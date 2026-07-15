@@ -118,4 +118,36 @@ describe('FileViewerModal — coordinator assembly content (Preview/Source, no w
     expect(screen.getByRole('tab', { name: 'Diff' }).getAttribute('aria-selected')).toBe('false');
     await waitFor(() => expect(document.body.textContent).toContain('Preview first'));
   });
+
+  it('also opens changed .markdown (long extension) files on Preview by default', async () => {
+    // ArtifactBrowser already treats .md and .markdown alike for icon/kind purposes; the
+    // FileViewer's own markdown detection must match so a `.markdown` file isn't silently
+    // stuck defaulting to Diff/Source.
+    const getContent = vi.fn().mockResolvedValue({
+      path: 'docs/guide.markdown',
+      content: '# Preview first\n',
+      is_binary: false,
+      language: 'markdown',
+    } satisfies WorkspaceFileContent);
+
+    render(
+      <Wrapper>
+        <FileViewerModal
+          runId="coord-run-md2"
+          filePath="docs/guide.markdown"
+          onClose={() => {}}
+          diff={{ path: 'docs/guide.markdown', diff: '@@ -1 +1 @@\n-Old\n+New\n', status: 'modified', is_binary: false }}
+          diffLoading={false}
+          diffError={null}
+          isChanged
+          getContent={getContent}
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(getContent).toHaveBeenCalledWith('coord-run-md2', 'docs/guide.markdown'));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true'));
+    expect(screen.getByRole('tab', { name: 'Diff' }).getAttribute('aria-selected')).toBe('false');
+    await waitFor(() => expect(document.body.textContent).toContain('Preview first'));
+  });
 });

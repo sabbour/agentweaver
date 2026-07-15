@@ -5,6 +5,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
 import { COORDINATOR_GRAPH_DESCRIPTOR } from './fixtures/graphDescriptor';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -910,6 +911,42 @@ describe('CoordinatorRunPage operator console redesign', () => {
     // Clicking it opens the run-wide diff overlay.
     fireEvent.click(within(screen.getByTestId('run-summary-chips')).getByTestId('run-summary-chip-changes'));
     await screen.findByRole('dialog', { name: 'Changes' }, { timeout: 4000 });
+  });
+
+  it('re-fetches assembly files and refreshes the Changes/Files chips as new live events arrive, without a manual page refresh', async () => {
+    // Run just started — no assembly diff exists yet, so the chips render disabled "· None".
+    vi.mocked(apiClient.getAssemblyFiles).mockResolvedValue([]);
+    currentEvents = [
+      { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
+    ];
+
+    const { rerender } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const chipRow = await screen.findByTestId('run-summary-chips', undefined, { timeout: 4000 });
+    expect(within(chipRow).getByTestId('run-summary-chip-changes').textContent).toContain('None');
+
+    // Assembly progresses and produces a diff, and a new live event lands on the SSE stream
+    // (bumping artifactsLiveUpdateKey) — the chips must react to this on their own, the same
+    // signal CoordinatorArtifactsPanel already reacts to, WITHOUT requiring a manual refresh.
+    vi.mocked(apiClient.getAssemblyFiles).mockResolvedValue([
+      { path: 'src/app.ts', status: 'modified', added_lines: 12, removed_lines: 4, scope: 'merged' },
+    ]);
+    currentEvents = [
+      ...currentEvents,
+      { sequence: 2, type: 'coordinator.assembly_completed', payload: {} },
+    ];
+    act(() => {
+      rerender(<Wrapper><CoordinatorRunPage /></Wrapper>);
+    });
+
+    await waitFor(
+      () => {
+        const row = screen.getByTestId('run-summary-chips');
+        expect(within(row).getByTestId('run-summary-chip-changes').textContent).toContain('1 file');
+        expect(within(row).getByTestId('run-summary-chip-files').textContent).toContain('1');
+      },
+      { timeout: 4000 },
+    );
   });
 
   it('renders the intent-driven Timeline as the default center content', async () => {

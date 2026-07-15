@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { WorkspaceFileContent, WorkspaceFileDiff } from '../api/types';
+import { isMarkdownFile } from '../utils/fileKind';
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
@@ -115,7 +116,7 @@ export function FileViewer({
   diffError = null,
 }: FileViewerProps) {
   const styles = useStyles();
-  const isMarkdown = filePath?.toLowerCase().endsWith('.md') ?? false;
+  const isMarkdown = isMarkdownFile(filePath);
   const fetchContent = useCallback(
     (rid: string, p: string): Promise<WorkspaceFileContent> =>
       (getContent ?? apiClient.getRunFileContent.bind(apiClient))(rid, p),

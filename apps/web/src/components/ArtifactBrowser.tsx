@@ -14,6 +14,7 @@ import {
   } from '@fluentui/react-components';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import { DiffViewer } from './DiffViewer';
+import { isMarkdownFile } from '../utils/fileKind';
 import {
   BracesRegular,
   CheckmarkRegular,
@@ -123,11 +124,11 @@ function getFileStatusIcon(status?: string): FluentIcon {
 // is surfaced as data-file-icon for styling/testing. In the review/diff tree the change
 // status COLOR is layered on top via the status icon class — this only picks the glyph.
 function fileIconForName(name: string): { Icon: FluentIcon; kind: string } {
+  // Markdown check kept in sync with isMarkdownFile (utils/fileKind.ts) — both `.md` and
+  // `.markdown` (case-insensitive) are treated as markdown across the app.
+  if (isMarkdownFile(name)) return { Icon: DocumentTextRegular, kind: 'markdown' };
   const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : '';
   switch (ext) {
-    case 'md':
-    case 'markdown':
-      return { Icon: DocumentTextRegular, kind: 'markdown' };
     case 'ts':
     case 'tsx':
     case 'js':
