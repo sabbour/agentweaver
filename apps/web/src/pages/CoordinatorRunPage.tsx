@@ -3825,7 +3825,9 @@ export function CoordinatorRunPage() {
 
   // Run-wide changes summary: the coordinator's collective integration diff (assembly files).
   // getAssemblyFiles returns [] before assembly runs, so this stays null until real changes exist.
-  // Refetch as the run advances/settles (coordRunStatus) so the Changes chip diff stays live.
+  // Refetch as the run advances/settles (coordRunStatus) or whenever a relevant live event arrives
+  // (artifactsLiveUpdateKey — the same key that drives CoordinatorArtifactsPanel) so the Changes/
+  // Files chips stay live instead of only updating after a manual refresh.
   useEffect(() => {
     if (isChildRun || !runId) {
       setRunChangesSummary(null);
@@ -3848,7 +3850,7 @@ export function CoordinatorRunPage() {
       })
       .catch(() => { if (!cancelled) setRunChangesSummary(null); });
     return () => { cancelled = true; };
-  }, [isChildRun, runId, coordRunStatus]);
+  }, [isChildRun, runId, coordRunStatus, artifactsLiveUpdateKey]);
 
   // Run-wide summary chips pinned just above the composer. Three distinct chips — Goal, Changes,
   // Files — each opening the matching overlay. All three are pinned to the coordinator/run
