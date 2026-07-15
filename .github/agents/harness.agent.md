@@ -132,9 +132,43 @@ real live API, never simulated):
    real response) to the transcript file itself via shell redirection as it
    goes, and on completion returns the transcript path + a factual (non-judging)
    summary to you.
-3. **Harness judges.** Take the returned transcript and proceed to Judging below
+3. **Harness reports a performance summary (timing only).** Once PersonaActor
+   returns, read the same transcript file yourself and report how long the run
+   took — this is operational observability for the human, not a Judge
+   concern: Judge's job is whether the persona behaved correctly, not how fast
+   it was, so this stays entirely on the Harness side and never enters the
+   judge prompt or verdict. Every transcript line PersonaActor writes already
+   carries a `ts` (ISO 8601, set the moment that turn's real response was
+   captured) alongside its `turn`/`request`/`response`/`thought` fields — this
+   is the one honest per-turn timestamp there is; the file's own mtime history
+   is not recoverable per-line after the fact, so this small addition to
+   PersonaActor's existing write (one more plain field, not new
+   instrumentation) is what makes timing derivable at all. From `ts` alone,
+   report:
+   - **Total run duration**: first turn's `ts` to last turn's `ts`.
+   - **Per-turn duration**: the gap between each turn's `ts` and the previous
+     turn's `ts`, alongside that turn's method/path — this is what surfaces a
+     slow API call or slow agent reasoning step.
+   - **Per-phase duration, only if phases are genuinely inferable** from the
+     turns' own `thought` narration (e.g. a cluster of turns whose thoughts are
+     about creating/discovering things versus a later cluster about
+     revising/confirming) — group them by your own reading of what the run
+     actually did, do not force a fixed phase list (setup/planning/build/etc.)
+     onto a run that doesn't naturally have those stages. If phases aren't
+     cleanly separable without guessing, skip this and report per-turn timing
+     only; the Judge or a human can group turns into phases themselves from the
+     `thought` field.
+   A minimal inline computation (e.g. a short `ForEach-Object`/`node -e`
+   one-liner over the parsed lines' `ts` values, or just your own reasoning
+   over the timestamps) is fine here — this is post-run reporting, not a new
+   subsystem sitting between PersonaActor and the API, so it isn't subject to
+   the "no fixed code" constraint that governs the live driving path; it still
+   should not become a standalone script file, though — keep it inline, the
+   same way the live-tail formatting above stays inline.
+4. **Harness judges.** Take the returned transcript and proceed to Judging below
    exactly as already wired — build the judge prompt, dispatch `Judge`, validate
-   and persist the verdict. This stage is unchanged by this pivot.
+   and persist the verdict. This stage is unchanged by this pivot, and the
+   performance summary above is not part of the evidence passed to Judge.
 
 For the API surface specifically (what PersonaActor uses internally, and what you
 use directly only for the structural `generated-artifacts-seam` exception, or when

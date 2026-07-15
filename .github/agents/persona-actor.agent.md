@@ -127,9 +127,14 @@ Each dispatch supplies, in the task prompt:
       turn, e.g.:
       ```
       cat >> "$TRANSCRIPT_PATH" <<'EOF'
-      {"turn": <n>, "thought": "<why you, the persona, are doing this>", "request": {"method": "<M>", "path": "<P>", "body": <json-or-null>}, "response": {"status": <code>, "body": <raw-response-text-or-json>}}
+      {"turn": <n>, "ts": "<ISO 8601 timestamp of right now, e.g. 2026-07-14T19:03:11Z>", "thought": "<why you, the persona, are doing this>", "request": {"method": "<M>", "path": "<P>", "body": <json-or-null>}, "response": {"status": <code>, "body": <raw-response-text-or-json>}}
       EOF
       ```
+      Include `ts` every time — it's the one honest timestamp of when you
+      actually captured this turn's real response, and it's how Harness derives
+      per-turn/per-run timing after the fact without any separate instrumentation.
+      It is not a new subsystem, just one more plain field in the write you're
+      already doing.
       The exact shape is not schema-enforced — Harness reads whatever you wrote
       when it builds the judged evidence — but it must always be the REAL request
       you issued and the REAL response you received, never a paraphrase or an
