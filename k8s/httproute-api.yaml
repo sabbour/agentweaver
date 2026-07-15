@@ -1,6 +1,7 @@
-# HTTPRoute — routes /api/*, /auth/*, and OAuth 2.1 AS paths to the Agentweaver API service.
+# HTTPRoute — routes /api/*, /auth/*, /openapi/*, and OAuth 2.1 AS paths to the Agentweaver API service.
 #
-# All requests with path prefix /api or /auth are forwarded to agentweaver-api:8080.
+# All requests with path prefix /api, /auth, or /openapi are forwarded to
+# agentweaver-api:8080.
 # OAuth 2.1 Authorization Server paths are also routed here:
 #   /.well-known/oauth-authorization-server      (RFC 8414 AS metadata, unauthenticated)
 #   /.well-known/oauth-authorization-server/mcp  (suffixed AS metadata, RFC 8414 path-aware)
@@ -33,6 +34,9 @@ spec:
         - path:
             type: PathPrefix
             value: /auth
+        - path:
+            type: PathPrefix
+            value: /openapi
         # RFC 8414 AS metadata discovery — unauthenticated, served by the API AS.
         # Both bare and /mcp-suffixed forms are matched for Copilot CLI / VS Code
         # path-aware RFC 8414 discovery (clients probe suffixed form first).
