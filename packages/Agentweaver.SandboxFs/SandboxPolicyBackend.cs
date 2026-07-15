@@ -46,11 +46,14 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
     /// <summary>
     /// Preview tools supervised by PreviewRunner. Starting a preview additionally requires
     /// working-directory containment; the remaining tools operate on session-scoped state.
+    /// `start_preview` (issue #334) finalizes/publishes the durable preview URL for an already
+    /// observed, healthy port — it carries no filesystem path argument, so it is session-scoped
+    /// like `observe_bound_port`/`health_check`/`stop_preview_process`.
     /// </summary>
     private static readonly HashSet<string> KnownPreviewTools = new(StringComparer.Ordinal)
     {
         "start_preview_process", "stop_preview_process",
-        "observe_bound_port", "health_check",
+        "observe_bound_port", "health_check", "start_preview",
     };
 
     /// <summary>

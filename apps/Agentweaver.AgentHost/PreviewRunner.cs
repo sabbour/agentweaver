@@ -91,7 +91,9 @@ internal interface IPreviewRunner
         CancellationToken ct = default);
 }
 
-internal sealed class PreviewRunnerToolProvider(IPreviewRunner runner) : IAgentRuntimeToolProvider
+internal sealed class PreviewRunnerToolProvider(
+    IPreviewRunner runner,
+    IOptions<AgentHostOptions> agentHostOptions) : IAgentRuntimeToolProvider
 {
     public IEnumerable<AIFunction> BuildTools(SandboxToolContext context)
     {
@@ -166,6 +168,23 @@ internal sealed class PreviewRunnerToolProvider(IPreviewRunner runner) : IAgentR
             },
             "stop_preview_process",
             "Stop a supervised preview process and its child process tree.");
+
+        // start_preview finalizes/publishes the durable, externally-reachable preview URL for the
+        // port observe_bound_port just confirmed healthy (issue #334: observe_bound_port's own
+        // response text tells the model to call this next, but until now no tool by this name was
+        // ever registered for sandboxed subtask agents — only PreviewRunnerToolProvider's other
+        // three preview tools were, since AgentweaverApiTools.Build's `start_preview` is gated on
+        // projectId/agentName being set, which subtask agents intentionally don't receive (#268)).
+        // Registering it here — alongside the tools observe_bound_port's hint assumes are always
+        // available — keeps the dead-end from recurring regardless of that gating.
+        if (!string.IsNullOrEmpty(context.RunId))
+        {
+            var options = agentHostOptions.Value;
+            var apiBaseUrl = string.IsNullOrWhiteSpace(options.ApiBaseUrl)
+                ? "http://localhost:5000"
+                : options.ApiBaseUrl!;
+            yield return PreviewPublishTool.Build(apiBaseUrl, options.ApiKey, context.RunId);
+        }
     }
 }
 
