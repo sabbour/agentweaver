@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.2" />
+    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.2" />
     <PackageReference Include="Microsoft.AgentGovernance" Version="[4.0.0,5.0.0)" />
     <PackageReference Include="Microsoft.Agents.AI.A2A" Version="1.11.1-preview.260625.1" />
     <PackageReference Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.11.1-rc1" />

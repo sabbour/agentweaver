@@ -1,0 +1,131 @@
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Client;
+
+namespace Agentweaver.AgentRuntime;
+
+/// <summary>
+/// Connection settings for the operator assistant's MCP client. <see cref="Endpoint"/> is the
+/// AgentweaverMCP server's streamable-HTTP endpoint (for example <c>https://host/mcp</c>).
+/// </summary>
+public sealed record AgentweaverMcpConnectionOptions
+{
+    /// <summary>The AgentweaverMCP <c>/mcp</c> streamable-HTTP endpoint.</summary>
+    public required Uri Endpoint { get; init; }
+
+    /// <summary>Client identity advertised to the server on initialize.</summary>
+    public string ClientName { get; init; } = "agentweaver-operator-assistant";
+
+    /// <summary>Transport connect timeout.</summary>
+    public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromSeconds(30);
+}
+
+/// <summary>
+/// Adapter that connects the in-API Copilot session to the real AgentweaverMCP server and exposes
+/// its tools as Microsoft.Extensions.AI <see cref="AIFunction"/>s so they can be dropped straight
+/// into <c>SessionConfig.Tools</c> (which is a list of <see cref="AIFunctionDeclaration"/>).
+///
+/// This replaces the 15 hand-wrapped read-only tools in <see cref="CopilotConsoleFacadeAgent"/> with
+/// the single source of truth (all ~91 MCP tools). The caller's GitHub bearer token is passed through
+/// on every request: it is set as the <c>Authorization</c> header on the streamable-HTTP transport, so
+/// each JSON-RPC <c>tools/call</c> (a distinct HTTP POST in stateless streamable-HTTP mode) carries the
+/// caller identity that the MCP server's bearer middleware forwards to the backend API.
+/// </summary>
+public interface IAgentweaverMcpToolProvider
+{
+    /// <summary>
+    /// Connects to the MCP server as the given caller and enumerates its tools. The returned session
+    /// owns the live MCP connection and MUST be disposed when the conversation ends.
+    /// </summary>
+    Task<AgentweaverMcpToolSession> ConnectAsync(string callerBearerToken, CancellationToken ct = default);
+}
+
+/// <inheritdoc />
+public sealed class AgentweaverMcpToolProvider : IAgentweaverMcpToolProvider
+{
+    private readonly AgentweaverMcpConnectionOptions _options;
+    private readonly ILoggerFactory? _loggerFactory;
+
+    // Optional factory so tests can supply an HttpClient bound to an in-process host. Production
+    // leaves this null and the transport creates its own pooled HttpClient.
+    private readonly Func<HttpClient>? _httpClientFactory;
+
+    public AgentweaverMcpToolProvider(
+        AgentweaverMcpConnectionOptions options,
+        ILoggerFactory? loggerFactory = null,
+        Func<HttpClient>? httpClientFactory = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options;
+        _loggerFactory = loggerFactory;
+        _httpClientFactory = httpClientFactory;
+    }
+
+    public async Task<AgentweaverMcpToolSession> ConnectAsync(string callerBearerToken, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(callerBearerToken))
+            throw new ArgumentException(
+                "A caller bearer token is required: the operator assistant forwards the signed-in user's " +
+                "token to the MCP server per call; it never uses a shared or installation identity.",
+                nameof(callerBearerToken));
+
+        var transportOptions = new SseClientTransportOptions
+        {
+            Endpoint = _options.Endpoint,
+            Name = _options.ClientName,
+            // Streamable HTTP matches the server (apps/Agentweaver.Mcp: WithHttpTransport stateless).
+            TransportMode = HttpTransportMode.StreamableHttp,
+            ConnectionTimeout = _options.ConnectionTimeout,
+            // Per-call bearer passthrough: every streamable-HTTP request carries the caller's token.
+            AdditionalHeaders = new Dictionary<string, string>
+            {
+                ["Authorization"] = $"Bearer {callerBearerToken}",
+            },
+        };
+
+        var http = _httpClientFactory?.Invoke();
+        var transport = http is null
+            ? new SseClientTransport(transportOptions, _loggerFactory)
+            : new SseClientTransport(transportOptions, http, _loggerFactory, ownsHttpClient: false);
+
+        var client = await McpClientFactory
+            .CreateAsync(transport, clientOptions: null, loggerFactory: _loggerFactory, cancellationToken: ct)
+            .ConfigureAwait(false);
+
+        try
+        {
+            var tools = await client.ListToolsAsync(cancellationToken: ct).ConfigureAwait(false);
+            return new AgentweaverMcpToolSession(client, tools);
+        }
+        catch
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+}
+
+/// <summary>
+/// A live MCP session plus its enumerated tools. Each tool is a <see cref="McpClientTool"/>, which
+/// derives from <see cref="AIFunction"/>: invoking it issues a <c>tools/call</c> over the same
+/// bearer-authenticated transport. Dispose to close the underlying connection.
+/// </summary>
+public sealed class AgentweaverMcpToolSession : IAsyncDisposable
+{
+    private readonly IMcpClient _client;
+
+    internal AgentweaverMcpToolSession(IMcpClient client, IList<McpClientTool> tools)
+    {
+        _client = client;
+        Tools = tools.ToList();
+    }
+
+    /// <summary>The MCP tools exposed by the server, as AIFunctions ready for a Copilot session.</summary>
+    public IReadOnlyList<McpClientTool> Tools { get; }
+
+    /// <summary>Adapts every MCP tool to the <see cref="AIFunctionDeclaration"/> form used by SessionConfig.Tools.</summary>
+    public IReadOnlyList<AIFunctionDeclaration> AsToolDeclarations() =>
+        Tools.Cast<AIFunctionDeclaration>().ToList();
+
+    public ValueTask DisposeAsync() => _client.DisposeAsync();
+}
