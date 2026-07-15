@@ -16,6 +16,31 @@ function Wrapper({ children }: { children: ReactNode }) {
 afterEach(() => cleanup());
 
 describe('RunTimeline default expansion', () => {
+  it('keeps the step count label aligned with the rendered top-level steps after narration collapsing', () => {
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: "Now let's build the prototype with Vite + React" }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'write_file', arguments: { path: 'src/main.tsx' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'agent.intent', { intent: 'Now the storage module' }),
+      evt(5, 'tool.call', { callId: 'c2', toolName: 'write_file', arguments: { path: 'src/storage.ts' } }),
+      evt(6, 'tool.result', { callId: 'c2', content: 'ok' }),
+      evt(7, 'agent.intent', { intent: 'Review the result' }),
+      evt(8, 'agent.message', { messageId: 'm1', content: 'Ready for review.' }),
+      evt(9, 'agent.turn.end', {}),
+    ]);
+
+    render(
+      <Wrapper>
+        <RunTimeline embedded steps={model.steps} running={false} />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('2 steps')).toBeTruthy();
+    expect(screen.getByText('Build the prototype with Vite + React')).toBeTruthy();
+    expect(screen.getByText('Review the result')).toBeTruthy();
+    expect(screen.queryByText('Now the storage module')).toBeNull();
+  });
+
   it('expands every activity step by default while keeping tool groups collapsed', () => {
     const model = buildRunTimeline([
       evt(1, 'agent.turn.start', { turnId: 't1' }),
