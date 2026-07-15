@@ -52,12 +52,12 @@ public sealed class McpRunTaskTests
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
 
-        var json = await tools.RunTaskAsync("proj-1", "Ship it", workflow_id: null, model_id: null, start_mode: "direct", timeout_seconds: 5, poll_interval_seconds: 1, CancellationToken.None);
+        var result = await tools.RunTaskAsync("proj-1", "Ship it", workflow_id: null, model_id: null, start_mode: "direct", timeout_seconds: 5, poll_interval_seconds: 1, CancellationToken.None);
 
-        using var payload = JsonDocument.Parse(json);
-        payload.RootElement.GetProperty("run_id").GetString().Should().Be("run-1");
-        payload.RootElement.GetProperty("status").GetString().Should().Be("merged");
-        payload.RootElement.GetProperty("artifacts")[0].GetProperty("path").GetString().Should().Be("README.md");
+        result.RunId.Should().Be("run-1");
+        result.Status.Should().Be("merged");
+        result.Artifacts.Should().NotBeNull();
+        result.Artifacts![0].GetProperty("path").GetString().Should().Be("README.md");
     }
 
     [Fact]
@@ -90,11 +90,10 @@ public sealed class McpRunTaskTests
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
 
-        var json = await tools.RunTaskAsync("proj-1", "Plan it", workflow_id: null, model_id: null, start_mode: "defineOutcome", timeout_seconds: 5, poll_interval_seconds: 1, CancellationToken.None);
+        var result = await tools.RunTaskAsync("proj-1", "Plan it", workflow_id: null, model_id: null, start_mode: "defineOutcome", timeout_seconds: 5, poll_interval_seconds: 1, CancellationToken.None);
 
-        using var payload = JsonDocument.Parse(json);
-        payload.RootElement.GetProperty("status").GetString().Should().Be("awaiting_confirmation");
-        payload.RootElement.GetProperty("review_prompt").GetString().Should().Contain("coordinator_outcome_spec_get");
+        result.Status.Should().Be("awaiting_confirmation");
+        result.ReviewPrompt.Should().Contain("coordinator_outcome_spec_get");
     }
 
     [Fact]
@@ -122,12 +121,14 @@ public sealed class McpRunTaskTests
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
 
-        var json = await tools.RunTaskAsync("proj-1", "Wait", workflow_id: null, model_id: null, start_mode: "direct", timeout_seconds: 1, poll_interval_seconds: 1, CancellationToken.None);
+        var result = await tools.RunTaskAsync("proj-1", "Wait", workflow_id: null, model_id: null, start_mode: "direct", timeout_seconds: 1, poll_interval_seconds: 1, CancellationToken.None);
 
-        using var payload = JsonDocument.Parse(json);
-        payload.RootElement.GetProperty("run_id").GetString().Should().Be("run-3");
-        payload.RootElement.GetProperty("status").GetString().Should().Be("timed_out");
-        payload.RootElement.GetProperty("hint").GetString().Should().Contain("run_status");
+        result.RunId.Should().Be("run-3");
+        result.Status.Should().Be("timed_out");
+        result.Hint.Should().Contain("run_status");
+        // #339: the timed_out response must still carry an artifacts array (empty), not omit it.
+        result.Artifacts.Should().NotBeNull();
+        result.Artifacts.Should().BeEmpty();
     }
 
     private static RunTools CreateRunTools(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)

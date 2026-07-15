@@ -3,11 +3,18 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http;
+using ModelContextProtocol;
 
 namespace Agentweaver.Mcp;
 
 /// <summary>Raised when an API call returns a non-success status.</summary>
-public sealed class McpApiException : Exception
+/// <remarks>
+/// Derives from <see cref="McpException"/> so the MCP server surfaces the structured
+/// <c>{ error, hint }</c> message to the client. The SDK only forwards an exception's message
+/// through the tool-call error content when the exception is an <see cref="McpException"/>;
+/// plain exceptions collapse to a generic "An error occurred invoking '&lt;tool&gt;'." string.
+/// </remarks>
+public sealed class McpApiException : McpException
 {
     private static readonly JsonSerializerOptions ErrorJsonOptions = new()
     {
