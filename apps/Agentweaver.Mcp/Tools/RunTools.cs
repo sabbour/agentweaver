@@ -39,6 +39,26 @@ public sealed record RunArtifactsResult(
     [property: JsonPropertyName("artifacts")] IReadOnlyList<JsonElement> Artifacts);
 
 /// <summary>
+/// Embedded run object inside <c>RunTaskResult</c>. Declares known fields (<c>run_id</c>,
+/// <c>status</c>, <c>coordinator_status</c>) so the schema generator can emit a proper
+/// object schema; all other API fields are preserved at runtime via extension data.
+/// </summary>
+public sealed record RunEmbedded
+{
+    [JsonPropertyName("run_id")]
+    public string? RunId { get; init; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+
+    [JsonPropertyName("coordinator_status")]
+    public string? CoordinatorStatus { get; init; }
+
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}
+
+/// <summary>
 /// Structured output for <c>run_task</c>. Covers every response variant (completed, gated,
 /// failed, timed out); optional fields are omitted when null so each variant stays clean.
 /// </summary>
@@ -54,9 +74,15 @@ public sealed record RunTaskResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<JsonElement>? Artifacts { get; init; }
 
+    /// <summary>
+    /// The full run object returned by the API. Typed as <see cref="RunEmbedded"/> (not
+    /// <c>JsonElement</c>) so the schema generator can emit a proper object schema instead of
+    /// the permissive boolean <c>true</c>, which breaks SDK Zod validation for all tools in
+    /// the <c>tools/list</c> response (see #341).
+    /// </summary>
     [JsonPropertyName("run")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? Run { get; init; }
+    public RunEmbedded? Run { get; init; }
 
     [JsonPropertyName("error")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -140,7 +166,7 @@ public sealed class RunTools(AgentweaverApiClient api)
                         RunId = runId,
                         Status = status!,
                         Artifacts = artifacts,
-                        Run = latestRun
+                        Run = latestRun.Deserialize<RunEmbedded>()
                     };
                 }
 
@@ -152,7 +178,7 @@ public sealed class RunTools(AgentweaverApiClient api)
                         Status = "failed",
                         Error = GetString(latestRun, "result") ?? $"Run ended in status '{status}'.",
                         Hint = GetFailureHint(status),
-                        Run = latestRun
+                        Run = latestRun.Deserialize<RunEmbedded>()
                     };
                 }
 
@@ -166,7 +192,7 @@ public sealed class RunTools(AgentweaverApiClient api)
                         // one-call-run response; emit an empty array rather than omitting it on timeout.
                         Artifacts = Array.Empty<JsonElement>(),
                         Hint = "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
-                        Run = latestRun
+                        Run = latestRun.Deserialize<RunEmbedded>()
                     };
                 }
 
@@ -368,7 +394,7 @@ public sealed class RunTools(AgentweaverApiClient api)
                 RunId = runId,
                 Status = "awaiting_review",
                 ReviewPrompt = "Run is awaiting human review. Call run_review, then rerun run_task or poll with run_status.",
-                Run = run
+                Run = run.Deserialize<RunEmbedded>()
             };
             return true;
         }
@@ -380,7 +406,7 @@ public sealed class RunTools(AgentweaverApiClient api)
                 RunId = runId,
                 Status = "awaiting_confirmation",
                 ReviewPrompt = "Coordinator drafted an outcome spec. Call coordinator_outcome_spec_get to inspect it, then coordinator_outcome_spec_confirm or coordinator_outcome_spec_revise.",
-                Run = run
+                Run = run.Deserialize<RunEmbedded>()
             };
             return true;
         }

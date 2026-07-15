@@ -64,6 +64,39 @@ public sealed class McpToolSchemaTests
         TypeOf(props["artifacts"]).Should().Contain("array");
     }
 
+    /// <summary>
+    /// Regression test for #341: run_task's outputSchema must NOT emit the JSON Schema boolean
+    /// <c>true</c> for the <c>run</c> property. The boolean <c>true</c> is technically valid
+    /// JSON Schema ("any value is valid") but causes the MCP TypeScript SDK's Zod-based
+    /// tools/list validator to throw, breaking ALL tools for any SDK-based MCP client.
+    /// </summary>
+    [Fact]
+    public void RunTask_OutputSchema_RunProperty_IsNotBooleanTrue()
+    {
+        var schema = OutputSchema(nameof(RunTools.RunTaskAsync));
+        var props = Properties(schema);
+
+        props.Should().ContainKey("run", because: "run_task always embeds the run object for terminal/gate responses");
+
+        var runSchema = props["run"];
+
+        // The schema must NOT be the JSON Schema boolean `true` (ValueKind == True).
+        // That literal-boolean form is what the broken generator emits when it can't reflect
+        // the type; the TypeScript MCP SDK's Zod validator rejects it with ZodError at
+        // tools[N].outputSchema.properties.run.
+        runSchema.ValueKind.Should().NotBe(JsonValueKind.True,
+            because: "JSON Schema boolean `true` for `run` breaks the MCP TypeScript SDK's Zod validation");
+
+        // The schema must be an object (not null, not a primitive) representing a JSON Schema node.
+        runSchema.ValueKind.Should().Be(JsonValueKind.Object,
+            because: "run must be described by a proper JSON Schema object (e.g. {\"type\":\"object\"} or $ref)");
+
+        // The schema must declare type as object (or object|null for nullable).
+        var types = TypeOf(runSchema);
+        types.Should().Contain("object",
+            because: "the `run` property holds the API run object so its schema must include type:object");
+    }
+
     // ---- #338: functionally-optional parameters must not be marked required ----
 
     [Fact]
