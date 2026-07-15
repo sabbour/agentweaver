@@ -167,6 +167,25 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
             _logger.LogError(exSweep, "Heartbeat: coordinator reconciler sweep failed");
         }
 
+        // #272 watchdog: drain outcome-spec confirm/revise decisions that were deferred to the DB but
+        // have no live drain path (a coordinator parked at awaiting_confirmation whose reasoning ran in
+        // a now-reaped AgentHost pod has no resident PollDeferredDecisionsAsync). The reconciler sweep
+        // above only recovers runs that already have a work plan, so the pre-work-plan spec gate needs
+        // its own drain. Isolated so a drain failure never affects the pickup tick outcome above.
+        try
+        {
+            var coordinatorRunService = sp.GetRequiredService<CoordinatorRunService>();
+            await coordinatorRunService.DrainOrphanedSpecDeferralsAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;   // shutdown — stop the service cleanly
+        }
+        catch (Exception exDrain)
+        {
+            _logger.LogError(exDrain, "Heartbeat: orphaned spec-deferral drain failed");
+        }
+
         // spec-006 (3rd phase): orphaned agent-host pod cleanup. Throttled to every Nth tick because
         // the heartbeat ticks far more often than the reaper needs to run. The reaper is only
         // registered when the Kubernetes sandbox is active, so resolve it null-safely. Isolated so a
