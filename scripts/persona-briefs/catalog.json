@@ -32,6 +32,14 @@
       "surfaces": ["api"],
       "runsToCompletion": false,
       "stopsAt": "after assembling a project team from a chosen blueprint and comparing its roster to the blueprint's promised roles; never submits a goal or starts orchestration"
+    },
+    {
+      "id": "oracle",
+      "description": "Product manager driving a self-chosen prototype idea through research, proposal, spec, backlog, implementation monitoring, and live preview validation.",
+      "tags": ["product-manager", "prototype", "quality", "research", "proposal", "spec", "backlog", "steering", "preview", "full-lifecycle"],
+      "surfaces": ["api"],
+      "runsToCompletion": true,
+      "stopsAt": "after the full lifecycle reaches a genuine end: a live preview has been actually validated, or the run is plainly too off-track to continue honestly"
     }
   ]
 }
