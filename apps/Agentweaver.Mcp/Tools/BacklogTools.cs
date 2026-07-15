@@ -28,8 +28,8 @@ public sealed class BacklogTools(AgentweaverApiClient api)
     public async Task<string> BacklogCaptureTaskAsync(
         [Description("Project ID")] string project_id,
         [Description("Task title (required)")] string title,
-        [Description("Optional task description")] string? description,
-        CancellationToken ct)
+        [Description("Optional task description")] string? description = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -47,8 +47,8 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         [Description("Task ID")] string task_id,
         [Description("New title (required)")] string title,
-        [Description("New description (optional, omit to clear)")] string? description,
-        CancellationToken ct)
+        [Description("New description (optional, omit to clear)")] string? description = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -80,8 +80,8 @@ public sealed class BacklogTools(AgentweaverApiClient api)
     public async Task<string> BacklogMoveToReadyAsync(
         [Description("Project ID")] string project_id,
         [Description("Task ID")] string task_id,
-        [Description("Zero-based target position in Ready column (null appends to end)")] int? target_index,
-        CancellationToken ct)
+        [Description("Zero-based target position in Ready column (null appends to end)")] int? target_index = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -98,8 +98,8 @@ public sealed class BacklogTools(AgentweaverApiClient api)
     public async Task<string> BacklogMoveToBacklogAsync(
         [Description("Project ID")] string project_id,
         [Description("Task ID")] string task_id,
-        [Description("Zero-based target position in Backlog column (null appends to end)")] int? target_index,
-        CancellationToken ct)
+        [Description("Zero-based target position in Backlog column (null appends to end)")] int? target_index = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -133,8 +133,8 @@ public sealed class BacklogTools(AgentweaverApiClient api)
     [McpServerTool(Name = "backlog_get_board"), Description("Get the full Kanban board for a project: Backlog, Ready, Problems, Human Review, Active, and Done.")]
     public async Task<string> BacklogGetBoardAsync(
         [Description("Project ID")] string project_id,
-        [Description("Include terminal/done history (default false)")] bool? include_terminal_history,
-        CancellationToken ct)
+        [Description("Include terminal/done history (default false)")] bool? include_terminal_history = null,
+        CancellationToken ct = default)
     {
         try
         {

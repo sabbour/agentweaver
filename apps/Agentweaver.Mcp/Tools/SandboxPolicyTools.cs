@@ -11,8 +11,8 @@ public sealed class SandboxPolicyTools(AgentweaverApiClient api)
 
     [McpServerTool(Name = "sandbox_policy_get"), Description("Get the sandbox policy for a repository.")]
     public async Task<string> SandboxPolicyGetAsync(
-        [Description("Repository path to get the policy for (optional)")] string? repository_path,
-        CancellationToken ct)
+        [Description("Repository path to get the policy for (optional)")] string? repository_path = null,
+        CancellationToken ct = default)
     {
         try
         {

@@ -80,8 +80,8 @@ public sealed class TeamTools(AgentweaverApiClient api)
         [Description("Project ID")] string project_id,
         [Description("Member name")] string name,
         [Description("Role ID from the catalog")] string role_id,
-        [Description("Model ID override (optional)")] string? model_id,
-        CancellationToken ct)
+        [Description("Model ID override (optional)")] string? model_id = null,
+        CancellationToken ct = default)
     {
         try
         {

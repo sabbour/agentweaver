@@ -40,11 +40,11 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
         [Description("Local working directory path")] string working_directory,
-        [Description("Project origin: 'blank' (default) or 'github'")] string? origin,
-        [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id,
-        [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint,
-        [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml,
-        CancellationToken ct)
+        [Description("Project origin: 'blank' (default) or 'github'")] string? origin = null,
+        [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id = null,
+        [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint = null,
+        [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -99,9 +99,9 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     public async Task<string> ProjectConfigureAsync(
         [Description("Project ID")] string project_id,
         [Description("Default model provider (e.g. github_copilot or microsoft_foundry)")] string default_provider,
-        [Description("Model ID for GitHub Copilot provider (optional)")] string? default_model_github_copilot,
-        [Description("Model ID for Microsoft Foundry provider (optional)")] string? default_model_microsoft_foundry,
-        CancellationToken ct)
+        [Description("Model ID for GitHub Copilot provider (optional)")] string? default_model_github_copilot = null,
+        [Description("Model ID for Microsoft Foundry provider (optional)")] string? default_model_microsoft_foundry = null,
+        CancellationToken ct = default)
     {
         try
         {
