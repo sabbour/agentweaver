@@ -143,6 +143,18 @@ internal sealed class AgentHostRuntimeState
 
     public void SetEffectiveWorkingDirectory(string workingDirectory) =>
         EffectiveWorkingDirectory = workingDirectory;
+
+    /// <summary>
+    /// The static, pod-environment system-prompt context assembled once at startup/configure time
+    /// (sandbox tool manifest + execution-purpose guidance + any image-baked context). The pod-side
+    /// A2A bridge prepends this to the per-turn context delivered in <c>AgentSetupParams</c> so the
+    /// per-run charter/memory/skills are layered onto — not substituted for — the environment
+    /// context (spec-018 / #336).
+    /// </summary>
+    public string? PodBaseSystemPromptContext { get; private set; }
+
+    public void SetPodBaseSystemPromptContext(string? context) =>
+        PodBaseSystemPromptContext = context;
 }
 
 /// <summary>Complete one-time configuration delivered to a warm AgentHost pod.</summary>

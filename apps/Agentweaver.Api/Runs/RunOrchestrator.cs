@@ -802,7 +802,18 @@ public sealed class RunOrchestrator
     private async Task<string?> AppendAssignedSkillsAsync(Run run, string? systemPromptContext, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(run.AgentName) || !run.ProjectId.HasValue || string.IsNullOrEmpty(run.WorktreePath))
+        {
+            // Observability for the #336 "assigned but not delivered" class of bug: a NAMED agent that
+            // is missing the project/worktree identity needed to resolve its assigned skills is skipped
+            // SILENTLY otherwise. Log it so a dropped skill block is traceable, mirroring how the
+            // downstream agent.system_prompt event now carries a skillsContextIncluded flag.
+            if (!string.IsNullOrEmpty(run.AgentName) && (!run.ProjectId.HasValue || string.IsNullOrEmpty(run.WorktreePath)))
+                _logger.LogWarning(
+                    "Skill context skipped for agent '{AgentName}' in run {RunId}: missing identity " +
+                    "(projectId={HasProject}, worktreePath={HasWorktree}). Assigned skills will NOT reach the agent.",
+                    run.AgentName, run.Id, run.ProjectId.HasValue, !string.IsNullOrEmpty(run.WorktreePath));
             return systemPromptContext;
+        }
 
         try
         {

@@ -93,7 +93,7 @@ public sealed class SkillPromptComposer
     private static string BuildMetadataBlock(IReadOnlyList<(Skill Skill, string Dir)> skills)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("## Available Skills");
+        sb.AppendLine(SkillPromptMarkers.SectionHeading);
         sb.AppendLine();
         sb.AppendLine(
             "You have specialized skill modules assigned to you. Only their NAME and DESCRIPTION are shown here. " +

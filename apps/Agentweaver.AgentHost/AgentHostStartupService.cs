@@ -187,6 +187,10 @@ internal sealed class AgentHostStartupService : IHostedService
             opts.SystemPromptContext,
             configuration.Purpose);
 
+        // Record the static pod-environment context so the A2A bridge can layer per-turn per-run
+        // context (charter/memory/skills) on top of it rather than replacing it (spec-018 / #336).
+        _runtimeState.SetPodBaseSystemPromptContext(systemPromptContext);
+
         _logger.LogInformation(
             "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir}, agentScratchDir={AgentScratchDir} (override={HasOverride}), manifestAttached={ManifestAttached}",
             runId, workingDirectory, agentScratchDirectory, !string.IsNullOrWhiteSpace(workingDirectoryOverride), SandboxManifestJson is not null);

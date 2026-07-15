@@ -18,6 +18,14 @@ internal interface IPodTurnRunner
     /// <summary>Runs a single agent turn, returning the accumulated assistant text.</summary>
     Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Applies the per-turn agent context (assembled system prompt with charter/memory/skills, plus
+    /// project/agent identity) delivered by the worker in <c>AgentSetupParams</c> before the turn
+    /// runs (spec-018 / #336). Returns <see langword="true"/> when the underlying agent was
+    /// reconfigured. Default no-op so lightweight test doubles need not implement it.
+    /// </summary>
+    bool ApplyPerTurnContext(string? systemPromptContext, string? projectId, string? agentName) => false;
+
     /// <summary>Stops a turn that did not honor its cancellation token within the bridge drain bound.</summary>
     Task ForceStopTurnAsync() => Task.CompletedTask;
 }
@@ -38,6 +46,9 @@ internal sealed class CopilotPodTurnRunner : IPodTurnRunner
 
     public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken) =>
         _agent.RunTurnAsync(task, isRevision, cancellationToken);
+
+    public bool ApplyPerTurnContext(string? systemPromptContext, string? projectId, string? agentName) =>
+        _agent.ApplyPerTurnContext(systemPromptContext, projectId, agentName);
 
     public Task ForceStopTurnAsync() => _agent.ForceStopCopilotProcessTreeAsync();
 }

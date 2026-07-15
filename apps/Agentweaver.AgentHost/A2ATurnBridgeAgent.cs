@@ -39,10 +39,14 @@ namespace Agentweaver.AgentHost;
 /// </list>
 ///
 /// <para>
-/// <b>Run-scoped vs per-turn config:</b> <c>AgentHostStartupService</c> still calls
-/// <c>SetupAsync</c> once at pod startup for the run-scoped configuration (Copilot client,
-/// governance, working dir). The bridge only swaps the per-turn stream writer and passes the
-/// per-turn <c>isRevision</c> flag; it does not re-run <c>SetupAsync</c>. It also extends
+/// <b>Run-scoped vs per-turn config:</b> <c>AgentHostStartupService</c> calls <c>SetupAsync</c>
+/// once at pod startup for the run-scoped provisioning (Copilot client, governance, working dir)
+/// using only the static, image-baked pod context. The bridge then applies the <b>per-turn</b>
+/// <see cref="AgentSetupParams"/> on every turn (spec-018 / #336): it forwards
+/// <see cref="AgentSetupParams.IsRevision"/> into <c>RunTurnAsync</c> and, via
+/// <see cref="IPodTurnRunner.ApplyPerTurnContext"/>, layers the per-run system prompt context
+/// (charter/memory/assigned skills) and project/agent identity onto the pod's agent — without
+/// re-provisioning the Copilot client. It also swaps the per-turn stream writer and extends
 /// <see cref="DelegatingAIAgent"/> so MAF session create/serialize/deserialize delegate to the
 /// inner <see cref="CopilotAIAgent"/>.
 /// </para>
@@ -159,7 +163,15 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
         IEnumerable<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var (task, isRevision) = ExtractTurn(messages);
+        var (task, setup) = ExtractTurnWithSetup(messages);
+        var isRevision = setup?.IsRevision ?? false;
+
+        // spec-018 / #336: apply the per-turn agent context the worker packed into AgentSetupParams
+        // (assembled system prompt with charter/memory/assigned skills, plus project/agent identity)
+        // BEFORE running the turn. A warm pod's startup SetupAsync only applied the static
+        // pod-environment context, so without this the per-run skills/memory never reach the agent's
+        // assembled prompt in pod-per-run mode.
+        ApplyPerTurnSetup(setup);
 
         _logger.LogDebug(
             "A2ATurnBridgeAgent: turn start — isRevision={IsRevision}, taskLength={Length}",
@@ -348,14 +360,27 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
 
     /// <summary>
     /// Extracts the task text and per-turn <c>isRevision</c> flag from the inbound A2A message
-    /// contents: the <see cref="AgentSetupParams"/> <c>DataPart</c> yields <c>isRevision</c>,
-    /// the <see cref="TextContent"/> parts yield the task. Exposed <see langword="internal"/> for
-    /// unit testing the decode path.
+    /// contents. Retained for callers/tests that only need those two values; delegates to
+    /// <see cref="ExtractTurnWithSetup"/>.
     /// </summary>
     internal static (string Task, bool IsRevision) ExtractTurn(IEnumerable<ChatMessage> messages)
     {
+        var (task, setup) = ExtractTurnWithSetup(messages);
+        return (task, setup?.IsRevision ?? false);
+    }
+
+    /// <summary>
+    /// Extracts the task text and the full per-turn <see cref="AgentSetupParams"/> from the inbound
+    /// A2A message contents: the <see cref="AgentSetupParams"/> <c>DataPart</c> (packed by
+    /// <see cref="RemoteAgentProxy"/>) yields the per-turn setup — including the assembled
+    /// <see cref="AgentSetupParams.SystemPromptContext"/> and identity — and the
+    /// <see cref="TextContent"/> parts yield the task. Exposed <see langword="internal"/> for unit
+    /// testing the decode path.
+    /// </summary>
+    internal static (string Task, AgentSetupParams? Setup) ExtractTurnWithSetup(IEnumerable<ChatMessage> messages)
+    {
         var taskText = new StringBuilder();
-        var isRevision = false;
+        AgentSetupParams? setup = null;
 
         foreach (var message in messages)
         {
@@ -363,8 +388,8 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             {
                 switch (content)
                 {
-                    case DataContent data when AgentSetupParams.TryDecode(data) is { } setup:
-                        isRevision = setup.IsRevision;
+                    case DataContent data when AgentSetupParams.TryDecode(data) is { } decoded:
+                        setup = decoded;
                         break;
                     case TextContent text when !string.IsNullOrEmpty(text.Text):
                         taskText.Append(text.Text);
@@ -373,6 +398,50 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             }
         }
 
-        return (taskText.ToString(), isRevision);
+        return (taskText.ToString(), setup);
+    }
+
+    /// <summary>
+    /// Applies the decoded per-turn <see cref="AgentSetupParams"/> to the pod's agent via
+    /// <see cref="IPodTurnRunner.ApplyPerTurnContext"/>. The per-turn system prompt context (the
+    /// per-run charter/memory/skills assembled by the API) is layered ON TOP OF the static
+    /// pod-environment context recorded at startup (<see cref="AgentHostRuntimeState.PodBaseSystemPromptContext"/>)
+    /// so environment guidance (e.g. the sandbox tool manifest) is preserved (spec-018 / #336).
+    /// </summary>
+    private void ApplyPerTurnSetup(AgentSetupParams? setup)
+    {
+        if (setup is null)
+            return;
+
+        var merged = MergeSystemPromptContext(
+            _runtimeState?.PodBaseSystemPromptContext,
+            setup.SystemPromptContext);
+
+        var applied = _runner.ApplyPerTurnContext(merged, setup.ProjectId, setup.AgentName);
+        if (applied)
+        {
+            _logger.LogInformation(
+                "A2ATurnBridgeAgent: applied per-turn context — projectId={ProjectId}, agentName={AgentName}, " +
+                "skillsIncluded={SkillsIncluded}, systemPromptChars={Chars}",
+                setup.ProjectId, setup.AgentName,
+                Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(setup.SystemPromptContext),
+                merged?.Length ?? 0);
+        }
+    }
+
+    /// <summary>
+    /// Joins the static pod-environment context with the per-turn per-run context. Either side may
+    /// be null/blank; when both are present they are separated by a blank line, mirroring how the
+    /// startup path assembles its prompt sections. Exposed <see langword="internal"/> for testing.
+    /// </summary>
+    internal static string? MergeSystemPromptContext(string? baseContext, string? perTurnContext)
+    {
+        var hasBase = !string.IsNullOrWhiteSpace(baseContext);
+        var hasTurn = !string.IsNullOrWhiteSpace(perTurnContext);
+        if (hasBase && hasTurn)
+            return baseContext + "\n\n" + perTurnContext;
+        if (hasBase)
+            return baseContext;
+        return hasTurn ? perTurnContext : null;
     }
 }

@@ -120,6 +120,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private GitHubTokenScope? _tokenScope;
     private SessionConfig? _sessionConfig;
     private ShellExecutionTracker? _shellExecutionTracker;
+    // Whether this run uses the controlled Build/Test shell surface (purpose == AssemblyBuildTest).
+    // Captured in SetupAsync so the inner agent can be rebuilt per turn (ApplyPerTurnContext).
+    private bool _controlledBuildTestShell;
+    // The CancellationToken SetupAsync was invoked with — reused when the inner agent is rebuilt
+    // per turn so the permission handler binds the identical run-scoped token (no behavior change).
+    private CancellationToken _setupCt;
 
     // --- Per-run run-event emission state (reset in SetupAsync) ---
     private StringBuilder _sb = new();
@@ -320,6 +326,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
         _userId = string.IsNullOrWhiteSpace(userId) ? null : userId;
+        _setupCt = ct;
 
         // Reset per-run emission state so a reused instance never leaks events across runs.
         _sb = new StringBuilder();
@@ -376,6 +383,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var agentId = $"did:mesh:agentweaver:copilot:{runId}";
 
         var controlledBuildTestShell = purpose == AgentHostPurpose.AssemblyBuildTest;
+        _controlledBuildTestShell = controlledBuildTestShell;
         var toolOptions = new SandboxToolOptions(
             ShellEnabled: sandboxPolicy.ShellEnabled,
             DefaultTimeoutMs: controlledBuildTestShell
@@ -420,6 +428,32 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
         _toolContext = toolContext;
 
+        RebuildInnerAgent();
+    }
+
+    /// <summary>
+    /// (Re)builds the inner Copilot <c>AIAgent</c> from the current per-run/per-turn context
+    /// (<see cref="_systemPromptContext"/>, <see cref="_projectId"/>, <see cref="_agentName"/>,
+    /// <see cref="_modelId"/>) and the already-provisioned <see cref="_client"/>,
+    /// <see cref="_toolContext"/>, and <see cref="_governance"/>.
+    ///
+    /// <para>
+    /// Called once at the end of <see cref="SetupAsync"/> and again by
+    /// <see cref="ApplyPerTurnContext"/> when the pod-side A2A bridge delivers per-turn context
+    /// (spec-018 / #336). The expensive Copilot client provisioning + governance setup are NOT
+    /// repeated — only the session's tool set and system message are recomputed, because both
+    /// depend on the (identity + prompt) context that a warm pod only learns per turn.
+    /// </para>
+    /// </summary>
+    private void RebuildInnerAgent()
+    {
+        var toolContext = _toolContext
+            ?? throw new InvalidOperationException("SetupAsync must run before RebuildInnerAgent.");
+        var client = _client
+            ?? throw new InvalidOperationException("SetupAsync must run before RebuildInnerAgent.");
+        var governance = _governance
+            ?? throw new InvalidOperationException("SetupAsync must run before RebuildInnerAgent.");
+
         var sessionTools = BuildSessionConfigTools(
             toolContext,
             _projectId,
@@ -427,7 +461,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             _apiBaseUrl,
             _apiKey,
             _toolProviders,
-            includeControlledRunCommand: controlledBuildTestShell);
+            includeControlledRunCommand: _controlledBuildTestShell);
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
         // list_decisions/get_memory/list_inbox/submit_decision are only registered when
         // Agentweaver API tools were built (projectId + agentName both supplied). Only tell the
@@ -438,29 +472,29 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(
-                _governance,
-                runId,
-                workingDirectory,
+                governance,
+                _runId,
+                _workingDirectory,
                 EmitToolCallOnce,
                 EmitToolErrorOnce,
                 Emit,
-                ct,
-                denyNativeShell: controlledBuildTestShell),
-            WorkingDirectory = workingDirectory,
+                _setupCt,
+                denyNativeShell: _controlledBuildTestShell),
+            WorkingDirectory = _workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
             // Deterministic session ID enables history replay via ResumeSessionAsync.
             // Format: "agentweaver-run-{runId}" — unique per run, stable across restarts.
-            SessionId = $"agentweaver-run-{runId}",
+            SessionId = $"agentweaver-run-{_runId}",
             Tools = sessionTools.Cast<AIFunctionDeclaration>().ToList(),
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = string.IsNullOrEmpty(systemPromptContext)
+                Content = string.IsNullOrEmpty(_systemPromptContext)
                     ? BuildBasePrompt(_includeTeamCoordinationPrompt)
-                    : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + systemPromptContext,
+                    : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext,
             },
-            Model = modelId,
+            Model = _modelId,
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
             // concurrent load with multiple replicas.
@@ -469,9 +503,59 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         };
         _sessionConfig = sessionConfig;
 
-        _inner = _client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
+        _inner = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
 
-        _logger.LogInformation("Inner Copilot AIAgent created with sandbox governance — runId={RunId}", runId);
+        _logger.LogInformation("Inner Copilot AIAgent created with sandbox governance — runId={RunId}", _runId);
+    }
+
+    /// <summary>
+    /// Applies the per-turn agent context delivered by the pod-side A2A bridge
+    /// (<c>A2ATurnBridgeAgent</c>, spec-018 / #336) onto an already-provisioned agent, rebuilding
+    /// the inner agent's tool set and system message when anything actually changed.
+    ///
+    /// <para>
+    /// Warm-pool pods run <see cref="SetupAsync"/> once at <c>/configure</c> time with only the
+    /// static, image-baked pod context (sandbox manifest) and empty identity. The per-run charter,
+    /// memory context, assigned skills, and real project/agent identity are delivered by the worker
+    /// on every turn via <c>AgentSetupParams</c>. Without applying them here, that per-run context —
+    /// including assigned skills (#336) and the project/agent identity that gates the memory/decision
+    /// tools (#335) — never reaches the agent in <c>pod-per-run</c> mode.
+    /// </para>
+    ///
+    /// <para>
+    /// Returns <see langword="true"/> when the inner agent was rebuilt. Identity/prompt values are
+    /// only overridden when the incoming turn supplies non-empty values, and the rebuild is skipped
+    /// when nothing changed so a resumed revision session is left untouched.
+    /// </para>
+    /// </summary>
+    public bool ApplyPerTurnContext(string? systemPromptContext, string? projectId, string? agentName)
+    {
+        // Not provisioned yet (no SetupAsync). Nothing to re-apply onto — the startup path will
+        // build the inner agent from these same fields.
+        if (_client is null || _toolContext is null || _governance is null)
+            return false;
+
+        var newProjectId = string.IsNullOrWhiteSpace(projectId) ? _projectId : projectId;
+        var newAgentName = string.IsNullOrWhiteSpace(agentName) ? _agentName : agentName;
+        var newContext = systemPromptContext;
+
+        var changed =
+            !string.Equals(_systemPromptContext, newContext, StringComparison.Ordinal) ||
+            !string.Equals(_projectId, newProjectId, StringComparison.Ordinal) ||
+            !string.Equals(_agentName, newAgentName, StringComparison.Ordinal);
+
+        if (!changed)
+            return false;
+
+        _systemPromptContext = newContext;
+        _projectId = newProjectId;
+        _agentName = newAgentName;
+        RebuildInnerAgent();
+
+        _logger.LogInformation(
+            "Applied per-turn agent context — runId={RunId}, projectId={ProjectId}, agentName={AgentName}, systemPromptChars={Chars}",
+            _runId, _projectId, _agentName, _systemPromptContext?.Length ?? 0);
+        return true;
     }
 
     // ----- AIAgent abstract overrides: delegate to the inner GitHubCopilotAgent -----
@@ -692,7 +776,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var fullSystemPrompt = string.IsNullOrEmpty(_systemPromptContext)
             ? BuildBasePrompt(_includeTeamCoordinationPrompt)
             : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext;
-        Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext) });
+        Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext), skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(_systemPromptContext) });
         Emit("agent.task", new { task });
         Emit("agent.tools", new { provider = "copilot", tools = _registeredToolNames });
         if (executor.HasNetworkWarning)
