@@ -231,6 +231,21 @@ public sealed class McpToolSchemaTests
         payload.RootElement.GetProperty("hint").GetString().Should().Contain("run_status");
     }
 
+    // ---- #344: team_cast mutually-exclusive params must not both be required ----
+
+    [Fact]
+    public void TeamCast_InputSchema_GoalAndConfirmProposalIdAreNotRequired()
+    {
+        var required = RequiredTeamInputs(nameof(TeamTools.TeamCastAsync));
+
+        required.Should().Contain("project_id");
+        required.Should().NotContain("goal",
+            because: "goal and confirm_proposal_id are mutually exclusive; neither should be in required (#344)");
+        required.Should().NotContain("confirm_proposal_id",
+            because: "goal and confirm_proposal_id are mutually exclusive; neither should be in required (#344)");
+        required.Should().NotContain("confirm");
+    }
+
     // ---- helpers ----
 
     private static JsonElement OutputSchema(string methodName)
@@ -270,6 +285,23 @@ public sealed class McpToolSchemaTests
         return type.ValueKind == JsonValueKind.Array
             ? type.EnumerateArray().Select(e => e.GetString()!).ToArray()
             : new[] { type.GetString()! };
+    }
+
+    private static HashSet<string> RequiredTeamInputs(string methodName)
+    {
+        var schema = BuildTeamTool(methodName).ProtocolTool.InputSchema;
+        if (schema.TryGetProperty("required", out var required) && required.ValueKind == JsonValueKind.Array)
+            return required.EnumerateArray().Select(e => e.GetString()!).ToHashSet();
+        return new HashSet<string>();
+    }
+
+    private static McpServerTool BuildTeamTool(string methodName)
+    {
+        var method = typeof(TeamTools).GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException($"Method {methodName} not found on TeamTools.");
+        var instance = new TeamTools(CreateApiClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
+        return McpServerTool.Create(method, instance, options: null);
     }
 
     private static RunTools CreateRunTools(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
