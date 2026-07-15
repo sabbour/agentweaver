@@ -92,7 +92,9 @@ internal sealed class AgentHostStartupService : IHostedService
                 opts.KvUserSecretName,
                 GitHubAccessToken: null,
                 PreviewRunnerCredential: null,
-                SharedWorkingDirectory: null),
+                SharedWorkingDirectory: null,
+                ProjectId: opts.ProjectId,
+                AgentName: opts.AgentName),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -198,8 +200,13 @@ internal sealed class AgentHostStartupService : IHostedService
             modelId: opts.ModelId,
             systemPromptContext: systemPromptContext,
             streamWriter: null,     // RunEvent side-channel forwarded via A2A DataParts (P1.5)
-            projectId: opts.ProjectId,
-            agentName: opts.AgentName,
+            // #335: prefer the per-run values delivered via /configure; fall back to the static
+            // AgentHost__ProjectId/AgentName env options (env-var launch path). Warm pods boot with
+            // empty static options, so without the /configure values projectId/agentName are empty
+            // and CopilotAIAgent.BuildSessionConfigTools omits the memory/decision (record_memory,
+            // get_memory, submit_decision, list_decisions, list_inbox) tools entirely.
+            projectId: string.IsNullOrWhiteSpace(configuration.ProjectId) ? opts.ProjectId : configuration.ProjectId,
+            agentName: string.IsNullOrWhiteSpace(configuration.AgentName) ? opts.AgentName : configuration.AgentName,
             apiBaseUrl: opts.ApiBaseUrl,
             apiKey: opts.ApiKey,
             ct: ct,

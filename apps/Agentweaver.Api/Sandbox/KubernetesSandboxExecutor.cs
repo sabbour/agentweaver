@@ -488,11 +488,16 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // immutable source refs; AgentHost creates their effective root inside execution-scratch.
             if (claimCreated)
             {
+                var (configProjectId, configAgentName) = _submittingUserResolver is not null
+                    ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
+                    : (null, null);
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
                     podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
                     await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
+                    configProjectId,
+                    configAgentName,
                     ct)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(effectiveWorkingDirectory))
@@ -812,6 +817,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         string podIp, int port, string runId, string userId, string turnBearerToken,
         string kvUserSecretName, string? gitHubAccessToken, string? sharedWorkingDirectory,
         AgentHostLaunchContext launchContext,
+        string? projectId,
+        string? agentName,
         CancellationToken ct)
     {
         if (_httpClientFactory is null)
@@ -857,6 +864,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Per-run AutoApproveTools flag (bug #221). Resolved from the API-side run-options store
             // keyed by the child runId; defaults false when the store is unavailable (unit tests).
             autoApproveTools = _runOptions?.Get(runId).AutoApproveTools ?? false,
+            // Per-run project/agent identity (#335). Delivered so the in-pod agent's tool schema
+            // includes the Agentweaver API tools (record_memory, get_memory, submit_decision,
+            // list_decisions, list_inbox). Warm pods boot with an empty static AgentHost__ProjectId
+            // /AgentName, so without these the memory/decision tools never reach the agent.
+            projectId,
+            agentName,
         };
 
         _logger.LogInformation(
