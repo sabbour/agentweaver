@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpHarnessClient } from '../mcp-client/client.mjs';
 import { assertCapabilitiesCompatible, checkCapabilities, loadCapabilitiesContract } from '../lib/capabilities-contract.mjs';
+import { classifySmokeStatus } from '../lib/smoke-confirm-gate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name) => {
@@ -53,14 +54,21 @@ try {
   const pollMs = Number(arg('--poll-ms') ?? 2_000);
   const terminal = new Set(['completed', 'failed', 'cancelled', 'archived']);
   let latest = null;
+  let confirmed = false;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     latest = await client.callTool(resolvedTool(report, 'poll-run'), { run_id: runId });
     if (latest.isError) throw new Error(`poll-run failed: ${latest.rawContent}`);
-    if (terminal.has(String(latest.structuredContent?.status ?? '').toLowerCase())) break;
+    const action = classifySmokeStatus(latest.structuredContent, { terminal, alreadyConfirmed: confirmed });
+    if (action === 'break') break;
+    if (action === 'confirm') {
+      confirmed = true;
+      const confirmResult = await client.callTool(resolvedTool(report, 'confirm-outcome-spec'), { run_id: runId });
+      if (confirmResult.isError) throw new Error(`confirm-outcome-spec failed: ${confirmResult.rawContent}`);
+    }
     await sleep(pollMs);
   }
-  if (!latest || !terminal.has(String(latest.structuredContent?.status ?? '').toLowerCase())) {
+  if (!latest || classifySmokeStatus(latest.structuredContent, { terminal, alreadyConfirmed: true }) !== 'break') {
     throw new Error(`poll-run timed out after ${timeoutMs}ms`);
   }
   const artifacts = await client.callTool(resolvedTool(report, 'list-artifacts'), { run_id: runId });

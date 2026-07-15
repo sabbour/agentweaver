@@ -359,3 +359,14 @@ When the general-purpose agent acts as the MCP persona driver and writes transcr
 - status: open
 
 team_cast.inputSchema.required = ['project_id','goal','confirm_proposal_id','confirm'] even though goal and confirm_proposal_id are described as mutually exclusive (goal is required unless confirm_proposal_id is set). Passing empty string for confirm_proposal_id when using goal mode results in a 'Project not found' error rather than a meaningful validation error. This is a variant of the same optional-params-marked-required pattern that was fixed for run_submit/run_task in v0.9.59, but team_cast was not fixed in the same release. Verified 2026-07-15 on v0.9.59.
+
+---
+
+## MCP smoke test must confirm awaiting_confirmation gate (fix #345)
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: fixed
+
+The smoke script (scripts/mcp-harness/smoke/mcp-cli-smoke.mjs) had no logic to handle the coordinator_status=awaiting_confirmation state. Any coordinator goal that produces a reviewable outcome spec suspends at this gate; with no confirm call, the smoke test polled for 240s then timed out as a false failure. Fix: detect coordinator_status=awaiting_confirmation in the poll loop and call coordinator_outcome_spec_confirm (the correct real tool, confirmed in CoordinatorTools.cs) once before continuing to poll. Point-3 verification: MCP coordinator_outcome_spec_confirm calls POST /api/runs/{id}/outcome-spec/confirm -> CoordinatorRunService.ConfirmOutcomeSpecAsync -> SubmitDecisionAsync -- the exact same backend resume seam used by the API surface (confirmed working in #272). No MCP-specific blocker exists; the confirm mechanism genuinely works over MCP. The issue was purely that the smoke path never invoked it.
