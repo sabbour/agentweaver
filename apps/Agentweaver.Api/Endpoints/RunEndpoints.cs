@@ -1645,9 +1645,22 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     var targetRun = targetRunId == id
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
-    if (targetRun is null
-        || EndpointHelpers.IsTerminal(targetRun.Status)
-        || targetRun.Status == RunStatus.AssembleReady)
+    // #349: only apply the run-active guard when there is a genuinely backend-tracked PENDING
+    // request to protect. The frontend optimistically renders one HITL card per approval-gated
+    // tool.call, but the agent SDK invokes the permission callback (which registers the approval
+    // gate + emits tool.approval_required) SEQUENTIALLY — web_fetch #1 blocks on approval, so
+    // #2/#N have not reached the gate and their request_ids are Unknown to the backend. Owning-run
+    // resolution can't find such a phantom request and falls back to the POSTED run (often the
+    // coordinator, which may already be AssembleReady/terminal). Guarding on lifecycle here would
+    // then mislabel it "Run is not active"; instead, let Unknown requests fall through to the
+    // accurate "no approval request found" handling below. A real pending request on a terminal
+    // run is still rejected (zombie/detached-turn safety).
+    var requestPending =
+        approvalGate.GetRequestState(targetRunId, body.RequestId) == ToolApprovalRequestState.Pending;
+    if (requestPending
+        && (targetRun is null
+            || EndpointHelpers.IsTerminal(targetRun.Status)
+            || targetRun.Status == RunStatus.AssembleReady))
         return Results.Conflict(new { error = "Run is not active." });
 
     var resolved = await approvalGate.GrantAsync(targetRunId, body.RequestId, approvalScope);
@@ -1726,9 +1739,18 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     var targetRun = targetRunId == id
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
-    if (targetRun is null
-        || EndpointHelpers.IsTerminal(targetRun.Status)
-        || targetRun.Status == RunStatus.AssembleReady)
+    // #349: mirror the tool-approvals guard — only reject on run lifecycle when a genuinely
+    // pending backend request is being protected. A phantom/Unknown request_id (posted from an
+    // optimistic HITL card for a tool.call that has not yet reached the sequential permission
+    // gate) must fall through to the accurate "no approval request found" handling rather than a
+    // misleading "Run is not active" 409. A real pending request on a terminal run is still
+    // rejected (zombie/detached-turn safety).
+    var requestPending =
+        approvalGate.GetRequestState(targetRunId, body.RequestId) == ToolApprovalRequestState.Pending;
+    if (requestPending
+        && (targetRun is null
+            || EndpointHelpers.IsTerminal(targetRun.Status)
+            || targetRun.Status == RunStatus.AssembleReady))
         return Results.Conflict(new { error = "Run is not active." });
 
     var resolved = approvalGate.Deny(targetRunId, body.RequestId);
