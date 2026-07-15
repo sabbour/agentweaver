@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
@@ -60,6 +61,11 @@ public sealed class CoordinatorRunService
     private readonly bool _autoDispatch;
     private readonly int _finalScribeMaxAttempts;
     private readonly CancellationToken _appStopping;
+
+    // #272 orphaned-deferral drain: throttle repeated recovery attempts for the same run so a
+    // checkpoint whose restore keeps failing can't be resumed on every heartbeat tick.
+    private static readonly TimeSpan SpecDeferralRetryInterval = TimeSpan.FromSeconds(15);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _specDeferralRecoveryAttempts = new();
 
     public CoordinatorRunService(
         IRunStore runStore,
@@ -863,6 +869,141 @@ public sealed class CoordinatorRunService
         }
 
         await RecoverMissingFinalScribesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #272 watchdog: drains outcome-spec confirm/revise decisions that were deferred to the shared
+    /// <c>DeferredDecisions</c> table but have no live drain path.
+    /// <para>
+    /// On the pod-per-run deployment a coordinator parked at the <c>awaiting_confirmation</c> HITL
+    /// gate has NO resident in-API watch loop (its reasoning ran in a now-reaped AgentHost pod), so
+    /// the only drainer — <see cref="PollDeferredDecisionsAsync"/>, which lives inside a live watch
+    /// loop — is not running. A confirm/revise that <see cref="SubmitDecisionAsync"/> could not apply
+    /// synchronously (checkpoint-restore race / MAF <c>$type</c> bug) is deferred and would otherwise
+    /// be orphaned forever, freezing the run at <c>awaiting_confirmation</c>. The pre-work-plan spec
+    /// gate is NOT covered by <c>CoordinatorReconciler.SweepAsync</c> (which only recovers runs that
+    /// already have a work plan), so this closes that gap.
+    /// </para>
+    /// <para>
+    /// For each persisted deferral it re-establishes the run via <see cref="RecoverSpecPhaseAsync"/>
+    /// (which re-arms the gate and starts <see cref="PollDeferredDecisionsAsync"/>, applying the
+    /// decision within one poll cycle). Resident runs are left to their own poller; runs no longer at
+    /// the gate get their stale deferral discarded; runs without a checkpoint (in-API mode, nothing to
+    /// resume) are left untouched. Every step is isolated and idempotent, so a failed resume simply
+    /// retries on a later tick. Returns the number of deferrals acted on (recovered or discarded).
+    /// </para>
+    /// </summary>
+    public async Task<int> DrainOrphanedSpecDeferralsAsync(CancellationToken ct)
+    {
+        List<string> deferredRunIds;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            deferredRunIds = await db.DeferredDecisions
+                .AsNoTracking()
+                .Select(d => d.RunId)
+                .ToListAsync(ct).ConfigureAwait(false);
+        }
+
+        if (deferredRunIds.Count == 0)
+            return 0;
+
+        var acted = 0;
+        foreach (var runId in deferredRunIds)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // A resident watch loop already owns the drain: its PollDeferredDecisionsAsync applies it.
+            if (_registry.Get(runId) is not null)
+                continue;
+
+            if (!RunId.TryParse(runId, out var id))
+                continue;
+
+            Run? run;
+            try
+            {
+                run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Orphaned-deferral drain: failed to load run {RunId}", runId);
+                continue;
+            }
+
+            // Only a spec-phase coordinator (parent) run still parked at the gate is recoverable here.
+            // Anything else (deleted / terminal / already advanced / a child-run review decision) has a
+            // stale coordinator deferral that must be discarded so it can't linger and be retried forever.
+            var eligible = run is not null
+                && run.Status == RunStatus.InProgress
+                && run.ParentRunId is null
+                && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+
+            if (eligible)
+            {
+                var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
+                eligible = string.Equals(spec?.Status, "awaiting_confirmation", StringComparison.Ordinal);
+            }
+
+            if (!eligible)
+            {
+                await DiscardDeferredSpecDecisionAsync(runId, ct).ConfigureAwait(false);
+                _specDeferralRecoveryAttempts.TryRemove(runId, out _);
+                acted++;
+                continue;
+            }
+
+            // Nothing to resume in-API mode (no checkpoint) — leave the deferral for the resident
+            // path. Only pod/remote runs (which DO checkpoint) reach the orphaned-resume case below.
+            if (!await _factory.HasCheckpointAsync(runId, ct).ConfigureAwait(false))
+                continue;
+
+            // Throttle repeated resume attempts for a checkpoint whose restore keeps failing.
+            if (_specDeferralRecoveryAttempts.TryGetValue(runId, out var last)
+                && DateTimeOffset.UtcNow - last < SpecDeferralRetryInterval)
+                continue;
+
+            _specDeferralRecoveryAttempts[runId] = DateTimeOffset.UtcNow;
+            try
+            {
+                // Re-establish the resident workflow + poller, which drains the deferred decision and
+                // drives the run forward. Idempotent: RehydrateConfirmationGateAsync reuses the armed
+                // gate, and PollDeferredDecisionsAsync consumes the row at-most-once.
+                await RecoverSpecPhaseAsync(run!, ct).ConfigureAwait(false);
+                acted++;
+                _logger.LogInformation(
+                    "Orphaned-deferral drain: re-armed coordinator run {RunId} at the confirmation gate to apply its deferred decision",
+                    runId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Orphaned-deferral drain: failed to re-arm coordinator run {RunId}; will retry on a later tick",
+                    runId);
+            }
+        }
+
+        return acted;
+    }
+
+    private async Task DiscardDeferredSpecDecisionAsync(string runId, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var deleted = await db.DeferredDecisions
+                .Where(d => d.RunId == runId)
+                .ExecuteDeleteAsync(ct).ConfigureAwait(false);
+            if (deleted > 0)
+                _logger.LogInformation(
+                    "Orphaned-deferral drain: discarded stale deferred decision for run {RunId} (no longer awaiting confirmation)",
+                    runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Orphaned-deferral drain: failed to discard stale deferral for run {RunId}", runId);
+        }
     }
 
     private async Task RecoverOneAsync(Run run, CancellationToken ct)

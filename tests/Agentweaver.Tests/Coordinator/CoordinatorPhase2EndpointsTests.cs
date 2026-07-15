@@ -290,6 +290,80 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         await WaitForGateAsync(runId);
     }
 
+    // =========================================================================
+    // #272 — outcome-spec confirm/revise via chat must actually advance the run,
+    // even when the coordinator has no resident watch loop (pod-per-run: its
+    // reasoning ran in a reaped AgentHost pod, so the confirm/revise decision is
+    // deferred to the DB and must be drained by the heartbeat watchdog).
+    // =========================================================================
+
+    [Fact]
+    public async Task DeferredOutcomeSpecDecision_IsAppliedByPoller_ConfirmsSpec()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A deferred confirm decision must advance the outcome spec");
+        await WaitForGateAsync(runId);
+
+        // A deferred confirm decision (what SubmitDecisionAsync writes when it cannot apply the
+        // decision synchronously) must be drained and applied — the run must reach 'confirmed'.
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+            {
+                RunId = runId,
+                DecisionJson = JsonSerializer.Serialize(
+                    new CoordinatorOutcomeSpecDecision(Confirmed: true, Revise: false,
+                        ConfirmedBy: CoordinatorWebApplicationFactory.OwnerUser),
+                    JsonDefaults.Options),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull("a deferred confirm decision must be applied so the run leaves awaiting_confirmation");
+    }
+
+    [Fact]
+    public async Task DrainOrphanedSpecDeferrals_StaleDecisionForNonGateRun_IsDiscarded()
+    {
+        // A coordinator run that is NOT parked at the confirmation gate (no outcome spec) with a
+        // lingering deferred decision must have that stale row discarded, not retried forever.
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+            {
+                RunId = runId,
+                DecisionJson = JsonSerializer.Serialize(
+                    new CoordinatorOutcomeSpecDecision(Confirmed: true), JsonDefaults.Options),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        var acted = await coordinator.DrainOrphanedSpecDeferralsAsync(CancellationToken.None);
+
+        acted.Should().Be(1, "the stale deferral for a non-gate run should be acted on (discarded)");
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.DeferredDecisions.AnyAsync(d => d.RunId == runId))
+                .Should().BeFalse("the stale deferral must be discarded so it is not retried forever");
+        }
+    }
+
+    [Fact]
+    public async Task DrainOrphanedSpecDeferrals_NoDeferrals_IsNoOp()
+    {
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        var acted = await coordinator.DrainOrphanedSpecDeferralsAsync(CancellationToken.None);
+        acted.Should().Be(0, "with no deferred decisions the drain must be a safe no-op");
+    }
+
     [Fact]
     public async Task Steer_NonOwner_Returns403()
     {
