@@ -240,6 +240,57 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Steer_Send_AwaitingOutcomeSpec_WithAffirmativeChat_ConfirmsSpec()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Let the operator confirm this outcome plan from chat");
+        await WaitForGateAsync(runId);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = "yes, go ahead" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created,
+            "an obvious affirmative chat reply at the outcome-spec gate should be accepted immediately");
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive.Should().NotBeNull();
+        directive!.Kind.Should().Be("send");
+        directive.Status.Should().Be(SteeringStatus.Applied,
+            "the chat reply should route through the existing confirm seam, not queue for a missing dispatch boundary");
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull();
+        spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
+    }
+
+    [Fact]
+    public async Task Steer_Send_AwaitingOutcomeSpec_WithClarificationChat_RedraftsSpec()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Let the operator clarify this outcome plan from chat");
+        await WaitForGateAsync(runId);
+
+        const string feedback = "Actually, also include rollback criteria in the plan";
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = feedback });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created,
+            "a non-affirmative chat reply at the outcome-spec gate should be treated as clarification feedback");
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive.Should().NotBeNull();
+        directive!.Kind.Should().Be("send");
+        directive.Status.Should().Be(SteeringStatus.Applied,
+            "clarification chat should route through revise immediately, not queue");
+
+        var spec = await PollOutcomeSpecUntilAsync(
+            runId,
+            s => s.Status == "awaiting_confirmation"
+                 && s.ClarifyingQuestions != null
+                 && s.ClarifyingQuestions.Contains(feedback, StringComparison.Ordinal));
+        spec.Should().NotBeNull("the revised outcome spec should carry the chat feedback into the re-draft");
+        await WaitForGateAsync(runId);
+    }
+
+    [Fact]
     public async Task Steer_NonOwner_Returns403()
     {
         var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
@@ -722,6 +773,28 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             var resp = await _owner.GetAsync($"/api/runs/{runId}/work-plan");
             if (resp.StatusCode == HttpStatusCode.OK)
                 return await resp.Content.ReadFromJsonAsync<WorkPlanResponse>();
+            await Task.Delay(50);
+        }
+
+        return null;
+    }
+
+    private async Task<OutcomeSpecResponse?> PollOutcomeSpecUntilAsync(
+        string runId,
+        Func<OutcomeSpecResponse, bool> predicate,
+        int timeoutSeconds = 20)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            var resp = await _owner.GetAsync($"/api/runs/{runId}/outcome-spec");
+            if (resp.StatusCode == HttpStatusCode.OK)
+            {
+                var spec = await resp.Content.ReadFromJsonAsync<OutcomeSpecResponse>();
+                if (spec is not null && predicate(spec))
+                    return spec;
+            }
+
             await Task.Delay(50);
         }
 

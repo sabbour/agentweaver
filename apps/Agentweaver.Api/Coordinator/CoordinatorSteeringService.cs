@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -381,10 +382,41 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
 /// </summary>
 public sealed class CoordinatorSteeringService
 {
+    private static readonly Regex OutcomeSpecReplyWhitespace = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex OutcomeSpecReplyTokenSanitizer = new(@"[^a-z0-9']+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex OutcomeSpecAffirmation = new(
+        @"^(?:(?:yes|yep|yeah|yup|ok|okay|sure)(?:\s+(?:please|go ahead|proceed|do it|with (?:this|the) plan|on this|thanks))*|sounds good|looks good|lgtm|ship it|go ahead|please go ahead|proceed|please proceed|confirm(?:ed)?|approve(?:d)?|that(?:'s| is) right|correct|exactly|do it)(?:\s+(?:please|thanks|with (?:this|the) plan|on this))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly string[] OutcomeSpecClarificationMarkers =
+    [
+        "actually",
+        "also",
+        "add",
+        "adjust",
+        "broaden",
+        "but",
+        "change",
+        "clarify",
+        "except",
+        "expand",
+        "however",
+        "include",
+        "instead",
+        "narrow",
+        "plus",
+        "remove",
+        "revise",
+        "scope",
+        "tweak",
+        "update",
+        "without",
+    ];
+
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly CoordinatorSteeringWaitRegistry _waitRegistry;
+    private readonly CoordinatorRunService? _coordinatorRunService;
     private readonly RunWorkflowFactory? _runWorkflowFactory;
     private readonly IRunStore? _runStore;
     private readonly IRunEventStream? _eventStream;
@@ -405,6 +437,7 @@ public sealed class CoordinatorSteeringService
         IServiceScopeFactory scopeFactory,
         ILogger<CoordinatorSteeringService> logger,
         CoordinatorSteeringWaitRegistry? waitRegistry = null,
+        CoordinatorRunService? coordinatorRunService = null,
         RunWorkflowFactory? runWorkflowFactory = null,
         IRunStore? runStore = null,
         IRunEventStream? eventStream = null,
@@ -414,6 +447,7 @@ public sealed class CoordinatorSteeringService
         _registry = registry;
         _scopeFactory = scopeFactory;
         _waitRegistry = waitRegistry ?? new CoordinatorSteeringWaitRegistry();
+        _coordinatorRunService = coordinatorRunService;
         _runStore = runStore;
         _eventStream = eventStream;
         _reviewGate = reviewGate;
@@ -484,6 +518,15 @@ public sealed class CoordinatorSteeringService
             return await ApplyStopAsync(
                 coordinatorRunId, directiveId, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
                 .ConfigureAwait(false);
+
+        if (normalized == SteeringKind.Send)
+        {
+            var outcomeSpecReply = await TryHandleOutcomeSpecReplyAsync(
+                coordinatorRunId, directiveId, targetChildRunId, resolvedInstruction, createdBy, createdAt, ct)
+                .ConfigureAwait(false);
+            if (outcomeSpecReply is not null)
+                return outcomeSpecReply;
+        }
 
         // #226: at the collective assembly HUMAN-REVIEW gate the one-shot dispatch loop has already
         // handed off to the LIVE assembly loop (parked in AwaitReviewDecisionAsync). A redirect/amend/send
@@ -786,6 +829,86 @@ public sealed class CoordinatorSteeringService
         return new SteeringDirectiveView(
             directiveId, coordinatorRunId, targetChildRunId, SteeringKind.Send, instruction,
             SteeringStatus.Queued, createdBy, createdAt, RelayedAt: null);
+    }
+
+    /// <summary>
+    /// Issue #272: while the coordinator is still parked at the outcome-spec confirmation gate, the
+    /// ordinary chat/steering composer has no dispatch loop to drain a plain <c>send</c>. Reuse the
+    /// SAME confirm/revise resume seam the Outcome plan buttons already call: an obvious affirmative
+    /// confirms the spec; anything else is treated as clarification feedback and re-drafts.
+    /// Non-obvious messages fail closed to "revise" rather than silently auto-confirming.
+    /// </summary>
+    private async Task<SteeringDirectiveView?> TryHandleOutcomeSpecReplyAsync(
+        string coordinatorRunId,
+        int directiveId,
+        string? targetChildRunId,
+        string instruction,
+        string createdBy,
+        DateTimeOffset createdAt,
+        CancellationToken ct)
+    {
+        if (_coordinatorRunService is null || string.IsNullOrWhiteSpace(instruction))
+            return null;
+
+        var spec = await _coordinatorRunService.GetOutcomeSpecAsync(coordinatorRunId, ct).ConfigureAwait(false);
+        if (!string.Equals(spec?.Status, "awaiting_confirmation", StringComparison.Ordinal))
+            return null;
+
+        var replyKind = ClassifyOutcomeSpecReply(instruction);
+        var outcome = replyKind == OutcomeSpecReplyKind.Confirm
+            ? await _coordinatorRunService.ConfirmOutcomeSpecAsync(coordinatorRunId, createdBy, ct).ConfigureAwait(false)
+            : await _coordinatorRunService.ReviseOutcomeSpecAsync(coordinatorRunId, instruction, createdBy, ct).ConfigureAwait(false);
+
+        if (outcome != CoordinatorGateOutcome.Accepted)
+        {
+            _logger.LogInformation(
+                "Outcome-spec chat reply for coordinator {RunId} could not be applied via the confirmation gate ({Outcome}); falling back to normal send semantics",
+                coordinatorRunId, outcome);
+            return null;
+        }
+
+        var appliedAt = DateTimeOffset.UtcNow;
+        await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, appliedAt, ct).ConfigureAwait(false);
+        await EmitSteeringAsync(
+            coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId, SteeringStatus.Applied, instruction, ct)
+            .ConfigureAwait(false);
+        _waitRegistry.Signal(coordinatorRunId);
+
+        _logger.LogInformation(
+            "Outcome-spec chat reply for coordinator {RunId} applied as {ReplyKind} via the existing confirmation gate",
+            coordinatorRunId, replyKind);
+
+        return new SteeringDirectiveView(
+            directiveId, coordinatorRunId, targetChildRunId, SteeringKind.Send, instruction,
+            SteeringStatus.Applied, createdBy, createdAt, appliedAt);
+    }
+
+    private static OutcomeSpecReplyKind ClassifyOutcomeSpecReply(string instruction)
+    {
+        var normalized = NormalizeOutcomeSpecReply(instruction);
+        if (normalized.Length == 0)
+            return OutcomeSpecReplyKind.Revise;
+
+        if (OutcomeSpecClarificationMarkers.Any(marker =>
+                normalized.Contains(marker, StringComparison.Ordinal)))
+            return OutcomeSpecReplyKind.Revise;
+
+        return OutcomeSpecAffirmation.IsMatch(normalized)
+            ? OutcomeSpecReplyKind.Confirm
+            : OutcomeSpecReplyKind.Revise;
+    }
+
+    private static string NormalizeOutcomeSpecReply(string instruction)
+    {
+        var lowered = instruction.Trim().ToLowerInvariant();
+        var sanitized = OutcomeSpecReplyTokenSanitizer.Replace(lowered, " ");
+        return OutcomeSpecReplyWhitespace.Replace(sanitized, " ").Trim();
+    }
+
+    private enum OutcomeSpecReplyKind
+    {
+        Confirm,
+        Revise,
     }
 
     // -----------------------------------------------------------------------
