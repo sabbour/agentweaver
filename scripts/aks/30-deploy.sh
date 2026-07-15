@@ -244,6 +244,23 @@ kubectl rollout status deployment/agentweaver-worker --namespace "${NAMESPACE}" 
   echo "  WARNING: Worker rollout did not complete within 300s. Check: kubectl logs -n ${NAMESPACE} -l app=agentweaver-worker --all-containers"
 
 echo ""
+echo "Verifying image provenance (post-deploy safety net for #251)..."
+# Confirms the images now actually running in the cluster are provably built
+# from ${IMAGE_TAG}'s source (no stale retag-forward drift). This must run
+# after rollout so pods have already settled on their final image/digest.
+if ! VERIFY_GIT_REF="${VERIFY_GIT_REF:-${IMAGE_TAG}}" bash "${SCRIPT_DIR}/25-verify-image-provenance.sh"; then
+  echo "" >&2
+  echo "ERROR: Image provenance verification FAILED -- see output above." >&2
+  echo "  A running pod's image does not provably match ${IMAGE_TAG}'s source, or watched" >&2
+  echo "  paths drifted since the image was built. This is the exact #251 stale-retag failure" >&2
+  echo "  mode -- treating the deploy as FAILED rather than silently succeeding." >&2
+  echo "  Re-run scripts/aks/20-build-push-images.sh with FORCE_REBUILD=true for the affected" >&2
+  echo "  image(s), then redeploy." >&2
+  exit 1
+fi
+echo "  [OK] All running images verified against source (${IMAGE_TAG})."
+
+echo ""
 echo "==================================================="
 echo " DEPLOYMENT COMPLETE"
 echo "==================================================="
