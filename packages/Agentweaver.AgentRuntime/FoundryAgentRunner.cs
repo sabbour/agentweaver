@@ -150,7 +150,9 @@ public sealed class FoundryAgentRunner : IAgentRunner
             RunId: runId,
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
             IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
-            QuestionGate: _questionGate);
+            QuestionGate: _questionGate,
+            ScratchDirectory: Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
+                ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
         var toolFunctions = SandboxToolRegistry.Build(toolContext);
         var tools = toolFunctions.Cast<AITool>().ToList();
 

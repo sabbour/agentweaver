@@ -75,7 +75,13 @@ internal sealed class RunCommandTool : ISandboxTool
                 if (!validatorAllowed)
                     return $"Command rejected by shell validator: {validatorReason}";
 
-                var fsPolicy = SandboxFsPolicyBuilder.Build(ctx.SandboxRoot, ctx.Options.AllowedRepositoryRoots);
+                var scratchDirectory = ResolveScratchDirectory(ctx);
+                var fsPolicy = SandboxFsPolicyBuilder.Build(
+                    ctx.SandboxRoot,
+                    ctx.Options.AllowedRepositoryRoots,
+                    additionalReadWriteRoots: string.IsNullOrWhiteSpace(scratchDirectory)
+                        ? null
+                        : [scratchDirectory]);
                 var timeout = timeout_ms ?? ctx.Options.DefaultTimeoutMs;
                 if (timeout <= 0)
                     timeout = ctx.Options.DefaultTimeoutMs;
@@ -86,7 +92,11 @@ internal sealed class RunCommandTool : ISandboxTool
                     timeout = ctx.Options.MinimumTimeoutMs;
                 if (ctx.Options.MaximumTimeoutMs > 0)
                     timeout = Math.Min(timeout, ctx.Options.MaximumTimeoutMs);
-                var cmd = new SandboxCommand(command, ctx.WorkingDirectory, null, fsPolicy,
+                var cmd = new SandboxCommand(
+                    command,
+                    ctx.WorkingDirectory,
+                    BuildCommandEnvironment(scratchDirectory),
+                    fsPolicy,
                     timeout,
                     NetworkEnabled: ctx.Options.NetworkEnabled,
                     AgentweaverRunId: string.IsNullOrEmpty(ctx.RunId) ? null : ctx.RunId);
@@ -129,6 +139,30 @@ internal sealed class RunCommandTool : ISandboxTool
         Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(command)))[..16].ToLowerInvariant();
+
+    private static string? ResolveScratchDirectory(SandboxToolContext ctx)
+    {
+        if (!string.IsNullOrWhiteSpace(ctx.ScratchDirectory))
+            return ctx.ScratchDirectory;
+
+        return Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
+            ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR");
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildCommandEnvironment(string? scratchDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(scratchDirectory))
+            return null;
+
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AGENTWEAVER_SCRATCH"] = scratchDirectory,
+            ["AGENTWEAVER_SCRATCH_DIR"] = scratchDirectory,
+            ["TMPDIR"] = scratchDirectory,
+            ["TMP"] = scratchDirectory,
+            ["TEMP"] = scratchDirectory,
+        };
+    }
 
     private static bool IsDestructivePattern(string command, string[] patterns)
     {

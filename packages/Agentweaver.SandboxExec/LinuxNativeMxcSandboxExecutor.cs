@@ -88,7 +88,7 @@ internal sealed class LinuxNativeMxcSandboxExecutor : ISandboxExecutor
         // The command is carried inside the config blob — never passed as a raw argument
         // to prevent command injection (F8).
         ContainerConfig config = MxcSdk.BuildSandboxPayload(
-            command.CommandLine,
+            SandboxCommandEnvironment.PrefixPosixExports(command.CommandLine, command.Environment),
             mxcPolicy,
             command.WorkingDirectory,
             null,

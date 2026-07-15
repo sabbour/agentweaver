@@ -19,29 +19,52 @@ public static class SandboxFsPolicyBuilder
     public static SandboxFsPolicy Build(
         string sandboxRoot,
         string[] allowedRepositoryRoots,
-        SandboxPolicyEnrichment? enrichment = null)
+        SandboxPolicyEnrichment? enrichment = null,
+        IReadOnlyList<string>? additionalReadWriteRoots = null)
     {
         // Canonicalize sandbox root through the full validator.
         var canonicalRoot = SandboxPathValidator.ValidateAbsoluteContained(
             Path.GetFullPath(sandboxRoot), Path.GetFullPath(sandboxRoot));
 
-        var rwPaths = new List<string> { canonicalRoot };
+        var rwPaths = new List<string>();
         var roPaths = new List<string>();
+        var seenRw = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenRo = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        AddUnique(rwPaths, seenRw, canonicalRoot);
 
         foreach (var root in allowedRepositoryRoots)
         {
             var resolved = SandboxPathValidator.ValidateAbsoluteContained(
                 Path.GetFullPath(root), canonicalRoot);
             if (!string.Equals(resolved, canonicalRoot, StringComparison.OrdinalIgnoreCase))
-                roPaths.Add(resolved);
+                AddUnique(roPaths, seenRo, resolved);
+        }
+
+        if (additionalReadWriteRoots is not null)
+        {
+            foreach (var root in additionalReadWriteRoots)
+            {
+                var resolved = SandboxPathValidator.ValidateAbsoluteContained(
+                    Path.GetFullPath(root), Path.GetFullPath(root));
+                AddUnique(rwPaths, seenRw, resolved);
+            }
         }
 
         if (enrichment is not null)
         {
-            roPaths.AddRange(enrichment.AdditionalReadOnlyPaths);
-            rwPaths.AddRange(enrichment.AdditionalReadWritePaths);
+            foreach (var path in enrichment.AdditionalReadOnlyPaths)
+                AddUnique(roPaths, seenRo, path);
+            foreach (var path in enrichment.AdditionalReadWritePaths)
+                AddUnique(rwPaths, seenRw, path);
         }
 
         return new SandboxFsPolicy(rwPaths, roPaths, []);
+    }
+
+    private static void AddUnique(List<string> paths, HashSet<string> seen, string path)
+    {
+        if (seen.Add(path))
+            paths.Add(path);
     }
 }

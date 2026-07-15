@@ -26,10 +26,12 @@ public sealed class ComposeChildSystemPromptTests
         prompt.Should().ContainEquivalentOf("session-state");
         prompt.Should().ContainEquivalentOf(".copilot");
         prompt.Should().ContainEquivalentOf("temp");
-        prompt.Should().ContainEquivalentOf("never write",
-            "the boundary must forbid writes outside the working directory");
+        prompt.Should().ContainEquivalentOf("AGENTWEAVER_SCRATCH",
+            "the boundary must surface the dedicated out-of-worktree scratch location");
+        prompt.Should().ContainEquivalentOf("non-deliverable",
+            "the boundary must reserve scratch for ephemeral working files");
         prompt.Should().ContainEquivalentOf("adapt",
-            "a rejected write must instruct the child to adapt and write within the working directory");
+            "a rejected write must instruct the child to adapt to the worktree-or-scratch split");
     }
 
     [Theory]
@@ -50,6 +52,7 @@ public sealed class ComposeChildSystemPromptTests
             "the deliverable capture instruction must always be present");
         prompt.Should().ContainEquivalentOf("committed",
             "the prompt must explain that files are committed when the turn ends");
+        prompt.Should().ContainEquivalentOf("AGENTWEAVER_SCRATCH");
     }
 
     [Fact]

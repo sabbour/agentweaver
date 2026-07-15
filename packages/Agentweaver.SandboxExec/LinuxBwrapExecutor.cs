@@ -92,7 +92,10 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
-        var payload = BuildBwrapPayload(command.CommandLine, command.WorkingDirectory, command.NetworkEnabled);
+        var payload = BuildBwrapPayload(
+            SandboxCommandEnvironment.PrefixPosixExports(command.CommandLine, command.Environment),
+            command.WorkingDirectory,
+            command.NetworkEnabled);
         _logger.LogDebug("Executing sandbox command via {Backend}, length={Length}",
             BackendName, command.CommandLine.Length);
 

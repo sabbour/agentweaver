@@ -928,18 +928,21 @@ public sealed class RunOrchestrator
         const string boundary =
             "## Working-directory sandbox boundary\n" +
             "You are running inside an isolated git worktree. ALL file reads and writes MUST stay " +
-            "within your current working directory (this worktree). You must NEVER write to any path " +
-            "outside the working directory — including session-state, .copilot, the home directory, " +
-            "or temp directories. If a write is rejected because it targets a path outside the " +
-            "sandbox, do not retry the same path: adapt and write the file within your current " +
-            "working directory instead.";
+            "within your current working directory (this worktree) for deliverables. The ONLY " +
+            "approved location outside the worktree is the run-scoped scratch directory exposed in " +
+            "$AGENTWEAVER_SCRATCH, which you may access through shell commands for non-deliverable " +
+            "working files only. You must NEVER write to any other path outside the working " +
+            "directory — including session-state, .copilot, the home directory, or other temp " +
+            "directories. If a write is rejected because it targets a path outside the sandbox, do " +
+            "not retry the same path: adapt and write deliverables in the worktree or ephemeral " +
+            "scratch output in $AGENTWEAVER_SCRATCH instead.";
 
         const string deliverableCapture =
             "## Deliverable files\n" +
             "All deliverables produced by this task — documents, drafts, reports, code, " +
             "configuration files, or any other output — MUST be written as files in your current " +
             "working directory. Files created here are automatically staged and committed when your " +
-            "turn ends; any output left only in memory or written to a path outside this directory " +
+            "turn ends; any output left only in memory or written only to $AGENTWEAVER_SCRATCH " +
             "will not be captured, will not appear in the human review, and will be permanently lost. " +
             "If a task requires you to produce a markdown document, report, or other artifact, write " +
             "it as a named file in your working directory.";

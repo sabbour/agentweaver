@@ -77,6 +77,27 @@ public sealed class SandboxFsPolicyBuilderTests : IDisposable
     }
 
     [Fact]
+    public void AdditionalReadWriteRoot_OutsideSandbox_IsAllowed()
+    {
+        var scratchRoot = Path.Combine(Path.GetTempPath(), $"outside-rw-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratchRoot);
+        try
+        {
+            var policy = SandboxFsPolicyBuilder.Build(
+                _sandboxRoot,
+                [],
+                additionalReadWriteRoots: [scratchRoot]);
+
+            policy.ReadWritePaths.Should().Contain(Path.GetFullPath(_sandboxRoot));
+            policy.ReadWritePaths.Should().Contain(Path.GetFullPath(scratchRoot));
+        }
+        finally
+        {
+            try { Directory.Delete(scratchRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void DeniedPaths_IsAlwaysEmpty()
     {
         var policy = SandboxFsPolicyBuilder.Build(_sandboxRoot, []);

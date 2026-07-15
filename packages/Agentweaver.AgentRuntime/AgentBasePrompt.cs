@@ -15,7 +15,7 @@ internal static class AgentBasePrompt
 
         WORKSPACE BOUNDARY
         Your sandbox allows reading and writing within the current working directory (your
-        workspace), plus shell access to the designated $AGENTWEAVER_SCRATCH_DIR. The workspace
+        workspace), plus shell access to the designated $AGENTWEAVER_SCRATCH. The workspace
         is the worktree path you were started in. Any other file or shell operation that resolves
         outside these directories — including paths that escape via "..", absolute paths elsewhere
         on the machine, or your home directory — is blocked by the sandbox.
@@ -25,7 +25,7 @@ internal static class AgentBasePrompt
         path (or shell working directory) is outside the workspace and designated scratch area.
         Self-correct:
         1. Re-read the task and decide whether the file is a deliverable (workspace) or working
-           artifact ($AGENTWEAVER_SCRATCH_DIR).
+           artifact ($AGENTWEAVER_SCRATCH).
         2. Retry using either a path relative to the workspace root for deliverables, or the
            designated scratch directory through a shell command for working artifacts; never use
            ".." segments or an absolute path outside those two locations.
@@ -40,7 +40,7 @@ internal static class AgentBasePrompt
         which is wrong. The ONLY files you may create or modify are genuine DELIVERABLES of the
         task — the code changes themselves, or documentation the user explicitly asked for.
         - Put non-deliverable working/session files (plans, notes, temporary fixtures, and tool
-          scratch) in the directory named by $AGENTWEAVER_SCRATCH_DIR, never in the workspace.
+          scratch) in the directory named by $AGENTWEAVER_SCRATCH, never in the workspace.
           That directory is run-scoped, outside the project worktree, and is deleted after the run;
           use it through shell commands only, because file tools remain restricted to the workspace.
         - Report findings, verdicts, and your self-assessment by calling report_outcome(achieved,

@@ -242,6 +242,29 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Fact]
+    public async Task Controlled_run_command_allows_run_scoped_scratch_outside_workspace()
+    {
+        var scratch = Path.Combine(_root, "scratch");
+        Directory.CreateDirectory(scratch);
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(cmd => observed = cmd);
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, scratchDirectory: scratch),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "echo scratch" }));
+
+        result?.ToString().Should().Contain("exit_code: 0");
+        observed.Should().NotBeNull();
+        observed!.FilesystemPolicy.ReadWritePaths.Should().Contain(scratch);
+        observed.Environment.Should().NotBeNull();
+        observed.Environment!["AGENTWEAVER_SCRATCH"].Should().Be(scratch);
+        observed.Environment["TMPDIR"].Should().Be(scratch);
+    }
+
+    [Fact]
     public async Task Controlled_run_command_runs_npm_install_with_sandbox_local_home_in_real_linux_sandbox()
     {
         ISandboxExecutor realExecutor;
@@ -370,7 +393,8 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     private SandboxToolContext BuildContext(
         ISandboxExecutor executor,
         ShellExecutionTracker tracker,
-        string? workspace = null) =>
+        string? workspace = null,
+        string? scratchDirectory = null) =>
         new(
             AgentId: "agent",
             WorkingDirectory: workspace ?? _root,
@@ -387,7 +411,8 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 MaximumTimeoutMs = 600_000,
             },
             Logger: NullLogger.Instance,
-            ShellExecutionTracker: tracker);
+            ShellExecutionTracker: tracker,
+            ScratchDirectory: scratchDirectory);
 
     private sealed class RecordingExecutor(ISandboxExecutor inner) : ISandboxExecutor
     {
