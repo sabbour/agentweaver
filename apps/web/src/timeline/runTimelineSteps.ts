@@ -72,6 +72,13 @@ export interface RunTimelineMessage {
   text: string;
   streaming: boolean;
   /**
+   * Message role from the server event payload. "user" messages are the operator's echoed
+   * input turns; "assistant" (or missing) are the agent's replies. Used by renderers to
+   * apply different visual styling (e.g. user bubble vs assistant bubble).
+   * When absent, the renderer treats the message as an assistant message.
+   */
+  role?: 'user' | 'assistant';
+  /**
    * Best-known message time in epoch-ms for relative-time rendering in the production
    * RunTimeline surface. Prefer a server/event payload timestamp when available;
    * otherwise fall back to the client-side receipt time captured while folding.
@@ -590,6 +597,7 @@ export function buildRunTimeline(
         const step = ensureStep(evt.sequence);
         const rawId = asStr(payload['messageId']);
         const delta = asStr(payload['delta']);
+        const role = (asStr(payload['role']) === 'user' ? 'user' : 'assistant') as 'user' | 'assistant';
         const byId = messageByStep.get(step.id)!;
         if (rawId) {
           const existing = byId.get(rawId);
@@ -600,6 +608,7 @@ export function buildRunTimeline(
               messageId: rawId,
               text: delta,
               streaming: true,
+              role,
               timestamp: captureMessageTimestamp(evt),
             };
             byId.set(rawId, msg);
@@ -617,6 +626,7 @@ export function buildRunTimeline(
               messageId: `msg-${evt.sequence}`,
               text: delta,
               streaming: true,
+              role,
               timestamp: captureMessageTimestamp(evt),
             };
             streamingNoIdByStep.set(step.id, msg);
@@ -631,6 +641,7 @@ export function buildRunTimeline(
         const step = ensureStep(evt.sequence);
         const rawId = asStr(payload['messageId']);
         const content = asStr(payload['content']);
+        const role = (asStr(payload['role']) === 'user' ? 'user' : 'assistant') as 'user' | 'assistant';
         const byId = messageByStep.get(step.id)!;
         if (rawId) {
           const existing = byId.get(rawId);
@@ -642,6 +653,7 @@ export function buildRunTimeline(
               messageId: rawId,
               text: content,
               streaming: false,
+              role,
               timestamp: captureMessageTimestamp(evt),
             };
             byId.set(rawId, msg);
@@ -661,6 +673,7 @@ export function buildRunTimeline(
               messageId: `msg-${evt.sequence}`,
               text: content,
               streaming: false,
+              role,
               timestamp: captureMessageTimestamp(evt),
             };
             step.messages.push(msg);

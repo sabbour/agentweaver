@@ -9,7 +9,8 @@ import {
 } from '@fluentui/react-components';
 import { useParams } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
-import { formatApiErrorMessage } from '../api/errors';
+import { ApiError } from '../api/client';
+import { formatApiErrorMessage, parseApiBody } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
 import { useSeededRunStream } from '../hooks/useSeededRunStream';
 import { buildRunTimeline } from '../timeline/runTimelineSteps';
@@ -50,6 +51,14 @@ const useStyles = makeStyles({
   },
   emptyState: {
     color: tokens.colorNeutralForeground3,
+    maxWidth: '640px',
+  },
+  idleTimeoutNotice: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
     maxWidth: '640px',
   },
   approvals: {
@@ -253,13 +262,26 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     [events, runId],
   );
 
+  // Detect idle-timeout: the backend emits run.completed {reason:"idle_timeout"} when the
+  // operator run is closed due to inactivity. Treat this as a terminal state distinct from
+  // a normal completion — the composer stays editable so the user can start a new run.
+  const idleTimedOut = useMemo(
+    () => events.some(
+      (e) => e.type === 'run.completed' &&
+        typeof e.payload === 'object' &&
+        (e.payload as Record<string, unknown>)['reason'] === 'idle_timeout',
+    ),
+    [events],
+  );
+
   const handleSubmit = useCallback(async () => {
     const message = input.trim();
     if (!message || busy) return;
     setBusy(true);
     setError(null);
+    const isNewRun = !runId;
     try {
-      if (!runId) {
+      if (isNewRun) {
         const created = await apiClient.createAssistantRun({
           message,
           project_id: effectiveProjectId,
@@ -270,7 +292,28 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       }
       setInput('');
     } catch (err) {
-      setError(formatApiErrorMessage(err));
+      if (
+        isNewRun &&
+        err instanceof ApiError &&
+        err.status === 429 &&
+        parseApiBody(err.body).error === 'operator_run_limit'
+      ) {
+        setError(
+          'You have too many active assistant conversations. End one before starting another.',
+        );
+      } else if (
+        !isNewRun &&
+        err instanceof ApiError &&
+        err.status === 404 &&
+        parseApiBody(err.body).error === 'run_not_found'
+      ) {
+        // The run was idle-closed by the server. Reset to the start state so the user can
+        // open a new conversation; the transcript stays visible below the notice.
+        setRunId('');
+        setError('This conversation timed out. Start a new one below.');
+      } else {
+        setError(formatApiErrorMessage(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -300,6 +343,11 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
             running={timelineModel.running}
             emptyHint="Messages, tool calls, and activity will appear here as the assistant responds."
           />
+        )}
+        {idleTimedOut && (
+          <Text className={styles.idleTimeoutNotice} data-testid="assistant-idle-timeout">
+            Conversation ended due to inactivity. Start a new one below.
+          </Text>
         )}
         {pendingApprovals.length > 0 && (
           <div className={styles.approvals} data-testid="assistant-approvals">
