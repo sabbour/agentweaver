@@ -17,6 +17,16 @@ function resolvedTool(report, capability) {
   return item.tool;
 }
 
+// `--list` is a no-connect catalog print (the reviewed persona IDs that have MCP
+// adapters). Short-circuit before touching any transport so it works offline, matching
+// the documented behavior and run-persona.mjs --list.
+if (process.argv.includes('--list')) {
+  const { listPersonas } = await import('../../persona-briefs/index.mjs');
+  const scenarios = await listPersonas({ surface: 'mcp' });
+  process.stdout.write(`${JSON.stringify({ surface: 'mcp', mode: 'persona-adapter', scenarios }, null, 2)}\n`);
+  process.exit(0);
+}
+
 const target = arg('--target') ?? 'stdio';
 const client = await McpHarnessClient.connect({
   target,
