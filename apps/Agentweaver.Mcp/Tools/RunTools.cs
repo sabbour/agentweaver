@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
@@ -11,27 +12,119 @@ internal sealed record RetryRunResponse(
     [property: JsonPropertyName("retried_from")] string RetriedFrom,
     [property: JsonPropertyName("status")]      string Status);
 
+internal sealed record StartCoordinatorRunResponse(
+    [property: JsonPropertyName("runId")] string RunId);
+
 [McpServerToolType]
 public sealed class RunTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    [McpServerTool(Name = "run_submit"), Description("Submit a new agent run for a project.")]
+    [McpServerTool(Name = "run_submit"), Description("Legacy compatibility alias that starts a coordinator run directly in direct mode. Prefer run_task for the common one-call flow, or coordinator_start for full manual control.")]
     public async Task<string> RunSubmitAsync(
         [Description("Project ID")] string project_id,
         [Description("Task description for the agent")] string task,
         [Description("Agent name (optional)")] string? agent_name,
         [Description("Branch to base the run on (optional)")] string? base_branch,
-        [Description("Model source override (optional)")] string? model_source,
+        [Description("Model id override (optional)")] string? model_source,
         CancellationToken ct)
     {
         try
         {
-            var body = new { task, agent_name, base_branch, model_source };
-            var result = await api.PostAsync<JsonElement>($"/api/projects/{Uri.EscapeDataString(project_id)}/runs", body, ct);
-            return JsonSerializer.Serialize(result, JsonOpts);
+            if (!string.IsNullOrWhiteSpace(agent_name) || !string.IsNullOrWhiteSpace(base_branch))
+            {
+                throw new McpApiException(
+                    400,
+                    "agent_name and base_branch are not supported by coordinator runs.",
+                    $"/api/projects/{Uri.EscapeDataString(project_id)}/runs",
+                    hint: "Call coordinator_start for manual control, or remove the legacy fields and use run_task.");
+            }
+
+            var runId = await StartCoordinatorRunAsync(project_id, task, model_source, workflow_id: null, start_mode: "direct", ct);
+            var result = new JsonObject
+            {
+                ["run_id"] = runId,
+                ["status"] = "submitted",
+                ["start_mode"] = "direct"
+            };
+            return result.ToJsonString(JsonOpts);
         }
         catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "run_task"), Description("Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action.")]
+    public async Task<string> RunTaskAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Task or goal for the coordinator")] string task,
+        [Description("Workflow id override (optional)")] string? workflow_id,
+        [Description("Model id override (optional)")] string? model_id,
+        [Description("Coordinator start mode: 'direct' (default) or 'defineOutcome'")] string? start_mode,
+        [Description("Maximum seconds to wait before returning partial state (default: 600)")] int? timeout_seconds,
+        [Description("Polling interval in seconds while waiting for completion (default: 2)")] int? poll_interval_seconds,
+        CancellationToken ct)
+    {
+        try
+        {
+            var effectiveTimeout = Math.Clamp(timeout_seconds ?? 600, 1, 3600);
+            var effectivePollInterval = Math.Clamp(poll_interval_seconds ?? 2, 1, 30);
+            var effectiveStartMode = string.IsNullOrWhiteSpace(start_mode) ? "direct" : start_mode;
+
+            var runId = await StartCoordinatorRunAsync(project_id, task, model_id, workflow_id, effectiveStartMode, ct);
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(effectiveTimeout);
+            JsonElement latestRun = default;
+
+            while (true)
+            {
+                latestRun = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}", ct);
+
+                if (TryBuildGateResponse(latestRun, runId, out var gatedResponse))
+                    return gatedResponse!;
+
+                var status = GetString(latestRun, "status");
+                if (IsSuccessfulTerminalStatus(status))
+                {
+                    var artifacts = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}/files", ct);
+                    var response = new JsonObject
+                    {
+                        ["run_id"] = runId,
+                        ["status"] = status,
+                        ["artifacts"] = JsonNode.Parse(artifacts.GetRawText()),
+                        ["run"] = JsonNode.Parse(latestRun.GetRawText())
+                    };
+                    return response.ToJsonString(JsonOpts);
+                }
+
+                if (IsFailedTerminalStatus(status))
+                {
+                    var response = new JsonObject
+                    {
+                        ["run_id"] = runId,
+                        ["status"] = "failed",
+                        ["error"] = GetString(latestRun, "result") ?? $"Run ended in status '{status}'.",
+                        ["hint"] = GetFailureHint(status),
+                        ["run"] = JsonNode.Parse(latestRun.GetRawText())
+                    };
+                    return response.ToJsonString(JsonOpts);
+                }
+
+                if (DateTimeOffset.UtcNow >= deadline)
+                {
+                    var response = new JsonObject
+                    {
+                        ["run_id"] = runId,
+                        ["status"] = "timed_out",
+                        ["hint"] = "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
+                        ["run"] = JsonNode.Parse(latestRun.GetRawText())
+                    };
+                    return response.ToJsonString(JsonOpts);
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(effectivePollInterval), ct);
+            }
+        }
+        catch (McpApiException) { throw; }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
@@ -187,4 +280,85 @@ public sealed class RunTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
+    private async Task<string> StartCoordinatorRunAsync(
+        string project_id,
+        string task,
+        string? model_id,
+        string? workflow_id,
+        string start_mode,
+        CancellationToken ct)
+    {
+        var body = new JsonObject
+        {
+            ["goal"] = task,
+            ["start_mode"] = start_mode
+        };
+
+        if (!string.IsNullOrWhiteSpace(model_id))
+            body["modelId"] = model_id;
+        if (!string.IsNullOrWhiteSpace(workflow_id))
+            body["workflow_override_id"] = workflow_id;
+
+        var result = await api.PostAsync<StartCoordinatorRunResponse>(
+            $"/api/projects/{Uri.EscapeDataString(project_id)}/orchestrations",
+            body,
+            ct);
+
+        return result.RunId;
+    }
+
+    private static bool TryBuildGateResponse(JsonElement run, string runId, out string? response)
+    {
+        var status = GetString(run, "status");
+        var coordinatorStatus = GetString(run, "coordinator_status");
+
+        if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = new JsonObject
+            {
+                ["run_id"] = runId,
+                ["status"] = "awaiting_review",
+                ["review_prompt"] = "Run is awaiting human review. Call run_review, then rerun run_task or poll with run_status.",
+                ["run"] = JsonNode.Parse(run.GetRawText())
+            };
+            response = payload.ToJsonString(JsonOpts);
+            return true;
+        }
+
+        if (string.Equals(coordinatorStatus, "awaiting_confirmation", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = new JsonObject
+            {
+                ["run_id"] = runId,
+                ["status"] = "awaiting_confirmation",
+                ["review_prompt"] = "Coordinator drafted an outcome spec. Call coordinator_outcome_spec_get to inspect it, then coordinator_outcome_spec_confirm or coordinator_outcome_spec_revise.",
+                ["run"] = JsonNode.Parse(run.GetRawText())
+            };
+            response = payload.ToJsonString(JsonOpts);
+            return true;
+        }
+
+        response = null;
+        return false;
+    }
+
+    private static string? GetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static bool IsSuccessfulTerminalStatus(string? status) =>
+        status is "completed" or "merged" or "assemble_ready";
+
+    private static bool IsFailedTerminalStatus(string? status) =>
+        status is "failed" or "declined" or "merge_failed";
+
+    private static string GetFailureHint(string? status) =>
+        status switch
+        {
+            "failed" => "Call run_status for the failure detail, then use run_retry if you want a fresh attempt.",
+            "declined" => "A reviewer declined this run. Inspect run_status or run_show_artifacts, revise the task, then retry.",
+            "merge_failed" => "Inspect run_status for merge_conflicts, resolve the blocking issue, then retry or resubmit.",
+            _ => "Call run_status for details before retrying."
+        };
 }

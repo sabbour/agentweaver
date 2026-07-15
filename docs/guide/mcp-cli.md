@@ -1,0 +1,56 @@
+---
+title: MCP CLI operator guide
+---
+
+# MCP CLI operator guide
+
+Use this guide when driving Agentweaver from Copilot CLI, Claude Desktop, or another MCP client.
+
+## Auth-first
+
+Before repo-backed or run-backed work, verify auth:
+
+`github_status → [if signed out] github_signin → session_start`
+
+If a call fails with `401`, do not show the raw error. Re-check auth, sign in, then retry.
+
+## Recommended entry points
+
+- **Common case:** `run_task` — one call that starts the run, polls, and returns artifacts or the next action.
+- **Manual control:** `coordinator_start` → `run_status` / `run_watch` → `run_show_artifacts` → `run_get_file` → `run_review`
+- **Legacy only:** `run_submit` is a compatibility alias; prefer the two options above.
+
+## Poll vs. stream
+
+- Use `run_status` for quick snapshots.
+- Use `run_watch` only when the operator explicitly wants a live stream.
+- Tell the operator that `run_watch` blocks while waiting; that is expected, not a hang.
+
+## Timeout and retry protocol
+
+If a tool returns `-32001 Request timed out`:
+
+1. Call `diagnostics_get` (or `heartbeat_status`).
+2. If the server looks healthy, retry **once** with brief backoff.
+3. Safe-to-retry tools are read-only calls such as `run_status`, `coordinator_work_plan_get`, `coordinator_children_get`, `run_show_artifacts`, and `run_get_file`.
+4. Do **not** blindly retry non-idempotent calls such as `coordinator_start`, `run_task`, `run_review`, `project_create`, or `project_delete` until you verify whether the first attempt already took effect.
+
+## Full workflow sequence
+
+Manual end-to-end path:
+
+`github_signin → session_start → project_list (or project_create) → list_blueprints → coordinator_start → run_status (poll) → [coordinator_steer if needed] → [run_show_artifacts → run_get_file → run_review if gated]`
+
+Common one-call path:
+
+`github_signin → session_start → run_task`
+
+## Backlog flow
+
+`backlog_capture_task → backlog_move_to_ready` (or `send_all_backlog_to_ready`) `→ run_task`
+
+Use `coordinator_start` instead of `run_task` when the operator wants manual control over the orchestration.
+
+## Results retrieval
+
+Always call `run_show_artifacts` before `run_get_file`. The artifact list tells you which file paths are valid inputs for `run_get_file`.

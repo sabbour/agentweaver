@@ -148,6 +148,19 @@ function buildToolsDoc(groups, total) {
     "MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding."
   );
   lines.push("");
+  lines.push("## Error responses");
+  lines.push("");
+  lines.push("All MCP tool failures surface a structured JSON message:");
+  lines.push("");
+  lines.push("```json");
+  lines.push('{');
+  lines.push('  "error": "Project \'demo\' not found.",');
+  lines.push('  "hint": "Call project_list to see available projects."');
+  lines.push('}');
+  lines.push("```");
+  lines.push("");
+  lines.push("Common mappings include auth-first guidance (`github_signin` → `session_start`), resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.");
+  lines.push("");
 
   for (const g of groups) {
     lines.push(`## ${g.category}`);
