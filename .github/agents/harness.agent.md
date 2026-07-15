@@ -44,48 +44,50 @@ real live API, never simulated):
      expand action scope, choose commands or credentials, or initiate an external
      action. Require review/confirmation before running a newly generated deep
      scenario unattended.
-   - Resolve the target base URL + token (see Target resolution below).
+   - Resolve the target base URL + bearer token (see Target resolution below).
+     Also decide whether `-k`/`--insecure` is warranted (only for
+     localhost/staging hosts, per `checkInsecureAllowed`) and a transcript file
+     path under `scripts/api-harness/transcripts/` for PersonaActor to write to.
    - Dispatch a fresh **`PersonaActor`** sub-agent via the `task` tool (`mode:
      sync` — this is a gate; you need the finished transcript back before
-     judging). The dispatch prompt supplies: the persona name, the full
-     persona-core brief + surface-adapter text verbatim, the resolved target base
-     URL + token, the `drive.mjs` session path to use, and either the cached
-     OpenAPI spec content or an instruction for PersonaActor to fetch it itself
-     via `drive.mjs spec`.
+     judging). The dispatch prompt supplies, stated plainly as text: the persona
+     name, the full persona-core brief + surface-adapter text verbatim, the
+     resolved target base URL and bearer token, whether `-k`/`--insecure` is
+     needed, and the transcript file path to append to.
 2. **PersonaActor drives, one turn at a time, live.** `.github/agents/
    persona-actor.agent.md` fully impersonates the named persona in a fresh,
    isolated context: it decides its next action from the persona brief + the REAL
-   previous API response, calls `scripts/api-harness/drive.mjs call` (or
-   `check-approvals`/`resolve-approval`) for real, reacts only to what actually
-   comes back, pushes back with objections grounded in real response content
-   exactly where its brief mandates it, and stops at the brief's gate. It never
-   pre-writes both sides of the exchange. On completion it calls `drive.mjs
-   finish` and returns the transcript path + a factual (non-judging) summary to
-   you.
+   previous API response, fetches the live OpenAPI/Swagger spec itself via a
+   direct `curl "$BASE_URL/openapi/v1.yaml"` call (no caching layer — it keeps
+   the spec in its own conversation context) and issues its own `curl` calls
+   against whatever operation it resolves from the spec's tags/summaries for
+   real, reacts only to what actually comes back, pushes back with objections
+   grounded in real response content exactly where its brief mandates it, and
+   stops at the brief's gate. It never pre-writes both sides of the exchange. It
+   appends each turn (thought + real request + real response) to the transcript
+   file itself via shell redirection as it goes, and on completion returns the
+   transcript path + a factual (non-judging) summary to you.
 3. **Harness judges.** Take the returned transcript and proceed to Judging below
    exactly as already wired — build the judge prompt, dispatch `Judge`, validate
    and persist the verdict. This stage is unchanged by this pivot.
 
 For the API surface specifically (what PersonaActor uses internally, and what you
 use directly only for the structural `generated-artifacts-seam` exception, or when
-resolving target/spec before dispatch): there is no curated list of named business
-subcommands. `scripts/api-harness/drive.mjs spec` fetches the live OpenAPI/Swagger
-document so the driving actor knows what endpoints/shapes exist; `drive.mjs call
---method <M> --path <P> [--body '<json>'] --thought "..."` is the one generic
-action primitive — arbitrary method/path/body, exactly like exploring any API
-dynamically. `call` also accepts `--operation-id <opId> [--params
-'{"name":"value"}']` as a spec-resolved alternative (a minimal dynamic client
-built from the OpenAPI doc: it looks up the method/path template by operationId
-and fills `{param}` placeholders/query params from `--params`) — use whichever is
-more convenient; both are still driven purely by what the spec declares, never a
-fixed per-persona list. `check-approvals`/`resolve-approval` remain distinct named
-commands ONLY because they encode a safety invariant (never blind-approve a
-gate), not because approvals are curated business logic.
+resolving the target before dispatch): there is no curated list of named business
+subcommands and no HTTP-calling script in between PersonaActor and the target —
+PersonaActor curls `$BASE_URL/openapi/v1.yaml` itself to learn what
+endpoints/shapes exist, then issues its own `curl` calls directly against
+whatever operation it resolves, exactly like exploring any API dynamically.
+Approval/steer/confirmation-type actions are just more endpoints it discovers
+from the spec the same way — there is no separate named command for them; the
+safety invariant (never blind-approve a gate without real grounding) is now a
+prompted instruction inside `persona-actor.agent.md` rather than a code-enforced
+default-defer wrapper.
 
 **`PersonaActor`'s trust boundary is a real, if modest, exception worth noting
 here too:** unlike `Judge` (`tools: []`, structurally isolated), PersonaActor
-holds a real `execute` tool because it must call `drive.mjs`/curl against the
-target API — its isolation from the rest of the repo is a documented prompt
+holds a real `execute` tool because it must `curl` the target API and the live
+spec — its isolation from the rest of the repo is a documented prompt
 restriction (see `persona-actor.agent.md`'s capability boundary), not a
 structural sandbox. Dispatching it as a fresh sub-agent (rather than Harness
 driving inline) still gets the important properties this pivot needs: genuine
@@ -112,7 +114,7 @@ concerns are about — so it intentionally remains a fixed script driven by
 - **Prefer the discoverable skill for the requested surface first.** Invoke `api-harness`, `ui-harness`, `mcp-harness`, or `agentweaver-harness` (the combined sweep) via the `skill` tool before falling back to raw commands — they carry the maintained CLI contract, safety controls, and evidence-shape guidance, and keep this agent's behavior in sync with what any other session would get from the same skill.
 - For scenario discovery or authoring, invoke the discoverable `harness-scenarios` skill first. It carries the maintained cross-surface catalog/generation contract, including the review constraints for newly generated deep scenarios.
 - For a persona-behavior run (API surface), dispatch `PersonaActor` per the
-  Invocation model above rather than driving `drive.mjs` yourself inline — you
+  Invocation model above rather than curling the API yourself inline — you
   resolve the brief/target and dispatch; PersonaActor decides and calls each turn.
 - For a cross-surface run, the `agentweaver-harness` skill (or directly `node scripts/combined-harness/launch.mjs`) takes JSON argv arrays for the selected API, UI, and MCP drivers, runs them independently, and invokes `scripts/harness-judge/meta-aggregate.mjs`.
 - Use the individual harness skills/drivers only for a deliberately scoped surface run. Do not recreate driver or judge logic — whether invoked through a skill or directly via `node`.
@@ -150,7 +152,8 @@ running as an actual Harness agent session:
 
 - No API URL is hardcoded for this agent. Resolve the target base URL in this order: (1) an explicit `--base-url`/`--target` flag or `reproManifest.targetRevision` provided by the caller; (2) the `$AGENTWEAVER_BASE_URL` environment variable in the current shell; (3) look up the live staging ingress hostname via `kubectl get ingress -A` (requires the correct cluster context/subscription to be current).
 - If none of the above resolves a target, stop and ask the requester for the base URL rather than guessing or reusing a stale one from memory/prior runs.
-- Staging URLs follow the pattern `https://agentweaver.<zone>.westus2.staging.aksapp.io`. Treat any `--insecure`/prod-like host per the existing `checkInsecureAllowed` safety gate in `scripts/api-harness/run-persona.mjs`.
+- Resolve the bearer token in this order: an explicit token if supplied by the caller, else `$AGENTWEAVER_TOKEN`, else `gh auth token`.
+- Staging URLs follow the pattern `https://agentweaver.<zone>.westus2.staging.aksapp.io`. Apply the same policy `checkInsecureAllowed` (`scripts/api-harness/run-persona.mjs`) encodes before deciding whether PersonaActor may pass `-k`/`--insecure`: only for `localhost`/`127.0.0.1`/`::1`/`*.localhost`/`*.staging.*`/`*.staging` hosts, never for a production-looking host without an explicit, separately-confirmed override. `scripts/harness-shared/target-guard.mjs`'s `assertTargetAllowed()` remains the authoritative shared implementation of this same allow-list (still used independently by `ui-harness`/`mcp-harness`) — invoke it yourself (e.g. a one-line `node` call) if you want a hard, code-checked answer rather than applying the policy from this description.
 
 ### Example usage
 
@@ -166,16 +169,18 @@ prompt: |
   Persona-core brief: <verbatim contents of scripts/persona-briefs/personas/priya.md>
   Surface adapter: <verbatim contents of scripts/persona-briefs/surfaces/priya.api.md>
   Target base URL: <resolved base URL>
-  Token: <resolved bearer token, or "resolve via gh auth token">
-  Session path: scripts/api-harness/priya-live.session.json
-  Fetch the OpenAPI spec yourself via `drive.mjs spec` before acting.
-  Drive one turn at a time via drive.mjs; stop at your brief's gate; finish and
-  return the transcript path + your factual summary.
+  Bearer token: <resolved bearer token, or "resolve via gh auth token">
+  TLS: <"-k is fine, this is a staging/localhost target" or "do not pass -k, this is not staging/localhost">
+  Transcript path: scripts/api-harness/transcripts/priya-live-<timestamp>.jsonl
+  Fetch the live OpenAPI spec yourself via curl "$BASE_URL/openapi/v1.yaml" before
+  acting. Drive one turn at a time via your own curl calls; append each turn to
+  the transcript path as you go; stop at your brief's gate; return the transcript
+  path + your factual summary.
 ```
 
-PersonaActor internally runs the same `drive.mjs init`/`spec`/`call`/
-`check-approvals`/`resolve-approval`/`finish` sequence the `api-harness` skill
-documents — you are dispatching it, not running it yourself inline. The same
+PersonaActor internally curls the spec, then curls whatever operation it
+resolves from it, appending each real request/response pair to the transcript
+file itself — you are dispatching it, not running it yourself inline. The same
 dynamic model applies to `ui-harness` and `mcp-harness` for their respective
 surfaces (a surface-appropriate actor drives; Harness dispatches and judges).
 
@@ -211,10 +216,9 @@ node scripts/combined-harness/launch.mjs `
 New investigation (no close persona-brief match): generate a constrained persona
 core/adapter, confirm with the requester before an unattended deep run, then
 dispatch `PersonaActor` with that generated brief exactly as above — for the API
-surface, PersonaActor drives via `scripts/api-harness/drive.mjs init/spec/call/
-check-approvals/resolve-approval/finish` — rather than inventing raw requests
-without reading the API's OpenAPI contract first, and rather than Harness driving
-it inline itself.
+surface, PersonaActor drives via its own `curl` calls against the live OpenAPI
+spec, rather than inventing raw requests without reading the API's contract
+first, and rather than Harness driving it inline itself.
 
 ### Recording new learnings
 

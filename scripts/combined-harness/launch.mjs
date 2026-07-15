@@ -48,9 +48,10 @@ export function buildCommands(args, tokens) {
     // Default targets the one remaining fixed, one-shot API check: the structural
     // generation-seam conformance test (no persona/pushback dimension, so it fits
     // this launcher's single-child-process-per-surface model). A dynamically-
-    // driven persona scenario (drive.mjs) is a multi-turn LLM-in-the-loop session,
-    // not a one-shot command — pass an explicit `--api-command` that wraps your
-    // own driving session if you need a persona scenario in a cross-surface sweep.
+    // driven persona scenario is a multi-turn, dispatched-sub-agent (PersonaActor)
+    // session driven by its own curl calls against the live API/OpenAPI spec, not
+    // a one-shot command — pass an explicit `--api-command` that wraps your own
+    // driving session if you need a persona scenario in a cross-surface sweep.
     api: commandFromJson(args['api-command'], 'api-command') ?? [
       'node', 'scripts/api-harness/run-persona.mjs', '--scenario', 'generated-artifacts-seam',
       '--batch-id', '{batchId}', '--out', '{verdictDir}/api.json',

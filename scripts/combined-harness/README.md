@@ -20,10 +20,11 @@ node scripts/combined-harness/launch.mjs `
 
 The API command defaults to `run-persona.mjs --scenario generated-artifacts-seam` —
 the one remaining fixed, one-shot structural check. A dynamically-driven persona
-scenario (`scripts/api-harness/drive.mjs`) is a multi-turn LLM-in-the-loop session,
-not a single child process with a fixed exit + verdict file, so it does not fit
-this launcher's one-command-per-surface model as-is; pass your own `--api-command`
-wrapping a driving session if you need a persona scenario in a cross-surface sweep.
+scenario is a multi-turn session where a dispatched `PersonaActor` sub-agent
+curls the live API/OpenAPI spec directly, not a single child process with a fixed
+exit + verdict file, so it does not fit this launcher's one-command-per-surface
+model as-is; pass your own `--api-command` wrapping a driving session if you need
+a persona scenario in a cross-surface sweep.
 UI and MCP commands are explicit because their current standalone CLIs require
 surface-specific session/target configuration. A nonzero child exit, absent
 verdict, or aggregation failure is recorded in `launcher-report.json`; completed

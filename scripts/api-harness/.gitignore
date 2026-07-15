@@ -1,4 +1,0 @@
-# Scratch session state / cache for the dynamic persona driver — run artifacts, not source.
-session.current.json
-openapi.cache.json
-*.session.json

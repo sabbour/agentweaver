@@ -2,10 +2,12 @@
 // Generated-artifact SEAM checker — CLI entry point.
 //
 // NOTE: this file NO LONGER drives persona scenarios. Persona-behavior scenarios
-// (Priya, Jordan, ...) are driven dynamically via `drive.mjs` — a driving LLM
-// issues live API calls guided by a persona-brief + the OpenAPI spec, deciding
-// every next action (including pushback/objections) itself, rather than replaying
-// a fixed step sequence. See drive.mjs's header and .github/agents/harness.agent.md.
+// (Priya, Jordan, ...) are driven dynamically by a dispatched PersonaActor
+// sub-agent that curls the live API directly, guided by a persona-brief + the
+// live OpenAPI/Swagger spec it fetches itself — deciding every next action
+// (including pushback/objections) live from real responses, with no scripted
+// HTTP-calling layer in between. See .github/agents/persona-actor.agent.md and
+// .github/agents/harness.agent.md.
 //
 // This file remains the entry point ONLY for `scenarios/generated-artifacts-seam.mjs`
 // (kind: 'generation-seam') — a deterministic STRUCTURAL conformance check of the
@@ -150,9 +152,10 @@ async function main() {
   if (kind !== 'generation-seam') {
     console.error(
       `error: run-persona.mjs only drives kind: 'generation-seam' scenarios (structural generator ` +
-      `checks). Persona-behavior scenarios (Priya, Jordan, ...) are no longer fixed scripts — drive ` +
-      `them dynamically via 'node drive.mjs init/spec/call/...' guided by a persona brief. See ` +
-      `.github/agents/harness.agent.md.`,
+      `checks). Persona-behavior scenarios (Priya, Jordan, ...) are no longer fixed scripts and are ` +
+      `not run through this file at all — dispatch a PersonaActor sub-agent that curls the live API ` +
+      `directly against the fetched OpenAPI/Swagger spec, guided by the persona brief. See ` +
+      `.github/agents/persona-actor.agent.md and .github/agents/harness.agent.md.`,
     );
     return 2;
   }
