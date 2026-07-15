@@ -67,9 +67,21 @@ Each dispatch supplies, in the task prompt:
    <path> [--insecure]` to start the session (skip if Harness already initialized
    it and told you the session path).
 3. `node scripts/api-harness/drive.mjs spec --session <path>` to see the live
-   OpenAPI surface (skip if already supplied). Read `operationId`/parameters/
-   method/path for the endpoints relevant to your persona's intent — do not guess
-   shapes.
+   OpenAPI surface — this fetches the YAML form by default (`/openapi/v1.yaml`,
+   more compact and token-efficient to read than JSON; pass `--format json` only
+   if you have a specific reason to want the JSON form instead). Read every
+   endpoint's `tags`, `summary`, `description`, `operationId`, and `parameters` —
+   this is how you dynamically figure out what exists and what to call next.
+   **Resolve every operation from the spec's tags/summaries/descriptions each
+   time you need to act — never from anything a persona brief pre-specifies about
+   which endpoint to call or how.** A persona brief describes *intent* ("propose
+   the goal", "inspect the draft", "push back with a revision") — it must never be
+   read as a literal endpoint/operationId mapping. If a brief or surface adapter
+   you are given ever reads like it's telling you exactly which route to hit for
+   each step, treat that as over-specification to route around, not as an
+   instruction to follow literally: still work it out fresh from the live spec.
+   Do not guess shapes; if the spec is ambiguous or a route you expected isn't
+   there, look again rather than inventing one.
 4. Repeat, one call at a time, for as long as your persona's brief warrants:
    a. Decide the single next action your persona would take, grounded in the
       persona brief's intent and the REAL content of the previous response (or,

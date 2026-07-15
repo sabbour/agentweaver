@@ -9,7 +9,7 @@
 // primitives that make that possible:
 //
 //   node drive.mjs init   --brief <persona> --base-url <url> [--insecure]
-//   node drive.mjs spec   [--refresh]                              # read the API surface
+//   node drive.mjs spec   [--refresh] [--format yaml|json]         # read the API surface (YAML by default)
 //   node drive.mjs call   --method GET|POST|PUT|DELETE --path "/api/..." [--body '<json>'] --thought "..."
 //   node drive.mjs call   --operation-id <opId> [--params '{"id":"..."}'] [--body '<json>'] --thought "..."
 //   node drive.mjs check-approvals  --thought "..."
@@ -66,6 +66,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
+import { parse as parseYaml } from 'yaml';
+
 import { AgentweaverClient } from './lib/client.mjs';
 import { detectPendingApprovals, describeGate } from './lib/approvals.mjs';
 import { decideApproval, executeApprovalDecision, makeDefaultJudge } from './lib/approval-judge.mjs';
@@ -94,10 +96,13 @@ import { loadPersona } from '../persona-briefs/index.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TRANSCRIPTS_DIR = join(HERE, 'transcripts');
 
-// Candidate OpenAPI/Swagger document locations, tried in order. The backend does
-// not yet serve one of these (tracked as a follow-up with the API owner — see
-// README "Known gap"); `spec` reports that plainly rather than pretending success.
-const OPENAPI_CANDIDATE_PATHS = ['/openapi/v1.json', '/swagger/v1/swagger.json'];
+// Candidate OpenAPI document locations, tried in order. YAML is preferred by
+// default — it's what Tank shipped specifically for LLM consumption (more
+// compact/token-efficient to read than the equivalent JSON) — with JSON kept as
+// an explicit fallback (`spec --format json`) and as a safety net if an older
+// target instance doesn't yet serve the YAML variant.
+const OPENAPI_YAML_PATHS = ['/openapi/v1.yaml'];
+const OPENAPI_JSON_PATHS = ['/openapi/v1.json', '/swagger/v1/swagger.json'];
 
 function parseArgs(argv) {
   const out = {};
@@ -254,12 +259,13 @@ const COMMANDS = {
     });
   },
 
-  // Fetch (and cache) the API's OpenAPI/Swagger document so the driving LLM knows
-  // what endpoints/shapes exist, instead of guessing or reinventing raw requests
-  // blind. KNOWN GAP: apps/Agentweaver.Api does not yet serve one (no Swashbuckle /
-  // Microsoft.AspNetCore.OpenApi wiring in Program.cs as of this writing) — this
-  // command reports that plainly and falls back to pointing at
-  // apps/Agentweaver.Api/API.md as the interim hand-written reference.
+  // Fetch (and cache) the API's OpenAPI document so the driving actor knows what
+  // endpoints/shapes exist, instead of guessing or reinventing raw requests
+  // blind. Prefers the YAML form by default (`/openapi/v1.yaml`) — Tank shipped
+  // it specifically so a driving LLM can read a more compact, token-efficient
+  // document than the equivalent JSON; pass `--format json` to force the JSON
+  // form instead (falls back to it automatically too, in case an older target
+  // instance only serves JSON/Swagger).
   async spec(args) {
     const session = await loadSession();
     const client = newClient(session, resolveToken(args.token));
@@ -269,36 +275,60 @@ const COMMANDS = {
       print({ ...cached, fromCache: true });
       return;
     }
-    for (const p of OPENAPI_CANDIDATE_PATHS) {
+    const wantJson = String(args.format ?? '').toLowerCase() === 'json';
+    const candidatePaths = wantJson ? OPENAPI_JSON_PATHS : [...OPENAPI_YAML_PATHS, ...OPENAPI_JSON_PATHS];
+    for (const p of candidatePaths) {
       const res = await client.get(p);
-      if (res.status === 200 && res.responseBody && typeof res.responseBody === 'object') {
-        const paths = res.responseBody.paths ?? {};
-        const endpoints = Object.entries(paths).flatMap(([path, ops]) =>
-          Object.entries(ops ?? {}).map(([method, op]) => ({
-            method: method.toUpperCase(),
-            path,
-            operationId: op?.operationId ?? null,
-            summary: op?.summary ?? op?.operationId ?? null,
-            // Path/query parameter names — lets `call --operation-id` substitute
-            // {param} placeholders and build the query string dynamically, i.e. a
-            // minimal dynamic client built FROM the spec rather than a fixed list
-            // of named actions per persona.
-            parameters: Array.isArray(op?.parameters)
-              ? op.parameters.map((prm) => ({ name: prm?.name, in: prm?.in, required: !!prm?.required }))
-              : [],
-            hasRequestBody: !!op?.requestBody,
-          })),
-        );
-        const result = { available: true, source: p, endpointCount: endpoints.length, endpoints };
-        await writeFile(cachePath, JSON.stringify(result, null, 2), 'utf8');
-        print(result);
-        return;
+      if (res.status !== 200 || !res.responseBody) continue;
+      const isYaml = p.endsWith('.yaml') || p.endsWith('.yml');
+      let doc;
+      if (isYaml) {
+        // client.get already tried JSON.parse and falls back to raw text for
+        // non-JSON bodies, so a YAML response body arrives here as plain text.
+        try {
+          doc = typeof res.responseBody === 'string' ? parseYaml(res.responseBody) : res.responseBody;
+        } catch {
+          continue; // malformed YAML at this candidate — try the next one
+        }
+      } else {
+        doc = typeof res.responseBody === 'object' ? res.responseBody : null;
       }
+      if (!doc || typeof doc !== 'object') continue;
+
+      const paths = doc.paths ?? {};
+      const endpoints = Object.entries(paths).flatMap(([path, ops]) =>
+        Object.entries(ops ?? {}).map(([method, op]) => ({
+          method: method.toUpperCase(),
+          path,
+          operationId: op?.operationId ?? null,
+          summary: op?.summary ?? op?.operationId ?? null,
+          description: op?.description ?? null,
+          tags: Array.isArray(op?.tags) ? op.tags : [],
+          // Path/query parameter names — lets `call --operation-id` substitute
+          // {param} placeholders and build the query string dynamically, i.e. a
+          // minimal dynamic client built FROM the spec rather than a fixed list
+          // of named actions per persona.
+          parameters: Array.isArray(op?.parameters)
+            ? op.parameters.map((prm) => ({ name: prm?.name, in: prm?.in, required: !!prm?.required }))
+            : [],
+          hasRequestBody: !!op?.requestBody,
+        })),
+      );
+      const result = {
+        available: true,
+        source: p,
+        sourceFormat: isYaml ? 'yaml' : 'json',
+        endpointCount: endpoints.length,
+        endpoints,
+      };
+      await writeFile(cachePath, JSON.stringify(result, null, 2), 'utf8');
+      print(result);
+      return;
     }
     print({
       available: false,
-      triedPaths: OPENAPI_CANDIDATE_PATHS,
-      note: 'No OpenAPI/Swagger document is currently served by this API instance.',
+      triedPaths: candidatePaths,
+      note: 'No OpenAPI document is currently served by this API instance.',
       fallback: 'apps/Agentweaver.Api/API.md (hand-written endpoint reference in the repo)',
     });
   },

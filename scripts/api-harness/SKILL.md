@@ -35,11 +35,12 @@ node scripts/api-harness/drive.mjs finish --summary "Persona investigation compl
 ```
 
 `init` prints the persona brief text and verifies auth. `spec` fetches (and
-caches) the live OpenAPI document at `/openapi/v1.json` (JSON remains the
-driver's primary format; the same contract is also available at
-`/openapi/v1.yaml`, and the driver still falls back to `/swagger/v1/swagger.json`
-if needed) so the
-driving LLM knows what endpoints/shapes exist instead of guessing. `call` is the
+caches) the live OpenAPI document, preferring the YAML form at `/openapi/v1.yaml`
+by default (more compact/token-efficient for an LLM to read than the equivalent
+JSON) — pass `--format json` to fetch `/openapi/v1.json` instead, which the
+driver also falls back to automatically, along with `/swagger/v1/swagger.json`,
+if YAML isn't available from the target instance — so the driving actor knows
+what endpoints/shapes exist instead of guessing. `call` is the
 one generic action primitive — arbitrary method/path/body, OR a spec-resolved
 `--operation-id` (see below) — and records every turn (with `--thought`, the
 persona's live reasoning) verbatim into the session transcript. Two commands
