@@ -150,3 +150,14 @@ scripts/api-harness/scenarios/*.mjs (fixed per-persona step sequences) and agent
 - status: open
 
 Harness no longer reasons inline as if it were the persona while driving drive.mjs. It resolves the persona brief + target/token, then dispatches a fresh, isolated PersonaActor sub-agent (.github/agents/persona-actor.agent.md, tools: [execute]) via task (mode: sync) with the persona brief/adapter text, target/token, session path, and OpenAPI spec injected into the per-invocation prompt -- mirroring how judge.agent.md bakes in shared methodology while evidence comes from the prompt. PersonaActor decides one action at a time from the persona brief + the REAL previous API response (never pre-writing both sides of the exchange), calls it for real via drive.mjs, grounds every pushback in real response content, stops at its brief's gate, then finishes and returns the transcript to Harness for judging. drive.mjs itself is unchanged -- this is purely about WHO calls it. Known caveat: unlike Judge (tools: [], structurally isolated), PersonaActor holds a real execute tool -- its isolation from the rest of the repo is a documented prompt restriction, not a structural sandbox. Do not re-fold persona driving back into Harness reasoning inline, and do not assume PersonaActor's isolation is tool-enforced the way Judge's is.
+
+---
+
+## drive.mjs deleted -- PersonaActor curls the API/spec directly, no HTTP-calling script
+
+- date: 2026-07-15
+- category: scenario-design-note
+- surface: api
+- status: open
+
+drive.mjs (init/spec/call/check-approvals/resolve-approval/finish) was deleted entirely -- do NOT re-add a scripted HTTP-calling/operationId-resolution/spec-caching layer between PersonaActor and the target API. PersonaActor is a real Copilot CLI agent with shell/execute access: it curls /openapi/v1.yaml directly, resolves operations from the live spec each turn via its own reasoning, issues its own curl calls with the bearer token, and appends transcript turns itself via shell redirection -- see .github/agents/persona-actor.agent.md. Approval/steer actions are just more discoverable endpoints now; the previous code-enforced default-defer approval judge (lib/approvals.mjs/lib/approval-judge.mjs) is preserved in the repo (still tested) but is unused by any production path -- the safety invariant is now a PROMPTED instruction in persona-actor.agent.md, not a structural default. Harness's Target resolution section documents the production/staging safety policy explicitly (scripts/harness-shared/target-guard.mjs remains the authoritative shared implementation, still used by ui-harness/mcp-harness) since it is no longer implicitly invoked by a drive.mjs init call. See decision Morpheus-deleted-drive-mjs-entirely-personaactor-now-curls-.
