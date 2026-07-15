@@ -25,9 +25,30 @@ public sealed record OperatorAssistantRequest(
 
 public sealed record OperatorAssistantResponse(string Message, IReadOnlyList<string> ToolNamesInvoked);
 
+/// <summary>
+/// Real-time sink for a single operator turn. The assistant invokes these callbacks as the turn
+/// streams so a caller (e.g. AssistantRunService) can project each assistant/tool step onto the run
+/// event stream in order. All members are optional to implement; a null sink disables streaming
+/// projection (the turn still returns its final <see cref="OperatorAssistantResponse"/>).
+/// </summary>
+public interface IOperatorAssistantTurnSink
+{
+    /// <summary>A streamed slice of the assistant's textual answer.</summary>
+    ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct);
+
+    /// <summary>The assistant asked to call an MCP tool. <paramref name="argumentsJson"/> may be null.</summary>
+    ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct);
+
+    /// <summary>A tool call completed. <paramref name="success"/> reflects whether the tool returned an error.</summary>
+    ValueTask OnToolResultAsync(string toolName, bool success, CancellationToken ct);
+}
+
 public interface IOperatorAssistantAgent
 {
-    Task<OperatorAssistantResponse> RunTurnAsync(OperatorAssistantRequest request, CancellationToken ct);
+    Task<OperatorAssistantResponse> RunTurnAsync(
+        OperatorAssistantRequest request,
+        IOperatorAssistantTurnSink? sink,
+        CancellationToken ct);
 }
 
 /// <summary>
@@ -53,7 +74,10 @@ public sealed class OperatorAssistantAgent(
         WriteIndented = false,
     };
 
-    public async Task<OperatorAssistantResponse> RunTurnAsync(OperatorAssistantRequest request, CancellationToken ct)
+    public async Task<OperatorAssistantResponse> RunTurnAsync(
+        OperatorAssistantRequest request,
+        IOperatorAssistantTurnSink? sink,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.CallerUser))
@@ -115,6 +139,7 @@ public sealed class OperatorAssistantAgent(
         var answer = new StringBuilder();
         var streamedMessageIds = new HashSet<string>(StringComparer.Ordinal);
         var anyDeltaForNullId = false;
+        var invokedTools = new List<string>();
 
         try
         {
@@ -130,6 +155,39 @@ public sealed class OperatorAssistantAgent(
                         streamedMessageIds.Add(chunk.MessageId);
                     else
                         anyDeltaForNullId = true;
+
+                    if (sink is not null)
+                        await sink.OnAssistantTextDeltaAsync(delta, ct).ConfigureAwait(false);
+                }
+
+                // Surface the actual tool activity (not the whole tool catalog) so callers can
+                // project a faithful per-step transcript onto the run event stream.
+                if (chunk.Contents is not null)
+                {
+                    foreach (var content in chunk.Contents)
+                    {
+                        switch (content)
+                        {
+                            case FunctionCallContent call:
+                                invokedTools.Add(call.Name);
+                                if (sink is not null)
+                                {
+                                    var argsJson = call.Arguments is null
+                                        ? null
+                                        : JsonSerializer.Serialize(call.Arguments, JsonOptions);
+                                    await sink.OnToolCallAsync(call.Name, argsJson, ct).ConfigureAwait(false);
+                                }
+                                break;
+                            case FunctionResultContent result:
+                                if (sink is not null)
+                                {
+                                    var toolName = ResolveToolName(result, invokedTools);
+                                    var success = result.Exception is null;
+                                    await sink.OnToolResultAsync(toolName, success, ct).ConfigureAwait(false);
+                                }
+                                break;
+                        }
+                    }
                 }
 
                 var final = ExtractFinalMessageContent(chunk);
@@ -153,8 +211,13 @@ public sealed class OperatorAssistantAgent(
         if (string.IsNullOrWhiteSpace(text))
             text = "I could not produce an operator response. Try rephrasing the request with a project or run context.";
 
-        return new OperatorAssistantResponse(text, toolDeclarations.Select(t => t.Name).ToList());
+        return new OperatorAssistantResponse(text, invokedTools);
     }
+
+    private static string ResolveToolName(FunctionResultContent result, IReadOnlyList<string> invokedTools) =>
+        !string.IsNullOrEmpty(result.CallId)
+            ? invokedTools.LastOrDefault() ?? result.CallId
+            : invokedTools.LastOrDefault() ?? "tool";
 
     /// <summary>
     /// Builds the Copilot session config that wires the MCP tool set (as AIFunctionDeclarations) into

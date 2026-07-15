@@ -1029,6 +1029,49 @@ public sealed record ConsoleClarification
     [JsonPropertyName("options")] public IReadOnlyList<string>? Options { get; init; }
 }
 
+// -----------------------------------------------------------------------
+// Operator assistant (#346) — MCP-driven operator chat modeled as a lightweight
+// "operator run" in the run store. The conversation streams over the existing
+// GET /api/runs/{id}/stream and /events endpoints (AgentName == "Operator").
+// -----------------------------------------------------------------------
+
+/// <summary>Request body for POST /api/assistant/runs. All fields optional; an initial
+/// <see cref="Message"/> runs the first turn immediately, otherwise the run is created empty.</summary>
+public sealed record StartAssistantRunRequest
+{
+    [JsonPropertyName("message")] public string? Message { get; init; }
+    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("model_id")] public string? ModelId { get; init; }
+}
+
+/// <summary>Response body for POST /api/assistant/runs.</summary>
+public sealed record StartAssistantRunResponse
+{
+    [JsonPropertyName("run_id")] public required string RunId { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    /// <summary>Assistant reply for the initial turn when a message was supplied; null otherwise.</summary>
+    [JsonPropertyName("message")] public string? Message { get; init; }
+    /// <summary>Names of MCP tools the assistant invoked on the initial turn.</summary>
+    [JsonPropertyName("tools_invoked")] public IReadOnlyList<string>? ToolsInvoked { get; init; }
+}
+
+/// <summary>Request body for POST /api/assistant/runs/{id}/messages.</summary>
+public sealed record AssistantMessageRequest
+{
+    [JsonPropertyName("message")] public string? Message { get; init; }
+}
+
+/// <summary>Response body for POST /api/assistant/runs/{id}/messages.</summary>
+public sealed record AssistantMessageResponse
+{
+    [JsonPropertyName("run_id")] public required string RunId { get; init; }
+    [JsonPropertyName("role")] public string Role { get; init; } = "assistant";
+    [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("tools_invoked")] public IReadOnlyList<string>? ToolsInvoked { get; init; }
+}
+
 public sealed record ConsoleError
 {
     [JsonPropertyName("code")] public required string Code { get; init; }
