@@ -146,6 +146,7 @@ public sealed class SandboxPolicyBackendTests : IDisposable
     [InlineData("stop_preview_process")]
     [InlineData("observe_bound_port")]
     [InlineData("health_check")]
+    [InlineData("start_preview")]
     public void SessionScopedPreviewTool_NoPathKey_Allowed(string toolName)
     {
         var context = new Dictionary<string, object>

@@ -10,27 +10,35 @@ using Agentweaver.AgentRuntime;
 namespace Agentweaver.Tests.Sandbox;
 
 /// <summary>
-/// Unit tests for the agent-initiated <c>start_preview</c> tool produced by
-/// <see cref="AgentweaverApiTools"/>. The tool is run-scoped: it is only present when a non-empty
-/// runId is captured in the closure, it POSTs <c>{ "target_port": N }</c> to
-/// <c>api/runs/{runId}/sandbox/preview</c>, and it returns the <c>preview_url</c> from the response.
+/// Unit tests for <see cref="PreviewPublishTool"/>, which builds the agent-initiated
+/// <c>start_preview</c> tool. The tool POSTs <c>{ "target_port": N }</c> to
+/// <c>api/runs/{runId}/sandbox/preview</c> and returns the <c>preview_url</c> from the response.
 /// A capturing fake handler asserts the path/body without a real server.
 /// </summary>
+/// <remarks>
+/// As of GitHub issue #334, <c>start_preview</c> is built exclusively via
+/// <see cref="PreviewPublishTool.Build"/> and registered by
+/// <c>PreviewRunnerToolProvider</c> (apps/Agentweaver.AgentHost/PreviewRunner.cs) — see
+/// <c>PreviewRunnerToolProviderStartPreviewTests</c> in the Preview test folder for the
+/// end-to-end lifecycle coverage. It is deliberately no longer part of
+/// <see cref="AgentweaverApiTools.Build"/>, which used to gate it behind both
+/// <c>projectId</c>/<c>agentName</c> being non-empty — a gate sandboxed subtask agents don't
+/// satisfy, which is exactly what caused the dead end in #334.
+/// </remarks>
 public sealed class StartPreviewToolTests
 {
     private const string ProjectId = "test-project-id";
     private const string AgentName = "tank";
     private const string RunId = "run-abc-123";
 
-    private static AIFunction GetStartPreview(CapturingHandler handler, string? runId = RunId)
+    private static AIFunction GetStartPreview(CapturingHandler handler, string runId = RunId)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
-        var tools = AgentweaverApiTools.Build(ProjectId, AgentName, "http://localhost", null, http, runId: runId);
-        return tools.Single(t => t.Name == "start_preview");
+        return PreviewPublishTool.Build("http://localhost", null, runId, http);
     }
 
     [Fact]
-    public void BuildSessionConfigTools_IncludesStartPreview_WhenProjectAgentAndRunArePresent()
+    public void BuildSessionConfigTools_NeverIncludesStartPreview_RegardlessOfProjectAgentPresence()
     {
         using var workspace = new TempWorkspace();
         var context = new SandboxToolContext(
@@ -50,32 +58,10 @@ public sealed class StartPreviewToolTests
         var withoutProject = CopilotAIAgent.BuildSessionConfigTools(
             context, projectId: null, agentName: AgentName, apiBaseUrl: "http://localhost", apiKey: null);
 
-        withProject.Select(t => t.Name).Should().Contain("start_preview");
+        // start_preview is registered only by PreviewRunnerToolProvider (issue #334) — never by the
+        // Agentweaver API tool set, so its presence must not depend on projectId/agentName at all.
+        withProject.Select(t => t.Name).Should().NotContain("start_preview");
         withoutProject.Select(t => t.Name).Should().NotContain("start_preview");
-    }
-
-    [Fact]
-    public void StartPreview_IsPresent_WhenRunIdSupplied()
-    {
-        var http = new HttpClient(new CapturingHandler(HttpStatusCode.OK, "{}"))
-            { BaseAddress = new Uri("http://localhost/") };
-        var tools = AgentweaverApiTools.Build(ProjectId, AgentName, "http://localhost", null, http, runId: RunId);
-
-        tools.Select(t => t.Name).Should().Contain("start_preview");
-    }
-
-    [Fact]
-    public void StartPreview_IsAbsent_WhenRunIdMissing()
-    {
-        var http = new HttpClient(new CapturingHandler(HttpStatusCode.OK, "{}"))
-            { BaseAddress = new Uri("http://localhost/") };
-
-        var withoutRun = AgentweaverApiTools.Build(ProjectId, AgentName, "http://localhost", null, http);
-        var withEmptyRun = AgentweaverApiTools.Build(ProjectId, AgentName, "http://localhost", null, http, runId: "");
-
-        withoutRun.Select(t => t.Name).Should().NotContain("start_preview",
-            because: "the tool is run-scoped and must not be offered without a bound runId");
-        withEmptyRun.Select(t => t.Name).Should().NotContain("start_preview");
     }
 
     [Fact]
