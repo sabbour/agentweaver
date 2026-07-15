@@ -60,6 +60,12 @@ const useStyles = makeStyles({
   },
   tabContent: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  syncHint: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: '1.5',
+    maxWidth: '640px',
+  },
   empty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   itemList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   item: {
@@ -396,6 +402,11 @@ export function SkillsPage() {
           {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
         </Button>
       </div>
+      <Text as="p" className={styles.syncHint}>
+        Sync scans the project&apos;s already-connected repo working directory (no separate fetch) for <code>&lt;skill-name&gt;/SKILL.md</code>,
+        one level deep, at the repo root or in <code>.github/skills</code>, <code>.copilot/skills</code>, <code>.claude/skills</code>, or <code>.agents/skills</code>.
+        Any other files next to SKILL.md are picked up as bundled resources. Re-syncing is safe to repeat — unchanged skills are skipped, changed ones are updated, and skills whose folder disappears are flagged as Missing instead of deleted.
+      </Text>
 
       <TabList
         selectedValue={selectedTab}
