@@ -276,6 +276,17 @@ public sealed class RunWatchLoopService
         string ownerUser,
         CancellationToken ct)
     {
+        // #331 — build/preview subtask terminal-emission gap: the agent turn itself can complete
+        // (agent.turn.end observed, #242's guard satisfied) and post-turn bookkeeping (commit/diff)
+        // can succeed — a real, verified deliverable — yet the MAF workflow stream still ends
+        // WITHOUT ever emitting the child-assemble-ready WorkflowOutputEvent (observed live: the
+        // stream closed ~2s after ExecutorCompletedEvent(agent) fired, before the conditional edge's
+        // downstream hop was observed). Track the last SUCCESSFUL AgentTurnOutput (TerminalFailureReason
+        // null) from the "agent" node's ExecutorCompletedEvent so the stream-end fallback below can
+        // recover a genuine success instead of discarding verified work as
+        // `watch_stream_completed_without_terminal_event`.
+        AgentTurnOutput? lastSuccessfulAgentTurnOutput = null;
+
         await foreach (var evt in streamingRun.WatchStreamAsync(ct))
         {
             switch (evt)
@@ -291,6 +302,12 @@ public sealed class RunWatchLoopService
 
                 case ExecutorCompletedEvent completed:
                     EmitExecutorStep(runId, entry, completed.ExecutorId, "completed");
+                    if (completed.Data is AgentTurnOutput { TerminalFailureReason: null } agentTurnOutput &&
+                        _factory.TryGetExecutorMeta(runId, completed.ExecutorId, out var completedMeta) &&
+                        completedMeta.LogicalNodeId == "agent")
+                    {
+                        lastSuccessfulAgentTurnOutput = agentTurnOutput;
+                    }
                     break;
 
                 case ExecutorFailedEvent failed:
@@ -369,10 +386,82 @@ public sealed class RunWatchLoopService
             }
         }
 
+        // #331 recovery: the agent turn completed cleanly (agent.turn.end observed, post-turn commit
+        // succeeded, TerminalFailureReason null) but the stream still ended before the child graph's
+        // conditional edge produced the child-assemble-ready WorkflowOutputEvent. For a coordinator
+        // CHILD run this is unambiguous — the trimmed child graph's ONLY possible outcomes after a
+        // successful agent turn are child-assemble-ready or child-turn-failed, and we already know
+        // the turn did not fail. Recover the real, verified work as assemble-ready instead of
+        // discarding it via the generic stream-ended fallback (which previously cascaded into
+        // `assembly_blocked: ineligible_subtasks` for a subtask that had genuinely succeeded).
+        // #331 recovery: the agent turn completed cleanly (agent.turn.end observed, post-turn commit
+        // succeeded, TerminalFailureReason null) but the stream still ended before the child graph's
+        // conditional edge produced the child-assemble-ready WorkflowOutputEvent. For a coordinator
+        // CHILD run this is unambiguous — the trimmed child graph's ONLY possible outcomes after a
+        // successful agent turn are child-assemble-ready or child-turn-failed, and we already know
+        // the turn did not fail. Recover the real, verified work as assemble-ready instead of
+        // discarding it via the generic stream-ended fallback (which previously cascaded into
+        // `assembly_blocked: ineligible_subtasks` for a subtask that had genuinely succeeded).
+        if (await TryRecoverChildAssembleReadyOnStreamEndAsync(
+                runId, entry, lastSuccessfulAgentTurnOutput, ct).ConfigureAwait(false))
+        {
+            return;
+        }
+
         _logger.LogWarning(
             "Workflow stream ended for run {RunId} without a terminal event; transitioning to Failed",
             runId);
         await FailRunSafeAsync(runId, entry, "watch_stream_completed_without_terminal_event").ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #331 — build/preview subtask terminal-emission gap: recovers a coordinator CHILD run whose
+    /// agent turn completed successfully (no <see cref="AgentTurnOutput.TerminalFailureReason"/>) but
+    /// whose workflow stream ended before the trimmed child graph's conditional edge produced the
+    /// <c>child-assemble-ready</c> <see cref="WorkflowOutputEvent"/>. Root and non-child runs are left
+    /// to the generic <c>watch_stream_completed_without_terminal_event</c> fallback — their graphs
+    /// have additional stages (RAI/review/merge/scribe) after the agent turn, so a bare successful
+    /// agent turn is NOT sufficient evidence the run is actually done.
+    /// Returns true when the run was terminalized here (caller must stop watching); false when there
+    /// is nothing to recover (caller falls through to the generic failure).
+    /// </summary>
+    internal async Task<bool> TryRecoverChildAssembleReadyOnStreamEndAsync(
+        string runId,
+        RunStreamEntry entry,
+        AgentTurnOutput? lastSuccessfulAgentTurnOutput,
+        CancellationToken ct)
+    {
+        if (lastSuccessfulAgentTurnOutput is not { } recoveredOutput)
+            return false;
+
+        if (!await IsChildRunAsync(runId, ct).ConfigureAwait(false))
+            return false;
+
+        _logger.LogWarning(
+            "Workflow stream ended for run {RunId} without a terminal event, but the agent turn " +
+            "completed successfully (no TerminalFailureReason) on a coordinator child run; recovering " +
+            "as assemble-ready instead of discarding verified work (issue #331)",
+            runId);
+
+        var recoveredEvent = new WorkflowOutputEvent(
+            new AssembleReadyOutput(
+                RunId: recoveredOutput.RunId,
+                WorktreeBranch: recoveredOutput.WorktreeBranch,
+                TreeHash: recoveredOutput.TreeHash,
+                Diff: recoveredOutput.Diff,
+                HasChanges: !string.IsNullOrEmpty(recoveredOutput.Diff),
+                StepCount: recoveredOutput.StepCount,
+                RaiSafetyFlagged: recoveredOutput.ContentSafetyFlagged),
+            "child-assemble-ready");
+
+        if (!await HandleTerminalOutputAsync(runId, recoveredEvent, entry, ct).ConfigureAwait(false))
+            return false;
+
+        await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
+        _registry.Abandon(runId);
+        _factory.DeleteCheckpoints(runId);
+        _factory.ClearRunExecutorMeta(runId);
+        return true;
     }
 
     private static TimeSpan ResolveWatchLoopTimeout(IConfiguration configuration)
