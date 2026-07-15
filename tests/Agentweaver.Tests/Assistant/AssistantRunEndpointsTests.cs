@@ -89,6 +89,136 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
+    public async Task SendMessage_GatedTool_EmitsApprovalRequired_AndRunsWhenApproved()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        factory.Agent.EmitApproval = true;
+        factory.Agent.ApprovalToolName = "coordinator_start";
+        factory.Agent.ReplyText = "Started the coordinator.";
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { });
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        // The turn blocks inside the gate until the operator approves, so post the message without
+        // awaiting it, resolve the approval on the SAME generic endpoint the coordinator uses, then
+        // await the turn.
+        var turnTask = client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "start coordinator" });
+
+        var requestId = await WaitForApprovalRequestIdAsync(client, runId);
+        requestId.Should().NotBeNullOrWhiteSpace("the gated tool must raise a tool.approval_required event");
+
+        var approve = await client.PostAsJsonAsync(
+            $"/api/runs/{runId}/tool-approvals", new { request_id = requestId, scope = "once" });
+        approve.StatusCode.Should().Be(HttpStatusCode.OK, "the generic approve endpoint must resolve an operator run's approval");
+
+        var turn = await turnTask;
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await turn.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("message").GetString()
+            .Should().Be("Started the coordinator.");
+
+        factory.Agent.LastApprovalGranted.Should().BeTrue("the sink must report the operator approved the tool");
+
+        var events = await GetEventsAsync(client, runId);
+        var types = events.Select(e => e.Type).ToList();
+        types.Should().Contain(EventTypes.ToolApprovalRequired);
+        types.Should().Contain(EventTypes.ToolApprovalResolved);
+
+        var required = events.First(e => e.Type == EventTypes.ToolApprovalRequired);
+        required.Payload.GetProperty("requestId").GetString().Should().Be(requestId);
+        required.Payload.GetProperty("toolName").GetString().Should().Be("coordinator_start");
+    }
+
+    [Fact]
+    public async Task SendMessage_GatedTool_DeniedByOperator_ReturnsDeniedDecision()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        factory.Agent.EmitApproval = true;
+        factory.Agent.ApprovalToolName = "run_submit";
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { });
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var turnTask = client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "submit a run" });
+
+        var requestId = await WaitForApprovalRequestIdAsync(client, runId);
+        requestId.Should().NotBeNullOrWhiteSpace();
+
+        var deny = await client.PostAsJsonAsync(
+            $"/api/runs/{runId}/tool-denials", new { request_id = requestId });
+        deny.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var turn = await turnTask;
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        factory.Agent.LastApprovalGranted.Should().BeFalse("a denied approval must surface as a false decision to the tool loop");
+
+        var events = await GetEventsAsync(client, runId);
+        events.Select(e => e.Type).Should().Contain(EventTypes.ToolApprovalResolved);
+        // The frontend's derivePendingApprovals matches the resolution by the camelCase
+        // `requestId`/`approved` fields emitted on the operator run's own stream by the sink.
+        var resolved = events.First(e =>
+            e.Type == EventTypes.ToolApprovalResolved &&
+            e.Payload.TryGetProperty("approved", out _) &&
+            e.Payload.TryGetProperty("requestId", out var rid) &&
+            rid.GetString() == requestId);
+        resolved.Payload.GetProperty("approved").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ListRuns_ReturnsOnlyCallersOwnRuns_NewestFirst()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var client = AuthedClient(factory);
+
+        var first = (await (await client.PostAsJsonAsync("/api/assistant/runs", new { message = "first convo" }))
+            .Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+        await Task.Delay(10);
+        var second = (await (await client.PostAsJsonAsync("/api/assistant/runs", new { message = "second convo" }))
+            .Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        // Seed an operator run owned by a DIFFERENT user directly in the store — it must never leak.
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var otherUserRunId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = otherUserRunId,
+            RepositoryPath = string.Empty,
+            OriginatingBranch = string.Empty,
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "not your conversation",
+            SubmittingUser = "someone-else",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = AssistantRunService.OperatorAgentName,
+        }, CancellationToken.None);
+
+        var response = await client.GetAsync("/api/assistant/runs");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var runs = body.GetProperty("runs").EnumerateArray()
+            .Select(r => (Id: r.GetProperty("run_id").GetString()!, Title: r.GetProperty("title").GetString()!))
+            .ToList();
+
+        runs.Select(r => r.Id).Should().Contain(new[] { first, second });
+        runs.Select(r => r.Id).Should().NotContain(otherUserRunId.ToString(), "another user's run must never leak");
+        runs[0].Id.Should().Be(second, "runs are returned newest-first");
+        runs.First(r => r.Id == first).Title.Should().Be("first convo");
+    }
+
+    [Fact]
+    public async Task ListRuns_RequiresAuth_401WithoutToken()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/assistant/runs");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
     public async Task StartRun_EnforcesPerUserConcurrencyBound()
     {
         await using var factory = new AssistantWebApplicationFactory { MaxConcurrentRunsPerUser = 1 };
@@ -142,6 +272,24 @@ public sealed class AssistantRunEndpointsTests
         return raw!.Select(e => new EventRow(
             e.GetProperty("type").GetString()!,
             e.GetProperty("payload"))).ToList();
+    }
+
+    /// <summary>Polls the run's event stream until a tool.approval_required event appears and returns
+    /// its requestId, or null if none arrives within the timeout.</summary>
+    private static async Task<string?> WaitForApprovalRequestIdAsync(HttpClient client, string runId)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            var events = await GetEventsAsync(client, runId);
+            var required = events.FirstOrDefault(e => e.Type == EventTypes.ToolApprovalRequired);
+            if (required is not null &&
+                required.Payload.TryGetProperty("requestId", out var id) &&
+                id.GetString() is { Length: > 0 } requestId)
+                return requestId;
+            await Task.Delay(100);
+        }
+        return null;
     }
 
     private sealed record EventRow(string Type, JsonElement Payload);
@@ -232,11 +380,29 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
     public string ToolName { get; set; } = "tool";
     public IReadOnlyList<string> ToolNamesInvoked { get; set; } = Array.Empty<string>();
 
+    /// <summary>When set, the fake drives one approval-gated tool call through the sink before
+    /// replying: it emits a tool.call, asks the sink for approval, and emits a tool.result whose
+    /// success reflects the decision. Mirrors what the real agent's approval-gating wrapper does.</summary>
+    public bool EmitApproval { get; set; }
+    public string ApprovalToolName { get; set; } = "coordinator_start";
+
+    /// <summary>Captures the approval decision the sink returned, for test assertions.</summary>
+    public bool? LastApprovalGranted { get; private set; }
+
     public async Task<OperatorAssistantResponse> RunTurnAsync(
         OperatorAssistantRequest request,
         IOperatorAssistantTurnSink? sink,
         CancellationToken ct)
     {
+        if (sink is not null && EmitApproval)
+        {
+            var requestId = Guid.NewGuid().ToString("N");
+            await sink.OnToolCallAsync(ApprovalToolName, "{}", ct);
+            var approved = await sink.OnApprovalRequiredAsync(requestId, ApprovalToolName, "{}", ct);
+            LastApprovalGranted = approved;
+            await sink.OnToolResultAsync(ApprovalToolName, success: approved, ct);
+        }
+
         if (sink is not null && EmitTool)
         {
             await sink.OnToolCallAsync(ToolName, "{}", ct);

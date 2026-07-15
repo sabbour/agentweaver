@@ -37,4 +37,16 @@ public interface IRunStore
     Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default);
     Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default);
     Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the non-archived runs submitted by <paramref name="submittingUser"/>, newest-first
+    /// (by StartedAt), optionally restricted to a single <paramref name="agentName"/> (e.g. the
+    /// operator-assistant sentinel) and capped at <paramref name="limit"/>. Used to list a caller's
+    /// own conversations without leaking other users' runs. The default implementation throws so the
+    /// two production stores (SQLite, EF) must provide it; test fakes that never call it are exempt.
+    /// </summary>
+    Task<IReadOnlyList<Run>> GetRunsBySubmittingUserAsync(
+        string submittingUser, string? agentName, int limit, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            $"{GetType().Name} does not implement GetRunsBySubmittingUserAsync.");
 }

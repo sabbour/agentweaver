@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using GitHub.Copilot;
@@ -41,6 +42,18 @@ public interface IOperatorAssistantTurnSink
 
     /// <summary>A tool call completed. <paramref name="success"/> reflects whether the tool returned an error.</summary>
     ValueTask OnToolResultAsync(string toolName, bool success, CancellationToken ct);
+
+    /// <summary>
+    /// A gated MCP tool call is about to run and requires an operator approval decision first. The
+    /// sink must project a <c>tool.approval_required</c> event carrying <paramref name="requestId"/>
+    /// and <paramref name="toolName"/> onto the run stream (the shape the frontend approval UI
+    /// consumes) and block until the operator grants or denies via the existing
+    /// <c>/api/runs/{id}/tool-approvals</c> / <c>tool-denials</c> endpoints, or the wait times out.
+    /// Returns <see langword="true"/> when approved (the tool then runs) or <see langword="false"/>
+    /// when denied or timed out (a "denied by operator" result is returned to the model instead).
+    /// A null sink cannot gate, so gated tools run ungated only in the no-sink (non-projected) case.
+    /// </summary>
+    ValueTask<bool> OnApprovalRequiredAsync(string requestId, string toolName, string? argumentsJson, CancellationToken ct);
 }
 
 public interface IOperatorAssistantAgent
@@ -101,7 +114,7 @@ public sealed class OperatorAssistantAgent(
         await using var mcpSession = await mcpToolProvider
             .ConnectAsync(request.CallerBearerToken, ct)
             .ConfigureAwait(false);
-        var toolDeclarations = mcpSession.AsToolDeclarations();
+        var toolDeclarations = BuildToolDeclarations(mcpSession, sink, ct);
         logger.LogInformation(
             "Operator assistant connected to MCP server: {ToolCount} tools available for conversation {ConversationId}",
             toolDeclarations.Count, request.ConversationId);
@@ -218,6 +231,81 @@ public sealed class OperatorAssistantAgent(
         !string.IsNullOrEmpty(result.CallId)
             ? invokedTools.LastOrDefault() ?? result.CallId
             : invokedTools.LastOrDefault() ?? "tool";
+
+    /// <summary>
+    /// Adapts every MCP tool to the <see cref="AIFunctionDeclaration"/> form used by SessionConfig.Tools,
+    /// wrapping the consequential ones (see <see cref="OperatorToolApprovalPolicy"/>) in an approval
+    /// gate so the SDK's auto-invocation blocks on an operator decision before the tool actually runs.
+    /// Read/discovery tools and low-consequence writes pass through unwrapped. When <paramref name="sink"/>
+    /// is null there is no run stream to raise the approval on, so gating is skipped (the tool runs).
+    /// </summary>
+    private static IReadOnlyList<AIFunctionDeclaration> BuildToolDeclarations(
+        AgentweaverMcpToolSession session,
+        IOperatorAssistantTurnSink? sink,
+        CancellationToken ct)
+    {
+        var declarations = new List<AIFunctionDeclaration>(session.Tools.Count);
+        foreach (var tool in session.Tools)
+        {
+            if (sink is not null && OperatorToolApprovalPolicy.RequiresApproval(tool.Name))
+                declarations.Add(new ApprovalGatingAIFunction(tool, sink, ct));
+            else
+                declarations.Add(tool);
+        }
+        return declarations;
+    }
+
+    /// <summary>
+    /// Wraps a gated MCP <see cref="AIFunction"/> so that, when the Copilot SDK auto-invokes it, the
+    /// call is first surfaced to the operator for approval via <see cref="IOperatorAssistantTurnSink"/>.
+    /// On approval the inner tool runs unchanged; on denial (or timeout) a clear "denied by operator"
+    /// result is returned to the model so the conversation continues sensibly instead of the model
+    /// seeing a generic permission-denied error. All declaration metadata is forwarded verbatim so the
+    /// model still sees the tool's real name, description, and parameter schema.
+    /// </summary>
+    private sealed class ApprovalGatingAIFunction(
+        AIFunction inner,
+        IOperatorAssistantTurnSink sink,
+        CancellationToken turnCt) : AIFunction
+    {
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => inner.AdditionalProperties;
+        public override JsonElement JsonSchema => inner.JsonSchema;
+        public override JsonElement? ReturnJsonSchema => inner.ReturnJsonSchema;
+        public override MethodInfo? UnderlyingMethod => inner.UnderlyingMethod;
+        public override JsonSerializerOptions JsonSerializerOptions => inner.JsonSerializerOptions;
+
+        protected override async ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments, CancellationToken cancellationToken)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(turnCt, cancellationToken);
+            var effectiveCt = linked.Token;
+
+            var requestId = Guid.NewGuid().ToString("N");
+            string? argumentsJson = null;
+            try
+            {
+                argumentsJson = JsonSerializer.Serialize(
+                    (IReadOnlyDictionary<string, object?>)arguments, JsonOptions);
+            }
+            catch
+            {
+                // Arguments are informational on the approval prompt; a serialization failure must
+                // not block the gate.
+            }
+
+            var approved = await sink
+                .OnApprovalRequiredAsync(requestId, inner.Name, argumentsJson, effectiveCt)
+                .ConfigureAwait(false);
+
+            if (!approved)
+                return $"The operator denied the '{inner.Name}' action, so it did not run. " +
+                       "Do not retry it; tell the user it was declined and ask how they would like to proceed.";
+
+            return await inner.InvokeAsync(arguments, effectiveCt).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>
     /// Builds the Copilot session config that wires the MCP tool set (as AIFunctionDeclarations) into

@@ -46,6 +46,9 @@ public sealed class AssistantRunHttpException(int statusCode, string error, stri
 
 public sealed record StartAssistantRunResult(RunId RunId, RunStatus Status, OperatorAssistantResponse? FirstTurn);
 
+/// <summary>A single operator conversation in a caller's recent-conversations list.</summary>
+public sealed record AssistantRunSummary(string RunId, RunStatus Status, string Title, DateTimeOffset CreatedAt);
+
 public interface IAssistantRunService
 {
     /// <summary>Creates a new operator run for the caller and, when <paramref name="firstMessage"/> is
@@ -65,6 +68,14 @@ public interface IAssistantRunService
         string callerBearerToken,
         string runId,
         string message,
+        CancellationToken ct);
+
+    /// <summary>Lists the caller's own operator conversations, newest-first, capped at
+    /// <paramref name="limit"/>. Scoped to the authenticated caller — never returns other users'
+    /// runs.</summary>
+    Task<IReadOnlyList<AssistantRunSummary>> ListRunsAsync(
+        CallerContext caller,
+        int limit,
         CancellationToken ct);
 }
 
@@ -92,8 +103,18 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private readonly IRunStore _runStore;
     private readonly IRunEventStream _eventStream;
     private readonly IOperatorAssistantAgent _assistant;
+    private readonly IToolApprovalGate _approvalGate;
     private readonly AssistantRunOptions _options;
     private readonly ILogger<AssistantRunService> _logger;
+
+    /// <summary>How long a gated tool call waits for an operator decision before it is treated as
+    /// denied. Mirrors the sandbox web_fetch approval gate's convention.</summary>
+    private static readonly TimeSpan ApprovalTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>How often a <c>tool.approval_pending</c> heartbeat is emitted while the turn blocks on
+    /// an operator decision, so the run's SSE stream keeps flowing and the buffered
+    /// <c>tool.approval_required</c> frame is delivered promptly.</summary>
+    private static readonly TimeSpan ApprovalHeartbeatInterval = TimeSpan.FromSeconds(10);
 
     private readonly ConcurrentDictionary<string, OperatorRunState> _runs = new(StringComparer.Ordinal);
     private readonly object _startLock = new();
@@ -103,12 +124,14 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         IRunStore runStore,
         IRunEventStream eventStream,
         IOperatorAssistantAgent assistant,
+        IToolApprovalGate approvalGate,
         IOptions<AssistantRunOptions> options,
         ILogger<AssistantRunService> logger)
     {
         _runStore = runStore;
         _eventStream = eventStream;
         _assistant = assistant;
+        _approvalGate = approvalGate;
         _options = options.Value;
         _logger = logger;
 
@@ -201,6 +224,42 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             throw new AssistantRunHttpException(StatusCodes.Status400BadRequest, "message_required", "message is required.");
 
         return RunTurnAsync(caller, callerBearerToken, runId, message, contextRunId: null, ct);
+    }
+
+    public async Task<IReadOnlyList<AssistantRunSummary>> ListRunsAsync(
+        CallerContext caller,
+        int limit,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        var cappedLimit = Math.Clamp(limit, 1, 200);
+
+        // Caller-scoped: the store query filters on submitting_user and the Operator sentinel agent,
+        // so only this caller's own operator conversations are returned (never another user's runs).
+        var runs = await _runStore
+            .GetRunsBySubmittingUserAsync(caller.User, OperatorAgentName, cappedLimit, ct)
+            .ConfigureAwait(false);
+
+        return runs
+            .Where(r => caller.Owns(r.SubmittingUser))
+            .Select(r => new AssistantRunSummary(
+                r.Id.ToString(),
+                r.Status,
+                BuildTitle(r.Task),
+                r.StartedAt))
+            .ToList();
+    }
+
+    /// <summary>Derives a short single-line conversation title from the run's opening task text.</summary>
+    private static string BuildTitle(string? task)
+    {
+        var trimmed = task?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            return "Operator assistant conversation";
+
+        var firstLine = trimmed.Split('\n', 2)[0].Trim();
+        const int maxLength = 80;
+        return firstLine.Length <= maxLength ? firstLine : firstLine[..maxLength].TrimEnd() + "\u2026";
     }
 
     private async Task<OperatorAssistantResponse> RunTurnAsync(
@@ -314,6 +373,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             }, CancellationToken.None).ConfigureAwait(false);
 
             await _eventStream.CompleteAsync(key).ConfigureAwait(false);
+            _approvalGate.Clear(key);
         }
         catch (Exception ex)
         {
@@ -387,5 +447,55 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 name = toolName,
                 success,
             }, ct);
+
+        public async ValueTask<bool> OnApprovalRequiredAsync(
+            string requestId, string toolName, string? argumentsJson, CancellationToken _)
+        {
+            var displayId = requestId.Length >= 8 ? requestId[..8] : requestId;
+
+            // Start the gate wait FIRST: the gate registers the approval context synchronously (before
+            // its first await), so the tool-approvals endpoint can already resolve this requestId by
+            // the time the frontend reacts to the tool.approval_required event emitted just below.
+            var waitTask = owner._approvalGate.WaitForApprovalAsync(
+                runId, requestId, toolName, url: null, ApprovalTimeout, ct);
+
+            await owner.AppendAsync(runId, EventTypes.ToolApprovalRequired, new
+            {
+                requestId,
+                displayId,
+                toolName,
+                arguments = argumentsJson,
+                message = $"The assistant wants to run {toolName}. Operator approval required.",
+            }, ct).ConfigureAwait(false);
+
+            // Heartbeat-punctuated wait so the run's SSE stream keeps moving (and the parent stall
+            // timers stay reset) while the operator decides.
+            while (!waitTask.IsCompleted)
+            {
+                var heartbeat = Task.Delay(ApprovalHeartbeatInterval, ct);
+                var completed = await Task.WhenAny(waitTask, heartbeat).ConfigureAwait(false);
+                if (completed == waitTask)
+                    break;
+                await owner.AppendAsync(runId, EventTypes.ToolApprovalPending, new
+                {
+                    requestId,
+                    displayId,
+                    toolName,
+                }, ct).ConfigureAwait(false);
+            }
+
+            var approved = await waitTask.ConfigureAwait(false);
+
+            // Emit the resolution on the operator run's own stream so the frontend drops the pending
+            // approval card even on a reload (derivePendingApprovals matches this by requestId).
+            await owner.AppendAsync(runId, EventTypes.ToolApprovalResolved, new
+            {
+                requestId,
+                runId,
+                approved,
+            }, ct).ConfigureAwait(false);
+
+            return approved;
+        }
     }
 }
