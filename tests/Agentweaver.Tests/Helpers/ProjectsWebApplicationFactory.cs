@@ -15,7 +15,7 @@ namespace Agentweaver.Tests.Helpers;
 /// uses LocalFilesystemWorkspaceProvider pointed at an isolated temp directory,
 /// and stubs out ProjectGitInitializer to skip real git operations.
 /// </summary>
-public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
+public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
 {
     public const string TestApiKey = "projects-test-api-key-54321";
     public const string TestUser   = "projects-test-user";
@@ -51,11 +51,19 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
         return client;
     }
 
+    /// <summary>
+    /// Hook for subclasses (e.g. a persistent-volume workspace variant) to layer extra
+    /// configuration on top of the defaults below, such as selecting a different
+    /// <c>Workspace:Provider</c>.
+    /// </summary>
+    protected virtual IDictionary<string, string?> GetAdditionalConfiguration() =>
+        new Dictionary<string, string?>();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, cfg) =>
         {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
+            var config = new Dictionary<string, string?>
             {
                 ["Database:Path"]                         = _dbPath,
                 ["Worktrees:BasePath"]                    = _worktreesPath,
@@ -78,7 +86,10 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
                 ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
                 ["RunBounds:MaxSteps"]                    = "50",
                 ["RunBounds:MaxMinutes"]                  = "10",
-            });
+            };
+            foreach (var kvp in GetAdditionalConfiguration())
+                config[kvp.Key] = kvp.Value;
+            cfg.AddInMemoryCollection(config);
         });
 
         builder.ConfigureServices(services =>
@@ -125,6 +136,38 @@ public sealed class ProjectsWebApplicationFactory : WebApplicationFactory<Progra
     {
         var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(T));
         if (descriptor is not null) services.Remove(descriptor);
+    }
+}
+
+/// <summary>
+/// Variant of <see cref="ProjectsWebApplicationFactory"/> that selects the
+/// <see cref="PersistentVolumeWorkspaceProvider"/> (<c>AutoAssignsPath == true</c>) instead of the
+/// default local filesystem provider, so tests can verify that <c>POST /api/projects</c> does not
+/// require a client-supplied <c>working_directory</c> when the active provider auto-assigns one (#333).
+/// </summary>
+public sealed class PersistentVolumeProjectsWebApplicationFactory : ProjectsWebApplicationFactory
+{
+    private readonly string _mountRoot =
+        Path.Combine(Path.GetTempPath(), $"agentweaver-proj-pv-{Guid.NewGuid():N}");
+
+    public PersistentVolumeProjectsWebApplicationFactory()
+    {
+        Directory.CreateDirectory(_mountRoot);
+    }
+
+    protected override IDictionary<string, string?> GetAdditionalConfiguration() =>
+        new Dictionary<string, string?>
+        {
+            ["Workspace:Provider"] = "persistent-volume",
+            ["Workspace:PersistentVolume:MountRoot"] = _mountRoot,
+        };
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (!disposing) return;
+
+        try { Directory.Delete(_mountRoot, recursive: true); } catch { /* best effort */ }
     }
 }
 

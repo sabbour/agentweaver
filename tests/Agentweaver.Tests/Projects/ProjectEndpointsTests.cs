@@ -397,6 +397,26 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     // =========================================================================
+    // PE-12b: POST /api/projects without working_directory returns 400 when the active
+    // workspace provider cannot auto-assign one (LocalFilesystemWorkspaceProvider, this
+    // factory's default). Regression guard for #333: this behavior must be preserved for
+    // providers that genuinely need an explicit client-supplied path.
+    // =========================================================================
+    [Fact]
+    public async Task PostProject_MissingWorkingDirectory_Returns400_WhenProviderCannotAutoAssign()
+    {
+        var response = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name   = $"No Dir Project {Guid.NewGuid():N}",
+            origin = "blank",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("working_directory is required.");
+    }
+
+    // =========================================================================
     // PE-13: GET /api/auth/github returns status
     // =========================================================================
     [Fact]

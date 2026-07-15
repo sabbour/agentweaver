@@ -280,6 +280,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         IRunStore runStore,
         RunWorkflowRegistry workflowRegistry,
         IProjectStore projectStore,
+        IProjectWorkspaceProvider workspaceProvider,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -295,7 +296,12 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         if (request.Origin == "github" && string.IsNullOrWhiteSpace(request.SourceRepository))
             return Results.BadRequest(new { error = "source_repository is required when origin is 'github'." });
 
-        if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
+        // working_directory is only mandatory when the active workspace provider cannot auto-assign
+        // one (e.g. LocalFilesystemWorkspaceProvider). Providers that report AutoAssignsPath == true
+        // (e.g. PersistentVolumeWorkspaceProvider) already derive the path deterministically from the
+        // project id in ResolveWorkingDirectoryAsync and ignore any client-supplied value, so requiring
+        // it here would force every client to leak server filesystem layout for no benefit (#333).
+        if (!workspaceProvider.AutoAssignsPath && string.IsNullOrWhiteSpace(request.WorkingDirectory))
             return Results.BadRequest(new { error = "working_directory is required." });
 
         if (!string.IsNullOrWhiteSpace(request.BlueprintId) && request.Blueprint is not null)
@@ -348,17 +354,23 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         try
         {
             Agentweaver.Domain.Project project;
+            // Pass through as-is when supplied; auto-assigning providers ignore this value entirely
+            // (ResolveWorkingDirectoryAsync derives the path from the project id instead), and
+            // LocalFilesystemWorkspaceProvider treats an empty/relative path as "assign one under the
+            // configured workspace root" rather than throwing.
+            var requestedWorkingDirectory = request.WorkingDirectory ?? string.Empty;
+
             if (request.Origin == "blank")
             {
                 project = await projectService.CreateBlankAsync(
-                    request.Name!, request.WorkingDirectory!,
+                    request.Name!, requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
                     request.DefaultModelMicrosoftFoundry, caller.User, ct);
             }
             else
             {
                 project = await projectService.CreateFromGitHubAsync(
-                    request.Name!, request.SourceRepository!, request.WorkingDirectory!,
+                    request.Name!, request.SourceRepository!, requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
                     request.DefaultModelMicrosoftFoundry, caller.User, ct);
             }
