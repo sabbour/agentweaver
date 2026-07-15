@@ -360,6 +360,64 @@ function closeStep(step: RunTimelineStep): void {
   }
 }
 
+const CONTINUATION_INTENT_RE = /^(?:now|next|then|after that|from here|meanwhile|finally|lastly|at this point)\b/i;
+const CONVERSATIONAL_INTENT_PREFIX_RE = /^(?:(?:now|next|then|after that|from here|meanwhile|finally|lastly|at this point)[,:]?\s*)?(?:(?:let['’]?s|we['’]ll|i['’]ll)\s+)?/i;
+const MAX_COLLAPSIBLE_STEP_TOOLS = 4;
+const MAX_COLLAPSIBLE_STEP_MESSAGES = 2;
+const MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS = 240;
+const MAX_COLLAPSIBLE_STEP_CHILDREN = 6;
+
+function isContinuationIntent(intent: string): boolean {
+  return CONTINUATION_INTENT_RE.test(intent.trim());
+}
+
+function normalizeContinuationIntent(intent: string): string {
+  const normalized = intent.replace(CONVERSATIONAL_INTENT_PREFIX_RE, '').trim() || intent.trim();
+  return normalized.length > 0
+    ? `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
+    : intent.trim();
+}
+
+function messageCharCount(step: RunTimelineStep): number {
+  return step.messages.reduce((total, message) => total + message.text.trim().length, 0);
+}
+
+function isCollapsibleNarrationStep(step: RunTimelineStep): boolean {
+  if (step.synthetic) return false;
+  if (step.tools.length > MAX_COLLAPSIBLE_STEP_TOOLS) return false;
+  if (step.messages.length > MAX_COLLAPSIBLE_STEP_MESSAGES) return false;
+  if (step.children.length > MAX_COLLAPSIBLE_STEP_CHILDREN) return false;
+  if (messageCharCount(step) > MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS) return false;
+  if (step.tools.some((tool) => tool.status === 'error')) return false;
+  return step.tools.every((tool) => tool.category !== 'command' && tool.category !== 'web');
+}
+
+function mergeTimelineSteps(base: RunTimelineStep, next: RunTimelineStep): void {
+  base.intent = normalizeContinuationIntent(base.intent);
+  base.tools.push(...next.tools);
+  base.messages.push(...next.messages);
+  base.children.push(...next.children);
+  base.active = base.active || next.active;
+}
+
+function collapseContinuationNarrationSteps(steps: RunTimelineStep[]): RunTimelineStep[] {
+  const collapsed: RunTimelineStep[] = [];
+  for (const step of steps) {
+    const previous = collapsed[collapsed.length - 1];
+    if (
+      previous
+      && isContinuationIntent(step.intent)
+      && isCollapsibleNarrationStep(previous)
+      && isCollapsibleNarrationStep(step)
+    ) {
+      mergeTimelineSteps(previous, step);
+      continue;
+    }
+    collapsed.push(step);
+  }
+  return collapsed;
+}
+
 /**
  * Fold a scope's event stream into intent-grouped Timeline steps.
  * `events` may arrive out of order across reconnects — we sort by `sequence`
@@ -644,13 +702,15 @@ export function buildRunTimeline(
     }
   }
 
+  const collapsedSteps = collapseContinuationNarrationSteps(steps);
+
   // Replace the coordinator decompose agent's serialized work-plan JSON (a giant illegible array)
   // with a short friendly line. The structured work-plan chip + subagents overlay stay the source of
   // truth. Children reference the same message objects, so mutating text covers both surfaces.
   // Only applied on the coordinator scope (stripSerializedWorkPlan) — a child agent may legitimately
   // emit a title/scope JSON array in its own output, which must be left intact.
   if (stripSerializedWorkPlan) {
-    for (const step of steps) {
+    for (const step of collapsedSteps) {
       for (const msg of step.messages) {
         if (isSerializedWorkPlan(msg.text)) {
           const n = serializedWorkPlanSubtaskCount(msg.text);
@@ -667,7 +727,7 @@ export function buildRunTimeline(
   // used once the spec is confirmed (see AgentSessionPanel's buildTurns). Unlike the
   // serialized-work-plan strip above this always applies — the raw JSON is illegible on
   // ANY scope (coordinator or child/subtask) that streams it (#UI-bug-2).
-  for (const step of steps) {
+  for (const step of collapsedSteps) {
     for (const msg of step.messages) {
       const outcomeSpec = parseOutcomeSpecMessage(msg.text);
       if (outcomeSpec) msg.text = formatOutcomeSpecMessage(outcomeSpec);
@@ -675,7 +735,7 @@ export function buildRunTimeline(
   }
 
   // Derive each step's status from its settled work.
-  for (const step of steps) {
+  for (const step of collapsedSteps) {
     for (const msg of step.messages) {
       if (!step.active) msg.streaming = false;
     }
@@ -693,9 +753,9 @@ export function buildRunTimeline(
   }
 
   return {
-    steps,
+    steps: collapsedSteps,
     eventCount: sorted.length,
-    running: steps.some((s) => s.active),
+    running: collapsedSteps.some((s) => s.active),
   };
 }
 

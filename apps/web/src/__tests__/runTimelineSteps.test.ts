@@ -360,5 +360,67 @@ describe('buildRunTimeline', () => {
     expect(step.messages[0].text).toContain('Ship a minimal preview app');
     expect(step.messages[0].text).toContain('Implement only the web preview path.');
   });
-});
 
+  it('collapses adjacent short continuation intents into one larger timeline step', () => {
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: "Now let's build the prototype with Vite + React" }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'write_file', arguments: { path: 'src/main.tsx' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'wrote 20 lines' }),
+      evt(4, 'agent.intent', { intent: 'Now the storage module' }),
+      evt(5, 'tool.call', { callId: 'c2', toolName: 'write_file', arguments: { path: 'src/storage.ts' } }),
+      evt(6, 'tool.result', { callId: 'c2', content: 'wrote 18 lines' }),
+      evt(7, 'agent.intent', { intent: 'Now the styles file' }),
+      evt(8, 'tool.call', { callId: 'c3', toolName: 'write_file', arguments: { path: 'src/styles.css' } }),
+      evt(9, 'tool.result', { callId: 'c3', content: 'wrote 12 lines' }),
+      evt(10, 'agent.intent', { intent: "Now let's create the README and .gitignore" }),
+      evt(11, 'tool.call', { callId: 'c4', toolName: 'write_file', arguments: { path: 'README.md' } }),
+      evt(12, 'tool.result', { callId: 'c4', content: 'wrote 8 lines' }),
+      evt(13, 'agent.turn.end', {}),
+    ]);
+
+    expect(model.steps).toHaveLength(1);
+    expect(model.steps[0].intent).toBe('Build the prototype with Vite + React');
+    expect(model.steps[0].tools).toHaveLength(4);
+    expect(model.steps[0].children.filter((child) => child.kind === 'tool')).toHaveLength(4);
+  });
+
+  it('keeps distinct non-continuation intents as separate steps', () => {
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Read the code' }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'read_file', arguments: { path: 'src/app.ts' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'agent.intent', { intent: 'Build the project' }),
+      evt(5, 'tool.call', { callId: 'c2', toolName: 'run_command', arguments: { command: 'npm run build' } }),
+      evt(6, 'tool.result', { callId: 'c2', content: 'ok' }),
+      evt(7, 'agent.turn.end', {}),
+    ]);
+
+    expect(model.steps).toHaveLength(2);
+    expect(model.steps[0].intent).toBe('Read the code');
+    expect(model.steps[1].intent).toBe('Build the project');
+  });
+
+  it('does not collapse continuation intents when a step is already too large', () => {
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: "Now let's build the prototype" }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'write_file', arguments: { path: 'src/one.ts' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'tool.call', { callId: 'c2', toolName: 'write_file', arguments: { path: 'src/two.ts' } }),
+      evt(5, 'tool.result', { callId: 'c2', content: 'ok' }),
+      evt(6, 'tool.call', { callId: 'c3', toolName: 'write_file', arguments: { path: 'src/three.ts' } }),
+      evt(7, 'tool.result', { callId: 'c3', content: 'ok' }),
+      evt(8, 'tool.call', { callId: 'c4', toolName: 'write_file', arguments: { path: 'src/four.ts' } }),
+      evt(9, 'tool.result', { callId: 'c4', content: 'ok' }),
+      evt(10, 'tool.call', { callId: 'c5', toolName: 'write_file', arguments: { path: 'src/five.ts' } }),
+      evt(11, 'tool.result', { callId: 'c5', content: 'ok' }),
+      evt(12, 'agent.intent', { intent: 'Now the README' }),
+      evt(13, 'tool.call', { callId: 'c6', toolName: 'write_file', arguments: { path: 'README.md' } }),
+      evt(14, 'tool.result', { callId: 'c6', content: 'ok' }),
+      evt(15, 'agent.turn.end', {}),
+    ]);
+
+    expect(model.steps).toHaveLength(2);
+    expect(model.steps[0].tools).toHaveLength(5);
+    expect(model.steps[1].intent).toBe('Now the README');
+  });
+});
