@@ -427,3 +427,52 @@ clicking either one opens the identical full topology dialog.
 ## Next step
 Not pushed. Coordinator (Ahmed) will merge this branch tip
 (`4e78744176da04ddbb8a80ab33ece91204ef9cb5`) into local main after Tank and Morpheus also report.
+
+## 2026-07-15T13-55-00Z — Deduplicated inbox merge after size-gate reset
+
+**By:** Scribe  
+**What:** Merged the current `decisions/inbox` backlog into the active decision log as a deduplicated summary after the 2026-07-14 active-file reset.  
+**Why:** Preserve durable decisions without restoring the pre-reset duplication and raw-note sprawl.
+
+### Release and deploy operations
+- `v0.9.54` staging repair: rebuilt `agentweaver-api` and updated the gateway `HTTPRoute` so `/openapi` is live in staging; WSL DNS issues required Git Bash for deploy execution.
+- `v0.9.55` shipped from `main` with #329, #331, #332, #333, and #334; the post-rollout `SandboxTemplate` false negative was identified as verifier drift rather than release health.
+- Provenance hardening now has two layers: `20-build-push-images.sh` verifies `prov-<sha>` tags by digest and propagates background-job failures deterministically, and `30-deploy.sh` now invokes `25-verify-image-provenance.sh` so mismatched running images fail the deploy.
+
+### Harness and persona infrastructure
+- API harness moved fully to dynamic persona driving: fixed scenario scripts were removed, Harness dispatches a fresh `PersonaActor` per run, and persona turns are driven from the live OpenAPI surface rather than curated subcommands.
+- That dynamic path was tightened further: YAML OpenAPI is preferred, `drive.mjs` was then removed entirely, PersonaActor now curls the live API/spec directly, and the old approval helper library was deleted once the prompt-level safety model became the chosen path.
+- Harness operator observability was upgraded: live transcript tailing became automatic, then human-readable (`TURN | METHOD path -> status | THOUGHT`), then actively relayed by running PersonaActor in background mode, and finally timing summaries were derived from per-turn transcript timestamps.
+- MCP harness now mirrors the API harness architecture: `scripts/mcp-harness/run-persona.mjs` prepares/finalizes runs, the Harness agent dispatches the real persona-driving agent, smoke checks stay as deterministic connectivity/capability checks, and the parity directive is recorded as a standing design rule.
+- Oracle was added as a full-lifecycle PM persona, then generalized so only durable PM behavior stays in the core brief while concrete journey shape comes from invocation-time goals and the live spec; Oracle adapters no longer prescribe ordered phases or tool-specific mechanisms.
+
+### Coordinator steering and recovery
+- Outcome-spec confirmation via normal chat/steering is now a first-class path: `steer kind=send` reuses the same confirm/revise machinery as the UI gate instead of maintaining a parallel flow.
+- #272 had two real failures and both are now part of team memory: orphaned deferred spec decisions on pod-per-run are drained by heartbeat-driven recovery, and confirm/revise intent classification must use an LLM-backed classifier with fail-closed `Revise` fallback instead of regex matching. Earlier regex-only notes are superseded by this LLM rule.
+- #332: coordinator `POST /retry` first attempts in-place resume from the preserved failure point and only falls back to minting a fresh run when no recoverable work plan exists or recovery is exhausted.
+- #331: if a coordinator child run ends its stream after a successful agent turn but before the watcher observes the terminal output edge, the watch loop may recover it as `assemble-ready` instead of discarding verified work.
+
+### API, MCP, runtime, and tooling fixes
+- OpenAPI generation is a shipped API feature at `GET /openapi/v1.json`, exposed in staging and exempted from GitHub-org auth so harnesses can discover the live contract.
+- #337/#338/#339: MCP run tools now declare typed structured output schemas, mark optional parameters via actual defaults, and surface real JSON `{ error, hint }` messages by deriving `McpApiException` from the SDK's `McpException`.
+- #334: `start_preview` belongs to preview lifecycle tooling, not the project/agent identity-gated coordination toolset, so it was consolidated into `PreviewRunnerToolProvider` and registered alongside the rest of the preview tools.
+- #333: `POST /api/projects` now treats `working_directory` as provider-driven; it remains required only for providers that truly need a client-supplied path.
+- #321: notifications now emit a real `tool_approval` type by reusing the shared pending-approval projection logic already used by the board.
+- #224: shell commands may use an explicit run-scoped scratch directory outside the worktree, but file tools remain rooted at the worktree.
+
+### Agent runtime identity, memory, and skills
+- #335 final root cause: warm-pool `/configure` never carried `projectId` and `agentName`, so native loopback memory/decision tools were silently omitted from warm-pod agent sessions; the fix is to plumb identity end-to-end through `/configure`.
+- #336 is distinct from #335. The durable conclusion is that pod-per-run A2A bridging dropped the per-turn `AgentSetupParams` context (skills, memory prompt text, identity) and only preserved `IsRevision`; the fix is to apply full per-turn context on the pod while preserving the pod-base manifest context. Earlier #336 notes about missing wiring or missing observability are intermediate findings and are superseded by the per-turn A2A bridge root cause.
+
+### UI and UX decisions
+- #316: session history belongs as a `Team memory` tab, while per-agent memory should live behind a team-drawer `View memory` affordance; reuse the existing paginated envelope and pager UI.
+- Timeline activity should collapse adjacent lightweight continuation-style intents into one top-level step instead of promoting every micro-update to its own major activity row.
+- Coordinator artifact panes now refetch from the existing run SSE stream, keeping files/diffs current without waiting for status polling.
+- #319: the notification bell shows a typed badge (`Human Review`, `Tool Approval`, or fallback) and the frontend deliberately tolerates future notification types.
+
+
+### Addendum from remaining inbox items
+- #97: coordinator `assembly_blocked` failures must durably persist enriched `ineligible_subtask` detail at block time and surface readable blocking-subtask detail in the UI instead of opaque ids.
+- Harness transcripts keep raw response evidence but cap `response.body` to about 1.5KB with explicit truncation markers; persona reasoning about the previous response belongs in `thought` so transcripts stay auditable without exploding in size.
+- The OpenAPI contract was further enriched with XML-backed lifecycle documentation, YAML serving, stable names/tags, and bearer-security metadata for persona-critical routes.
+- Oracle adapter cleanup continued past the first refactor: the API adapter is now fully live-spec-driven and intentionally stripped of residual journey-shape hints, leaving only discovery framing and epistemic guardrails.
