@@ -176,6 +176,25 @@ builder.Services.AddSingleton<ConsoleConversationStore>();
 builder.Services.AddSingleton<IConsoleFacadeAgent, CopilotConsoleFacadeAgent>();
 builder.Services.AddSingleton<IConsoleTurnService, ConsoleTurnService>();
 
+// Operator assistant (#346): MCP-driven chat modeled as a lightweight "operator run". The MCP tool
+// provider connects to the AgentweaverMCP /mcp endpoint per caller (bearer passed through per call);
+// the assistant agent is the in-API Copilot loop seeded with agentweaver.agent.md; AssistantRunService
+// persists the conversation as a run and streams turns onto the existing run event stream. Additive:
+// the legacy console facade path above is untouched.
+builder.Services.AddSingleton<IAgentweaverMcpToolProvider>(sp =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var endpoint = cfg["Assistant:McpEndpoint"];
+    if (string.IsNullOrWhiteSpace(endpoint))
+        throw new InvalidOperationException(
+            "Assistant:McpEndpoint must be configured (the in-cluster AgentweaverMCP /mcp URL) to use the operator assistant.");
+    var options = new AgentweaverMcpConnectionOptions { Endpoint = new Uri(endpoint) };
+    return new AgentweaverMcpToolProvider(options, sp.GetService<ILoggerFactory>());
+});
+builder.Services.AddSingleton<IOperatorAssistantAgent, OperatorAssistantAgent>();
+builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
+builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
+
 // GitHub auth (token store + scope provider + device flow service)
 var tokenStoreProvider = builder.Configuration["Auth:TokenStore:Provider"];
 var kvUri = builder.Configuration["Auth:TokenStore:KeyVaultUri"];
@@ -942,6 +961,7 @@ else
     app.MapBacklogEndpoints();
     app.MapBacklogDecomposeEndpoints();
     app.MapConsoleEndpoints();
+    app.MapAssistantEndpoints();
     app.MapCoordinatorEndpoints();
     app.MapCastingEndpoints();
     app.MapBlueprintEndpoints();
