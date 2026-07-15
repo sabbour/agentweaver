@@ -216,3 +216,58 @@ Scenario memory-agent-roundtrip (batch 20260715T014105, v0.9.56/864e2c51) confir
 - status: open
 
 Scenario skill-usage-verify (batch 20260715T015920, v0.9.56/864e2c51) confirmed: skill instructions assigned to agent Rogers via PUT /api/projects/{id}/skills/{skillId}/assignments/{agentName} (HTTP 204, persisted in API) are NOT injected into the agent's system prompt or callable tool list during live orchestration execution. agent.system_prompt event for Rogers child run 3320174d: 4608-char prompt contains zero skill-related content. agent.tools event: 8 standard platform tools only, no skill functions. Unique verification token SKILL-ACTIVE-SKL-9X3M7-HARNESS-VERIFY absent from all 23 child run events. Rogers produced a correct 14424-char research document with no trace of skill instructions. This is the same symptom as #335 (memory-tool-injection bug): both skill instructions and memory tools are wired in the API layer but the runtime context assembly in v0.9.56 ignores both when starting agent subtasks. Skill CRUD and assignment API itself works correctly (stages 1-2 PASS). New issue recommended for squad triage.
+
+---
+
+## transport-http.mjs URL capture bug: assertTargetAllowed returns void, not the URL
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: fixed
+
+transport-http.mjs had 'const url = assertTargetAllowed(target, ...)' but assertTargetAllowed() is a void assertion (returns undefined), so url was always undefined and StreamableHTTPClientTransport threw 'Failed to parse URL from undefined' on every HTTP smoke attempt. Fixed this session by removing the const url = capture and passing new URL(target) directly to StreamableHTTPClientTransport. Unit tests still pass (all 10). Root cause: assertTargetAllowed's signature implies an assertion, not a transformer — its return value is meaningless. If anyone modifies transport-http.mjs again, assertTargetAllowed must be called for side-effect only.
+
+---
+
+## MCP outputSchema null for all run-workflow tools: surface regression in v0.9.56
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+All 5 run-workflow MCP tools (run_submit, run_status, run_show_artifacts, run_task, run_archive) return outputSchema: null in tools/list. The required-capabilities.json contract requires declared output schemas for run_submit (run_id+status), run_status (status), run_show_artifacts (artifacts), and run_task (run_id+status+artifacts). This causes the capabilities contract check to FAIL on 4 of 8 required capabilities (submit-run, poll-run, list-artifacts, one-call-run). Note: runtime behavior IS correct -- run_submit returns run_id+status, run_status returns status, etc. -- but the schema declarations are absent. The fix is to add [return: Description] or schema annotations to these tools in MemoryTools.cs/RunTools.cs so the MCP SDK exposes outputSchema in tools/list. Verified in mcp-stress-run-20260715T032543 against v0.9.56-864e2c51.
+
+---
+
+## MCP run_submit and run_task mark optional params as required in inputSchema
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+run_submit marks agent_name, base_branch, model_source as required in its inputSchema even though they are functionally optional (empty string works). Calling without them throws System.ArgumentException from .NET reflection-based parameter binding. Similarly run_task marks workflow_id, model_id, start_mode, timeout_seconds, poll_interval_seconds as required. The current capabilities-contract.mjs does not catch this regression because it only checks that ITS known required fields (project_id, task) are still required -- it does not flag NEW required fields being added. Workaround: always pass these optional fields as empty strings. Fix: mark them as non-required in the C# method signature (use nullable or default params). Verified in mcp-stress-run-20260715T032543 against v0.9.56-864e2c51.
+
+---
+
+## MCP tool exceptions use generic error message, actual error detail is lost to client
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+When MCP tools throw exceptions, the server returns isError:true with a generic 'An error occurred invoking <tool>.' message. The actual business logic error (e.g. 'Run artifacts are not ready yet.', 'Invalid project id.', 'Invalid run id.', 'This project has no team.') is only visible in server-side pod logs, never surfaced to the MCP client. This prevents agents using these tools from understanding and recovering from specific error conditions. The server logs do include a 'hint' field (e.g. 'Call run_status to confirm the run is in a review-ready or terminal state, then retry.') but it is also not surfaced. Fix: expose the McpApiException error/hint fields in the MCP error content rather than swallowing them in a generic message. Verified in mcp-stress-run-20260715T032543 against v0.9.56-864e2c51.
+
+---
+
+## mcp-cli-smoke.mjs --list flag documented in SKILL.md but not implemented
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+SKILL.md documents 'node scripts/mcp-harness/smoke/mcp-cli-smoke.mjs --list' to list built-in persona-driven MCP scenarios, but the flag has no handler in the source file. Running it without --target/--server-command triggers stdio transport which throws 'A stdio server command is required'. The --list codepath was either never implemented or was removed. Until fixed, the only way to discover MCP scenarios is to read scripts/persona-briefs/catalog.json directly.
