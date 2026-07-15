@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 20-build-push-images.sh -- Build and push Agentweaver container images to ACR.
+# Keep in sync with 20-build-push-images.ps1 (PowerShell equivalent).
 #
 # Builds four images using 'az acr build' (no local Docker daemon required), or
 # retags unchanged images with 'az acr import' when a previous deployed tag is known:

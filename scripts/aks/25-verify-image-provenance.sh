@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 25-verify-image-provenance.sh -- Independent, post-deploy safety net for #251
 # ("release image retag-forward can ship stale code").
+# Keep in sync with 25-verify-image-provenance.ps1 (PowerShell equivalent).
 #
 # 20-build-push-images.sh decides build-vs-retag at build time and, since the
 # #251/#303 fix, stamps every image it produces with an extra immutable ACR
@@ -33,7 +34,19 @@ source "${SCRIPT_DIR}/00-variables.sh"
 cd "${REPO_ROOT}"
 
 VERIFY_GIT_REF="${VERIFY_GIT_REF:-HEAD}"
-VERIFY_COMMIT="$(git rev-parse --verify "${VERIFY_GIT_REF}^{commit}")"
+# Defensive check: VERIFY_GIT_REF is sometimes passed in from a caller (e.g.
+# 30-deploy.sh) as an IMAGE_TAG-derived string. Since ~v0.9.36, release tags
+# are no longer created in git for every VERSION bump (see release_ref_for_tag()
+# in 20-build-push-images.sh), so a caller-supplied ref may not resolve. Fail
+# with a clear, actionable message instead of git's generic
+# "fatal: Needed a single revision".
+if ! VERIFY_COMMIT="$(git rev-parse --verify "${VERIFY_GIT_REF}^{commit}" 2>/dev/null)"; then
+  echo "ERROR: VERIFY_GIT_REF='${VERIFY_GIT_REF}' does not resolve to a commit in this repository." >&2
+  echo "  This is usually because VERIFY_GIT_REF was derived from IMAGE_TAG (a VERSION-file" >&2
+  echo "  semver string), which is not necessarily an actual git tag/ref. Pass an explicit," >&2
+  echo "  resolvable commit/ref via VERIFY_GIT_REF, or leave it unset to default to HEAD." >&2
+  exit 1
+fi
 
 PASS=0
 FAIL=0

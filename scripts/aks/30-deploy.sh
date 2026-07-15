@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 30-deploy.sh -- Deploy Agentweaver to AKS.
+# Keep in sync with 30-deploy.ps1 (PowerShell equivalent).
 
 set -euo pipefail
 
@@ -248,7 +249,18 @@ echo "Verifying image provenance (post-deploy safety net for #251)..."
 # Confirms the images now actually running in the cluster are provably built
 # from ${IMAGE_TAG}'s source (no stale retag-forward drift). This must run
 # after rollout so pods have already settled on their final image/digest.
-if ! VERIFY_GIT_REF="${VERIFY_GIT_REF:-${IMAGE_TAG}}" bash "${SCRIPT_DIR}/25-verify-image-provenance.sh"; then
+#
+# BUGFIX: this used to default VERIFY_GIT_REF to IMAGE_TAG (e.g. "v0.9.63").
+# IMAGE_TAG is derived from the VERSION file, not from an actual git tag --
+# release_ref_for_tag() in 20-build-push-images.sh explicitly notes that
+# releases since v0.9.36 deliberately stopped creating a matching git tag.
+# Passing a non-existent tag straight to `git rev-parse --verify <ref>^{commit}`
+# inside 25-verify-image-provenance.sh fails with "fatal: Needed a single
+# revision" -- this was reproduced live at the end of a real deploy. HEAD is
+# the commit actually checked out for this deploy (the one IMAGE_TAG's VERSION
+# bump belongs to), so default to HEAD instead, exactly like
+# 25-verify-image-provenance.sh's own standalone default.
+if ! VERIFY_GIT_REF="${VERIFY_GIT_REF:-HEAD}" bash "${SCRIPT_DIR}/25-verify-image-provenance.sh"; then
   echo "" >&2
   echo "ERROR: Image provenance verification FAILED -- see output above." >&2
   echo "  A running pod's image does not provably match ${IMAGE_TAG}'s source, or watched" >&2
