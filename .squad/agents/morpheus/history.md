@@ -79,3 +79,24 @@ Authored docs/mcp-test-harness-plan.md (committed 9dc223a9): a third persona-dri
 **Coordination:** Lockstep with Tank (API) and Trinity (UI) on two-file skill structure, target-guard implementation, untrusted-delimiter contract, and verdict schema versioning. Ahmed's sandbox-architecture clarification narrows Finding 1 scope to deployment allowlist, not tool-execution scopes.
 
 **Follow-ups:** Live-staging E2E required on all 4 open runtime issues. MCP protocol end-to-end test + hostile-content injection resistance scenario.
+
+
+---
+
+## 2026-07-15: #272 Re-fix — Orphaned Outcome-Spec Deferral Drain (reopened after live harness)
+
+**Trigger:** Live API-persona harness re-verified my prior merged #272 fix (v0.9.56 / 864e2c51) against staging and found it does NOT work: `steer kind=send "yes, looks good, please proceed"` returned 201/applied but `coordinator_status` stayed frozen at `awaiting_confirmation`, step_count 0, events frozen at 216. #272 reopened.
+
+**Root cause:** NOT a wiring gap — `steer kind=send` DOES reach `TryHandleOutcomeSpecReplyAsync` -> `ClassifyOutcomeSpecReply` -> `Confirm/ReviseOutcomeSpecAsync` -> `SubmitDecisionAsync`. The real hole: on the pod-per-run deployment the coordinator's reasoning pod is reaped at the `awaiting_confirmation` HITL gate, so the API has NO resident watch loop. When the decision can't apply synchronously (checkpoint-restore race / MAF `$type` bug) `SubmitDecisionAsync` defers it to the `DeferredDecisions` table and returns Accepted. The only drainer (`PollDeferredDecisionsAsync`) lives inside a live watch loop; `CoordinatorReconciler.SweepAsync` only covers work-plan phases; startup recovery only fires on boot. So the pre-work-plan spec gate had no periodic recovery -> deferred confirm/revise orphaned forever. In-process tests passed because in-API mode keeps the run resident (never checkpoints at the gate). Chat AND UI confirm share the hole.
+
+**Fix:** Added `CoordinatorRunService.DrainOrphanedSpecDeferralsAsync`, invoked each tick by `CoordinatorHeartbeatService` (isolated try/catch after the reconciler sweep). Discards stale deferrals for runs no longer at the gate; for eligible checkpointed orphaned spec-gate runs, re-establishes the resident workflow+poller via the proven `RecoverSpecPhaseAsync` seam (applies the decision at-most-once); leaves resident/checkpoint-less runs untouched; retries throttled 15s/run. Original fail-closed-to-revise classification untouched.
+
+**Validation:** Solution builds clean (0/0). All 30 Coordinator Phase2 tests pass incl. 3 new regression tests (deferred-decision applied confirms spec; stale non-gate deferral discarded; empty no-op). Full suite 2238 passed; 6 failures are pre-existing/environmental (Linux real-sandbox + PodLocalWorkspaceManager Windows-path + 1 timing-flaky AsyncStreamIdleTimeout) — confirmed identical on clean baseline main with changes stashed. E2E resume-drain not in-process testable (no checkpoint in in-api mode); validated by composition. Coordinator to re-run live harness on fresh deploy.
+
+**Status:** Committed on `fix/coordinator-steer-confirm-272` (1ca944f4, "Fixes #272"). No PR opened. Decision persisted to inbox. Ready for coordinator merge.
+
+### 2026-07-15 (same day, follow-up): SECOND root cause — brittle affirmation regex
+
+Coordinator traced the classifier while I was on the deferral drain and surfaced a second, independent bug (verified by me). `ClassifyOutcomeSpecReply`'s single fully-anchored `OutcomeSpecAffirmation` regex only allowed a fixed whitelist of follow-words after `yes/ok/sure`; the harness phrase "yes, looks good, please proceed" (normalized `yes looks good please proceed`) failed the whole anchored match because `looks` is not whitelisted -> classified **Revise**, not Confirm. So both bugs stacked: misclassified as Revise, then that decision orphaned by the deferral gap.
+
+Fix: replaced the rigid pattern with a clause-based classifier — split on punctuation/conjunctions and require EVERY clause to be an independent pure affirmation (affirmation-only vocab), keeping the clarification-marker guard. Preserves fail-closed-to-revise. Verified with a 31-case battery (19 confirm/12 revise) and a new endpoint regression test using the exact harness phrase. Committed as 84afd8aa (drain = 1ca944f4). Both commits needed for the harness to pass.

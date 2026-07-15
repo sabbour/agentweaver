@@ -161,3 +161,58 @@ Harness no longer reasons inline as if it were the persona while driving drive.m
 - status: open
 
 drive.mjs (init/spec/call/check-approvals/resolve-approval/finish) was deleted entirely -- do NOT re-add a scripted HTTP-calling/operationId-resolution/spec-caching layer between PersonaActor and the target API. PersonaActor is a real Copilot CLI agent with shell/execute access: it curls /openapi/v1.yaml directly, resolves operations from the live spec each turn via its own reasoning, issues its own curl calls with the bearer token, and appends transcript turns itself via shell redirection -- see .github/agents/persona-actor.agent.md. Approval/steer actions are just more discoverable endpoints now; the previous code-enforced default-defer approval judge (lib/approvals.mjs/lib/approval-judge.mjs) is preserved in the repo (still tested) but is unused by any production path -- the safety invariant is now a PROMPTED instruction in persona-actor.agent.md, not a structural default. Harness's Target resolution section documents the production/staging safety policy explicitly (scripts/harness-shared/target-guard.mjs remains the authoritative shared implementation, still used by ui-harness/mcp-harness) since it is no longer implicitly invoked by a drive.mjs init call. See decision Morpheus-deleted-drive-mjs-entirely-personaactor-now-curls-.
+
+---
+
+## Fix #272 (chat-confirm) FAIL in v0.9.56-864e2c51: steer kind=send does not transition from awaiting_confirmation
+
+- date: 2026-07-15
+- category: bug
+- surface: api
+- status: open
+
+Verified against live staging (wave1-verify-20260715T004112). A run was started in defineOutcome mode and reached coordinator_status=awaiting_confirmation. A steer message with kind=send and instruction='yes, looks good, please proceed' was accepted (HTTP 201, status=applied, relayedAt set), but coordinator_status remained awaiting_confirmation across 3 polls over 45s. Event count stayed static at 216 (last event coordinator.outcome_spec/awaiting_confirmation). The steer kind=confirm verb is not even supported (returns 400 with 'Unknown steering verb confirm; supported: stop, send, redirect, amend'). Fix #272 is NOT working in this build — reopening recommended.
+
+---
+
+## Memory write endpoint: POST /api/projects/{id}/agents/{name}/memory
+
+- date: 2026-07-15
+- category: environment-fact
+- surface: api
+- status: open
+
+The live API exposes a direct memory-write endpoint at POST /api/projects/{id}/agents/{name}/memory accepting RecordMemoryRequest body (fields: session_id, type, importance, content, tags). Returns HTTP 201 with the created item including id and created_at. Confirmed that writes persist and are immediately visible via GET /api/projects/{id}/memory (total_count increments). Verified in batch memory-write-verify-20260715T010957 against v0.9.56-864e2c51.
+
+---
+
+## Team member history not updated by direct memory writes
+
+- date: 2026-07-15
+- category: scenario-design-note
+- surface: api
+- status: open
+
+GET /api/projects/{id}/team/members/{name}/history does NOT update when you call POST /api/projects/{id}/agents/{name}/memory directly. The history endpoint reflects only orchestration-run-driven activity. A direct memory write (HTTP 201) leaves history unchanged (confirmed: identical 430-byte response before and after write in batch memory-write-verify-20260715T010957). Do not use direct memory writes as a proxy for testing history updates; trigger a real orchestration run instead.
+
+---
+
+## Memory MCP tools (memory_record/memory_list/memory_search) not injected into agent function schema during live orchestration runs
+
+- date: 2026-07-15
+- category: bug
+- surface: api
+- status: open
+
+Scenario memory-agent-roundtrip (batch 20260715T014105, v0.9.56/864e2c51) confirmed: the MCP tools defined in MemoryTools.cs (memory_record, memory_list, memory_get, memory_search) are NOT exposed in the agent's callable function schema when a squad agent executes a subtask in a live orchestration. The agent.tools event for the child run lists only 8 platform tools (report_intent, report_outcome, ask_question, preview/health tools); no memory tools appear. The agent (Stark, claude-sonnet-5) explicitly self-diagnosed: 'no memory_record, memory_list, or memory_search MCP tools are exposed in my available toolset.' Memory count was 13 before and 13 after — delta=0. Secondary issue: system prompt says 'Persist durable project facts with record_memory' but the registered tool name in MemoryTools.cs is 'memory_record' (name mismatch). Both issues must be fixed for the agent-driven memory round-trip to work. The raw REST memory API plumbing (POST /api/projects/{id}/agents/{name}/memory) was separately confirmed working by the coordinator calling it directly. Verdict: FAIL — agent-driven memory round-trip is broken. Squad defect for triage.
+
+---
+
+## Skill instructions NOT injected into agent context during live orchestration runs (v0.9.56)
+
+- date: 2026-07-15
+- category: bug
+- surface: api
+- status: open
+
+Scenario skill-usage-verify (batch 20260715T015920, v0.9.56/864e2c51) confirmed: skill instructions assigned to agent Rogers via PUT /api/projects/{id}/skills/{skillId}/assignments/{agentName} (HTTP 204, persisted in API) are NOT injected into the agent's system prompt or callable tool list during live orchestration execution. agent.system_prompt event for Rogers child run 3320174d: 4608-char prompt contains zero skill-related content. agent.tools event: 8 standard platform tools only, no skill functions. Unique verification token SKILL-ACTIVE-SKL-9X3M7-HARNESS-VERIFY absent from all 23 child run events. Rogers produced a correct 14424-char research document with no trace of skill instructions. This is the same symptom as #335 (memory-tool-injection bug): both skill instructions and memory tools are wired in the API layer but the runtime context assembly in v0.9.56 ignores both when starting agent subtasks. Skill CRUD and assignment API itself works correctly (stages 1-2 PASS). New issue recommended for squad triage.
