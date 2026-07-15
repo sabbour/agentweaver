@@ -188,6 +188,53 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         persistedEntry.GetProperty("agent").GetString().Should().Be("morpheus");
     }
 
+    // ── #97: the enriched coordinator.assembly_blocked payload (ineligibleSubtaskIds + id/title/status/
+    //    agent detail) must be durably persisted to RunEvents THE MOMENT the plan blocks — WHILE it is
+    //    still PARKED awaiting steering — not only after the paused stream eventually completes. The live
+    //    symptom (#97) was an opaque "The collective assembly could not complete." error on reload: while
+    //    parked at assembly_blocked the in-memory stream could be evicted, leaving a reconnecting UI with
+    //    only WorkPlan.AssemblyStatusReason and NO structured detail. BlockAsync now flushes the snapshot
+    //    immediately so a mid-park reload replays the full ineligible-subtask detail. ─────────────────────
+    [Fact]
+    public async Task RunAssembly_Blocked_PersistsEnrichedDetailImmediately_WhileStillParked()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (_, subtaskIds) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.Failed });
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+
+        // The plan is PARKED (still awaiting steering, stream NOT completed) — yet the enriched blocked
+        // detail must ALREADY be durable in RunEvents (simulates a reload after in-memory eviction).
+        _streamStore.Get(coordinatorRunId)!.IsCompleted.Should().BeFalse("the plan is parked, not terminal");
+
+        var blockedId = subtaskIds[1];
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var persisted = await db.RunEvents
+                .Where(e => e.RunId == coordinatorRunId && e.EventType == EventTypes.CoordinatorAssemblyBlocked)
+                .ToListAsync(cts.Token);
+            persisted.Should().HaveCount(1,
+                "the blocked detail must be durable immediately at block time, not only on stream completion");
+            using var doc = System.Text.Json.JsonDocument.Parse(persisted[0].PayloadJson);
+            doc.RootElement.GetProperty("reason").GetString().Should().Be("ineligible_subtasks");
+            doc.RootElement.GetProperty("ineligibleSubtaskIds").EnumerateArray()
+                .Select(n => n.GetInt32()).Should().Equal(blockedId);
+            var detail = doc.RootElement.GetProperty("ineligibleSubtasks");
+            detail.GetArrayLength().Should().Be(1);
+            detail[0].GetProperty("id").GetInt32().Should().Be(blockedId);
+            detail[0].GetProperty("status").GetString().Should().Be("failed");
+        }
+
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
+        await run;
+    }
+
     // ── UNIFIED AUTONOMOUS STEERING (live v0.9.12-rc1 regression): an in-place revision whose child
     //    run ends WITHOUT a clean assemble_ready terminal (watch_stream_completed_without_terminal_event)
     //    left the target subtask FAILED. Advancing the directive to `applied` on the durable effect

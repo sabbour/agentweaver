@@ -3568,6 +3568,26 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyBlocked, edges, ct)
             .ConfigureAwait(false);
+
+        // #97: durably persist the assembly-blocked events (including the ENRICHED coordinator.assembly_blocked
+        // payload — ineligibleSubtaskIds + the id/title/status/agent detail) to RunEvents RIGHT NOW, instead of
+        // relying on the in-memory stream being flushed later by PersistAndCompleteStreamAsync. The block parks
+        // the plan and WAITS (WaitForBlockedAssemblySteeringAsync) without completing the stream, so on a
+        // reload/reconnect during that park the stream may have been evicted and the UI would otherwise be left
+        // with only WorkPlan.AssemblyStatusReason (the opaque "ineligible_subtasks [ids]" code) and NO structured
+        // detail — the exact opaque-error symptom in issue #97. Idempotent (skips already-persisted sequences)
+        // and best-effort (a persistence fault must never break the block/park path).
+        try
+        {
+            await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Collective assembly: failed to durably persist assembly_blocked detail for run {RunId}",
+                context.CoordinatorRunId);
+        }
+
         _logger.LogWarning(
             "Collective assembly blocked for run {RunId}: {Reason}. Waiting for steering input.",
             context.CoordinatorRunId, reason);
