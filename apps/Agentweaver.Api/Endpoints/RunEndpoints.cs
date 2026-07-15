@@ -1645,20 +1645,9 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     var targetRun = targetRunId == id
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
-    // #349: a run can finalize (AssembleReady/terminal) while it still has multiple
-    // outstanding tool-approval requests — e.g. a doc-only deliverable that produces no
-    // runnable app assembles while several web_fetch approvals are queued. Approving the
-    // first lands while the run is active, then the run transitions and later approvals
-    // race and 409. The pending gate — not run.status — is the source of truth: honor a
-    // genuinely-pending request regardless of the owning run's lifecycle state so
-    // concurrent approvals all resolve. Only fall back to the run-active guard when there
-    // is no pending request to resolve.
-    var requestPending =
-        approvalGate.GetRequestState(targetRunId, body.RequestId) == ToolApprovalRequestState.Pending;
-    if (!requestPending
-        && (targetRun is null
-            || EndpointHelpers.IsTerminal(targetRun.Status)
-            || targetRun.Status == RunStatus.AssembleReady))
+    if (targetRun is null
+        || EndpointHelpers.IsTerminal(targetRun.Status)
+        || targetRun.Status == RunStatus.AssembleReady)
         return Results.Conflict(new { error = "Run is not active." });
 
     var resolved = await approvalGate.GrantAsync(targetRunId, body.RequestId, approvalScope);
@@ -1737,16 +1726,9 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     var targetRun = targetRunId == id
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
-    // #349: honor a genuinely-pending denial regardless of the owning run's lifecycle
-    // state (mirrors the tool-approvals path). A run can finalize while multiple approval
-    // gates are still outstanding; the pending gate — not run.status — is the source of
-    // truth. Only fall back to the run-active guard when there is no pending request.
-    var requestPending =
-        approvalGate.GetRequestState(targetRunId, body.RequestId) == ToolApprovalRequestState.Pending;
-    if (!requestPending
-        && (targetRun is null
-            || EndpointHelpers.IsTerminal(targetRun.Status)
-            || targetRun.Status == RunStatus.AssembleReady))
+    if (targetRun is null
+        || EndpointHelpers.IsTerminal(targetRun.Status)
+        || targetRun.Status == RunStatus.AssembleReady)
         return Results.Conflict(new { error = "Run is not active." });
 
     var resolved = approvalGate.Deny(targetRunId, body.RequestId);
