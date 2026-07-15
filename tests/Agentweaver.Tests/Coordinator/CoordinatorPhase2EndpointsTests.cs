@@ -262,6 +262,31 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
     }
 
+    // #272 regression: the live API harness used the multi-clause phrase
+    // "yes, looks good, please proceed", which the original single anchored affirmation regex
+    // rejected (the "looks" token broke the whitelisted follow-word run), misclassifying an obvious
+    // confirm as revise. The clause-based classifier must recognize it as a confirm.
+    [Fact]
+    public async Task Steer_Send_AwaitingOutcomeSpec_WithMultiClauseAffirmativeChat_ConfirmsSpec()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Confirm this outcome plan with a natural multi-clause reply");
+        await WaitForGateAsync(runId);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = "yes, looks good, please proceed" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
+        directive.Should().NotBeNull();
+        directive!.Status.Should().Be(SteeringStatus.Applied,
+            "a natural multi-clause affirmative ('yes, looks good, please proceed') must route through the confirm seam");
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull("the exact harness confirm phrase must confirm the spec, not redraft it");
+        spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
+    }
+
     [Fact]
     public async Task Steer_Send_AwaitingOutcomeSpec_WithClarificationChat_RedraftsSpec()
     {

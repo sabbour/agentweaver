@@ -384,8 +384,23 @@ public sealed class CoordinatorSteeringService
 {
     private static readonly Regex OutcomeSpecReplyWhitespace = new(@"\s+", RegexOptions.Compiled);
     private static readonly Regex OutcomeSpecReplyTokenSanitizer = new(@"[^a-z0-9']+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex OutcomeSpecAffirmation = new(
-        @"^(?:(?:yes|yep|yeah|yup|ok|okay|sure)(?:\s+(?:please|go ahead|proceed|do it|with (?:this|the) plan|on this|thanks))*|sounds good|looks good|lgtm|ship it|go ahead|please go ahead|proceed|please proceed|confirm(?:ed)?|approve(?:d)?|that(?:'s| is) right|correct|exactly|do it)(?:\s+(?:please|thanks|with (?:this|the) plan|on this))?$",
+
+    // A single affirmation token/phrase. Multiword phrases are listed first so the alternation prefers
+    // them over their constituent words. Deliberately affirmation-only: no content words, so a clause
+    // that carries any free-form request can never match (it falls through to revise).
+    private const string OutcomeSpecAffirmToken =
+        @"(?:sounds\s+good|sounds\s+great|looks\s+good|looks\s+great|good\s+to\s+go|go\s+ahead|go\s+for\s+it|let'?s\s+go|ship\s+it|do\s+it|works\s+for\s+me|makes\s+sense|that\s+works|that'?s\s+right|that\s+is\s+right|that'?s\s+correct|thank\s+you|with\s+(?:this|the)\s+plan|on\s+this|all\s+good|yes|yep|yeah|yup|ok|okay|sure|absolutely|definitely|certainly|please|thanks|proceed|continue|confirm(?:ed)?|approve(?:d)?|agree(?:d)?|correct|exactly|perfect|great|good|fine|right|lgtm)";
+
+    // A whole clause is affirmational only when it is composed ENTIRELY of affirmation tokens/phrases.
+    private static readonly Regex OutcomeSpecAffirmationClause = new(
+        $@"^{OutcomeSpecAffirmToken}(?:\s+{OutcomeSpecAffirmToken})*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Clause boundaries within a reply: punctuation, conjunctions, and connective words. Splitting on
+    // these lets a natural multi-clause confirm ("yes, looks good, please proceed") be validated one
+    // clause at a time instead of relying on a single rigid whitelist of word orderings.
+    private static readonly Regex OutcomeSpecClauseSplitter = new(
+        @"\s*(?:[,;.!/]+|\band\b|\bthen\b|&)\s*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly string[] OutcomeSpecClarificationMarkers =
     [
@@ -889,13 +904,28 @@ public sealed class CoordinatorSteeringService
         if (normalized.Length == 0)
             return OutcomeSpecReplyKind.Revise;
 
+        // Any explicit clarification/change marker means the human wants edits — fail closed to revise.
         if (OutcomeSpecClarificationMarkers.Any(marker =>
                 normalized.Contains(marker, StringComparison.Ordinal)))
             return OutcomeSpecReplyKind.Revise;
 
-        return OutcomeSpecAffirmation.IsMatch(normalized)
-            ? OutcomeSpecReplyKind.Confirm
-            : OutcomeSpecReplyKind.Revise;
+        // A confirmation is frequently phrased as several affirmation clauses
+        // ("yes, looks good, please proceed"). Treat the reply as a confirm ONLY when every clause is
+        // independently a pure affirmation; if any clause carries free-form content we cannot vouch
+        // for, fail closed to revise. This preserves the original safety property while recognizing
+        // ordinary multi-clause confirm phrases the previous single anchored pattern rejected.
+        var sawAffirmationClause = false;
+        foreach (var rawClause in OutcomeSpecClauseSplitter.Split(instruction.ToLowerInvariant()))
+        {
+            var clause = NormalizeOutcomeSpecReply(rawClause);
+            if (clause.Length == 0)
+                continue;
+            if (!OutcomeSpecAffirmationClause.IsMatch(clause))
+                return OutcomeSpecReplyKind.Revise;
+            sawAffirmationClause = true;
+        }
+
+        return sawAffirmationClause ? OutcomeSpecReplyKind.Confirm : OutcomeSpecReplyKind.Revise;
     }
 
     private static string NormalizeOutcomeSpecReply(string instruction)
