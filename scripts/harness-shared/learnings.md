@@ -271,3 +271,91 @@ When MCP tools throw exceptions, the server returns isError:true with a generic 
 - status: open
 
 SKILL.md documents 'node scripts/mcp-harness/smoke/mcp-cli-smoke.mjs --list' to list built-in persona-driven MCP scenarios, but the flag has no handler in the source file. Running it without --target/--server-command triggers stdio transport which throws 'A stdio server command is required'. The --list codepath was either never implemented or was removed. Until fixed, the only way to discover MCP scenarios is to read scripts/persona-briefs/catalog.json directly.
+
+---
+
+## run_task outputSchema has 'run:true' boolean property causing MCP SDK Zod validation failure
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+run_task's outputSchema declares 'run' property as boolean true (meaning 'any value' in JSON Schema) rather than as a proper type schema. This causes the MCP SDK's Zod validator to throw ZodError 'Invalid input' at tools[N].outputSchema.properties.run when calling tools/list via the McpHarnessClient. Verified in v0.9.58 (ab0aeff7d459). The runtime behavior IS correct (run_task returns a full run object), but the declared schema uses boolean schema syntax that the @modelcontextprotocol/sdk client rejects. Fix: change 'run: true' to 'run: { type: object }' or add a proper object schema with the RunSummary shape. Impact: any MCP client using the SDK's strict schema validation fails to enumerate tools at all. Workaround: use raw JSON-RPC calls that skip Zod validation.
+
+---
+
+## run_task outputSchema boolean true fixed in v0.9.59
+
+- date: 2026-07-15
+- category: environment-fact
+- surface: mcp
+- status: fixed
+
+The #341 bug (run_task outputSchema had 'run: true' boolean JSON Schema property causing MCP SDK Zod validation failure on tools/list) is CONFIRMED FIXED in v0.9.59. Verified 2026-07-15 via real @modelcontextprotocol/sdk TypeScript client: tools/list succeeded, returned 91 tools, and run_task.outputSchema.properties.run is now {'type':['object','null'],'properties':{'run_id':...}} — a proper typed schema, not boolean true. The fix replaced RunTaskResult.Run (was JsonElement?) with a typed RunEmbedded record in apps/Agentweaver.Mcp/Tools/RunTools.cs.
+
+---
+
+## MCP run-workflow outputSchemas null fixed in v0.9.59
+
+- date: 2026-07-15
+- category: environment-fact
+- surface: mcp
+- status: fixed
+
+The v0.9.56 bug (all run-workflow MCP tools returned outputSchema: null) is CONFIRMED FIXED in v0.9.59. Verified 2026-07-15: run_submit.outputSchema.properties = ['run_id','status','start_mode'], run_status.outputSchema.properties = ['status'], run_show_artifacts.outputSchema.properties = ['artifacts'], run_task.outputSchema.properties = ['run_id','status','artifacts','run','error','hint','review_prompt']. Required-capabilities.json contract checks for these fields will now pass.
+
+---
+
+## MCP run_submit and run_task optional params marked required fixed in v0.9.59
+
+- date: 2026-07-15
+- category: environment-fact
+- surface: mcp
+- status: fixed
+
+The v0.9.56 bug (run_submit marking agent_name/base_branch/model_source as required, run_task marking workflow_id/model_id/start_mode/timeout_seconds/poll_interval_seconds as required) is CONFIRMED FIXED in v0.9.59. Verified 2026-07-15: run_submit.inputSchema.required = ['project_id','task'] only, run_task.inputSchema.required = ['project_id','task'] only. Callers no longer need to pass empty-string workarounds for optional parameters.
+
+---
+
+## MCP smoke test times out: run stays in awaiting_confirmation, never reaches terminal status
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+In v0.9.59, mcp-cli-smoke.mjs timed out after 240 seconds (2026-07-15). The smoke test submits a task via run_submit with a minimal goal and polls run_status every 2s, but the run never reached a terminal status (completed/failed/cancelled/archived) — it got stuck in an awaiting_confirmation-like state consistent with the #272 'steer kind=send does not transition from awaiting_confirmation' bug. The smoke test requires terminal status to proceed to artifact/cleanup steps. Workaround: use a project that already has a team configured for a workflow that will naturally complete, or extend the smoke test to detect awaiting_confirmation and steer/confirm if the run reaches that state. The smoke test's goal was 'Create a minimal smoke-test task and stop at the reviewable result' — but the coordinator reached a confirmation gate and had no one to confirm it.
+
+---
+
+## MCP team_get and team_cast return 'Project not found' for projects without initialized workspace
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+team_get and team_cast MCP tools return isError:true with 'Project X not found' even when project_get and project_list confirm the project exists (state:active). Reproduced 2026-07-15 on v0.9.59 for both a freshly-created blank project (5fb39a60-...) and an existing blank project (2ca06f67-... 'MCP Harness Smoke Test'). Root cause: team operations look up the team from the project's git workspace (which must have .squad/agents/ charaters) — a blank project never has its workspace initialized. The error message 'Project not found' is misleading: the project IS found in the database, but the workspace files don't exist. The Oracle Demo project (a80d1db5-...) works correctly because it has an initialized workspace with cast team members. Fix: return a more accurate error like 'No team configured for this project' or 'Project workspace not initialized' instead of 'Project not found'. This misleads callers into thinking the project ID is wrong.
+
+---
+
+## MCP persona driver (general-purpose agent) writes PowerShell DateTime ts format instead of ISO 8601
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+When the general-purpose agent acts as the MCP persona driver and writes transcript JSONL turns, it uses PowerShell's default DateTime.ToString() format ('7/15/2026 2:02:10 PM') instead of the ISO 8601 format required by the AGENT.md spec ('2026-07-15T14:02:10Z'). This makes timing derivation unreliable (tools parsing the ts field may fail or produce wrong results) and does not match the transcript schema. Observed in the jordan-live-2026-07-15T13-56-19-444Z.jsonl and priya-live-2026-07-15T13-56-27-230Z.jsonl transcripts from batch mcp-v0959-stress. The dispatch prompt should explicitly instruct agents to use new Date().toISOString() or equivalent for the ts field, or the AGENT.md should be updated to emphasize the ISO 8601 requirement more prominently.
+
+---
+
+## MCP team_cast inputSchema marks mutually exclusive params as required
+
+- date: 2026-07-15
+- category: bug
+- surface: mcp
+- status: open
+
+team_cast.inputSchema.required = ['project_id','goal','confirm_proposal_id','confirm'] even though goal and confirm_proposal_id are described as mutually exclusive (goal is required unless confirm_proposal_id is set). Passing empty string for confirm_proposal_id when using goal mode results in a 'Project not found' error rather than a meaningful validation error. This is a variant of the same optional-params-marked-required pattern that was fixed for run_submit/run_task in v0.9.59, but team_cast was not fixed in the same release. Verified 2026-07-15 on v0.9.59.
