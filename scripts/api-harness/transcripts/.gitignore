@@ -1,3 +1,4 @@
 # Live persona transcripts are run artifacts, not source.
 *.json
+*.jsonl
 !.gitignore

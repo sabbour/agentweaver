@@ -71,16 +71,44 @@ real live API, never simulated):
      land in real time, before or right after dispatching PersonaActor.** Since
      PersonaActor appends each turn via shell redirection as it goes (see stage
      2), a simple tail is all that's needed — create the (empty) transcript file
-     first if your shell's tail requires the file to already exist, then run:
-     `Get-Content <transcript-path> -Wait` on PowerShell/Windows, or `tail -f
-     <transcript-path>` on macOS/Linux. Run this as its own background process,
-     started separately from the PersonaActor dispatch itself — it is pure,
-     read-only observability for the human watching, not part of the driving
-     mechanism, and PersonaActor's run must not depend on it in any way (it
-     succeeds or fails identically whether or not anyone is tailing the file).
-     Do not wrap this in a script or add any buffering/formatting logic — a bare
-     tail command is the whole point; anything more would reintroduce fixed code
-     between PersonaActor and its output.
+     first if your shell's tail requires the file to already exist, then pipe
+     the tail through a lightweight parse+format step so the operator sees a
+     readable `TURN <n> | <METHOD> <path> -> <status> | THOUGHT: <thought>` line
+     per turn instead of raw JSON. On PowerShell/Windows:
+     ```powershell
+     Get-Content <transcript-path> -Wait | ForEach-Object {
+       if ([string]::IsNullOrWhiteSpace($_)) { return }
+       try {
+         $t = $_ | ConvertFrom-Json -ErrorAction Stop
+         if ($null -eq $t) { return }
+         "TURN $($t.turn) | $($t.request.method) $($t.request.path) -> $($t.response.status) | THOUGHT: $($t.thought)"
+       } catch {
+         # a line can be read mid-flush while PersonaActor is still writing it;
+         # skip silently, it will parse cleanly once the write completes
+       }
+     }
+     ```
+     On macOS/Linux, the `jq` equivalent (skip-on-error via `try ... catch
+     empty`, which handles the same mid-flush partial-line case):
+     ```bash
+     tail -f <transcript-path> | jq -R --unbuffered \
+       'try fromjson catch empty | "TURN \(.turn) | \(.request.method) \(.request.path) -> \(.response.status) | THOUGHT: \(.thought)"'
+     ```
+     Both were verified against a real transcript file
+     (`scripts/api-harness/transcripts/oracle-live-*.jsonl`) and against
+     synthesized blank/truncated lines before being documented here. Run this as
+     its own background process, started separately from the PersonaActor
+     dispatch itself — it is pure, read-only observability for the human
+     watching, not part of the driving mechanism, and PersonaActor's run must
+     not depend on it in any way (it succeeds or fails identically whether or
+     not anyone is tailing the file). **This formatting is presentation-only for
+     the live view** — the transcript file on disk remains exactly the raw,
+     verbatim JSONL PersonaActor writes; nothing about what PersonaActor writes
+     or how it writes it changes, and that raw file is still the durable record
+     Judge reads afterward. Do not wrap this in a script file or add any
+     buffering/interpretation logic beyond this inline formatting pipe — a
+     one-line shell pipe is the whole point; a separate tool/wrapper would
+     reintroduce fixed code between PersonaActor and its output.
    - Dispatch a fresh **`PersonaActor`** sub-agent via the `task` tool (`mode:
      sync` — this is a gate; you need the finished transcript back before
      judging). The dispatch prompt supplies, stated plainly as text: the persona
@@ -200,11 +228,12 @@ tool, `skill: "api-harness"`, for the CLI contract details PersonaActor will use
 interpret the actual ask into a concrete goal statement for this run (see
 "Resolve a concrete goal statement for this specific run" above — do not invent
 scope beyond what was asked, and do not map it onto a fixed phase list), create
-the transcript path, start a live tail of it (`Get-Content
-scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl -Wait` on
-PowerShell, `tail -f` on macOS/Linux) as its own background process so you can
-watch turns land in real time, then dispatch `PersonaActor` via `task` (`mode:
-sync`) with a prompt like:
+the transcript path, start the parsed live tail of it described above (`Get-
+Content scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl -Wait`
+piped through the `ConvertFrom-Json` formatting step on PowerShell, `tail -f`
+piped through the `jq` formatting step on macOS/Linux) as its own background
+process so you can watch turns land in real time, then dispatch `PersonaActor`
+via `task` (`mode: sync`) with a prompt like:
 
 ```
 agent_type: "PersonaActor"
@@ -226,11 +255,21 @@ prompt: |
   transcript path + your factual summary.
 ```
 
-While PersonaActor runs, the live tail you started shows each turn as it is
-appended — this is purely so the operator can watch the run happen, not
-something PersonaActor or the dispatch depends on; stop the tail once
-PersonaActor returns. The same transcript file remains the durable record you
-hand to Judge afterward regardless of whether anyone tailed it live.
+While PersonaActor runs, the live tail you started prints a readable line per
+turn as it is appended — for example:
+
+```
+TURN 1 | GET /openapi/v1.yaml -> 200 | THOUGHT: Fetch live OpenAPI spec to discover real capabilities before acting, per surface adapter.
+TURN 2 | GET /api/blueprints -> 200 | THOUGHT: List built-in blueprints to find one spanning both product and engineering, per the goal's blueprint requirement.
+TURN 3 | POST /api/projects -> 201 | THOUGHT: 'blueprint-pm-and-software-development' is an exact match: PM roster merged with full engineering roster. Create the project with this blueprint.
+```
+
+This is purely so the operator can watch the run happen, not something
+PersonaActor or the dispatch depends on; stop the tail once PersonaActor
+returns. The transcript file on disk is untouched by this formatting — it
+remains the same raw, verbatim JSONL PersonaActor writes, and that raw file is
+still the durable record you hand to Judge afterward regardless of whether
+anyone tailed it live.
 
 PersonaActor internally curls the spec, then curls whatever operation it
 resolves from it, appending each real request/response pair to the transcript
