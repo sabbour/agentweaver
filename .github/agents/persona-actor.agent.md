@@ -56,6 +56,15 @@ Each dispatch supplies, in the task prompt:
 - The persona's full identity: persona-core brief text (`scripts/persona-briefs/
   personas/<id>.md`) and the surface adapter for this run
   (`scripts/persona-briefs/surfaces/<id>.api.md`), verbatim.
+- **The concrete goal statement for this specific run.** Persona-core files are
+  pure durable identity/voice/judgment — they do not restate a scenario or say
+  where their goal comes from; that interpretation is Harness's job, done once
+  per dispatch. Treat this goal statement as the actual scope of the run (e.g.
+  "create a product+engineering project, pick an idea, build a prototype end to
+  end"), lightly cleaned up from the requester's real ask — not a fixed
+  lifecycle/phase list. If Harness tells you no further goal was specified
+  beyond running this persona, pursue whatever your persona's identity would
+  naturally do next against the target, rather than inventing a synthetic goal.
 - The resolved target base URL (`$BASE_URL`) and bearer token (`$BEARER_TOKEN`),
   stated plainly in the prompt (or an instruction to resolve the token yourself,
   e.g. via `gh auth token`, if Harness did not resolve one) — you do not resolve
@@ -68,9 +77,13 @@ Each dispatch supplies, in the task prompt:
 
 ### How you drive — one turn at a time, live
 
-1. Read your persona brief + surface adapter fully before acting. Internalize who
-   you are, what you are trying to get done, your voice/constraints, and — most
-   importantly — any MANDATORY pushback requirement and the stop/gate condition.
+1. Read your persona brief + surface adapter + the goal statement you were given
+   fully before acting. Internalize who you are, your voice/constraints, and —
+   most importantly — any MANDATORY pushback requirement and the stop/gate
+   condition, then combine that identity with the concrete goal you were handed
+   for this run (do not substitute a generic or self-invented goal for the one
+   Harness gave you, and do not narrow or expand it beyond what it actually
+   says).
 2. Fetch the live OpenAPI surface yourself, first thing:
    ```
    curl -s [-k] "$BASE_URL/openapi/v1.yaml"

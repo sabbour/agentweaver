@@ -35,6 +35,25 @@ real live API, never simulated):
 1. **Harness (you) resolve, then dispatch.** Resolve the persona brief and the
    target base URL + token before dispatching anyone; do not drive the API
    yourself.
+   - **Resolve a concrete goal statement for this specific run.** Persona-core
+     files are pure durable identity/voice/judgment — they intentionally do not
+     restate a scenario or say where their goal comes from. That interpretation
+     step is Harness's job, done once per dispatch, not baked into every persona
+     file: read the actual ask you were given (the requester's literal words,
+     e.g. "Act as Oracle: create a product+engineering project, pick an idea,
+     build a prototype end to end", or a more generic instruction like "run
+     Oracle against staging"), and turn it into a short, concrete goal statement
+     for this run. Apply the same discovery principle here that governs
+     PersonaActor's own live driving: do not invent scope beyond what was
+     actually asked, and do not map the ask onto a fixed lifecycle/phase list of
+     your own (e.g. "discovery, then scoping, then build, then launch") — state
+     the goal as given, lightly cleaned up for clarity, and let the persona
+     (using its own identity/judgment) and the live API (via PersonaActor's
+     discovery) determine the path from there. If the ask is only a persona name
+     with no further detail, say so plainly in the goal statement rather than
+     fabricating one ("no further goal was specified beyond running <persona>;
+     pursue whatever this persona's identity would naturally do next against
+     this target") — do not invent a synthetic goal to fill the gap.
    - Resolve the persona brief: check `scripts/persona-briefs/catalog.json` / run
      `node scripts/persona-briefs/find-similar.mjs --description "<the requested
      intent>"` for a close match. Only generate a new constrained persona core and
@@ -51,22 +70,26 @@ real live API, never simulated):
    - Dispatch a fresh **`PersonaActor`** sub-agent via the `task` tool (`mode:
      sync` — this is a gate; you need the finished transcript back before
      judging). The dispatch prompt supplies, stated plainly as text: the persona
-     name, the full persona-core brief + surface-adapter text verbatim, the
-     resolved target base URL and bearer token, whether `-k`/`--insecure` is
+     name, the full persona-core brief + surface-adapter text verbatim, **the
+     concrete goal statement for this run** (the one piece of per-invocation
+     content the now-goal-agnostic persona-core file no longer carries itself),
+     the resolved target base URL and bearer token, whether `-k`/`--insecure` is
      needed, and the transcript file path to append to.
 2. **PersonaActor drives, one turn at a time, live.** `.github/agents/
    persona-actor.agent.md` fully impersonates the named persona in a fresh,
-   isolated context: it decides its next action from the persona brief + the REAL
-   previous API response, fetches the live OpenAPI/Swagger spec itself via a
-   direct `curl "$BASE_URL/openapi/v1.yaml"` call (no caching layer — it keeps
-   the spec in its own conversation context) and issues its own `curl` calls
-   against whatever operation it resolves from the spec's tags/summaries for
-   real, reacts only to what actually comes back, pushes back with objections
-   grounded in real response content exactly where its brief mandates it, and
-   stops at the brief's gate. It never pre-writes both sides of the exchange. It
-   appends each turn (thought + real request + real response) to the transcript
-   file itself via shell redirection as it goes, and on completion returns the
-   transcript path + a factual (non-judging) summary to you.
+   isolated context: it pursues the concrete goal statement you handed it, using
+   the persona's identity/voice/judgment from its brief, and decides its next
+   action from that goal + the REAL previous API response, fetches the live
+   OpenAPI/Swagger spec itself via a direct `curl "$BASE_URL/openapi/v1.yaml"`
+   call (no caching layer — it keeps the spec in its own conversation context)
+   and issues its own `curl` calls against whatever operation it resolves from
+   the spec's tags/summaries for real, reacts only to what actually comes back,
+   pushes back with objections grounded in real response content exactly where
+   its brief mandates it, and stops at the brief's gate. It never pre-writes
+   both sides of the exchange. It appends each turn (thought + real request +
+   real response) to the transcript file itself via shell redirection as it
+   goes, and on completion returns the transcript path + a factual (non-judging)
+   summary to you.
 3. **Harness judges.** Take the returned transcript and proceed to Judging below
    exactly as already wired — build the judge prompt, dispatch `Judge`, validate
    and persist the verdict. This stage is unchanged by this pivot.
@@ -160,22 +183,29 @@ running as an actual Harness agent session:
 Scoped single-surface run (persona scenario, API surface): resolve the brief +
 target yourself (invoke the discoverable `api-harness` skill, via the `skill`
 tool, `skill: "api-harness"`, for the CLI contract details PersonaActor will use),
-then dispatch `PersonaActor` via `task` (`mode: sync`) with a prompt like:
+interpret the actual ask into a concrete goal statement for this run (see
+"Resolve a concrete goal statement for this specific run" above — do not invent
+scope beyond what was asked, and do not map it onto a fixed phase list), then
+dispatch `PersonaActor` via `task` (`mode: sync`) with a prompt like:
 
 ```
 agent_type: "PersonaActor"
 prompt: |
-  Persona: priya
-  Persona-core brief: <verbatim contents of scripts/persona-briefs/personas/priya.md>
-  Surface adapter: <verbatim contents of scripts/persona-briefs/surfaces/priya.api.md>
+  Persona: oracle
+  Persona-core brief: <verbatim contents of scripts/persona-briefs/personas/oracle.md>
+  Surface adapter: <verbatim contents of scripts/persona-briefs/surfaces/oracle.api.md>
+  Goal for this run: Create a product+engineering project, pick an idea, and
+    build a prototype end to end. (This is the requester's actual ask, lightly
+    cleaned up — not a fixed phase list Harness invented.)
   Target base URL: <resolved base URL>
   Bearer token: <resolved bearer token, or "resolve via gh auth token">
   TLS: <"-k is fine, this is a staging/localhost target" or "do not pass -k, this is not staging/localhost">
-  Transcript path: scripts/api-harness/transcripts/priya-live-<timestamp>.jsonl
+  Transcript path: scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl
   Fetch the live OpenAPI spec yourself via curl "$BASE_URL/openapi/v1.yaml" before
-  acting. Drive one turn at a time via your own curl calls; append each turn to
-  the transcript path as you go; stop at your brief's gate; return the transcript
-  path + your factual summary.
+  acting. Drive one turn at a time via your own curl calls, in pursuit of the
+  goal above, using your persona's identity/judgment to decide how; append each
+  turn to the transcript path as you go; stop at your brief's gate; return the
+  transcript path + your factual summary.
 ```
 
 PersonaActor internally curls the spec, then curls whatever operation it
@@ -186,8 +216,9 @@ surfaces (a surface-appropriate actor drives; Harness dispatches and judges).
 
 Structured re-test from a caller-supplied `reproManifest` (fresh comparison,
 re-driven live — not a replay): dispatch a fresh `PersonaActor` the same way,
-using the manifest's persona brief against `reproManifest.targetRevision`, then
-compare the resulting verdict against the manifest's prior one.
+using the manifest's persona brief and the same goal statement as the original
+run, against `reproManifest.targetRevision`, then compare the resulting verdict
+against the manifest's prior one.
 
 The one fixed-script exception (a structural, non-persona conformance check —
 still run directly by Harness, not dispatched, since it has no persona/pushback
@@ -214,11 +245,12 @@ node scripts/combined-harness/launch.mjs `
 ```
 
 New investigation (no close persona-brief match): generate a constrained persona
-core/adapter, confirm with the requester before an unattended deep run, then
-dispatch `PersonaActor` with that generated brief exactly as above — for the API
-surface, PersonaActor drives via its own `curl` calls against the live OpenAPI
-spec, rather than inventing raw requests without reading the API's contract
-first, and rather than Harness driving it inline itself.
+core/adapter, confirm with the requester before an unattended deep run, resolve a
+concrete goal statement from the actual ask the same way as above, then dispatch
+`PersonaActor` with that generated brief + goal statement exactly as above — for
+the API surface, PersonaActor drives via its own `curl` calls against the live
+OpenAPI spec, rather than inventing raw requests without reading the API's
+contract first, and rather than Harness driving it inline itself.
 
 ### Recording new learnings
 
