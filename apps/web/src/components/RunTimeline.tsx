@@ -283,6 +283,23 @@ const useStyles = makeStyles({
     },
     '& code': { fontFamily: tokens.fontFamilyMonospace },
   },
+  messageUser: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    color: tokens.colorNeutralForeground1,
+    fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
+  messageUserLabel: {
+    display: 'block',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    marginBottom: tokens.spacingVerticalXXS,
+  },
   messageStreaming: {
     color: tokens.colorNeutralForeground2,
     whiteSpace: 'pre-wrap',
@@ -522,6 +539,16 @@ function MessageBlock({ message }: { message: RunTimelineMessage }) {
       {formatRelativeTime(message.timestamp)}
     </span>
   );
+  if (message.role === 'user') {
+    return (
+      <div data-testid="timeline-message" data-role="user">
+        {timestamp}
+        <span className={styles.messageUserLabel}>You</span>
+        <div className={styles.messageUser}>{message.text}</div>
+      </div>
+    );
+  }
+  // role === 'assistant' or absent — render as agent output.
   if (message.streaming || message.text.length === 0) {
     return (
       <div data-testid="timeline-message">

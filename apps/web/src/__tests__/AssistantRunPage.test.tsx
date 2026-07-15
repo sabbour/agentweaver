@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AssistantRunPage } from '../pages/AssistantRunPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -56,6 +57,23 @@ function typeAndSend(message: string) {
   fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
 }
 
+/** Real response shape from POST /api/assistant/runs (201). */
+const REAL_CREATE_RESPONSE = {
+  run_id: 'assistant-run-1',
+  status: 'in_progress',
+  message: 'Hello, how can I help?',
+  tools_invoked: [],
+};
+
+/** Real response shape from POST /api/assistant/runs/{id}/messages (200). */
+const REAL_MESSAGE_RESPONSE = {
+  run_id: 'assistant-run-1',
+  role: 'assistant' as const,
+  message: 'I checked the projects. Here is what I found.',
+  status: 'in_progress',
+  tools_invoked: ['coordinator_list_projects'],
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockRunStreamState.current = {
@@ -66,8 +84,8 @@ beforeEach(() => {
     reconnect: vi.fn(),
   };
   vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
-  vi.mocked(apiClient.createAssistantRun).mockResolvedValue({ run_id: 'assistant-local-1', status: 'created' });
-  vi.mocked(apiClient.sendAssistantMessage).mockResolvedValue({ status: 'queued' });
+  vi.mocked(apiClient.createAssistantRun).mockResolvedValue(REAL_CREATE_RESPONSE);
+  vi.mocked(apiClient.sendAssistantMessage).mockResolvedValue(REAL_MESSAGE_RESPONSE);
 });
 
 afterEach(() => {
@@ -82,7 +100,7 @@ describe('AssistantRunPage', () => {
     expect(screen.getByPlaceholderText('Message the assistant...')).toBeTruthy();
   });
 
-  it('creates a run on the first composer submit (stubbed create-run call)', async () => {
+  it('creates a run on the first composer submit using real backend shape', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
     typeAndSend('what projects exist?');
 
@@ -99,7 +117,7 @@ describe('AssistantRunPage', () => {
     });
   });
 
-  it('sends subsequent messages via the send-message stub once a run exists', async () => {
+  it('sends subsequent messages via real send-message endpoint once a run exists', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
 
     typeAndSend('first message');
@@ -110,7 +128,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledTimes(1);
     });
     expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
-      'assistant-local-1',
+      'assistant-run-1',
       expect.objectContaining({ message: 'second message' }),
     );
     // The create call is not made again for follow-ups.
@@ -143,7 +161,66 @@ describe('AssistantRunPage', () => {
     // Approving wires through to apiClient.approveTool against the run id.
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
     await waitFor(() => {
-      expect(apiClient.approveTool).toHaveBeenCalledWith('assistant-local-1', 'req-1', 'once');
+      expect(apiClient.approveTool).toHaveBeenCalledWith('assistant-run-1', 'req-1', 'once');
     });
+  });
+
+  it('shows operator_run_limit message on 429 from createAssistantRun', async () => {
+    const err = new ApiError(429, JSON.stringify({ error: 'operator_run_limit', message: 'Limit reached.' }));
+    vi.mocked(apiClient.createAssistantRun).mockRejectedValue(err);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    typeAndSend('hello');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-error')).toBeTruthy();
+    });
+    expect(screen.getByTestId('assistant-error').textContent).toContain(
+      'You have too many active assistant conversations',
+    );
+    // Run state is not set — empty state remains.
+    expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
+  });
+
+  it('shows conversation-timeout message and resets on 404 run_not_found from sendAssistantMessage', async () => {
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+
+    // First message creates the run.
+    typeAndSend('first message');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+
+    // Now the run gets idle-closed on the next message.
+    const err = new ApiError(404, JSON.stringify({ error: 'run_not_found', message: 'Run not found.' }));
+    vi.mocked(apiClient.sendAssistantMessage).mockRejectedValue(err);
+
+    typeAndSend('second message');
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-error')).toBeTruthy();
+    });
+    expect(screen.getByTestId('assistant-error').textContent).toContain('timed out');
+    // Page resets: empty state reappears so the user can start a new run.
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
+    });
+  });
+
+  it('shows idle-timeout notice in the transcript when run.completed reason is idle_timeout', async () => {
+    // Seed an idle-timeout completion event on the stream.
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        { sequence: 1, type: 'run.completed', payload: { reason: 'idle_timeout' } },
+      ],
+    };
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+
+    typeAndSend('hello');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+
+    // The idle-timeout notice renders in the transcript area.
+    const notice = await screen.findByTestId('assistant-idle-timeout');
+    expect(notice).toBeTruthy();
+    expect(notice.textContent).toContain('inactivity');
   });
 });

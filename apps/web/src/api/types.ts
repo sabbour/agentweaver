@@ -818,12 +818,9 @@ export interface SteerCoordinatorResponse {
 }
 
 // ─── Assistant (operator) run endpoints (#346) ──────────────────────────────
-// STUB CONTRACT — assumed shape for the MCP-driven operator assistant. These are
-// consumed by the (currently stubbed) apiClient.createAssistantRun /
-// sendAssistantMessage methods and must be reconciled with Tank's backend
-// (tank-346-backend: POST /api/assistant/runs, POST /api/assistant/runs/{id}/messages).
-// Modeled on the coordinator run + steer shapes so the existing run-stream endpoints
-// (GET /api/runs/{id}/stream + /events) can be reused unchanged for the transcript.
+// MCP-driven operator assistant types (#346).
+// POST /api/assistant/runs + POST /api/assistant/runs/{id}/messages.
+// The transcript streams over the existing run-stream endpoints (GET /api/runs/{id}/stream + /events).
 export interface CreateAssistantRunRequest {
   /** The operator's first message; creating the run also seeds this turn. */
   message: string;
@@ -832,9 +829,14 @@ export interface CreateAssistantRunRequest {
 }
 
 export interface CreateAssistantRunResponse {
-  /** Run id to bind the run-stream (SSE) transcript to, same as a coordinator run id. */
+  /** Run id — bind to the run-stream (SSE) transcript. */
   run_id: string;
-  status?: string;
+  /** Always "in_progress" from the backend. */
+  status: 'in_progress' | string;
+  /** Assistant reply for the initial turn when a message was supplied; null otherwise. */
+  message?: string;
+  /** Names of MCP tools invoked on the initial turn, if any. */
+  tools_invoked?: string[];
 }
 
 export interface SendAssistantMessageRequest {
@@ -842,8 +844,13 @@ export interface SendAssistantMessageRequest {
 }
 
 export interface SendAssistantMessageResponse {
-  // status:"queued" — appended to the live operator run; reply arrives on the run stream.
-  status: 'queued' | 'applied' | string;
+  run_id: string;
+  /** Always "assistant" from the backend. */
+  role: 'assistant' | string;
+  /** Assistant reply text — the transcript also streams the same turn on the SSE channel. */
+  message: string;
+  status: string;
+  tools_invoked?: string[];
 }
 
 // coordinator.steering event payload — steering directive state surfaced on a node.

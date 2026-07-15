@@ -657,35 +657,25 @@ export class AgentweaverApiClient {
   }
 
   // ─── Assistant (operator) run (#346) ──────────────────────────────────────
-  // MCP-driven operator assistant. The first composer submit creates the run;
+  // MCP-driven operator assistant (#346). The first composer submit creates the run;
   // subsequent submits append messages. The transcript streams over the EXISTING
   // run-stream endpoints (getRunEvents + useRunStream), so no new stream client is
   // needed here.
   //
-  // TODO(#346): wire to real backend once tank-346-backend lands. The real endpoints
-  // (POST /api/assistant/runs, POST /api/assistant/runs/{id}/messages) do not exist
-  // yet, so these return a local fake response to keep the page visually complete and
-  // testable. Swap the fake for the commented-out `this.request(...)` calls when the
-  // backend branch merges, reconciling the request/response shapes against Tank's
-  // actual contract.
+  // POST /api/assistant/runs → 201 {run_id, status:"in_progress", message?, tools_invoked?}
+  //   429 with error:"operator_run_limit" when the per-user concurrency cap is reached.
+  // POST /api/assistant/runs/{id}/messages → 200 {run_id, role:"assistant", message, status, tools_invoked}
+  //   404 with error:"run_not_found" when the run has been idle-closed.
   createAssistantRun(req: CreateAssistantRunRequest): Promise<CreateAssistantRunResponse> {
-    // return this.request<CreateAssistantRunResponse>('POST', '/assistant/runs', req);
-    void req;
-    return Promise.resolve({
-      run_id: `assistant-local-${Date.now().toString(36)}`,
-      status: 'created',
-    });
+    return this.request<CreateAssistantRunResponse>('POST', '/assistant/runs', req);
   }
 
   sendAssistantMessage(
     assistantRunId: string,
     req: SendAssistantMessageRequest,
   ): Promise<SendAssistantMessageResponse> {
-    // return this.request<SendAssistantMessageResponse>(
-    //   'POST', `/assistant/runs/${encodeURIComponent(assistantRunId)}/messages`, req);
-    void assistantRunId;
-    void req;
-    return Promise.resolve({ status: 'queued' });
+    return this.request<SendAssistantMessageResponse>(
+      'POST', `/assistant/runs/${encodeURIComponent(assistantRunId)}/messages`, req);
   }
 
   // Coordinator topology REST seed (Feature 008 Phase 2). The SSE topology snapshot is
