@@ -263,9 +263,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     // #272 regression: the live API harness used the multi-clause phrase
-    // "yes, looks good, please proceed", which the original single anchored affirmation regex
-    // rejected (the "looks" token broke the whitelisted follow-word run), misclassifying an obvious
-    // confirm as revise. The clause-based classifier must recognize it as a confirm.
+    // "yes, looks good, please proceed". This natural affirmative must confirm the spec (route through
+    // the confirm seam), not redraft it.
     [Fact]
     public async Task Steer_Send_AwaitingOutcomeSpec_WithMultiClauseAffirmativeChat_ConfirmsSpec()
     {
@@ -285,6 +284,66 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
         spec.Should().NotBeNull("the exact harness confirm phrase must confirm the spec, not redraft it");
         spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
+    }
+
+    // The classification decision must come from the (LLM) classifier, not from keyword matching:
+    // an ambiguous phrase the classifier rules a confirm must confirm the spec.
+    [Fact]
+    public async Task Steer_Send_AwaitingOutcomeSpec_UsesClassifierDecision_ToConfirm()
+    {
+        _factory.ReplyClassifier.Override = _ => OutcomeSpecReplyKind.Confirm;
+
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Confirm via a classifier decision, not keywords");
+        await WaitForGateAsync(runId);
+
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = "hmm ok I suppose that will do then" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>())!
+            .Status.Should().Be(SteeringStatus.Applied);
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull("the classifier's confirm decision must drive the confirm seam");
+
+        _factory.ReplyClassifier.CallCount.Should().BeGreaterThan(0, "the classifier must be consulted");
+        _factory.ReplyClassifier.LastContext!.Instruction.Should().Be("hmm ok I suppose that will do then");
+        _factory.ReplyClassifier.LastContext.SubmittingUser.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
+        _factory.ReplyClassifier.LastContext.DesiredOutcome.Should().NotBeNullOrWhiteSpace(
+            "the classifier must receive the proposed spec as grounding context");
+    }
+
+    // Safety: if the classifier cannot produce a decision (model outage → null), an obvious
+    // affirmative must NOT be silently confirmed — the steering service fails closed to revise.
+    [Fact]
+    public async Task Steer_Send_AwaitingOutcomeSpec_WhenClassifierUnavailable_FailsClosedToRevise()
+    {
+        _factory.ReplyClassifier.Override = _ => null;
+
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Fail closed to revise when the classifier is unavailable");
+        await WaitForGateAsync(runId);
+
+        const string reply = "yes, looks good, please proceed";
+        var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = reply });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>())!
+            .Status.Should().Be(SteeringStatus.Applied,
+                "the reply is still handled via the gate — as a revise, since classification was unavailable");
+
+        // Fail closed: the spec must be re-drafted (still awaiting_confirmation, reply surfaced as
+        // feedback), NEVER confirmed, when the classifier returns no decision.
+        var spec = await PollOutcomeSpecUntilAsync(
+            runId,
+            s => s.Status == "awaiting_confirmation"
+                 && s.ClarifyingQuestions != null
+                 && s.ClarifyingQuestions.Contains(reply, StringComparison.Ordinal));
+        spec.Should().NotBeNull("an unavailable classifier must fail closed to revise, not confirm");
+        spec!.ConfirmedBy.Should().BeNull("a fail-closed revise must never confirm the spec");
+        await WaitForGateAsync(runId);
     }
 
     [Fact]

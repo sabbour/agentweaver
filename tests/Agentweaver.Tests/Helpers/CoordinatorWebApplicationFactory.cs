@@ -57,6 +57,12 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
 
     public HttpClient CreateOtherClient() => CreateClientWithKey(OtherApiKey);
 
+    /// <summary>
+    /// The hermetic reply classifier wired into this host. Tests may set its <c>Override</c> to force
+    /// a specific confirm/revise/null result (e.g. to prove fail-closed behavior on model outage).
+    /// </summary>
+    public FakeOutcomeSpecReplyClassifier ReplyClassifier { get; } = new();
+
     private HttpClient CreateClientWithKey(string apiKey)
     {
         var client = CreateClient();
@@ -117,6 +123,12 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
             RemoveService<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(services);
             services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(
                 new FakeCoordinatorSpecDrafter());
+
+            // Replace the production Copilot-backed reply classifier with a deterministic, hermetic
+            // fake so the confirm/revise routing at the outcome-spec gate never makes a live model
+            // call. Tests can drive its Override to force confirm/revise/null (fail-closed) results.
+            RemoveService<Agentweaver.Api.Coordinator.IOutcomeSpecReplyClassifier>(services);
+            services.AddSingleton<Agentweaver.Api.Coordinator.IOutcomeSpecReplyClassifier>(ReplyClassifier);
 
             // Any other agent path still fails closed (signed out) so it never reaches the network.
             // This is a real IGitHubTokenStore, not a mock.

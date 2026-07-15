@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -382,51 +381,6 @@ public sealed class CoordinatorSteeringQueue(IServiceScopeFactory scopeFactory)
 /// </summary>
 public sealed class CoordinatorSteeringService
 {
-    private static readonly Regex OutcomeSpecReplyWhitespace = new(@"\s+", RegexOptions.Compiled);
-    private static readonly Regex OutcomeSpecReplyTokenSanitizer = new(@"[^a-z0-9']+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    // A single affirmation token/phrase. Multiword phrases are listed first so the alternation prefers
-    // them over their constituent words. Deliberately affirmation-only: no content words, so a clause
-    // that carries any free-form request can never match (it falls through to revise).
-    private const string OutcomeSpecAffirmToken =
-        @"(?:sounds\s+good|sounds\s+great|looks\s+good|looks\s+great|good\s+to\s+go|go\s+ahead|go\s+for\s+it|let'?s\s+go|ship\s+it|do\s+it|works\s+for\s+me|makes\s+sense|that\s+works|that'?s\s+right|that\s+is\s+right|that'?s\s+correct|thank\s+you|with\s+(?:this|the)\s+plan|on\s+this|all\s+good|yes|yep|yeah|yup|ok|okay|sure|absolutely|definitely|certainly|please|thanks|proceed|continue|confirm(?:ed)?|approve(?:d)?|agree(?:d)?|correct|exactly|perfect|great|good|fine|right|lgtm)";
-
-    // A whole clause is affirmational only when it is composed ENTIRELY of affirmation tokens/phrases.
-    private static readonly Regex OutcomeSpecAffirmationClause = new(
-        $@"^{OutcomeSpecAffirmToken}(?:\s+{OutcomeSpecAffirmToken})*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    // Clause boundaries within a reply: punctuation, conjunctions, and connective words. Splitting on
-    // these lets a natural multi-clause confirm ("yes, looks good, please proceed") be validated one
-    // clause at a time instead of relying on a single rigid whitelist of word orderings.
-    private static readonly Regex OutcomeSpecClauseSplitter = new(
-        @"\s*(?:[,;.!/]+|\band\b|\bthen\b|&)\s*",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly string[] OutcomeSpecClarificationMarkers =
-    [
-        "actually",
-        "also",
-        "add",
-        "adjust",
-        "broaden",
-        "but",
-        "change",
-        "clarify",
-        "except",
-        "expand",
-        "however",
-        "include",
-        "instead",
-        "narrow",
-        "plus",
-        "remove",
-        "revise",
-        "scope",
-        "tweak",
-        "update",
-        "without",
-    ];
-
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -436,6 +390,7 @@ public sealed class CoordinatorSteeringService
     private readonly IRunStore? _runStore;
     private readonly IRunEventStream? _eventStream;
     private readonly AssemblyReviewGate? _reviewGate;
+    private readonly IOutcomeSpecReplyClassifier? _replyClassifier;
     private readonly ILogger<CoordinatorSteeringService> _logger;
 
     /// <summary>
@@ -456,7 +411,8 @@ public sealed class CoordinatorSteeringService
         RunWorkflowFactory? runWorkflowFactory = null,
         IRunStore? runStore = null,
         IRunEventStream? eventStream = null,
-        AssemblyReviewGate? reviewGate = null)
+        AssemblyReviewGate? reviewGate = null,
+        IOutcomeSpecReplyClassifier? replyClassifier = null)
     {
         _streamStore = streamStore;
         _registry = registry;
@@ -466,6 +422,7 @@ public sealed class CoordinatorSteeringService
         _runStore = runStore;
         _eventStream = eventStream;
         _reviewGate = reviewGate;
+        _replyClassifier = replyClassifier;
         _logger = logger;
         _runWorkflowFactory = runWorkflowFactory;
     }
@@ -869,7 +826,8 @@ public sealed class CoordinatorSteeringService
         if (!string.Equals(spec?.Status, "awaiting_confirmation", StringComparison.Ordinal))
             return null;
 
-        var replyKind = ClassifyOutcomeSpecReply(instruction);
+        var replyKind = await ClassifyOutcomeSpecReplyAsync(coordinatorRunId, spec!, instruction, createdBy, ct)
+            .ConfigureAwait(false);
         var outcome = replyKind == OutcomeSpecReplyKind.Confirm
             ? await _coordinatorRunService.ConfirmOutcomeSpecAsync(coordinatorRunId, createdBy, ct).ConfigureAwait(false)
             : await _coordinatorRunService.ReviseOutcomeSpecAsync(coordinatorRunId, instruction, createdBy, ct).ConfigureAwait(false);
@@ -898,47 +856,63 @@ public sealed class CoordinatorSteeringService
             SteeringStatus.Applied, createdBy, createdAt, appliedAt);
     }
 
-    private static OutcomeSpecReplyKind ClassifyOutcomeSpecReply(string instruction)
+    /// <summary>
+    /// Classifies a human's free-text reply at the outcome-spec confirmation gate as confirm vs
+    /// revise by delegating to the LLM-backed <see cref="IOutcomeSpecReplyClassifier"/> (Ahmed's
+    /// directive: "It shouldn't be a regex at all, we have the LLM for that").
+    /// <para>
+    /// Fails closed: if no classifier is wired, or the model is unavailable / returns an unparseable
+    /// answer (<see cref="IOutcomeSpecReplyClassifier.ClassifyAsync"/> returns <see langword="null"/>
+    /// or throws), the reply is treated as <see cref="OutcomeSpecReplyKind.Revise"/>. A transient LLM
+    /// outage can therefore never silently confirm a spec the human did not clearly approve.
+    /// </para>
+    /// </summary>
+    private async Task<OutcomeSpecReplyKind> ClassifyOutcomeSpecReplyAsync(
+        string coordinatorRunId, OutcomeSpec spec, string instruction, string createdBy, CancellationToken ct)
     {
-        var normalized = NormalizeOutcomeSpecReply(instruction);
-        if (normalized.Length == 0)
-            return OutcomeSpecReplyKind.Revise;
-
-        // Any explicit clarification/change marker means the human wants edits — fail closed to revise.
-        if (OutcomeSpecClarificationMarkers.Any(marker =>
-                normalized.Contains(marker, StringComparison.Ordinal)))
-            return OutcomeSpecReplyKind.Revise;
-
-        // A confirmation is frequently phrased as several affirmation clauses
-        // ("yes, looks good, please proceed"). Treat the reply as a confirm ONLY when every clause is
-        // independently a pure affirmation; if any clause carries free-form content we cannot vouch
-        // for, fail closed to revise. This preserves the original safety property while recognizing
-        // ordinary multi-clause confirm phrases the previous single anchored pattern rejected.
-        var sawAffirmationClause = false;
-        foreach (var rawClause in OutcomeSpecClauseSplitter.Split(instruction.ToLowerInvariant()))
+        if (_replyClassifier is null)
         {
-            var clause = NormalizeOutcomeSpecReply(rawClause);
-            if (clause.Length == 0)
-                continue;
-            if (!OutcomeSpecAffirmationClause.IsMatch(clause))
-                return OutcomeSpecReplyKind.Revise;
-            sawAffirmationClause = true;
+            _logger.LogWarning(
+                "No outcome-spec reply classifier is configured for coordinator {RunId}; failing closed to revise",
+                coordinatorRunId);
+            return OutcomeSpecReplyKind.Revise;
         }
 
-        return sawAffirmationClause ? OutcomeSpecReplyKind.Confirm : OutcomeSpecReplyKind.Revise;
-    }
+        try
+        {
+            var context = new OutcomeSpecReplyClassificationContext(
+                RunId: coordinatorRunId,
+                ProjectId: spec.ProjectId,
+                SubmittingUser: createdBy,
+                Instruction: instruction,
+                Goal: spec.Goal,
+                DesiredOutcome: spec.DesiredOutcome,
+                Scope: spec.Scope,
+                Assumptions: spec.Assumptions,
+                ClarifyingQuestions: spec.ClarifyingQuestions);
 
-    private static string NormalizeOutcomeSpecReply(string instruction)
-    {
-        var lowered = instruction.Trim().ToLowerInvariant();
-        var sanitized = OutcomeSpecReplyTokenSanitizer.Replace(lowered, " ");
-        return OutcomeSpecReplyWhitespace.Replace(sanitized, " ").Trim();
-    }
+            var decision = await _replyClassifier.ClassifyAsync(context, ct).ConfigureAwait(false);
+            if (decision is null)
+            {
+                _logger.LogInformation(
+                    "Outcome-spec reply classifier returned no decision for coordinator {RunId}; failing closed to revise",
+                    coordinatorRunId);
+                return OutcomeSpecReplyKind.Revise;
+            }
 
-    private enum OutcomeSpecReplyKind
-    {
-        Confirm,
-        Revise,
+            return decision.Value;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Outcome-spec reply classification failed for coordinator {RunId}; failing closed to revise",
+                coordinatorRunId);
+            return OutcomeSpecReplyKind.Revise;
+        }
     }
 
     // -----------------------------------------------------------------------
