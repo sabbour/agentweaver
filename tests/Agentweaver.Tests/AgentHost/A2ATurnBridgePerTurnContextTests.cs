@@ -35,7 +35,9 @@ public sealed class A2ATurnBridgePerTurnContextTests
         string? systemPromptContext,
         string? projectId,
         string? agentName,
-        bool isRevision = false)
+        bool isRevision = false,
+        string? apiBaseUrl = null,
+        string? apiKey = null)
     {
         var setup = new AgentSetupParams
         {
@@ -45,6 +47,8 @@ public sealed class A2ATurnBridgePerTurnContextTests
             SystemPromptContext = systemPromptContext,
             ProjectId = projectId,
             AgentName = agentName,
+            ApiBaseUrl = apiBaseUrl,
+            ApiKey = apiKey,
             IsRevision = isRevision,
         };
         var json = JsonSerializer.SerializeToUtf8Bytes(
@@ -53,11 +57,12 @@ public sealed class A2ATurnBridgePerTurnContextTests
     }
 
     private static List<ChatMessage> BuildTurnMessage(
-        string task, string? systemPromptContext, string? projectId, string? agentName, bool isRevision = false) =>
+        string task, string? systemPromptContext, string? projectId, string? agentName,
+        bool isRevision = false, string? apiBaseUrl = null, string? apiKey = null) =>
     [
         new(ChatRole.User, new List<AIContent>
         {
-            EncodeSetup(systemPromptContext, projectId, agentName, isRevision),
+            EncodeSetup(systemPromptContext, projectId, agentName, isRevision, apiBaseUrl, apiKey),
             new TextContent(task),
         }),
     ];
@@ -88,14 +93,16 @@ public sealed class A2ATurnBridgePerTurnContextTests
     private sealed class RecordingTurnRunner : IPodTurnRunner
     {
         private ChannelWriter<RunEvent>? _writer;
-        public List<(string? SystemPromptContext, string? ProjectId, string? AgentName)> Applied { get; } = [];
+        public List<(string? SystemPromptContext, string? ProjectId, string? AgentName, string? ApiBaseUrl, string? ApiKey)> Applied { get; } = [];
         public bool ContextAppliedBeforeTurn { get; private set; }
 
         public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) => _writer = streamWriter;
 
-        public bool ApplyPerTurnContext(string? systemPromptContext, string? projectId, string? agentName)
+        public bool ApplyPerTurnContext(
+            string? systemPromptContext, string? projectId, string? agentName,
+            string? apiBaseUrl = null, string? apiKey = null)
         {
-            Applied.Add((systemPromptContext, projectId, agentName));
+            Applied.Add((systemPromptContext, projectId, agentName, apiBaseUrl, apiKey));
             return true;
         }
 
@@ -151,6 +158,28 @@ public sealed class A2ATurnBridgePerTurnContextTests
 
         runner.ContextAppliedBeforeTurn.Should().BeTrue(
             "context must be applied before the turn executes, not after");
+    }
+
+    [Fact]
+    public async Task StreamTurnAsync_ForwardsPerTurnApiBaseUrlAndKey_ToTheAgent()
+    {
+        // #335 P1 regression: the AgentHost pod template injects no static AgentHost__ApiBaseUrl/ApiKey,
+        // so the memory/decision loopback tools default to http://localhost:5000 (unreachable inside
+        // the pod) unless the per-turn API endpoint the worker packs into AgentSetupParams is applied.
+        // The bridge MUST forward setup.ApiBaseUrl / setup.ApiKey to ApplyPerTurnContext.
+        var runner = new RecordingTurnRunner();
+        var bridge = CreateBridge(runner, runtimeState: null);
+
+        await DrainAsync(bridge, BuildTurnMessage(
+            "record a memory", systemPromptContext: "Charter: ship it.",
+            projectId: "proj-335", agentName: "Rogers",
+            apiBaseUrl: "http://agentweaver-worker.svc.cluster.local:8080", apiKey: "secret-key-abc"));
+
+        runner.Applied.Should().ContainSingle();
+        runner.Applied[0].ApiBaseUrl.Should().Be("http://agentweaver-worker.svc.cluster.local:8080",
+            "the per-turn API base URL must reach the agent so loopback tools target the real API, not localhost:5000");
+        runner.Applied[0].ApiKey.Should().Be("secret-key-abc",
+            "the per-turn API key must reach the agent so loopback calls authenticate");
     }
 
     [Fact]

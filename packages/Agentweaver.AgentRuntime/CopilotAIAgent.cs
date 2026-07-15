@@ -516,19 +516,37 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// <para>
     /// Warm-pool pods run <see cref="SetupAsync"/> once at <c>/configure</c> time with only the
     /// static, image-baked pod context (sandbox manifest) and empty identity. The per-run charter,
-    /// memory context, assigned skills, and real project/agent identity are delivered by the worker
-    /// on every turn via <c>AgentSetupParams</c>. Without applying them here, that per-run context —
-    /// including assigned skills (#336) and the project/agent identity that gates the memory/decision
-    /// tools (#335) — never reaches the agent in <c>pod-per-run</c> mode.
+    /// memory context, assigned skills, real project/agent identity, AND the Agentweaver API
+    /// base URL + key the loopback tools call are delivered by the worker on every turn via
+    /// <c>AgentSetupParams</c>. Without applying them here, that per-run context — including
+    /// assigned skills (#336), the project/agent identity that gates the memory/decision tools
+    /// (#335), and the API base URL those tools POST/GET against (#335 P1) — never reaches the
+    /// agent in <c>pod-per-run</c> mode.
     /// </para>
     ///
     /// <para>
-    /// Returns <see langword="true"/> when the inner agent was rebuilt. Identity/prompt values are
-    /// only overridden when the incoming turn supplies non-empty values, and the rebuild is skipped
-    /// when nothing changed so a resumed revision session is left untouched.
+    /// The AgentHost pod template injects no static <c>AgentHost__ApiBaseUrl</c>/<c>ApiKey</c>
+    /// (see <c>k8s/sandbox-template-agenthost.yaml</c>), so a warm pod's startup
+    /// <see cref="SetupAsync"/> leaves <see cref="_apiBaseUrl"/> null. The Agentweaver API tools
+    /// then default their <c>HttpClient</c> base address to <c>http://localhost:5000</c>, which is
+    /// unreachable from inside the pod — every <c>record_memory</c>/<c>get_memory</c> call throws a
+    /// connection-refused transport exception that the SDK reports as an opaque
+    /// "Tool execution failed". Threading the per-turn base URL/key here points the tools at the
+    /// real worker-tier API.
+    /// </para>
+    ///
+    /// <para>
+    /// Returns <see langword="true"/> when the inner agent was rebuilt. Identity/prompt/endpoint
+    /// values are only overridden when the incoming turn supplies non-empty values, and the rebuild
+    /// is skipped when nothing changed so a resumed revision session is left untouched.
     /// </para>
     /// </summary>
-    public bool ApplyPerTurnContext(string? systemPromptContext, string? projectId, string? agentName)
+    public bool ApplyPerTurnContext(
+        string? systemPromptContext,
+        string? projectId,
+        string? agentName,
+        string? apiBaseUrl = null,
+        string? apiKey = null)
     {
         // Not provisioned yet (no SetupAsync). Nothing to re-apply onto — the startup path will
         // build the inner agent from these same fields.
@@ -537,12 +555,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
         var newProjectId = string.IsNullOrWhiteSpace(projectId) ? _projectId : projectId;
         var newAgentName = string.IsNullOrWhiteSpace(agentName) ? _agentName : agentName;
+        // The API base URL/key are per-run values the worker packs into every turn. Warm pods have
+        // no static value, so keep any existing value only when the turn omits one (#335 P1).
+        var newApiBaseUrl = string.IsNullOrWhiteSpace(apiBaseUrl) ? _apiBaseUrl : apiBaseUrl;
+        var newApiKey = string.IsNullOrWhiteSpace(apiKey) ? _apiKey : apiKey;
         var newContext = systemPromptContext;
 
         var changed =
             !string.Equals(_systemPromptContext, newContext, StringComparison.Ordinal) ||
             !string.Equals(_projectId, newProjectId, StringComparison.Ordinal) ||
-            !string.Equals(_agentName, newAgentName, StringComparison.Ordinal);
+            !string.Equals(_agentName, newAgentName, StringComparison.Ordinal) ||
+            !string.Equals(_apiBaseUrl, newApiBaseUrl, StringComparison.Ordinal) ||
+            !string.Equals(_apiKey, newApiKey, StringComparison.Ordinal);
 
         if (!changed)
             return false;
@@ -550,11 +574,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _systemPromptContext = newContext;
         _projectId = newProjectId;
         _agentName = newAgentName;
+        _apiBaseUrl = newApiBaseUrl;
+        _apiKey = newApiKey;
         RebuildInnerAgent();
 
         _logger.LogInformation(
-            "Applied per-turn agent context — runId={RunId}, projectId={ProjectId}, agentName={AgentName}, systemPromptChars={Chars}",
-            _runId, _projectId, _agentName, _systemPromptContext?.Length ?? 0);
+            "Applied per-turn agent context — runId={RunId}, projectId={ProjectId}, agentName={AgentName}, apiBaseUrlSet={ApiBaseUrlSet}, systemPromptChars={Chars}",
+            _runId, _projectId, _agentName, !string.IsNullOrWhiteSpace(_apiBaseUrl), _systemPromptContext?.Length ?? 0);
         return true;
     }
 
