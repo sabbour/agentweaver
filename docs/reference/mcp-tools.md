@@ -10,9 +10,22 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **90 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **91 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
+
+## Error responses
+
+All MCP tool failures surface a structured JSON message:
+
+```json
+{
+  "error": "Project 'demo' not found.",
+  "hint": "Call project_list to see available projects."
+}
+```
+
+Common mappings include auth-first guidance (`github_signin` → `session_start`), resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.
 
 ## Backlog
 
@@ -119,7 +132,8 @@ MCP tool implementations URI-escape every route path parameter before calling th
 | `run_review` | Approve or reject a run that is awaiting review. |
 | `run_show_artifacts` | List the files changed by a run. |
 | `run_status` | Get the current status of a run. |
-| `run_submit` | Submit a new agent run for a project. |
+| `run_submit` | Legacy compatibility alias that starts a coordinator run directly in direct mode. Prefer run_task for the common one-call flow, or coordinator_start for full manual control. |
+| `run_task` | Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action. |
 | `run_watch` | Watch a run live, streaming progress until completion. |
 | `start_preview` | Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started. |
 

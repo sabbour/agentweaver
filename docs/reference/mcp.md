@@ -43,7 +43,23 @@ GET /healthz → 200 { "status": "healthy" }
 
 ## Error handling
 
-All tools surface API errors as MCP tool errors with human-readable messages. HTTP 4xx errors include the API's error detail. HTTP 5xx errors are distinguished from client-side failures.
+All tools surface failures in a structured JSON shape:
+
+```json
+{
+  "error": "Project 'demo' not found.",
+  "hint": "Call project_list to see available projects."
+}
+```
+
+The MCP transport still raises a tool error, but the message is now actionable and consistent. Common mappings include:
+
+- `401` → `Not signed in.` with `Call github_signin then session_start before retrying.`
+- `404` project/run/file lookups → a resource-specific `error` plus the relevant list/read tool in `hint`
+- `409` review-state conflicts → `Call run_status to check current state.`
+- `-32001`, `408`, or `504` timeouts → `Call diagnostics_get to check health, then retry.`
+
+When the failure is the **run's** outcome rather than the **tool's** outcome, `run_task` returns a normal JSON payload with `status: "failed"` or `status: "timed_out"` instead of throwing a transport error.
 
 ## Route parameter encoding
 
@@ -135,7 +151,7 @@ Update provider settings for a project.
 
 ### `run_submit`
 
-Submit a new agent run for a project.
+Legacy compatibility alias that starts a coordinator run directly in `direct` mode. Prefer `run_task` for the common one-call flow, or `coordinator_start` for full manual control.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -145,7 +161,69 @@ Submit a new agent run for a project.
 | `base_branch` | string | no | Branch to base the run on (defaults to current) |
 | `model_source` | string | no | Model provider override |
 
-**Returns**: `{ run_id, status }`.
+**Returns**: `{ run_id, status, start_mode }`.
+
+---
+
+### `run_task`
+
+Run the common coordinator workflow in one call: start the run, poll until it reaches a terminal state or a gate, and return the artifacts or the next required action.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project ID |
+| `task` | string | yes | Goal or task statement for the coordinator |
+| `workflow_id` | string | no | Workflow override. Must already be in the project's `allowed_workflow_ids`. |
+| `model_id` | string | no | Coordinator model override |
+| `start_mode` | string | no | `direct` (default) or `defineOutcome` |
+| `timeout_seconds` | integer | no | Maximum wait before returning partial state (default `600`) |
+| `poll_interval_seconds` | integer | no | Poll cadence while waiting (default `2`) |
+
+**Returns** one of these shapes:
+
+- Success:
+
+```json
+{
+  "run_id": "abc123",
+  "status": "merged",
+  "artifacts": [{ "path": "README.md" }],
+  "run": { "...": "run_status payload" }
+}
+```
+
+- Outcome-spec gate:
+
+```json
+{
+  "run_id": "abc123",
+  "status": "awaiting_confirmation",
+  "review_prompt": "Coordinator drafted an outcome spec. Call coordinator_outcome_spec_get ...",
+  "run": { "...": "run_status payload" }
+}
+```
+
+- Human review gate:
+
+```json
+{
+  "run_id": "abc123",
+  "status": "awaiting_review",
+  "review_prompt": "Run is awaiting human review. Call run_review ...",
+  "run": { "...": "run_status payload" }
+}
+```
+
+- Timeout / partial state:
+
+```json
+{
+  "run_id": "abc123",
+  "status": "timed_out",
+  "hint": "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
+  "run": { "...": "latest run_status payload" }
+}
+```
 
 ---
 
