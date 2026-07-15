@@ -9,59 +9,57 @@ research/proposal/spec chain, decompose it into backlog work, let implementation
 monitor the live orchestration continuously, and validate an actual preview before
 stopping.
 
+This adapter is intentionally about **intent**, not a fixed route table. At each major
+decision point, fetch the live OpenAPI spec with `drive.mjs spec` and prefer the YAML
+form the server exposes. Use the real spec's tags, summaries, and descriptions to infer
+what operation to call next. Agentweaver's API is broadly organized around blueprint,
+project, coordinator, backlog, run, and sandbox concerns, but the actor should resolve
+the concrete operation live from the current spec instead of following prewritten
+endpoint mappings.
+
 ## Intent mapping
 
 - Project setup:
-  - Inspect the built-in blueprint catalog with `ListBlueprints` (`GET /api/blueprints`).
-  - Create a blank project with `CreateProject` (`POST /api/projects`) using the combined
-    PM + engineering blueprint id `blueprint-pm-and-software-development`, unless the
-    live catalog clearly shows a better product+software default.
+  - Explore the live spec to understand how to inspect available starting points and
+    create a new blank project.
+  - Prefer a starting shape that combines product-management and software-engineering
+    capability when the live catalog supports it, but decide from the real spec/catalog
+    content rather than from a hardcoded mapping in this file.
 - Idea + discovery kickoff:
   - Oracle chooses the product idea herself; do not wait for a prewritten prompt.
-  - Start the coordinator in outcome-definition mode with `StartProjectOrchestration`
-    (`POST /api/projects/{id}/orchestrations`) so the system produces the discovery /
-    proposal / spec chain rather than jumping straight to code.
+  - Use the live spec to find how to start the coordinator in the mode that produces a
+    discovery / proposal / spec chain rather than jumping straight to code.
 - Outcome-spec loop:
-  - Read the drafted artifact with `GetCoordinatorOutcomeSpec`
-    (`GET /api/runs/{id}/outcome-spec`).
+  - Use the live spec to find how to inspect the drafted discovery/spec artifact once it
+    exists.
   - If the actual draft is shallow, misaligned, or missing the product/business shape
-    Oracle expects, revise it with `ReviseCoordinatorOutcomeSpec`
-    (`POST /api/runs/{id}/outcome-spec/revise`).
-  - If the draft is genuinely good enough, confirm it with `ConfirmCoordinatorOutcomeSpec`
-    (`POST /api/runs/{id}/outcome-spec/confirm`).
+    Oracle expects, use the live spec to find the right revision or feedback action.
+  - If the draft is genuinely good enough, use the live spec to find the right confirm /
+    continue action.
 - Spec to backlog:
-  - Preview decomposition first with `POST /api/projects/{id}/backlog/decompose` using
-    the coordinator `run_id` and `confirm: false`.
-  - If the proposed tasks look plausible, persist them with the same route using
-    `confirm: true`.
-  - Move the created backlog into the pickup queue with `POST /api/projects/{projectId}/backlog/ready-all`.
+  - Use the live spec to find how the confirmed spec is previewed as a task breakdown,
+    then persisted as real backlog work.
+  - After tasks exist, use the live spec to determine how that work is moved into active
+    execution, rather than assuming there is only one fixed implementation-start path.
 - Active execution monitoring:
-  - Do not submit-and-wait. Periodically inspect the real run state with
-    `GET /api/runs/{id}/events` and, while work is live, `GET /api/runs/{id}/stream`.
-  - For coordinator-level orchestration state, poll `GetCoordinatorWorkPlan`
-    (`GET /api/runs/{coordinatorRunId}/work-plan`) and `GetCoordinatorChildren`
-    (`GET /api/runs/{coordinatorRunId}/children`).
-  - When you need to see whether backlog decomposition actually turned into execution,
-    it is acceptable to check `GET /api/projects/{id}/runs` and/or `GET /api/projects/{projectId}/board`
-    in addition to the coordinator endpoints above.
+  - Do not submit-and-wait. Use the live spec to find the persisted event log, live
+    streaming view, orchestration state, child-run state, and any project-level views
+    that help Oracle watch progress while work is actually happening.
+  - Re-fetch the spec when the run enters a new phase so the next inspection step is
+    chosen from the real API, not from stale memory.
 - Quality gates and steering:
   - Oracle's praise or objections must always be grounded in the actual proposal/spec,
     events, child-run state, review artifacts, or preview she just read.
-  - If the run is drifting mid-flight, steer it immediately with `SteerCoordinator`
-    (`POST /api/runs/{coordinatorRunId}/steer`) using `kind: stop`, `redirect`, or
-    `amend` plus a concrete instruction.
-  - If the collective assembly review gate appears, use `SubmitCoordinatorAssemblyReview`
-    (`POST /api/runs/{coordinatorRunId}/assembly/review`) with approve / request_changes /
-    feedback based on the real assembled result.
-  - If an individual run exposes the ordinary revision gate instead, use
-    `POST /api/runs/{id}/request-changes` with a concrete comment grounded in what you
-    actually saw.
+  - If the run is drifting mid-flight, use the live spec to find the steering action and
+    send a concrete instruction grounded in what Oracle actually saw.
+  - If a human review, assembly review, or request-changes gate appears, inspect the
+    live spec for the appropriate review / feedback action at that point in the run
+    instead of assuming the same endpoint shape every time.
 - Live preview validation:
-  - Start preview with `POST /api/runs/{runId}/sandbox/preview`.
-  - Treat preview as unvalidated until you actually fetch the returned `preview_url` and
+  - Use the live spec to find how to request a preview, keep it alive if needed, and
+    stop it when done.
+  - Treat preview as unvalidated until you actually fetch the returned preview URL and
     inspect the live content yourself; a returned URL string alone is not proof.
-  - If you need more time, extend it with `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive`.
-  - Clean up when done with `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}`.
 - Stop only at a genuine endpoint:
   - Continue across the full arc — idea, research, proposal, spec, tasks, build,
     active monitoring, live preview validation — unless the real run quality makes it
@@ -71,6 +69,8 @@ stopping.
 
 Use only real returned content and state as the basis for praise, concern, steering,
 review, or revision. Poll while work is happening instead of narrating imaginary
-progress. Do not call a preview "validated" until you have fetched the returned
-`preview_url` content yourself. Record every request and response verbatim; the driver
-acts as Oracle, not as the final judge.
+progress. Re-fetch the live YAML spec whenever you need to choose the next operation
+from blueprint, project, coordinator, backlog, run, or sandbox concerns. Do not call a
+preview "validated" until you have fetched the returned preview content yourself.
+Record every request and response verbatim; the driver acts as Oracle, not as the final
+judge.
