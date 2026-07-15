@@ -1921,6 +1921,9 @@ export function AgentSessionPanel({
     ? 'Retry from the run header above to relaunch this work.'
     : "This step can't be retried on its own — retrying the coordinator run will relaunch it.";
 
+  const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
+  const artifactLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
+
   // Reuse the shared artifact browser hook so the Changes tab renders the dense changed-files list
   // and the Files tab renders the full workspace FOLDER TREE (getRunWorkspace / assembly workspace),
   // not just the changed files. This is the same hook WorkspacePage drives.
@@ -1932,6 +1935,8 @@ export function AgentSessionPanel({
     undefined,
     undefined,
     effectiveAdapter,
+    'changes',
+    artifactLiveUpdateKey,
   );
   const {
     selectedPath,
@@ -1942,7 +1947,6 @@ export function AgentSessionPanel({
     clearSelection,
   } = artifactState;
 
-  const { events: liveEvents } = useRunStream(open && canBrowseSelectedRun ? selectedRunId : '');
   const events = useMemo(() => mergeRunEvents(seedEvents, liveEvents), [seedEvents, liveEvents]);
   const displayEvents = useMemo(
     () => selectedAssemblyScope ? assemblyEventsForScope(events, selectedAssemblyScope) : events,

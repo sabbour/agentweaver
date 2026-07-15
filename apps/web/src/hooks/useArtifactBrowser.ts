@@ -95,6 +95,7 @@ export function useArtifactBrowser(
   commitMessage?: string | null,
   adapter?: ArtifactBrowserAdapter,
   initialTab: 'changes' | 'files' = 'changes',
+  liveUpdateKey?: number,
 ): ArtifactBrowserState {
   const normalizedRunStatus = normalizeRunStatus(runStatus);
   const isHistorical = isTerminalRunStatus(normalizedRunStatus);
@@ -149,14 +150,14 @@ export function useArtifactBrowser(
     setFilter('all');
     setReviewResult(null);
     setReviewError(null);
-    setActiveTab('changes');
+    setActiveTab(initialTab);
     setWorkspaceFiles([]);
     setWorkspaceError(null);
     setCommitResult(null);
     setCommitError(null);
     setRequestChangesResult(null);
     setRequestChangesError(null);
-  }, [runId]);
+  }, [initialTab, runId]);
 
   // Fetch file list whenever filter or runId changes.
   // Loading/error state is reset in event handlers to avoid synchronous setState in effect body.
@@ -207,7 +208,7 @@ export function useArtifactBrowser(
       active = false;
       clearInterval(intervalId);
     };
-  }, [runId, activeFilter, isLive, adapter]);
+  }, [runId, activeFilter, isLive, adapter, liveUpdateKey]);
 
   // Fetch workspace files when the Files tab is active, and keep polling while the run
   // is live (#280) — previously this was a one-time fetch on tab-open, so newly created
@@ -255,7 +256,7 @@ export function useArtifactBrowser(
       active = false;
       clearInterval(workspaceIntervalId);
     };
-  }, [runId, activeTab, adapter, isLive]);
+  }, [runId, activeTab, adapter, isLive, liveUpdateKey]);
 
   // Fetch diff when selected file changes (only for changed files).
   // Loading state is reset in the file selection handler, not here.
@@ -282,7 +283,7 @@ export function useArtifactBrowser(
     return () => {
       active = false;
     };
-  }, [runId, selectedPath, selectedPathIsChanged, adapter]);
+  }, [runId, selectedPath, selectedPathIsChanged, adapter, liveUpdateKey]);
 
   const handleSetActiveTab = (tab: 'changes' | 'files') => {
     if (tab === 'files') {
