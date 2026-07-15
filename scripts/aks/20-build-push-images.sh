@@ -334,16 +334,39 @@ stamp_provenance() {
     echo "  [dry-run] Would run az acr import for ${image}:${tag} -> ${prov_tag}"
     return 0
   fi
-  if ! az acr import \
+
+  local source_digest=""
+  source_digest="$(wait_for_acr_tag_digest "${image}" "${tag}" 2>/dev/null || true)"
+  if [[ -z "${source_digest}" ]]; then
+    echo "ERROR: source image ${image}:${tag} never resolved to a digest in ACR; refusing to stamp unverifiable provenance" >&2
+    return 1
+  fi
+
+  if az acr import \
     --name "${ACR_NAME}" \
     --resource-group "${RESOURCE_GROUP}" \
-    --source "${ACR_LOGIN_SERVER}/${image}:${tag}" \
+    --source "${ACR_LOGIN_SERVER}/${image}@${source_digest}" \
     --image "${image}:${prov_tag}" \
     --force \
     --output none; then
-    echo "ERROR: failed to stamp provenance tag ${image}:${prov_tag}; refusing to ship unstamped image" >&2
+    :
+  else
+    local import_status=$?
+    echo "ERROR: failed to stamp provenance tag ${image}:${prov_tag} (az acr import exit ${import_status}); refusing to ship unstamped image" >&2
     return 1
   fi
+
+  local stamped_digest=""
+  stamped_digest="$(wait_for_acr_tag_digest "${image}" "${prov_tag}" 2>/dev/null || true)"
+  if [[ -z "${stamped_digest}" ]]; then
+    echo "ERROR: provenance tag ${image}:${prov_tag} did not appear in ACR after import; refusing to ship unstamped image" >&2
+    return 1
+  fi
+  if [[ "${stamped_digest}" != "${source_digest}" ]]; then
+    echo "ERROR: provenance tag ${image}:${prov_tag} resolved to ${stamped_digest}, expected ${source_digest}; refusing to ship mismatched provenance" >&2
+    return 1
+  fi
+
   echo "  [prov]   ${ACR_LOGIN_SERVER}/${image}:${prov_tag} (commit ${resolved_commit})"
 }
 
@@ -356,7 +379,7 @@ build_image() {
   if [[ "${DRY_RUN}" == "true" ]]; then
     echo "  [dry-run] Would run az acr build for ${image}:${tag}"
     stamp_provenance "${image}" "${tag}" "${TARGET_COMMIT}"
-    return 0
+    return $?
   fi
   az acr build \
     --registry "${ACR_NAME}" \
@@ -392,6 +415,34 @@ retag_image() {
     --force \
     --output none
   echo "  [retag]  ${ACR_LOGIN_SERVER}/${image}:${target_tag}"
+}
+
+acr_digest_for_tag() {
+  local image="$1"
+  local tag="$2"
+  az acr repository show-manifests \
+    --name "${ACR_NAME}" \
+    --repository "${image}" \
+    --query "[?tags[?@=='${tag}']].digest" \
+    --output tsv 2>/dev/null \
+  | tr '\r' '\n' \
+  | awk 'NF {print; exit}'
+}
+
+wait_for_acr_tag_digest() {
+  local image="$1"
+  local tag="$2"
+  local digest=""
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    digest="$(acr_digest_for_tag "${image}" "${tag}" 2>/dev/null || true)"
+    if [[ -n "${digest}" ]]; then
+      printf '%s\n' "${digest}"
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
 }
 
 schedule_image() {
@@ -508,36 +559,46 @@ terminate_remaining_jobs() {
 wait_for_image_jobs() {
   local pending_pids=("${PIDS[@]}")
   local pending_jobs=("${JOBS[@]}")
-  local next_pids=()
-  local next_jobs=()
+  local completed_pid=""
+  local completed_status=0
   local i
+  local found_index=-1
 
   while [[ "${#pending_pids[@]}" -gt 0 ]]; do
-    next_pids=()
-    next_jobs=()
-    for i in "${!pending_pids[@]}"; do
-      local pid="${pending_pids[$i]}"
-      local job="${pending_jobs[$i]}"
-      if kill -0 "${pid}" 2>/dev/null; then
-        next_pids+=("${pid}")
-        next_jobs+=("${job}")
-        continue
-      fi
+    completed_pid=""
+    if wait -n -p completed_pid "${pending_pids[@]}"; then
+      completed_status=0
+    else
+      completed_status=$?
+    fi
 
-      if wait "${pid}"; then
-        echo "  [OK] ${job}"
-      else
-        echo "  [FAIL] ${job}" >&2
-        terminate_remaining_jobs "${pid}"
-        return 1
+    found_index=-1
+    for i in "${!pending_pids[@]}"; do
+      if [[ "${pending_pids[$i]}" == "${completed_pid}" ]]; then
+        found_index=$i
+        break
       fi
     done
 
-    pending_pids=("${next_pids[@]}")
-    pending_jobs=("${next_jobs[@]}")
-    if [[ "${#pending_pids[@]}" -gt 0 ]]; then
-      sleep 1
+    if [[ "${found_index}" -lt 0 ]]; then
+      echo "ERROR: image wait bookkeeping lost child pid '${completed_pid:-<empty>}'" >&2
+      terminate_remaining_jobs ""
+      return 1
     fi
+
+    local job="${pending_jobs[$found_index]}"
+    if [[ "${completed_status}" -eq 0 ]]; then
+      echo "  [OK] ${job}"
+    else
+      echo "  [FAIL:${completed_status}] ${job}" >&2
+      terminate_remaining_jobs "${completed_pid}"
+      return "${completed_status}"
+    fi
+
+    unset 'pending_pids[found_index]'
+    unset 'pending_jobs[found_index]'
+    pending_pids=("${pending_pids[@]}")
+    pending_jobs=("${pending_jobs[@]}")
   done
 }
 
