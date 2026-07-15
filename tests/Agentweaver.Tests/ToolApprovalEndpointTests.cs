@@ -38,6 +38,78 @@ public sealed class ToolApprovalEndpointTests
         (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
     }
 
+    // #349 — exact repro: an agent issues 3 concurrent approval-gated web_fetch tool.call events,
+    // but the SDK invokes the permission callback sequentially so only the FIRST registers a real
+    // backend approval gate (+ tool.approval_required). The frontend optimistically renders a card
+    // per tool.call, so #2/#3 are "phantom" cards whose request_ids are Unknown to the backend.
+    // Approving the first (posted to the coordinator, resolved to the active child) must succeed;
+    // approving the phantom #2/#3 must NOT be mislabeled "Run is not active" — the coordinator the
+    // card posted to may already be AssembleReady while the owning child is still active.
+    [Fact]
+    public async Task Approve_ThreeConcurrentWebFetch_FirstSucceeds_PhantomsReportUnknownNotRunNotActive()
+    {
+        using var factory = new AgentweaverWebApplicationFactory();
+        using var client = CreateAuthenticatedClient(factory);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+
+        var coordinatorId = RunId.New();
+        var childId = RunId.New();
+        // Coordinator has already moved on to assembly while the child research subtask keeps
+        // fetching — this is what makes the phantom-card fallback hit a non-active run.
+        await InsertRunAsync(runStore, coordinatorId, RunStatus.AssembleReady);
+        await InsertRunAsync(runStore, childId, RunStatus.InProgress, coordinatorId.ToString());
+
+        // Only the FIRST web_fetch reached the permission gate and registered a real request.
+        const string firstRequestId = "toolu_first_web_fetch";
+        var firstApproval = approvalGate.WaitForApprovalAsync(
+            childId.ToString(), firstRequestId, "web_fetch", "https://anthropic.com/a",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        // First card: posted to the coordinator, resolves to the active child, approves cleanly.
+        var firstResponse = await client.PostAsJsonAsync(
+            $"/api/runs/{coordinatorId}/tool-approvals",
+            new { request_id = firstRequestId, scope = "once" });
+        firstResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await firstApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+
+        // Phantom cards #2 and #3: never backend-registered. Must not 409 "Run is not active".
+        foreach (var phantomRequestId in new[] { "toolu_second_web_fetch", "toolu_third_web_fetch" })
+        {
+            var response = await client.PostAsJsonAsync(
+                $"/api/runs/{coordinatorId}/tool-approvals",
+                new { request_id = phantomRequestId, scope = "once" });
+
+            response.StatusCode.Should().NotBe(
+                HttpStatusCode.Conflict, $"phantom {phantomRequestId} must not be mislabeled Run-not-active");
+            var body = await response.Content.ReadAsStringAsync();
+            body.Should().NotContain("Run is not active");
+            body.Should().Contain("unknown", "an unregistered request must report an accurate unknown-request error");
+        }
+    }
+
+    [Fact]
+    public async Task Deny_PhantomCard_UnknownRequestOnNonActiveCoordinator_DoesNotReturnRunNotActive()
+    {
+        using var factory = new AgentweaverWebApplicationFactory();
+        using var client = CreateAuthenticatedClient(factory);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+
+        var coordinatorId = RunId.New();
+        var childId = RunId.New();
+        await InsertRunAsync(runStore, coordinatorId, RunStatus.AssembleReady);
+        await InsertRunAsync(runStore, childId, RunStatus.InProgress, coordinatorId.ToString());
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/runs/{coordinatorId}/tool-denials",
+            new { request_id = "toolu_never_registered", scope = "once" });
+
+        response.StatusCode.Should().NotBe(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().NotContain("Run is not active");
+        body.Should().Contain("unknown");
+    }
+
     [Fact]
     public async Task Approve_PendingApprovalOnTerminalOwningRun_ReturnsConflict()
     {
