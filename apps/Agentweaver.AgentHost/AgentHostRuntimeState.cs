@@ -44,6 +44,22 @@ internal sealed class AgentHostRuntimeState
     public string? CommitAuthorEmail { get; private set; }
 
     /// <summary>
+    /// Project ID (#335) delivered per-run via <c>POST /configure</c>. Threaded into
+    /// <c>CopilotAIAgent.SetupAsync</c> so the in-pod agent's tool schema includes the Agentweaver
+    /// API tools (record_memory, get_memory, submit_decision, list_decisions, list_inbox, ...).
+    /// Without it a warm pod defaults to the empty static <c>AgentHost__ProjectId</c> option and the
+    /// memory/decision tools are silently omitted from the agent's callable functions.
+    /// </summary>
+    public string? ProjectId { get; private set; }
+
+    /// <summary>
+    /// Agent persona name (#335) delivered per-run via <c>POST /configure</c>. Paired with
+    /// <see cref="ProjectId"/> to gate Agentweaver API tool injection in
+    /// <c>CopilotAIAgent.BuildSessionConfigTools</c>.
+    /// </summary>
+    public string? AgentName { get; private set; }
+
+    /// <summary>
     /// Effective repository/tool root after workspace preparation. For shared execution this is the
     /// shared worktree; for local execution it is the checkout created inside the pod.
     /// </summary>
@@ -94,6 +110,8 @@ internal sealed class AgentHostRuntimeState
         ScratchRoot = null;
         CommitAuthorName = null;
         CommitAuthorEmail = null;
+        ProjectId = options.ProjectId;
+        AgentName = options.AgentName;
         EffectiveWorkingDirectory = options.WorkingDirectory;
     }
 
@@ -137,6 +155,8 @@ internal sealed class AgentHostRuntimeState
         ScratchRoot = configuration.ScratchRoot;
         CommitAuthorName = configuration.CommitAuthorName;
         CommitAuthorEmail = configuration.CommitAuthorEmail;
+        ProjectId = configuration.ProjectId;
+        AgentName = configuration.AgentName;
         EffectiveWorkingDirectory = configuration.SharedWorkingDirectory;
         return true;
     }
@@ -174,4 +194,6 @@ internal sealed record AgentHostRunConfiguration(
     ExecutionWorkspaceMode WorkspaceMode = ExecutionWorkspaceMode.Shared,
     string? ScratchRoot = null,
     string? CommitAuthorName = null,
-    string? CommitAuthorEmail = null);
+    string? CommitAuthorEmail = null,
+    string? ProjectId = null,
+    string? AgentName = null);

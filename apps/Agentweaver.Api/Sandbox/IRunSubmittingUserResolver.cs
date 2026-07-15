@@ -37,6 +37,20 @@ public interface IRunSubmittingUserResolver
     /// </para>
     /// </summary>
     Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the run's project id and agent persona name (#335) so the pod-per-run executor can
+    /// deliver them to the warm AgentHost via <c>POST /configure</c>. The in-pod
+    /// <c>CopilotAIAgent.BuildSessionConfigTools</c> injects the Agentweaver API tools
+    /// (record_memory, get_memory, submit_decision, list_decisions, list_inbox) only when BOTH are
+    /// non-empty; without this the memory/decision tools are silently omitted from the agent's
+    /// callable function schema for warm-pool runs.
+    ///
+    /// <para>Returns <c>(null, null)</c> when the run is unknown. The default implementation returns
+    /// <c>(null, null)</c> so lifecycle fakes and legacy resolvers keep compiling.</para>
+    /// </summary>
+    Task<(string? ProjectId, string? AgentName)> GetRunIdentityAsync(string runId, CancellationToken ct = default)
+        => Task.FromResult<(string?, string?)>((null, null));
 }
 
 /// <summary>
@@ -69,6 +83,16 @@ public sealed class RunStoreSubmittingUserResolver : IRunSubmittingUserResolver
     {
         var run = await ResolveRunAsync(runId, ct).ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(run?.WorktreePath) ? null : run!.WorktreePath;
+    }
+
+    public async Task<(string? ProjectId, string? AgentName)> GetRunIdentityAsync(string runId, CancellationToken ct = default)
+    {
+        var run = await ResolveRunAsync(runId, ct).ConfigureAwait(false);
+        if (run is null)
+            return (null, null);
+        var projectId = run.ProjectId?.Value.ToString();
+        var agentName = string.IsNullOrWhiteSpace(run.AgentName) ? null : run.AgentName;
+        return (projectId, agentName);
     }
 
     /// <summary>

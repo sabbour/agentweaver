@@ -553,6 +553,18 @@ internal sealed record ConfigureRequest
     /// <summary>Platform-owned email used for the generated implementation commit.</summary>
     public string? CommitAuthorEmail { get; init; }
 
+    /// <summary>
+    /// Project ID for the run (#335). Delivered per-run so the in-pod agent's tool schema includes
+    /// the Agentweaver API tools (record_memory, get_memory, submit_decision, list_decisions,
+    /// list_inbox). Warm pods boot with an empty static <c>AgentHost__ProjectId</c>, so without this
+    /// the memory/decision tools are silently absent from the agent's callable functions.
+    /// </summary>
+    public string? ProjectId { get; init; }
+
+    /// <summary>Agent persona name for the run (#335). Paired with <see cref="ProjectId"/> to gate
+    /// Agentweaver API tool injection in <c>CopilotAIAgent.BuildSessionConfigTools</c>.</summary>
+    public string? AgentName { get; init; }
+
     internal AgentHostRunConfiguration ToRunConfiguration() => new(
         RunId ?? string.Empty,
         UserId ?? string.Empty,
@@ -569,7 +581,9 @@ internal sealed record ConfigureRequest
         WorkspaceMode,
         ScratchRoot,
         CommitAuthorName,
-        CommitAuthorEmail);
+        CommitAuthorEmail,
+        ProjectId,
+        AgentName);
 }
 
 internal sealed record PreviewProcessStartRequest
