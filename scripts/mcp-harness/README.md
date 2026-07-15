@@ -6,6 +6,18 @@ session start and is the sole persona action menu. The independent
 
 Run unit tests with `npm test` from this directory.
 
+There are two entry points:
+
+- `run-persona.mjs` — full **dynamic** persona scenario validation. No fixed script:
+  a fresh sub-agent dispatched under `agent-driver/AGENT.md` (the MCP peer of the API
+  harness's `PersonaActor`) discovers the live tool menu, decides each `tools/call`
+  live, pushes back, never blind-approves a gate, and appends its own JSONL transcript.
+  `run-persona.mjs` owns the deterministic scaffolding (target guard, transcript path,
+  capability contract, judge) in two phases — `prepare` (emit the dispatch prompt) and
+  `finalize --transcript <path>` (judge the transcript into a normalized verdict). See
+  `SKILL.md` for the full contract.
+- `smoke/mcp-cli-smoke.mjs` — a fast, fixed connectivity + capability tripwire.
+
 ## Quickstart contract
 
 - **stdio transport** (`--target stdio`) spawns a **local subprocess** via

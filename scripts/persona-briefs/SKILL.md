@@ -44,14 +44,17 @@ persona IDs that currently have reviewed UI adapters under
 List the built-in MCP scenario starters:
 
 ```powershell
-node scripts/mcp-harness/smoke/mcp-cli-smoke.mjs --list
+node scripts/mcp-harness/run-persona.mjs --list
 ```
 
 Output: JSON with `surface: "mcp"`, `mode: "persona-adapter"`, and `scenarios`, the
 persona IDs that currently have reviewed MCP adapters under
-`scripts/persona-briefs/surfaces/*.mcp.md`. The current implemented MCP runner is
-still the smoke path; treat this catalog as the reviewed starting set for MCP
-persona-driven work.
+`scripts/persona-briefs/surfaces/*.mcp.md`. Drive one of them dynamically with
+`run-persona.mjs` (a sub-agent dispatched under `scripts/mcp-harness/agent-driver/AGENT.md`
+discovers the live tool menu and decides each call), or run the fixed
+`smoke/mcp-cli-smoke.mjs` connectivity/capability tripwire; see
+`scripts/mcp-harness/SKILL.md`. The same `--list` also works from
+`smoke/mcp-cli-smoke.mjs`.
 
 ## Generate a new reviewed scenario starter
 
