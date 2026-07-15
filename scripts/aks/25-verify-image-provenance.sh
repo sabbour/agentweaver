@@ -217,24 +217,44 @@ verify_image() {
     fail "${label}: no prov-<sha> tag found for live digest ${live_digest:0:19} -- image predates the #251/#303 provenance fix, or was pushed by a route other than 20-build-push-images.sh. Cannot verify provenance; treat as unverified, not passing."
     return
   fi
-  if [[ "${#prov_tags[@]}" -gt 1 ]]; then
-    fail "${label}: multiple provenance tags map to live digest ${live_digest:0:19} (${prov_tags[*]}); refusing ambiguous provenance resolution"
+
+  # An unchanged image can accumulate multiple prov-<sha> tags across successive
+  # releases (each release's 'az acr import' retag stamps a fresh prov tag onto
+  # the SAME already-existing digest, since the content genuinely didn't change).
+  # That is not ambiguous -- all such tags describe bit-identical content. It is
+  # sufficient for ANY one of the accumulated commits to show no drift in the
+  # watched paths vs VERIFY_COMMIT; report which one, plus the ones we skipped.
+  local -a resolved_ok=() resolved_stale=() resolved_unresolvable=()
+  for prov_tag in "${prov_tags[@]}"; do
+    local candidate_commit
+    candidate_commit="$(resolve_provenance_commit "${prov_tag#prov-}")"
+    if [[ -z "${candidate_commit}" ]]; then
+      resolved_unresolvable+=("${prov_tag}")
+      continue
+    fi
+    if git diff --quiet "${candidate_commit}" "${VERIFY_COMMIT}" -- "${paths[@]}"; then
+      resolved_ok+=("${candidate_commit}")
+    else
+      resolved_stale+=("${candidate_commit}")
+    fi
+  done
+
+  if [[ "${#resolved_ok[@]}" -gt 0 ]]; then
+    resolved_commit="${resolved_ok[0]}"
+    local extra_note=""
+    if [[ "${#prov_tags[@]}" -gt 1 ]]; then
+      extra_note=" (${#prov_tags[@]} prov tags accumulated on this unchanged digest across releases; using ${resolved_commit:0:12})"
+    fi
+    ok "${label}: ${live_pod_count} live pod(s) run ${image}:${live_tag:-<digest-only>} at ${live_digest:0:19}, provably built from ${resolved_commit:0:12}; no drift in watched paths vs ${VERIFY_COMMIT:0:12}${extra_note}"
     return
   fi
 
-  local prov_commit="${prov_tags[0]#prov-}"
-
-  resolved_commit="$(resolve_provenance_commit "${prov_commit}")"
-  if [[ -z "${resolved_commit}" ]]; then
-    fail "${label}: prov tag's commit is not resolvable in local git history (shallow clone or rewritten history?)"
+  if [[ "${#resolved_stale[@]}" -gt 0 ]]; then
+    fail "${label}: ${live_pod_count} live pod(s) run ${image}:${live_tag:-<digest-only>} at ${live_digest:0:19}, built from ${resolved_stale[0]:0:12}, but watched paths changed since then vs ${VERIFY_COMMIT:0:12} -- STALE IMAGE (this is exactly the #251 failure mode). Re-run scripts/aks/20-build-push-images.sh with FORCE_REBUILD=true for this image."
     return
   fi
 
-  if git diff --quiet "${resolved_commit}" "${VERIFY_COMMIT}" -- "${paths[@]}"; then
-    ok "${label}: ${live_pod_count} live pod(s) run ${image}:${live_tag:-<digest-only>} at ${live_digest:0:19}, provably built from ${resolved_commit:0:12}; no drift in watched paths vs ${VERIFY_COMMIT:0:12}"
-  else
-    fail "${label}: ${live_pod_count} live pod(s) run ${image}:${live_tag:-<digest-only>} at ${live_digest:0:19}, built from ${resolved_commit:0:12}, but watched paths changed since then vs ${VERIFY_COMMIT:0:12} -- STALE IMAGE (this is exactly the #251 failure mode). Re-run scripts/aks/20-build-push-images.sh with FORCE_REBUILD=true for this image."
-  fi
+  fail "${label}: none of the ${#prov_tags[@]} prov tag(s) for live digest ${live_digest:0:19} resolve in local git history (shallow clone or rewritten history?): ${resolved_unresolvable[*]}"
 }
 
 verify_image "api"         "agentweaver-api"        "app=agentweaver-api"                                     "$(desired_deployment_replicas agentweaver-api)"        "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.Api"
