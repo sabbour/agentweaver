@@ -56,6 +56,10 @@ import type {
   StartOrchestrationResponse,
   SteerCoordinatorRequest,
   SteerCoordinatorResponse,
+  CreateAssistantRunRequest,
+  CreateAssistantRunResponse,
+  SendAssistantMessageRequest,
+  SendAssistantMessageResponse,
   SubmitRunResponse,
   SuggestBlueprintResponse,
   SyncCommitRequest,
@@ -650,6 +654,38 @@ export class AgentweaverApiClient {
   // backend team in parallel; this codes against the agreed contract.
   steerCoordinator(coordinatorRunId: string, req: SteerCoordinatorRequest): Promise<SteerCoordinatorResponse> {
     return this.request<SteerCoordinatorResponse>('POST', `/runs/${encodeURIComponent(coordinatorRunId)}/steer`, req);
+  }
+
+  // ─── Assistant (operator) run (#346) ──────────────────────────────────────
+  // MCP-driven operator assistant. The first composer submit creates the run;
+  // subsequent submits append messages. The transcript streams over the EXISTING
+  // run-stream endpoints (getRunEvents + useRunStream), so no new stream client is
+  // needed here.
+  //
+  // TODO(#346): wire to real backend once tank-346-backend lands. The real endpoints
+  // (POST /api/assistant/runs, POST /api/assistant/runs/{id}/messages) do not exist
+  // yet, so these return a local fake response to keep the page visually complete and
+  // testable. Swap the fake for the commented-out `this.request(...)` calls when the
+  // backend branch merges, reconciling the request/response shapes against Tank's
+  // actual contract.
+  createAssistantRun(req: CreateAssistantRunRequest): Promise<CreateAssistantRunResponse> {
+    // return this.request<CreateAssistantRunResponse>('POST', '/assistant/runs', req);
+    void req;
+    return Promise.resolve({
+      run_id: `assistant-local-${Date.now().toString(36)}`,
+      status: 'created',
+    });
+  }
+
+  sendAssistantMessage(
+    assistantRunId: string,
+    req: SendAssistantMessageRequest,
+  ): Promise<SendAssistantMessageResponse> {
+    // return this.request<SendAssistantMessageResponse>(
+    //   'POST', `/assistant/runs/${encodeURIComponent(assistantRunId)}/messages`, req);
+    void assistantRunId;
+    void req;
+    return Promise.resolve({ status: 'queued' });
   }
 
   // Coordinator topology REST seed (Feature 008 Phase 2). The SSE topology snapshot is

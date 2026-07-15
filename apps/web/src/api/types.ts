@@ -817,6 +817,35 @@ export interface SteerCoordinatorResponse {
   status: 'queued' | 'applied' | string;
 }
 
+// ─── Assistant (operator) run endpoints (#346) ──────────────────────────────
+// STUB CONTRACT — assumed shape for the MCP-driven operator assistant. These are
+// consumed by the (currently stubbed) apiClient.createAssistantRun /
+// sendAssistantMessage methods and must be reconciled with Tank's backend
+// (tank-346-backend: POST /api/assistant/runs, POST /api/assistant/runs/{id}/messages).
+// Modeled on the coordinator run + steer shapes so the existing run-stream endpoints
+// (GET /api/runs/{id}/stream + /events) can be reused unchanged for the transcript.
+export interface CreateAssistantRunRequest {
+  /** The operator's first message; creating the run also seeds this turn. */
+  message: string;
+  /** Optional project scope for MCP tool calls that need a project context. */
+  project_id?: string;
+}
+
+export interface CreateAssistantRunResponse {
+  /** Run id to bind the run-stream (SSE) transcript to, same as a coordinator run id. */
+  run_id: string;
+  status?: string;
+}
+
+export interface SendAssistantMessageRequest {
+  message: string;
+}
+
+export interface SendAssistantMessageResponse {
+  // status:"queued" — appended to the live operator run; reply arrives on the run stream.
+  status: 'queued' | 'applied' | string;
+}
+
 // coordinator.steering event payload — steering directive state surfaced on a node.
 export interface SteeringDirective {
   directiveId: string;

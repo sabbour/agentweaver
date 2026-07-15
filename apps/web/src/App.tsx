@@ -33,6 +33,7 @@ import { TeamPage } from './pages/TeamPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
+import { AssistantRoute } from './routes/AssistantRoute';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
@@ -55,6 +56,8 @@ function Shell() {
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/projects" element={<ProjectGalleryPage />} />
         <Route path="/console" element={<ConsoleRouteRedirect />} />
+        {/* #346 MCP-driven operator assistant — feature-flagged (?assistant=1), additive rollout. */}
+        <Route path="/assistant" element={<AssistantRoute />} />
         <Route path="/observability" element={<ObservabilityRedirectPage />} />
         <Route path="/observability/traces" element={<ObservabilityRedirectPage suffix="/traces" />} />
         <Route path="/observability/agents" element={<ObservabilityRedirectPage suffix="/agents" />} />
