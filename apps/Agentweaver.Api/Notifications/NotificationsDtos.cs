@@ -4,8 +4,8 @@ namespace Agentweaver.Api.Notifications;
 
 /// <summary>
 /// A single pending item the signed-in user needs to act on (Human Review or Tool Approval),
-/// surfaced by the global notification center (#247). MVP covers Human Review only; Tool Approval
-/// is a documented fast-follow (see NotificationsService remarks).
+/// surfaced by the global notification center (#247). Both Human Review and Tool Approval (#321)
+/// are covered (see NotificationsService remarks).
 /// </summary>
 public sealed record NotificationDto
 {
@@ -13,7 +13,7 @@ public sealed record NotificationDto
     [JsonPropertyName("id")]
     public required string Id { get; init; }
 
-    /// <summary>"human_review" today; "tool_approval" reserved for the fast-follow.</summary>
+    /// <summary>"human_review" or "tool_approval".</summary>
     [JsonPropertyName("type")]
     public required string Type { get; init; }
 

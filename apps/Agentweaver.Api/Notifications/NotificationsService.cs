@@ -1,4 +1,5 @@
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 
@@ -17,26 +18,27 @@ namespace Agentweaver.Api.Notifications;
 /// prefer the less invasive option, polling wins; a follow-up can add push delivery once a user-scoped
 /// event bus exists (tracked as a fast-follow below).
 ///
-/// SCOPE (issue open question #5): Human Review is fully covered here — it is derivable straight from
-/// the durable `runs` table (`status = awaiting_review`), which already survives pod restarts with no
-/// extra plumbing. Tool Approval is NOT included in this MVP:
-/// <see cref="IToolApprovalGate"/> only exposes single-request lookups
-/// (<c>GetRequestState(runId, requestId)</c>) and has no "list all pending approvals" query; the
-/// in-memory implementation is per-pod, and even the durable implementation
-/// (<see cref="Endpoints.RunEndpoints"/> / DurableToolApprovalGate) is keyed by run+request, not
-/// enumerable by owner. Building a durable, owner-queryable "all my pending tool approvals" index is a
-/// real fast-follow (naturally pairs with the durable in-flight-state work referenced in #246), not a
-/// quick addition here — so it is explicitly deferred rather than bolted on unsafely.
+/// SCOPE: Human Review is derivable straight from the durable `runs` table (`status =
+/// awaiting_review`), which already survives pod restarts with no extra plumbing. Tool Approval
+/// (#321) is sourced from the SAME signal <see cref="PendingToolApprovalRunsQuery"/> uses for the
+/// board's "Approval needed" badge (<c>tool.approval_required</c> run events with no matching
+/// <c>tool.result</c>/<c>tool.error</c> callId yet) rather than a parallel detection mechanism —
+/// candidate runs are the caller's owned, non-archived, in-progress runs.
 /// </summary>
 public sealed class NotificationsService
 {
     private readonly IRunStore _runStore;
     private readonly IProjectStore _projectStore;
+    private readonly PendingToolApprovalRunsQuery _pendingApprovalQuery;
 
-    public NotificationsService(IRunStore runStore, IProjectStore projectStore)
+    public NotificationsService(
+        IRunStore runStore,
+        IProjectStore projectStore,
+        PendingToolApprovalRunsQuery pendingApprovalQuery)
     {
         _runStore = runStore;
         _projectStore = projectStore;
+        _pendingApprovalQuery = pendingApprovalQuery;
     }
 
     public async Task<NotificationsResponseDto> GetPendingAsync(CallerContext caller, CancellationToken ct = default)
@@ -47,10 +49,30 @@ public sealed class NotificationsService
 
         var awaitingReview = await _runStore.GetByStatusAsync(RunStatus.AwaitingReview, ct).ConfigureAwait(false);
 
-        var notifications = awaitingReview
+        var ownedAwaitingReview = awaitingReview
             .Where(run => run.ArchivedAt is null && run.ProjectId is not null)
             .Where(run => ownedProjectNames.ContainsKey(run.ProjectId!.ToString()!))
+            .ToList();
+
+        // Tool approval gates fire mid-execution, so the candidate pool is the caller's owned,
+        // non-archived InProgress runs (mirrors the Human Review candidate pool above, just against
+        // a different RunStatus — the pending-approval signal itself is never derivable from status
+        // alone, hence the PendingToolApprovalRunsQuery lookup).
+        var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
+        var ownedInProgress = inProgress
+            .Where(run => run.ArchivedAt is null && run.ProjectId is not null)
+            .Where(run => ownedProjectNames.ContainsKey(run.ProjectId!.ToString()!))
+            .ToList();
+
+        var pendingApprovals = await _pendingApprovalQuery
+            .GetPendingApprovalDetailsAsync(ownedInProgress.Select(run => run.Id.ToString()).ToList(), ct)
+            .ConfigureAwait(false);
+
+        var notifications = ownedAwaitingReview
             .Select(run => ToHumanReviewNotification(run, ownedProjectNames))
+            .Concat(ownedInProgress
+                .Where(run => pendingApprovals.ContainsKey(run.Id.ToString()))
+                .Select(run => ToToolApprovalNotification(run, pendingApprovals[run.Id.ToString()], ownedProjectNames)))
             .OrderByDescending(notification => notification.CreatedUtc)
             .ToList();
 
@@ -87,9 +109,38 @@ public sealed class NotificationsService
         };
     }
 
+    private static NotificationDto ToToolApprovalNotification(
+        Run run,
+        PendingToolApproval approval,
+        IReadOnlyDictionary<string, string> ownedProjectNames)
+    {
+        var projectId = run.ProjectId!.ToString()!;
+        // Same CTA deep-link convention as Human Review — the board's RunCard navigates a pending
+        // tool-approval run to the same orchestration route (workflow_run_id when present, otherwise
+        // the execution id); the approval UI itself lives inline on that route.
+        var deepLinkRunId = run.WorkflowRunId ?? run.Id.ToString();
+        var title = string.IsNullOrWhiteSpace(approval.ToolName)
+            ? "A run needs tool approval"
+            : Truncate($"Approval needed to run \"{approval.ToolName}\"", 120);
+
+        return new NotificationDto
+        {
+            Id = $"tool_approval:{run.Id}:{approval.RequestId}",
+            Type = "tool_approval",
+            RunId = run.Id.ToString(),
+            ProjectId = projectId,
+            ProjectName = ownedProjectNames.GetValueOrDefault(projectId, "Unknown project"),
+            AgentName = run.AgentName,
+            Title = title,
+            CreatedUtc = approval.CreatedUtc,
+            CtaPath = $"/projects/{projectId}/orchestrations/{deepLinkRunId}",
+        };
+    }
+
     private static string Truncate(string value, int max)
     {
         value = value.Trim();
         return value.Length <= max ? value : value[..max].TrimEnd() + "\u2026";
     }
 }
+
