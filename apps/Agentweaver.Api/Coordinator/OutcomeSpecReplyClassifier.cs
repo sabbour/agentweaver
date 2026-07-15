@@ -5,7 +5,9 @@ using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.GitHub.Copilot;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Generation;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
@@ -62,13 +64,21 @@ public interface IOutcomeSpecReplyClassifier
 ///
 /// <para>
 /// This is a low-latency call on the synchronous steering-request path, so it deliberately uses a
-/// small/fast model: <c>Generation:ReplyClassificationModel</c> when configured, otherwise the shared
-/// Copilot model. Confirm-vs-revise is a trivial binary intent classification that does not warrant a
-/// frontier model.
+/// small/fast model (<see cref="GenerationModelOptions.ResolveReplyClassificationModel"/>, which
+/// defaults to <see cref="GenerationModelOptions.DefaultReplyClassificationModel"/>) and bounds the
+/// model turn with an ~8s timeout — a stalled model deterministically fails closed to revise rather
+/// than hanging the <c>POST /steer</c> request. Confirm-vs-revise is a trivial binary intent
+/// classification that does not warrant a frontier model.
 /// </para>
 /// </summary>
-public sealed class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
+public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
 {
+    /// <summary>
+    /// Upper bound on the model turn on the synchronous steering path. On expiry the classification
+    /// fails closed to revise (returns <see langword="null"/>) rather than hanging the request.
+    /// </summary>
+    internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(8);
+
     private const string ClassifierCharter =
         "You are the Coordinator interpreting a human's chat reply to a proposed outcome spec that is " +
         "awaiting their confirmation. Decide whether the reply APPROVES the spec as-is so work can " +
@@ -88,15 +98,17 @@ public sealed class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassif
         GitHubCopilotClientFactory copilotClientFactory,
         IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotOutcomeSpecReplyClassifier> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
         _logger = logger;
-        // Prefer an explicitly configured lightweight classification model; fall back to the shared
-        // Copilot model so the feature works out of the box even when no override is set.
-        _modelId = configuration["Generation:ReplyClassificationModel"]
-            ?? configuration["Providers:GitHubCopilot:Model"];
+        // A low-latency binary classification on the synchronous steering path: resolve through the
+        // validated generation-model options, which default to a small/fast model rather than the
+        // shared frontier generation model.
+        _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
+            .ResolveReplyClassificationModel();
     }
 
     public async Task<OutcomeSpecReplyKind?> ClassifyAsync(
@@ -105,8 +117,6 @@ public sealed class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassif
         if (string.IsNullOrWhiteSpace(context.Instruction))
             return null;
 
-        CopilotClient? client = null;
-        AIAgent? agent = null;
         try
         {
             // Copilot model turns require a Copilot-entitled user token; installation scope is not a
@@ -120,6 +130,73 @@ public sealed class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassif
                 throw new InvalidOperationException(
                     "Outcome-spec reply classification requires a user Copilot token scope; installation-scope Copilot auth is not permitted.");
 
+            var prompt = BuildPrompt(context);
+
+            // Bound the model turn: this runs synchronously inside POST /steer, so a stalled model
+            // must fail closed to revise within a few seconds rather than hang the request. Timeout
+            // and any other failure both resolve to null (revise) below.
+            var decision = await RunWithTimeoutAsync(
+                token => RunModelTurnAsync(scope, prompt, token),
+                ClassificationTimeout,
+                ct,
+                onTimeout: () => _logger.LogWarning(
+                    "Outcome-spec reply classification for run {RunId} timed out after {TimeoutSeconds}s; failing closed to revise.",
+                    context.RunId, ClassificationTimeout.TotalSeconds)).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "Outcome-spec reply classification for run {RunId}: {Decision}",
+                context.RunId, decision?.ToString() ?? "unparseable/timed-out");
+            return decision;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Outcome-spec reply classification model turn failed for run {RunId}; caller will fail closed to revise.",
+                context.RunId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="modelTurn"/> under a linked CTS bounded by <paramref name="timeout"/> and
+    /// parses its output. If the turn exceeds the bound it is cancelled and this returns
+    /// <see langword="null"/> (the caller fails closed to revise). Ambient cancellation via
+    /// <paramref name="ct"/> and any non-timeout exception propagate to the caller. Exposed
+    /// <c>internal static</c> so the timeout/fail-closed contract is unit-testable without a live model.
+    /// </summary>
+    internal static async Task<OutcomeSpecReplyKind?> RunWithTimeoutAsync(
+        Func<CancellationToken, Task<string?>> modelTurn,
+        TimeSpan timeout,
+        CancellationToken ct,
+        Action? onTimeout = null)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+        try
+        {
+            var raw = await modelTurn(timeoutCts.Token).ConfigureAwait(false);
+            return ParseDecision(raw);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // The timeout fired (not caller-initiated cancellation): fail closed to revise.
+            onTimeout?.Invoke();
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Executes the single tool-less Copilot completion and returns its raw text. Isolated as a
+    /// <c>protected virtual</c> seam so tests can substitute a stalling/failing turn without a live
+    /// Copilot session.
+    /// </summary>
+    protected virtual async Task<string?> RunModelTurnAsync(
+        GitHubTokenScope scope, string prompt, CancellationToken ct)
+    {
+        CopilotClient? client = null;
+        AIAgent? agent = null;
+        try
+        {
             client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
@@ -141,22 +218,8 @@ public sealed class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassif
             agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
 
-            var prompt = BuildPrompt(context);
-            var raw = await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(
+            return await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(
                 agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
-
-            var decision = ParseDecision(raw);
-            _logger.LogInformation(
-                "Outcome-spec reply classification for run {RunId}: {Decision} (raw, truncated: {Raw})",
-                context.RunId, decision?.ToString() ?? "unparseable", Truncate(raw));
-            return decision;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Outcome-spec reply classification model turn failed for run {RunId}; caller will fail closed to revise.",
-                context.RunId);
-            return null;
         }
         finally
         {
@@ -252,12 +315,5 @@ public sealed class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassif
             "revise" => OutcomeSpecReplyKind.Revise,
             _ => null,
         };
-    }
-
-    private static string Truncate(string? value, int max = 300)
-    {
-        if (string.IsNullOrEmpty(value)) return "(empty)";
-        var collapsed = value.Trim();
-        return collapsed.Length <= max ? collapsed : collapsed[..max] + "…";
     }
 }
