@@ -50,6 +50,8 @@ export interface CoordinatorArtifactsPanelProps {
   /** Which sub-view to open on first render: the integration diff ('changes', default) or the
    *  produced-files browser ('files'). Lets the Changes vs Files chips reach distinct destinations. */
   initialTab?: 'changes' | 'files';
+  /** Existing run-stream sequence key used to refetch artifacts immediately when new run events land. */
+  liveUpdateKey?: number;
   previewStatusSlot?: ReactNode;
 }
 
@@ -60,9 +62,9 @@ export interface CoordinatorArtifactsPanelProps {
  * read-only file viewer on the right) inside the full-width Changes/Files slide-in — clicking a
  * file selects it in place instead of opening a separate modal on top.
  */
-export function CoordinatorArtifactsPanel({ runId, runStatus, adapter, initialTab = 'changes', previewStatusSlot }: CoordinatorArtifactsPanelProps) {
+export function CoordinatorArtifactsPanel({ runId, runStatus, adapter, initialTab = 'changes', liveUpdateKey, previewStatusSlot }: CoordinatorArtifactsPanelProps) {
   const styles = useStyles();
-  const state = useArtifactBrowser(runId, runStatus, undefined, undefined, undefined, undefined, adapter, initialTab);
+  const state = useArtifactBrowser(runId, runStatus, undefined, undefined, undefined, undefined, adapter, initialTab, liveUpdateKey);
 
   return (
     <div className={styles.root} data-testid="coord-artifacts-panel">

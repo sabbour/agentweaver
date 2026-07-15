@@ -2272,11 +2272,13 @@ export function CoordinatorRunPage() {
 
   const {
     events,
+    liveEvents,
     droppedEventCount,
     status: streamStatus,
     error: streamError,
     reconnect: reconnectStream,
   } = useSeededRunStream(runId ?? '', runLevelStatus);
+  const artifactsLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
   // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
   // The toolbar's "Switch orientation" toggles this and re-fits the view.
@@ -4601,7 +4603,7 @@ export function CoordinatorRunPage() {
           width="100vw"
           flushBody
         >
-          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} previewStatusSlot={previewStatusSlot} />
+          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} liveUpdateKey={artifactsLiveUpdateKey} previewStatusSlot={previewStatusSlot} />
         </SlidePanel>
       )}
 
@@ -4613,7 +4615,7 @@ export function CoordinatorRunPage() {
           width="100vw"
           flushBody
         >
-          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} initialTab="files" />
+          <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} initialTab="files" liveUpdateKey={artifactsLiveUpdateKey} />
         </SlidePanel>
       )}
 

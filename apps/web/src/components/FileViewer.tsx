@@ -122,10 +122,10 @@ export function FileViewer({
     [getContent],
   );
 
-  // Default view: changed files open on Diff; otherwise markdown opens on the
-  // rendered Preview and everything else on Source.
+  // Default view: markdown always opens on the rendered Preview; other changed
+  // files open on Diff and everything else on Source.
   const defaultViewMode = (): 'diff' | 'source' | 'preview' =>
-    isChanged ? 'diff' : isMarkdown ? 'preview' : 'source';
+    isMarkdown ? 'preview' : isChanged ? 'diff' : 'source';
 
   const [viewMode, setViewMode] = useState<'diff' | 'source' | 'preview'>(defaultViewMode());
 
@@ -135,7 +135,7 @@ export function FileViewer({
 
   // Reset view mode when the file (or changed-ness) changes.
   useEffect(() => {
-    setViewMode(isChanged ? 'diff' : isMarkdown ? 'preview' : 'source'); // eslint-disable-line react-hooks/set-state-in-effect
+    setViewMode(isMarkdown ? 'preview' : isChanged ? 'diff' : 'source'); // eslint-disable-line react-hooks/set-state-in-effect
   }, [filePath, isChanged, isMarkdown]);
 
   // Reset content state when the file identity changes.

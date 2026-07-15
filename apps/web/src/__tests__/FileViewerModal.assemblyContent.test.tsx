@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { FileViewerModal } from '../components/FileViewerModal';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import {
   afterEach,
   beforeEach,
@@ -88,5 +88,34 @@ describe('FileViewerModal — coordinator assembly content (Preview/Source, no w
 
     await waitFor(() => expect(apiClient.getRunFileContent).toHaveBeenCalledWith('run-9', 'src/a.ts'));
     await waitFor(() => expect(document.body.textContent).toContain('const a = 1;'));
+  });
+
+  it('opens changed markdown files on Preview by default', async () => {
+    const getContent = vi.fn().mockResolvedValue({
+      path: 'docs/guide.md',
+      content: '# Preview first\n',
+      is_binary: false,
+      language: 'markdown',
+    } satisfies WorkspaceFileContent);
+
+    render(
+      <Wrapper>
+        <FileViewerModal
+          runId="coord-run-md"
+          filePath="docs/guide.md"
+          onClose={() => {}}
+          diff={{ path: 'docs/guide.md', diff: '@@ -1 +1 @@\n-Old\n+New\n', status: 'modified', is_binary: false }}
+          diffLoading={false}
+          diffError={null}
+          isChanged
+          getContent={getContent}
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() => expect(getContent).toHaveBeenCalledWith('coord-run-md', 'docs/guide.md'));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true'));
+    expect(screen.getByRole('tab', { name: 'Diff' }).getAttribute('aria-selected')).toBe('false');
+    await waitFor(() => expect(document.body.textContent).toContain('Preview first'));
   });
 });

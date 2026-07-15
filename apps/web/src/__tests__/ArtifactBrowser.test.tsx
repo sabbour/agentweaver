@@ -22,6 +22,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getRunFiles: vi.fn(),
     getRunFileDiff: vi.fn(),
+    getRunWorkspace: vi.fn(),
     submitReview: vi.fn(),
     commitRun: vi.fn(),
     requestChanges: vi.fn(),
@@ -61,6 +62,7 @@ function makeDiff(overrides: Partial<WorkspaceFileDiff> = {}): WorkspaceFileDiff
 // vi.mocked asserts the deep-mocked type so .mockResolvedValue is available.
 const getRunFilesMock      = () => vi.mocked(apiClient.getRunFiles);
 const getRunFileDiffMock   = () => vi.mocked(apiClient.getRunFileDiff);
+const getRunWorkspaceMock  = () => vi.mocked(apiClient.getRunWorkspace);
 const requestChangesMock   = () => vi.mocked(apiClient.requestChanges);
 const commitRunMock        = () => vi.mocked(apiClient.commitRun);
 
@@ -329,6 +331,73 @@ describe('ArtifactBrowser', () => {
       expect(getRunFilesMock()).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('preserves the requested initial tab across run changes', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+    getRunWorkspaceMock().mockResolvedValue([]);
+
+    const { result, rerender } = renderHook(
+      ({ runId }) => useArtifactBrowser(runId, 'pending', undefined, undefined, undefined, undefined, undefined, 'files'),
+      { initialProps: { runId: 'run-1' } },
+    );
+
+    await waitFor(() => {
+      expect(getRunFilesMock()).toHaveBeenCalledWith('run-1', 'all');
+    });
+    await waitFor(() => {
+      expect(getRunWorkspaceMock()).toHaveBeenCalledWith('run-1');
+    });
+    expect(result.current.activeTab).toBe('files');
+
+    rerender({ runId: 'run-2' });
+
+    await waitFor(() => {
+      expect(getRunFilesMock()).toHaveBeenCalledWith('run-2', 'all');
+    });
+    await waitFor(() => {
+      expect(getRunWorkspaceMock()).toHaveBeenCalledWith('run-2');
+    });
+    expect(result.current.activeTab).toBe('files');
+  });
+
+  it('refetches changes when the live update key advances', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+
+    const { rerender } = renderHook(
+      ({ liveUpdateKey }) => useArtifactBrowser('run-live', 'pending', undefined, undefined, undefined, undefined, undefined, 'changes', liveUpdateKey),
+      { initialProps: { liveUpdateKey: 0 } },
+    );
+
+    await waitFor(() => {
+      expect(getRunFilesMock()).toHaveBeenCalledTimes(1);
+    });
+
+    rerender({ liveUpdateKey: 1 });
+
+    await waitFor(() => {
+      expect(getRunFilesMock()).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('refetches workspace files when the live update key advances on the Files tab', async () => {
+    getRunFilesMock().mockResolvedValue([]);
+    getRunWorkspaceMock().mockResolvedValue([]);
+
+    const { rerender } = renderHook(
+      ({ liveUpdateKey }) => useArtifactBrowser('run-live-files', 'pending', undefined, undefined, undefined, undefined, undefined, 'files', liveUpdateKey),
+      { initialProps: { liveUpdateKey: 0 } },
+    );
+
+    await waitFor(() => {
+      expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(1);
+    });
+
+    rerender({ liveUpdateKey: 1 });
+
+    await waitFor(() => {
+      expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(2);
+    });
+  });
 
   // AB-08: Request change flow — clicking "Request change" reveals a textarea;
   // submitting calls apiClient.requestChanges with the comment text.
