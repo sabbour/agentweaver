@@ -347,6 +347,17 @@ export interface AgentMemoryDto {
   updated_at: string;
 }
 
+export interface SessionHistoryDto {
+  id: string;
+  session_id: string;
+  focus_area?: string | null;
+  active_issues?: string | null;
+  summary?: string | null;
+  serialized_state?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+}
+
 export interface RunDto {
   run_id: string;
   status: string;

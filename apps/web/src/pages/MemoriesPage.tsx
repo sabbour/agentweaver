@@ -25,7 +25,7 @@ import {
 import { Pager } from '../copilot-fluent-system';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto } from '../api/types';
+import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
 
 const useStyles = makeStyles({
   breadcrumbLink: {
@@ -113,11 +113,21 @@ function formatApiError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function parseActiveIssues(value?: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return value.split('\n').map((item) => item.trim()).filter(Boolean);
+  }
+}
+
 export function MemoriesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
-  const [selectedTab, setSelectedTab] = useState<'decisions' | 'memory'>('decisions');
+  const [selectedTab, setSelectedTab] = useState<'decisions' | 'memory' | 'sessions'>('decisions');
   const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
   const [decisionsTotalCount, setDecisionsTotalCount] = useState(0);
   const [decisionsPage, setDecisionsPage] = useState(1);
@@ -130,6 +140,10 @@ export function MemoriesPage() {
   const [memoryTotalCount, setMemoryTotalCount] = useState(0);
   const [memoryPage, setMemoryPage] = useState(1);
   const [memoryPageSize, setMemoryPageSize] = useState(25);
+  const [sessions, setSessions] = useState<SessionHistoryDto[] | null>(null);
+  const [sessionsTotalCount, setSessionsTotalCount] = useState(0);
+  const [sessionsPage, setSessionsPage] = useState(1);
+  const [sessionsPageSize, setSessionsPageSize] = useState(25);
   const [loading,     setLoading]     = useState(false);
   const [loadError,   setLoadError]   = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -174,21 +188,29 @@ export function MemoriesPage() {
       loadDecisionsPage()
         .catch((err: unknown) => { setDecisions([]); setDecisionsTotalCount(0); setInbox([]); setInboxTotalCount(0); setLoadError(formatApiError(err)); })
         .finally(() => setLoading(false));
-    } else {
+    } else if (selectedTab === 'memory') {
       if (memory !== null) { setLoading(false); return; }
       apiClient.getProjectMemory(projectId, { page: memoryPage, pageSize: memoryPageSize })
         .then(m => { setMemory(m.items); setMemoryTotalCount(m.total_count); })
         .catch((err: unknown) => { setMemory([]); setMemoryTotalCount(0); setLoadError(formatApiError(err)); })
         .finally(() => setLoading(false));
+    } else {
+      if (sessions !== null) { setLoading(false); return; }
+      apiClient.getProjectSessions(projectId, { page: sessionsPage, pageSize: sessionsPageSize })
+        .then(result => { setSessions(result.items); setSessionsTotalCount(result.total_count); })
+        .catch((err: unknown) => { setSessions([]); setSessionsTotalCount(0); setLoadError(formatApiError(err)); })
+        .finally(() => setLoading(false));
     }
-  }, [projectId, selectedTab, decisions, inbox, memory, reloadKey, decisionsPage, decisionsPageSize, inboxPage, inboxPageSize, memoryPage, memoryPageSize]);
+  }, [projectId, selectedTab, decisions, inbox, memory, sessions, reloadKey, decisionsPage, decisionsPageSize, inboxPage, inboxPageSize, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize]);
 
   const retryLoad = () => {
     if (selectedTab === 'decisions') {
       setDecisions(null);
       setInbox(null);
-    } else {
+    } else if (selectedTab === 'memory') {
       setMemory(null);
+    } else {
+      setSessions(null);
     }
     setLoadError(null);
     setReloadKey((key) => key + 1);
@@ -265,6 +287,7 @@ export function MemoriesPage() {
   const busy = busyAction !== null;
   const decisionCount = decisionsTotalCount;
   const memoryCount = memoryTotalCount;
+  const sessionCount = sessionsTotalCount;
 
   return (
     <PageContainer>
@@ -286,14 +309,16 @@ export function MemoriesPage() {
         { label: 'Pending', value: inboxTotalCount },
         { label: 'Decisions', value: decisionCount },
         { label: 'Memories', value: memoryCount },
+        { label: 'Sessions', value: sessionCount },
       ]} />
 
       <TabList
         selectedValue={selectedTab}
-        onTabSelect={(_, data) => setSelectedTab(data.value as 'decisions' | 'memory')}
+        onTabSelect={(_, data) => setSelectedTab(data.value as 'decisions' | 'memory' | 'sessions')}
       >
         <Tab value="decisions">Decisions</Tab>
         <Tab value="memory">Agent memory</Tab>
+        <Tab value="sessions">Session history</Tab>
       </TabList>
 
       <div className={styles.tabContent}>
@@ -469,6 +494,55 @@ export function MemoriesPage() {
                 </div>
               )}
           </>
+        )}
+
+        {!loading && !loadError && selectedTab === 'sessions' && (
+          sessions === null || sessions.length === 0
+            ? (
+              <EmptyState
+                title="No session history yet"
+                description="Completed and in-progress session summaries will appear here."
+              />
+            )
+            : (
+              <PageSection
+                title="Session history"
+                description="Recent coordinator and agent sessions for this project."
+              >
+                <div className={styles.itemList}>
+                  {sessions.map((session) => {
+                    const issues = parseActiveIssues(session.active_issues);
+                    return (
+                      <div key={session.id} className={styles.item}>
+                        <div className={styles.itemHeader}>
+                          <span className={styles.itemTitle}>{session.focus_area || session.session_id}</span>
+                          <Badge appearance="outline">{session.ended_at ? 'Completed' : 'In progress'}</Badge>
+                          <span className={styles.itemMeta}>
+                            Started {new Date(session.started_at).toLocaleString()}
+                            {session.ended_at ? ` • Ended ${new Date(session.ended_at).toLocaleString()}` : ''}
+                          </span>
+                        </div>
+                        <span className={styles.itemMeta}>Session ID: {session.session_id}</span>
+                        {session.summary && <span className={styles.itemContent}>{session.summary}</span>}
+                        {issues.length > 0 && (
+                          <span className={styles.itemRationale}>Active issues: {issues.join(', ')}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {sessionsTotalCount > sessionsPageSize && (
+                    <Pager
+                      page={sessionsPage}
+                      pageSize={sessionsPageSize}
+                      totalItems={sessionsTotalCount}
+                      pageSizeOptions={[10, 25, 50]}
+                      onPageChange={(p) => { setSessionsPage(p); setSessions(null); }}
+                      onPageSizeChange={(size) => { setSessionsPageSize(size); setSessionsPage(1); setSessions(null); }}
+                    />
+                  )}
+                </div>
+              </PageSection>
+            )
         )}
       </div>
     </PageContainer>

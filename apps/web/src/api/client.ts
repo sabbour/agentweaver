@@ -487,6 +487,15 @@ export class AgentweaverApiClient {
     );
   }
 
+  getProjectSessions(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').SessionHistoryDto>> {
+    return this.request<PagedResult<import('./types').SessionHistoryDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/sessions${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
+  }
+
   createAgentMemory(
     projectId: string,
     agentName: string,

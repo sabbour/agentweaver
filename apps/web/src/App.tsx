@@ -15,6 +15,7 @@ import { ClusterPage } from './pages/ClusterPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { FlowPage } from './pages/FlowPage';
+import { AgentMemoryPage } from './pages/AgentMemoryPage';
 import { HeartbeatPage } from './pages/HeartbeatPage';
 import { MemoriesPage } from './pages/MemoriesPage';
 import { ObservabilityAgentsPage } from './pages/observability/ObservabilityAgentsPage';
@@ -66,6 +67,7 @@ function Shell() {
         <Route path="/projects/:projectId/workspace" element={<WorkspacePage />} />
         <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
         <Route path="/projects/:projectId/team" element={<TeamPage />} />
+        <Route path="/projects/:projectId/team/:agentName/memory" element={<AgentMemoryPage />} />
         <Route path="/projects/:projectId/team/cast" element={<CastingWizardPage />} />
         <Route path="/projects/:projectId/memories" element={<MemoriesPage />} />
         <Route path="/projects/:projectId/skills" element={<SkillsPage />} />

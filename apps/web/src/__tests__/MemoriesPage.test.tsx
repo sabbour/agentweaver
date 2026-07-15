@@ -11,13 +11,14 @@ import {
   it,
   vi,
 } from 'vitest';
-import type { DecisionDto, DecisionInboxEntryDto } from '../api/types';
+import type { DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getDecisions: vi.fn(),
     getDecisionsInbox: vi.fn(),
     getProjectMemory: vi.fn(),
+    getProjectSessions: vi.fn(),
     mergeDecisionInboxEntry: vi.fn(),
     promoteDecisionInboxEntry: vi.fn(),
     rejectDecisionInboxEntry: vi.fn(),
@@ -109,6 +110,20 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
 });
+
+function makeSession(id: string, over?: Partial<SessionHistoryDto>): SessionHistoryDto {
+  return {
+    id,
+    session_id: `session-${id}`,
+    focus_area: 'Investigate UI refresh',
+    active_issues: JSON.stringify(['#316']),
+    summary: 'Updated the frontend to surface paginated history.',
+    serialized_state: null,
+    started_at: '2026-03-10T12:00:00Z',
+    ended_at: '2026-03-10T12:15:00Z',
+    ...over,
+  };
+}
 
 describe('MemoriesPage — Decisions tab', () => {
   it('renders a Proposed section for pending inbox entries', async () => {
@@ -240,5 +255,52 @@ describe('MemoriesPage — Decisions tab', () => {
     expect(
       vi.mocked(apiClient.getDecisionsInbox).mock.calls.some(([, options]) => options?.page === 1 && options?.pageSize === 25),
     ).toBe(true);
+  });
+});
+
+describe('MemoriesPage — Session history tab', () => {
+  beforeEach(() => {
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getProjectMemory).mockResolvedValue(page([]));
+  });
+
+  it('renders paginated session history from the backend', async () => {
+    const allSessions = Array.from({ length: 28 }, (_, index) =>
+      makeSession(`s${index + 1}`, {
+        session_id: `session-${index + 1}`,
+        focus_area: `Focus area ${index + 1}`,
+      }),
+    );
+    vi.mocked(apiClient.getProjectSessions).mockImplementation(async (_projectId, options) => {
+      const pageNumber = options?.page ?? 1;
+      const pageSize = options?.pageSize ?? 25;
+      const start = (pageNumber - 1) * pageSize;
+      return pagedResult(allSessions.slice(start, start + pageSize), pageNumber, pageSize, allSessions.length);
+    });
+
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Session history' }));
+
+    await waitFor(() => expect(screen.getByText('Focus area 1')).toBeTruthy());
+    expect(screen.queryByText('Focus area 26')).toBeNull();
+    expect(screen.getAllByText('Active issues: #316').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(screen.getByText('Focus area 26')).toBeTruthy());
+    expect(screen.queryByText('Focus area 1')).toBeNull();
+    expect(
+      vi.mocked(apiClient.getProjectSessions).mock.calls.some(([, options]) => options?.page === 2 && options?.pageSize === 25),
+    ).toBe(true);
+  });
+
+  it('shows an empty state when there is no session history', async () => {
+    vi.mocked(apiClient.getProjectSessions).mockResolvedValue(page([]));
+
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Session history' }));
+
+    await waitFor(() => expect(screen.getByText('No session history yet')).toBeTruthy());
   });
 });

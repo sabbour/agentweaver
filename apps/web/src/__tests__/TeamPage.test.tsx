@@ -40,6 +40,7 @@ function renderWithRouter(projectId: string) {
       <MemoryRouter initialEntries={[`/projects/${projectId}/team`]}>
         <Routes>
           <Route path="/projects/:projectId/team" element={<TeamPage />} />
+          <Route path="/projects/:projectId/team/:agentName/memory" element={<div>Agent memory page</div>} />
           <Route path="/projects/:projectId/team/cast" element={<div>Cast page</div>} />
         </Routes>
       </MemoryRouter>
@@ -191,5 +192,19 @@ describe('TeamPage', () => {
     await waitFor(() => {
       expect(screen.getByText('No skills assigned')).toBeDefined();
     });
+  });
+
+  it('navigates to the selected agent memory view from the drawer', async () => {
+    getTeamMock().mockResolvedValue(singleMemberTeam);
+
+    renderWithRouter('proj-005');
+
+    await waitFor(() => expect(screen.getByText('Alice')).toBeDefined());
+    fireEvent.click(screen.getByText('Alice'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'View memory' })).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: 'View memory' }));
+
+    await waitFor(() => expect(screen.getByText('Agent memory page')).toBeDefined());
   });
 });

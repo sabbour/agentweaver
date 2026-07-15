@@ -155,6 +155,11 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: tokens.spacingHorizontalS,
   },
+  panelActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
 });
 
 function RemoveMemberDialog({
@@ -423,6 +428,7 @@ function AgentDetailPanel({
   onReroled: (updated: TeamMemberDto) => void;
 }) {
   const styles = useStyles();
+  const navigate = useNavigate();
   const [panelTab, setPanelTab] = useState<PanelTab>('overview');
 
   const [history, setHistory] = useState<HistoryDto | null>(null);
@@ -624,6 +630,17 @@ function AgentDetailPanel({
               <div className={styles.panelSection}>
                 <Text className={styles.panelSectionLabel}>Charter path</Text>
                 <Text className={styles.monoText}>{member.charter_path}</Text>
+              </div>
+              <div className={styles.panelActions}>
+                <Button
+                  appearance="secondary"
+                  onClick={() => {
+                    onClose();
+                    navigate(`/projects/${projectId}/team/${encodeURIComponent(member.name)}/memory`);
+                  }}
+                >
+                  View memory
+                </Button>
               </div>
               <div className={styles.panelSection}>
                 <Text className={styles.panelSectionLabel}>Recent history</Text>
