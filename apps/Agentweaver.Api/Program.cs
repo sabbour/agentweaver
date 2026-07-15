@@ -325,6 +325,7 @@ builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
     sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
+builder.Services.AddSingleton<Agentweaver.Api.Runs.PendingToolApprovalRunsQuery>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.BoardProjectionService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorPickupService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorReconciler>();

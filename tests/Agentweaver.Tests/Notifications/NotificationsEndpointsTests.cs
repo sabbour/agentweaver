@@ -5,6 +5,8 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
@@ -62,6 +64,58 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         };
         await runStore.InsertAsync(run);
         return run;
+    }
+
+    private async Task<Run> InsertInProgressRunAsync(string projectId, string task, string? agentName = null, string? workflowRunId = null)
+    {
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var run = new Run
+        {
+            Id = RunId.New(),
+            RepositoryPath = NewWorkingDir(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = task,
+            SubmittingUser = ProjectsWebApplicationFactory.TestUser,
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            ProjectId = ProjectId.Parse(projectId),
+            AgentName = agentName,
+            WorkflowRunId = workflowRunId,
+        };
+        await runStore.InsertAsync(run);
+        return run;
+    }
+
+    private async Task InsertToolApprovalRequiredEventAsync(
+        string runId, string requestId, string toolName = "web_fetch", DateTime? createdAt = null)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = 1,
+            EventType = EventTypes.ToolApprovalRequired,
+            PayloadJson = $$"""{"requestId":"{{requestId}}","toolName":"{{toolName}}","url":"https://example.com"}""",
+            CreatedAt = createdAt ?? DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task InsertToolResultEventAsync(string runId, string callId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = 2,
+            EventType = EventTypes.ToolResult,
+            PayloadJson = $$"""{"callId":"{{callId}}"}""",
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
     }
 
     [Fact]
@@ -187,5 +241,115 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         title.Should().NotBeNull();
         title!.Length.Should().BeLessThanOrEqualTo(121, "the title should be truncated to ~120 chars plus the ellipsis");
         title.Should().EndWith("\u2026");
+    }
+
+    [Fact]
+    public async Task GetNotifications_SurfacesOwnedPendingToolApprovalRun()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project G");
+        var run = await InsertInProgressRunAsync(projectId, "Fetch the release notes", "Researcher", "wf-run-2");
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "toolu_01pending", "web_fetch");
+
+        var response = await _client.GetAsync("/api/notifications");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        var match = notifications.Should().ContainSingle(n => n.GetProperty("run_id").GetString() == run.Id.ToString())
+            .Subject;
+        match.GetProperty("type").GetString().Should().Be("tool_approval");
+        match.GetProperty("project_id").GetString().Should().Be(projectId);
+        match.GetProperty("agent_name").GetString().Should().Be("Researcher");
+        match.GetProperty("cta_path").GetString().Should().Be($"/projects/{projectId}/orchestrations/wf-run-2");
+        match.GetProperty("id").GetString().Should().Be($"tool_approval:{run.Id}:toolu_01pending");
+    }
+
+    [Fact]
+    public async Task GetNotifications_ExcludesResolvedToolApproval()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project H");
+        var run = await InsertInProgressRunAsync(projectId, "Fetch and resolve", "Researcher");
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "toolu_01resolved", "web_fetch");
+        // The callId defaults to the requestId in this test's minimal payload shape.
+        await InsertToolResultEventAsync(run.Id.ToString(), "toolu_01resolved");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+    }
+
+    [Fact]
+    public async Task GetNotifications_DoesNotDoubleFire_HumanReviewAndToolApproval_ForSameRun()
+    {
+        // A run cannot be both AwaitingReview and InProgress at once, so a pending tool approval on
+        // an InProgress run must surface exactly one notification (tool_approval), never both types.
+        var projectId = await CreateBlankProjectAsync("Notif Project I");
+        var run = await InsertInProgressRunAsync(projectId, "Fetch once", "Researcher");
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "toolu_01single", "web_fetch");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var forRun = body.GetProperty("notifications").EnumerateArray()
+            .Where(n => n.GetProperty("run_id").GetString() == run.Id.ToString())
+            .ToList();
+
+        forRun.Should().ContainSingle();
+        forRun[0].GetProperty("type").GetString().Should().Be("tool_approval");
+    }
+
+    [Fact]
+    public async Task GetNotifications_ToolApprovalId_IsStableAcrossPolls()
+    {
+        // Client-side de-duplication relies on a stable id across polling intervals, mirroring the
+        // "review:{runId}" stability guarantee already covered for human_review.
+        var projectId = await CreateBlankProjectAsync("Notif Project J");
+        var run = await InsertInProgressRunAsync(projectId, "Fetch repeatedly", "Researcher");
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "toolu_01stable", "web_fetch");
+
+        var first = await _client.GetAsync("/api/notifications");
+        var firstBody = await first.Content.ReadFromJsonAsync<JsonElement>();
+        var firstId = firstBody.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("run_id").GetString() == run.Id.ToString())
+            .GetProperty("id").GetString();
+
+        var second = await _client.GetAsync("/api/notifications");
+        var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+        var secondId = secondBody.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("run_id").GetString() == run.Id.ToString())
+            .GetProperty("id").GetString();
+
+        secondId.Should().Be(firstId);
+    }
+
+    [Fact]
+    public async Task GetNotifications_ExcludesOtherUsersToolApproval()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project K");
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var othersProject = ProjectId.New();
+        var run = new Run
+        {
+            Id = RunId.New(),
+            RepositoryPath = NewWorkingDir(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "Someone else's approval",
+            SubmittingUser = "someone-else",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            ProjectId = othersProject,
+        };
+        await runStore.InsertAsync(run);
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "toolu_01others", "web_fetch");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+        _ = projectId;
     }
 }
