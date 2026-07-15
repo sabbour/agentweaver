@@ -29,9 +29,9 @@ public sealed class TeamTools(AgentweaverApiClient api)
         "Set confirm=true to automatically confirm the new proposal.")]
     public async Task<string> TeamCastAsync(
         [Description("Project ID")] string project_id,
-        [Description("Goal description for the new team (required unless confirm_proposal_id is set)")] string? goal,
-        [Description("ID of an existing proposal to confirm (skips creation)")] string? confirm_proposal_id,
-        [Description("Automatically confirm the newly created proposal (default false)")] bool confirm,
+        [Description("Goal description for the new team (required unless confirm_proposal_id is set)")] string? goal = null,
+        [Description("ID of an existing proposal to confirm (skips creation)")] string? confirm_proposal_id = null,
+        [Description("Automatically confirm the newly created proposal (default false)")] bool confirm = false,
         [Description("Casting mode: 'free_text' (default), 'scenario', 'analysis', or 'manual'")] string mode = "free_text",
         [Description("Intent for confirmation: 'new' (default) replaces the team, 'merge' adds to existing")] string intent = "new",
         CancellationToken ct = default)
