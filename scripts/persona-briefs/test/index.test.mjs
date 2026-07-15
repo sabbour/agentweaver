@@ -31,7 +31,7 @@ test('loads an API adapter whose core uses judgment instead of mandatory pushbac
   assert.equal(persona.id, 'oracle');
   assert.match(persona.text, /## Judgment, not a script/);
   assert.match(persona.text, /live OpenAPI spec/);
-  assert.match(persona.text, /does \*\*not\*\* prescribe phases, checkpoints, or their order/);
+  assert.match(persona.text, /does \*\*not\*\* prescribe phases, checkpoints, product shape, or step/);
   assert.match(persona.text, /preview "validated"/);
 });
 
