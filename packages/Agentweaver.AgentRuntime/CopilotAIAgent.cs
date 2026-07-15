@@ -692,7 +692,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var fullSystemPrompt = string.IsNullOrEmpty(_systemPromptContext)
             ? BuildBasePrompt(_includeTeamCoordinationPrompt)
             : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext;
-        Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext) });
+        Emit("agent.system_prompt", new { provider = "copilot", prompt = fullSystemPrompt, memoryContextIncluded = !string.IsNullOrEmpty(_systemPromptContext), skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(_systemPromptContext) });
         Emit("agent.task", new { task });
         Emit("agent.tools", new { provider = "copilot", tools = _registeredToolNames });
         if (executor.HasNetworkWarning)
