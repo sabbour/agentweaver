@@ -463,6 +463,13 @@ export function buildRunTimeline(
   // Global correlation maps so a tool.result/error settles the right tool even if
   // intents interleave (same approach as the reducer's pendingToolCalls map).
   const toolByCallId = new Map<string, RunTimelineTool>();
+  // Fallback correlation for sources that never send a callId/call_id at all (e.g. the
+  // operator assistant run's RunEventSink, which streams tool.call/tool.result pairs
+  // without any correlation id since each MCP tool call there is awaited sequentially
+  // before the next one starts). Queued FIFO per tool name so an unresolved call is
+  // matched to the next result/error for the same tool rather than staying "running"
+  // forever.
+  const pendingByToolName = new Map<string, RunTimelineTool[]>();
   const messageByStep = new Map<string, Map<string, RunTimelineMessage>>();
   // Uncapped arg-derived diff per callId, so the tool.result fallback recounts +A −R from
   // the FULL diff rather than an already-capped copy stored on the tool.
@@ -493,6 +500,19 @@ export function buildRunTimeline(
 
   const asStr = (v: unknown): string => (v == null ? '' : String(v));
 
+  /** Pop the oldest still-unresolved tool queued under `toolName` (FIFO) — used when a
+   * tool.result/tool.error carries no correlation id of its own. Returns undefined if
+   * nothing is queued (unknown tool name, or already resolved). */
+  const dequeuePendingTool = (
+    queueByName: Map<string, RunTimelineTool[]>,
+    toolName: string,
+  ): RunTimelineTool | undefined => {
+    if (!toolName) return undefined;
+    const queue = queueByName.get(toolName);
+    if (!queue || queue.length === 0) return undefined;
+    return queue.shift();
+  };
+
   for (const evt of sorted) {
     const payload = evt.payload ?? {};
     switch (evt.type) {
@@ -519,7 +539,10 @@ export function buildRunTimeline(
       }
 
       case 'tool.call': {
-        const toolName = asStr(payload['toolName']) || 'tool';
+        // Accept both `toolName` (reducer/coordinator wire format) and `name` (the operator
+        // assistant run's RunEventSink, which appends { name, arguments } instead) so a real
+        // tool name always resolves instead of falling back to the generic "tool" placeholder.
+        const toolName = asStr(payload['toolName']) || asStr(payload['name']) || 'tool';
         // report_intent IS the intent (already surfaced via agent.intent) — don't
         // duplicate it as a tool row.
         if (toolName === 'report_intent') break;
@@ -549,13 +572,22 @@ export function buildRunTimeline(
         step.tools.push(tool);
         step.children.push({ kind: 'tool', tool });
         toolByCallId.set(callId, tool);
+        // No real correlation id was on the wire — queue it so the matching
+        // tool.result/tool.error (which also has no id) can still find it by name.
+        if (rawCallId == null) {
+          const queue = pendingByToolName.get(toolName) ?? [];
+          queue.push(tool);
+          pendingByToolName.set(toolName, queue);
+        }
         break;
       }
 
       case 'tool.result': {
         const rawCallId = extractCallId(payload);
-        if (rawCallId == null) break;
-        const tool = toolByCallId.get(String(rawCallId));
+        const toolName = asStr(payload['toolName']) || asStr(payload['name']);
+        const tool = rawCallId != null
+          ? toolByCallId.get(String(rawCallId))
+          : dequeuePendingTool(pendingByToolName, toolName);
         if (!tool) break;
         tool.status = 'complete';
         const content = asStr(payload['content']);
@@ -579,8 +611,10 @@ export function buildRunTimeline(
 
       case 'tool.error': {
         const rawCallId = extractCallId(payload);
-        if (rawCallId == null) break;
-        const tool = toolByCallId.get(String(rawCallId));
+        const toolName = asStr(payload['toolName']) || asStr(payload['name']);
+        const tool = rawCallId != null
+          ? toolByCallId.get(String(rawCallId))
+          : dequeuePendingTool(pendingByToolName, toolName);
         if (!tool) break;
         const errorMessage = asStr(payload['errorMessage']);
         const lower = errorMessage.toLowerCase();
