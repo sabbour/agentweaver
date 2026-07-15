@@ -252,6 +252,8 @@ A rebuild should preserve this pattern:
 4. Let the MCP SDK generate protocol schemas from tool declarations.
 5. Forward the caller's bearer token for every backend call when one exists.
 6. URI-escape every API route path segment (`project_id`, `run_id`, `agent_name`, task ids, workflow ids, etc.) before interpolation. Path parameters must be encoded with `Uri.EscapeDataString()` so a malicious id containing `../` or `/` stays inside its segment instead of rewriting the target API route.
+7. Surface actionable error detail. When a backend call fails, throw an `McpException` (Agentweaver uses `McpApiException`) carrying the mapped API error payload. The MCP SDK only appends the message text to the client-visible result when the thrown exception derives from `McpException`; any other exception type collapses to the opaque `An error occurred invoking '<tool>'.` wrapper that hides the real cause.
+8. Give every optional tool parameter an explicit default (`string? model_id = null`, `int? target_index = null`, and a trailing `CancellationToken ct = default`). `Microsoft.Extensions.AI` marks any parameter *without* a default as `required` in the generated JSON schema regardless of C# nullability. A client that omits such a parameter triggers an argument-binding failure that throws *before* the tool body runs — a non-`McpException` the SDK collapses to the opaque wrapper (the root cause of #347).
 
 ### Capability map
 
@@ -341,6 +343,7 @@ If you were recreating Agentweaver's MCP server from scratch, build in this orde
 | Existing automation cannot call MCP | Only OAuth JWTs are accepted. | Keep automation keys as an explicit machine-to-machine path. |
 | Raw GitHub tokens become permanent architecture | Migration path is left enabled without a sunset. | Gate GitHub passthrough by configuration and prefer Agentweaver-minted audience-bound tokens. |
 | Future local MCP tool bypasses authorization | Tool performs sensitive work without calling the API. | Either keep tools as API proxies or add equivalent local authorization and revocation checks. |
+| Tool returns opaque `An error occurred invoking '<tool>'.` | The exception reaching the SDK is not an `McpException`, or argument binding failed before the body ran because an optional parameter lacked a default and was schema-marked `required`. | Throw `McpApiException` for backend failures and give every optional parameter an explicit `= null`/`= default`. |
 
 ## See also
 

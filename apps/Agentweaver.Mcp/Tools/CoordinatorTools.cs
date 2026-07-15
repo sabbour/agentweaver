@@ -13,8 +13,8 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     public async Task<string> CoordinatorStartAsync(
         [Description("Project ID")] string project_id,
         [Description("The outcome the coordinator should draft a spec for")] string goal,
-        [Description("Model id override (optional); falls back to the project default, then the role default")] string? model_id,
-        CancellationToken ct)
+        [Description("Model id override (optional); falls back to the project default, then the role default")] string? model_id = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -102,9 +102,9 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
     public async Task<string> CoordinatorSteerAsync(
         [Description("Coordinator run ID")] string run_id,
         [Description("Steering verb: 'stop', 'redirect', 'amend', or a recovery verb such as 'recover'")] string kind,
-        [Description("Direction relayed to the targeted subagent(s); required for redirect/amend, optional for stop and recovery verbs")] string? instruction,
-        [Description("Target child run ID (optional); omit to broadcast to every active child")] string? target_child_run_id,
-        CancellationToken ct)
+        [Description("Direction relayed to the targeted subagent(s); required for redirect/amend, optional for stop and recovery verbs")] string? instruction = null,
+        [Description("Target child run ID (optional); omit to broadcast to every active child")] string? target_child_run_id = null,
+        CancellationToken ct = default)
     {
         try
         {
