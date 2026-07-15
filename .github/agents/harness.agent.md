@@ -67,6 +67,20 @@ real live API, never simulated):
      Also decide whether `-k`/`--insecure` is warranted (only for
      localhost/staging hosts, per `checkInsecureAllowed`) and a transcript file
      path under `scripts/api-harness/transcripts/` for PersonaActor to write to.
+   - **Start a live tail of that transcript path so the operator can watch turns
+     land in real time, before or right after dispatching PersonaActor.** Since
+     PersonaActor appends each turn via shell redirection as it goes (see stage
+     2), a simple tail is all that's needed — create the (empty) transcript file
+     first if your shell's tail requires the file to already exist, then run:
+     `Get-Content <transcript-path> -Wait` on PowerShell/Windows, or `tail -f
+     <transcript-path>` on macOS/Linux. Run this as its own background process,
+     started separately from the PersonaActor dispatch itself — it is pure,
+     read-only observability for the human watching, not part of the driving
+     mechanism, and PersonaActor's run must not depend on it in any way (it
+     succeeds or fails identically whether or not anyone is tailing the file).
+     Do not wrap this in a script or add any buffering/formatting logic — a bare
+     tail command is the whole point; anything more would reintroduce fixed code
+     between PersonaActor and its output.
    - Dispatch a fresh **`PersonaActor`** sub-agent via the `task` tool (`mode:
      sync` — this is a gate; you need the finished transcript back before
      judging). The dispatch prompt supplies, stated plainly as text: the persona
@@ -185,8 +199,12 @@ target yourself (invoke the discoverable `api-harness` skill, via the `skill`
 tool, `skill: "api-harness"`, for the CLI contract details PersonaActor will use),
 interpret the actual ask into a concrete goal statement for this run (see
 "Resolve a concrete goal statement for this specific run" above — do not invent
-scope beyond what was asked, and do not map it onto a fixed phase list), then
-dispatch `PersonaActor` via `task` (`mode: sync`) with a prompt like:
+scope beyond what was asked, and do not map it onto a fixed phase list), create
+the transcript path, start a live tail of it (`Get-Content
+scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl -Wait` on
+PowerShell, `tail -f` on macOS/Linux) as its own background process so you can
+watch turns land in real time, then dispatch `PersonaActor` via `task` (`mode:
+sync`) with a prompt like:
 
 ```
 agent_type: "PersonaActor"
@@ -207,6 +225,12 @@ prompt: |
   turn to the transcript path as you go; stop at your brief's gate; return the
   transcript path + your factual summary.
 ```
+
+While PersonaActor runs, the live tail you started shows each turn as it is
+appended — this is purely so the operator can watch the run happen, not
+something PersonaActor or the dispatch depends on; stop the tail once
+PersonaActor returns. The same transcript file remains the durable record you
+hand to Judge afterward regardless of whether anyone tailed it live.
 
 PersonaActor internally curls the spec, then curls whatever operation it
 resolves from it, appending each real request/response pair to the transcript
