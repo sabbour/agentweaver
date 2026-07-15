@@ -35,8 +35,10 @@ node scripts/api-harness/drive.mjs finish --summary "Persona investigation compl
 ```
 
 `init` prints the persona brief text and verifies auth. `spec` fetches (and
-caches) the live OpenAPI document at `/openapi/v1.json` (falling back to
-`/swagger/v1/swagger.json`, then reporting plainly if neither is served) so the
+caches) the live OpenAPI document at `/openapi/v1.json` (JSON remains the
+driver's primary format; the same contract is also available at
+`/openapi/v1.yaml`, and the driver still falls back to `/swagger/v1/swagger.json`
+if needed) so the
 driving LLM knows what endpoints/shapes exist instead of guessing. `call` is the
 one generic action primitive — arbitrary method/path/body, OR a spec-resolved
 `--operation-id` (see below) — and records every turn (with `--thought`, the
@@ -61,15 +63,12 @@ still fully spec-driven, never a fixed per-persona list. Use raw `--method`/`--p
 or `--operation-id`, whichever is more convenient in the moment; both record
 identically.
 
-**Known coverage gap (verified against a live instance on 2026-07-14):** as of
-Tank's `/openapi/v1.json` (commit `0b80b41b`), only endpoints the backend
-explicitly named via `.WithName(...)` carry an `operationId` — currently just
-`GET /api/version` (`GetVersion`), out of 169 routes. `--operation-id` therefore
-only works for that one route today; raw `--method`/`--path` is the reliable
-primary mechanism until/unless the backend adds `.WithName()` more broadly. This
-is a backend-naming gap, not a driver limitation — flag it to Tank if broader
-`--operation-id` coverage becomes worth the churn; it is not required, since raw
-method/path already covers every operation the spec declares.
+**OperationId coverage note:** `--operation-id` works best on routes the backend
+has explicitly named via `.WithName(...)`. The backend now names the primary
+project / blueprint / casting / coordinator lifecycle routes, but coverage is
+still not universal across every endpoint in the API. When an operationId you
+want is missing, fall back to raw `--method`/`--path`; that remains the fully
+reliable mechanism because it covers every operation the spec declares.
 
 `finish` prints a transcript path under `scripts/api-harness/transcripts/`, computes
 a generic P0 mechanics check (did every recorded call succeed — no

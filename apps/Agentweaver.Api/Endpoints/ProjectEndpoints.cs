@@ -31,170 +31,15 @@ public static class ProjectEndpoints
     public static void MapProjectEndpoints(this WebApplication app)
     {
 // POST /api/projects — create blank or from GitHub
-app.MapPost("/api/projects", async (
-    HttpContext httpContext,
-    CreateProjectRequest request,
-    ProjectService projectService,
-    BlueprintService blueprintService,
-    IRunStore runStore,
-    RunWorkflowRegistry workflowRegistry,
-    IProjectStore projectStore,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-
-    if (string.IsNullOrWhiteSpace(request.Name))
-        return Results.BadRequest(new { error = "name is required." });
-
-    if (string.IsNullOrWhiteSpace(request.Origin) ||
-        (request.Origin != "blank" && request.Origin != "github"))
-        return Results.BadRequest(new { error = "origin must be 'blank' or 'github'." });
-
-    if (request.Origin == "github" && string.IsNullOrWhiteSpace(request.SourceRepository))
-        return Results.BadRequest(new { error = "source_repository is required when origin is 'github'." });
-
-    if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
-        return Results.BadRequest(new { error = "working_directory is required." });
-
-    // Resolve and validate any selected blueprint BEFORE creating the project so an invalid blueprint
-    // (e.g. a roster role that is neither in the catalog nor supplied as a new role) is rejected
-    // without leaving an orphaned project (Feature 012).
-    if (!string.IsNullOrWhiteSpace(request.BlueprintId) && request.Blueprint is not null)
-        return Results.BadRequest(new { error = "Provide either blueprint_id or an inline blueprint, not both." });
-
-    Agentweaver.Squad.Model.Blueprint? blueprintToApply = null;
-
-    if (!string.IsNullOrWhiteSpace(request.BlueprintId))
+app.MapPost("/api/projects", CreateProjectAsync)
+    .WithName("CreateProject")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        blueprintToApply = blueprintService.GetPredefinedById(request.BlueprintId!);
-        if (blueprintToApply is null)
-            return Results.BadRequest(new { error = $"No predefined blueprint with id '{request.BlueprintId}'." });
-    }
-    else if (request.Blueprint is not null)
-    {
-        blueprintToApply = request.Blueprint.ToModel();
-    }
-
-    if (blueprintToApply is not null)
-    {
-        // When a generated workflow YAML is included, parse it to get the id so validation can treat
-        // it as a known workflow (it hasn't been materialized to disk yet — FR-063).
-        IReadOnlySet<string>? extraKnownWorkflowIds = null;
-        if (!string.IsNullOrWhiteSpace(request.GeneratedWorkflowYaml))
-        {
-            var genWf = WorkflowDefinitionLoader.Load(request.GeneratedWorkflowYaml, "generated");
-            if (genWf.IsValid && genWf.Definition is not null)
-                extraKnownWorkflowIds = new HashSet<string>([genWf.Definition.Id], StringComparer.Ordinal);
-        }
-
-        var validation = blueprintService.Validate(
-            blueprintToApply,
-            BlueprintService.ValidationProject(request.WorkingDirectory),
-            extraKnownWorkflowIds);
-        if (!validation.Valid)
-            return Results.BadRequest(new { error = "invalid_blueprint", details = validation.Errors });
-    }
-
-    // Track blueprint provenance for SetSourceBlueprint call after creation
-    string? blueprintSourceId = null;
-    string? blueprintSourceType = null;
-    if (!string.IsNullOrWhiteSpace(request.BlueprintId))
-    {
-        blueprintSourceId = request.BlueprintId;
-        blueprintSourceType = "predefined";
-    }
-    else if (request.Blueprint is not null)
-    {
-        blueprintSourceId = "inline";
-        blueprintSourceType = "inline";
-    }
-
-    try
-    {
-        Agentweaver.Domain.Project project;
-        if (request.Origin == "blank")
-        {
-            project = await projectService.CreateBlankAsync(
-                request.Name!, request.WorkingDirectory!,
-                request.DefaultProvider, request.DefaultModelGitHubCopilot,
-                request.DefaultModelMicrosoftFoundry, caller.User, ct);
-        }
-        else
-        {
-            project = await projectService.CreateFromGitHubAsync(
-                request.Name!, request.SourceRepository!, request.WorkingDirectory!,
-                request.DefaultProvider, request.DefaultModelGitHubCopilot,
-                request.DefaultModelMicrosoftFoundry, caller.User, ct);
-        }
-
-        if (blueprintToApply is not null)
-        {
-            try
-            {
-                var applyResult = await blueprintService.ApplyAsync(
-                    project.Id.ToString(), blueprintToApply,
-                    request.GeneratedWorkflowYaml, ct);
-                if (!applyResult.Valid)
-                {
-                    await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
-                    return Results.BadRequest(new { error = "invalid_blueprint", details = applyResult.Errors });
-                }
-
-                // Record blueprint provenance inside the creation transaction boundary so a provenance
-                // write failure rolls back the project and all generated files.
-                var pid = ProjectId.Parse(project.Id.ToString());
-                await projectStore.UpdateSourceBlueprintAsync(
-                    pid, blueprintSourceId, blueprintSourceType, DateTimeOffset.UtcNow, ct);
-            }
-            catch (Exception blueprintEx)
-            {
-                // Rollback: blueprint application failed — delete the orphaned project
-                logger.LogError(blueprintEx,
-                    "Blueprint application failed for project {ProjectId}; rolling back project creation",
-                    project.Id);
-                try
-                {
-                    await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
-                }
-                catch (Exception rollbackEx)
-                {
-                    logger.LogError(rollbackEx,
-                        "Rollback delete failed for orphaned project {ProjectId}", project.Id);
-                }
-                throw;
-            }
-
-            // Re-read so the response reflects the workflow/review/sandbox defaults the blueprint set.
-            var view = await projectService.GetViewAsync(project.Id, ct);
-            if (view is not null)
-                return Results.Created($"/api/projects/{project.Id}", MapProject(view.Project, view.Available));
-        }
-
-        return Results.Created($"/api/projects/{project.Id}", MapProject(project, available: true));
-    }
-    catch (ArgumentException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (WorkspaceUnavailableException ex)
-    {
-        return Results.Json(
-            new { error = "workspace_unavailable", message = ex.Message },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to create project");
-        return Results.Problem(
-            $"Failed to create the project. {ex.GetType().Name}: {ex.Message}",
-            statusCode: 500);
-    }
-});
+        operation.Description ??=
+            "Creates a project from a blank workspace or GitHub repository, optionally applying a blueprint and generated workflow atomically.";
+        return Task.CompletedTask;
+    });
 
 // GET /api/server/info — public server metadata (no auth required)
 app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider) => Results.Ok(new
@@ -204,36 +49,24 @@ app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider) => 
 })).AllowAnonymous();
 
 // GET /api/projects — list all projects (paginated; see Contracts.PagedResult<T>)
-app.MapGet("/api/projects", async (
-    HttpContext httpContext,
-    ProjectService projectService,
-    int? page,
-    int? page_size,
-    CancellationToken ct) =>
-{
-    var views = await projectService.ListViewsAsync(ct);
-    var projects = views
-        .Where(v => IsProjectOwner(httpContext, v.Project))
-        .Select(v => MapProject(v.Project, v.Available))
-        .ToList();
-    return Results.Ok(Paging.Of(projects, page, page_size));
-});
+app.MapGet("/api/projects", ListProjectsAsync)
+    .WithName("ListProjects")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Lists the authenticated caller's projects with pagination metadata.";
+        return Task.CompletedTask;
+    });
 
 // GET /api/projects/{id} — get a single project
-app.MapGet("/api/projects/{id}", async (
-    HttpContext httpContext,
-    string id,
-    ProjectService projectService,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    var view = await projectService.GetViewAsync(projectId, ct);
-    if (view is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    return Results.Ok(MapProject(view.Project, view.Available));
-});
+app.MapGet("/api/projects/{id}", GetProjectAsync)
+    .WithName("GetProject")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Returns one project's current metadata, ownership, and model defaults.";
+        return Task.CompletedTask;
+    });
 
 // PATCH /api/projects/{id} — rename
 app.MapMethods("/api/projects/{id}", ["PATCH"], async (
@@ -402,28 +235,6 @@ static bool IsTerminalHistoryStatus(RunStatus status) =>
     status is RunStatus.Completed or RunStatus.Merged or RunStatus.AssembleReady
         or RunStatus.Declined or RunStatus.Failed or RunStatus.MergeFailed;
 
-static bool TryParseCoordinatorStartMode(string? raw, out CoordinatorStartMode mode)
-{
-    if (string.IsNullOrWhiteSpace(raw)
-        || string.Equals(raw, "defineOutcome", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(raw, "define_outcome", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(raw, "outcomeSpec", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(raw, "outcome_spec", StringComparison.OrdinalIgnoreCase))
-    {
-        mode = CoordinatorStartMode.DefineOutcome;
-        return true;
-    }
-
-    if (string.Equals(raw, "direct", StringComparison.OrdinalIgnoreCase))
-    {
-        mode = CoordinatorStartMode.Direct;
-        return true;
-    }
-
-    mode = CoordinatorStartMode.DefineOutcome;
-    return false;
-}
-
 // POST /api/projects/{id}/runs — deprecated direct run submission route
 app.MapPost("/api/projects/{id}/runs", () => Results.Problem(
     title: "Single-run endpoint deprecated",
@@ -439,77 +250,330 @@ app.MapPost("/api/projects/{id}/runs", () => Results.Problem(
 // POST /api/projects/{id}/orchestrations — start a coordinator run. Default/defineOutcome drafts a
 // confirmable outcome spec and suspends at the confirmation gate; direct plans from the prompt.
 // Body: { goal, start_mode?, modelId? }.
-app.MapPost("/api/projects/{id}/orchestrations", async (
-    HttpContext httpContext,
-    string id,
-    StartOrchestrationRequest request,
-    IProjectStore projectStore,
-    IProjectWorkspaceProvider workspaceProvider,
-    CoordinatorRunService coordinator,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    if (string.IsNullOrWhiteSpace(request.Goal))
-        return Results.BadRequest(new { error = "goal is required." });
-
-    if (!TryParseCoordinatorStartMode(request.StartMode ?? request.Mode, out var startMode))
-        return Results.BadRequest(new { error = "start_mode must be 'defineOutcome' or 'direct'." });
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-
-    var project = await projectStore.GetAsync(projectId, ct);
-    if (project is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    if (!IsAllowedModelId(request.ModelId))
-        return Results.BadRequest(new { error = "model_id is not allowed." });
-
-    if (project.State == ProjectState.Deleting)
-        return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
-
-    if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
-        return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available." });
-
-    // The coordinator provider is fixed to GitHub Copilot (Constitution Principle II). Resolve the
-    // model id the same way the run-start endpoint does: explicit override -> project default ->
-    // null (the service falls back to the role-default model). Repository path, originating branch,
-    // and submitting user are taken from the project + authenticated caller, mirroring POST /runs.
-    var modelId = string.IsNullOrWhiteSpace(request.ModelId)
-        ? project.ProviderSettings.GitHubCopilotModel
-        : request.ModelId;
-
-    RunId runId;
-    try
+app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
+    .WithName("StartProjectOrchestration")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        runId = await coordinator.StartCoordinatorRunAsync(
-            projectId,
-            request.Goal!,
-            caller.User,
-            project.WorkingDirectory,
-            project.DefaultBranch,
-            modelId,
-            request.AutoApproveTools,
-            request.Autopilot,
-            ct,
-            workflowOverrideId: request.WorkflowOverrideId,
-            startMode: startMode);
-    }
-    catch (NoTeamException)
-    {
-        return Results.Conflict(new { error = NoTeamException.ErrorCode, message = NoTeamException.DefaultMessage });
-    }
-    catch (InvalidTeamException ex)
-    {
-        logger.LogError(ex, "Failed to read dispatchable team roster for project {ProjectId}", projectId);
-        return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
+        operation.Description ??= "Starts a coordinator run for the project using either defineOutcome or direct planning mode.";
+        return Task.CompletedTask;
+    });
     }
 
-    return Results.Created(
-        $"/api/runs/{runId}",
-        new StartOrchestrationResponse { RunId = runId.ToString() });
-});
+    /// <summary>
+    /// Creates a project workspace, optionally cloning a GitHub repository and applying a blueprint before the first run.
+    /// </summary>
+    /// <param name="request">The project origin, workspace path, model defaults, and optional blueprint materialization payload.</param>
+    /// <response code="201">Returns the created project, including any blueprint-derived defaults that were applied.</response>
+    /// <response code="400">The request was malformed or the selected blueprint/workflow payload was invalid.</response>
+    /// <response code="500">Project creation or rollback failed unexpectedly.</response>
+    /// <response code="503">The target workspace root is unavailable.</response>
+    /// <remarks>
+    /// Persona-style drivers should prefer this route over manual file bootstrapping because it atomically creates the
+    /// project, validates blueprint inputs, and rolls back on apply failures.
+    /// </remarks>
+    public static async Task<IResult> CreateProjectAsync(
+        HttpContext httpContext,
+        CreateProjectRequest request,
+        ProjectService projectService,
+        BlueprintService blueprintService,
+        IRunStore runStore,
+        RunWorkflowRegistry workflowRegistry,
+        IProjectStore projectStore,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return Results.BadRequest(new { error = "name is required." });
+
+        if (string.IsNullOrWhiteSpace(request.Origin) ||
+            (request.Origin != "blank" && request.Origin != "github"))
+            return Results.BadRequest(new { error = "origin must be 'blank' or 'github'." });
+
+        if (request.Origin == "github" && string.IsNullOrWhiteSpace(request.SourceRepository))
+            return Results.BadRequest(new { error = "source_repository is required when origin is 'github'." });
+
+        if (string.IsNullOrWhiteSpace(request.WorkingDirectory))
+            return Results.BadRequest(new { error = "working_directory is required." });
+
+        if (!string.IsNullOrWhiteSpace(request.BlueprintId) && request.Blueprint is not null)
+            return Results.BadRequest(new { error = "Provide either blueprint_id or an inline blueprint, not both." });
+
+        Agentweaver.Squad.Model.Blueprint? blueprintToApply = null;
+
+        if (!string.IsNullOrWhiteSpace(request.BlueprintId))
+        {
+            blueprintToApply = blueprintService.GetPredefinedById(request.BlueprintId!);
+            if (blueprintToApply is null)
+                return Results.BadRequest(new { error = $"No predefined blueprint with id '{request.BlueprintId}'." });
+        }
+        else if (request.Blueprint is not null)
+        {
+            blueprintToApply = request.Blueprint.ToModel();
+        }
+
+        if (blueprintToApply is not null)
+        {
+            IReadOnlySet<string>? extraKnownWorkflowIds = null;
+            if (!string.IsNullOrWhiteSpace(request.GeneratedWorkflowYaml))
+            {
+                var genWf = WorkflowDefinitionLoader.Load(request.GeneratedWorkflowYaml, "generated");
+                if (genWf.IsValid && genWf.Definition is not null)
+                    extraKnownWorkflowIds = new HashSet<string>([genWf.Definition.Id], StringComparer.Ordinal);
+            }
+
+            var validation = blueprintService.Validate(
+                blueprintToApply,
+                BlueprintService.ValidationProject(request.WorkingDirectory),
+                extraKnownWorkflowIds);
+            if (!validation.Valid)
+                return Results.BadRequest(new { error = "invalid_blueprint", details = validation.Errors });
+        }
+
+        string? blueprintSourceId = null;
+        string? blueprintSourceType = null;
+        if (!string.IsNullOrWhiteSpace(request.BlueprintId))
+        {
+            blueprintSourceId = request.BlueprintId;
+            blueprintSourceType = "predefined";
+        }
+        else if (request.Blueprint is not null)
+        {
+            blueprintSourceId = "inline";
+            blueprintSourceType = "inline";
+        }
+
+        try
+        {
+            Agentweaver.Domain.Project project;
+            if (request.Origin == "blank")
+            {
+                project = await projectService.CreateBlankAsync(
+                    request.Name!, request.WorkingDirectory!,
+                    request.DefaultProvider, request.DefaultModelGitHubCopilot,
+                    request.DefaultModelMicrosoftFoundry, caller.User, ct);
+            }
+            else
+            {
+                project = await projectService.CreateFromGitHubAsync(
+                    request.Name!, request.SourceRepository!, request.WorkingDirectory!,
+                    request.DefaultProvider, request.DefaultModelGitHubCopilot,
+                    request.DefaultModelMicrosoftFoundry, caller.User, ct);
+            }
+
+            if (blueprintToApply is not null)
+            {
+                try
+                {
+                    var applyResult = await blueprintService.ApplyAsync(
+                        project.Id.ToString(), blueprintToApply,
+                        request.GeneratedWorkflowYaml, ct);
+                    if (!applyResult.Valid)
+                    {
+                        await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
+                        return Results.BadRequest(new { error = "invalid_blueprint", details = applyResult.Errors });
+                    }
+
+                    var pid = ProjectId.Parse(project.Id.ToString());
+                    await projectStore.UpdateSourceBlueprintAsync(
+                        pid, blueprintSourceId, blueprintSourceType, DateTimeOffset.UtcNow, ct);
+                }
+                catch (Exception blueprintEx)
+                {
+                    logger.LogError(blueprintEx,
+                        "Blueprint application failed for project {ProjectId}; rolling back project creation",
+                        project.Id);
+                    try
+                    {
+                        await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
+                    }
+                    catch (Exception rollbackEx)
+                    {
+                        logger.LogError(rollbackEx,
+                            "Rollback delete failed for orphaned project {ProjectId}", project.Id);
+                    }
+                    throw;
+                }
+
+                var view = await projectService.GetViewAsync(project.Id, ct);
+                if (view is not null)
+                    return Results.Created($"/api/projects/{project.Id}", MapProject(view.Project, view.Available));
+            }
+
+            return Results.Created($"/api/projects/{project.Id}", MapProject(project, available: true));
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (WorkspaceUnavailableException ex)
+        {
+            return Results.Json(
+                new { error = "workspace_unavailable", message = ex.Message },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to create project");
+            return Results.Problem(
+                $"Failed to create the project. {ex.GetType().Name}: {ex.Message}",
+                statusCode: 500);
+        }
+    }
+
+    /// <summary>
+    /// Lists the caller's visible projects with paging metadata so a persona can discover where to work next.
+    /// </summary>
+    /// <param name="page">Optional one-based page number.</param>
+    /// <param name="page_size">Optional page size.</param>
+    /// <response code="200">Returns only the projects owned by the authenticated caller.</response>
+    public static async Task<IResult> ListProjectsAsync(
+        HttpContext httpContext,
+        ProjectService projectService,
+        int? page,
+        int? page_size,
+        CancellationToken ct)
+    {
+        var views = await projectService.ListViewsAsync(ct);
+        var projects = views
+            .Where(v => IsProjectOwner(httpContext, v.Project))
+            .Select(v => MapProject(v.Project, v.Available))
+            .ToList();
+        return Results.Ok(Paging.Of(projects, page, page_size));
+    }
+
+    /// <summary>
+    /// Returns the current metadata and model defaults for one project.
+    /// </summary>
+    /// <param name="id">The project identifier returned by project creation or listing endpoints.</param>
+    /// <response code="200">Returns the requested project.</response>
+    /// <response code="400">The project id was malformed.</response>
+    /// <response code="403">The caller does not own the project.</response>
+    /// <response code="404">The project does not exist.</response>
+    public static async Task<IResult> GetProjectAsync(
+        HttpContext httpContext,
+        string id,
+        ProjectService projectService,
+        CancellationToken ct)
+    {
+        if (!ProjectId.TryParse(id, out var projectId))
+            return Results.BadRequest(new { error = "Invalid project id." });
+
+        var view = await projectService.GetViewAsync(projectId, ct);
+        if (view is null) return Results.NotFound();
+        if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+        return Results.Ok(MapProject(view.Project, view.Available));
+    }
+
+    /// <summary>
+    /// Starts a coordinator run for a project so the system can plan, delegate, assemble, and review work.
+    /// </summary>
+    /// <param name="id">The project identifier that owns the new coordinator run.</param>
+    /// <param name="request">The goal, start mode, model override, and autonomy flags for the orchestration.</param>
+    /// <response code="201">Returns the new coordinator run id.</response>
+    /// <response code="400">The project id, goal, start mode, or model override was invalid.</response>
+    /// <response code="403">The caller does not own the project.</response>
+    /// <response code="404">The project was not found.</response>
+    /// <response code="409">The project is deleting or its workspace is unavailable.</response>
+    /// <response code="422">The project has no dispatchable team roster.</response>
+    /// <remarks>
+    /// This is the main entry point a persona should use to kick off work. In <c>defineOutcome</c> mode the coordinator
+    /// first drafts an outcome spec, while <c>direct</c> goes straight to planning from the goal prompt.
+    /// </remarks>
+    public static async Task<IResult> StartOrchestrationAsync(
+        HttpContext httpContext,
+        string id,
+        StartOrchestrationRequest request,
+        IProjectStore projectStore,
+        IProjectWorkspaceProvider workspaceProvider,
+        CoordinatorRunService coordinator,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!ProjectId.TryParse(id, out var projectId))
+            return Results.BadRequest(new { error = "Invalid project id." });
+
+        if (string.IsNullOrWhiteSpace(request.Goal))
+            return Results.BadRequest(new { error = "goal is required." });
+
+        if (!TryParseCoordinatorStartMode(request.StartMode ?? request.Mode, out var startMode))
+            return Results.BadRequest(new { error = "start_mode must be 'defineOutcome' or 'direct'." });
+
+        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+        var project = await projectStore.GetAsync(projectId, ct);
+        if (project is null) return Results.NotFound();
+        if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+        if (!IsAllowedModelId(request.ModelId))
+            return Results.BadRequest(new { error = "model_id is not allowed." });
+
+        if (project.State == ProjectState.Deleting)
+            return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
+
+        if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
+            return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available." });
+
+        var modelId = string.IsNullOrWhiteSpace(request.ModelId)
+            ? project.ProviderSettings.GitHubCopilotModel
+            : request.ModelId;
+
+        RunId runId;
+        try
+        {
+            runId = await coordinator.StartCoordinatorRunAsync(
+                projectId,
+                request.Goal!,
+                caller.User,
+                project.WorkingDirectory,
+                project.DefaultBranch,
+                modelId,
+                request.AutoApproveTools,
+                request.Autopilot,
+                ct,
+                workflowOverrideId: request.WorkflowOverrideId,
+                startMode: startMode);
+        }
+        catch (NoTeamException)
+        {
+            return Results.Conflict(new { error = NoTeamException.ErrorCode, message = NoTeamException.DefaultMessage });
+        }
+        catch (InvalidTeamException ex)
+        {
+            logger.LogError(ex, "Failed to read dispatchable team roster for project {ProjectId}", projectId);
+            return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
+        }
+
+        return Results.Created(
+            $"/api/runs/{runId}",
+            new StartOrchestrationResponse { RunId = runId.ToString() });
+    }
+
+    private static bool TryParseCoordinatorStartMode(string? raw, out CoordinatorStartMode mode)
+    {
+        if (string.IsNullOrWhiteSpace(raw)
+            || string.Equals(raw, "defineOutcome", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "define_outcome", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "outcomeSpec", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "outcome_spec", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CoordinatorStartMode.DefineOutcome;
+            return true;
+        }
+
+        if (string.Equals(raw, "direct", StringComparison.OrdinalIgnoreCase))
+        {
+            mode = CoordinatorStartMode.Direct;
+            return true;
+        }
+
+        mode = CoordinatorStartMode.DefineOutcome;
+        return false;
     }
 
 static ProjectResponse MapProject(Project p, bool available) => new()

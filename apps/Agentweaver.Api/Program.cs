@@ -32,6 +32,7 @@ using Agentweaver.Squad.Analysis;
 using Agentweaver.Squad.Sync;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.OpenApi;
 using Agentweaver.Api.Tools;
 using Agentweaver.Api.Workflows;
 
@@ -61,7 +62,11 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 // spec-006 (api-harness): built-in OpenAPI document generation (net10.0 supports AddOpenApi/
 // MapOpenApi natively, no Swashbuckle needed). Registered unconditionally — not gated on
 // IsDevelopment — because the harness needs to discover the same contract in staging as locally.
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer<BearerSecuritySchemeDocumentTransformer>();
+    options.AddOperationTransformer<BearerSecurityRequirementOperationTransformer>();
+});
 
 builder.Services.AddOptions<GenerationModelOptions>()
     .Bind(builder.Configuration.GetSection(GenerationModelOptions.SectionName))
@@ -925,6 +930,7 @@ else
     // Exempt from GitHub org auth (see GitHubOrgAuthorizationMiddleware.ExemptPrefixes) since it is
     // pure endpoint/schema metadata, not live data.
     app.MapOpenApi();
+    app.MapOpenApi("/openapi/{documentName}.yaml");
 
     app.MapRunEndpoints();
     app.MapProjectEndpoints();

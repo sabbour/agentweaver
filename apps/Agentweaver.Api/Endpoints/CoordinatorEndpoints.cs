@@ -29,108 +29,35 @@ public static class CoordinatorEndpoints
     public static void MapCoordinatorEndpoints(this WebApplication app)
     {
 // GET /api/runs/{id}/outcome-spec — current persisted outcome spec for a coordinator run.
-app.MapGet("/api/runs/{id}/outcome-spec", async (
-    HttpContext httpContext,
-    string id,
-    IRunStore runStore,
-    CoordinatorRunService coordinator,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!RunId.TryParse(id, out var runId))
-        return BadRequestError("invalid_run_id", "Invalid run id.");
-
-    Run? run;
-    try { run = await runStore.GetAsync(runId, ct); }
-    catch (Exception ex)
+app.MapGet("/api/runs/{id}/outcome-spec", GetOutcomeSpecAsync)
+    .WithName("GetCoordinatorOutcomeSpec")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec", runId);
-        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
-    }
-
-    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
-
-    var spec = await ReadOutcomeSpecWithBriefWaitAsync(coordinator, id, ct);
-    if (spec is null) return NotFoundError("outcome_spec_not_found", "The coordinator outcome spec was not found.");
-
-    return Results.Json(MapOutcomeSpec(spec));
-});
+        operation.Description ??= "Returns the current drafted outcome spec for a coordinator run before execution proceeds.";
+        return Task.CompletedTask;
+    });
 
 // POST /api/runs/{id}/outcome-spec/confirm — confirm the drafted outcome spec.
-app.MapPost("/api/runs/{id}/outcome-spec/confirm", async (
-    HttpContext httpContext,
-    string id,
-    IRunStore runStore,
-    CoordinatorRunService coordinator,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!RunId.TryParse(id, out var runId))
-        return BadRequestError("invalid_run_id", "Invalid run id.");
-
-    Run? run;
-    try { run = await runStore.GetAsync(runId, ct); }
-    catch (Exception ex)
+app.MapPost("/api/runs/{id}/outcome-spec/confirm", ConfirmOutcomeSpecAsync)
+    .WithName("ConfirmCoordinatorOutcomeSpec")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec confirm", runId);
-        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
-    }
-
-    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    var outcome = await coordinator.ConfirmOutcomeSpecAsync(id, caller.User, ct);
-
-    return outcome switch
-    {
-        CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
-        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
-        CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
-        _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
-    };
-});
+        operation.Description ??= "Confirms the drafted outcome spec so the coordinator can decompose it into a work plan.";
+        return Task.CompletedTask;
+    });
 
 // POST /api/runs/{id}/outcome-spec/revise — request a revision of the drafted outcome spec.
 // Body: { feedback }. The coordinator re-drafts and re-suspends at the gate.
-app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
-    HttpContext httpContext,
-    string id,
-    ReviseOutcomeSpecRequest request,
-    IRunStore runStore,
-    CoordinatorRunService coordinator,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!RunId.TryParse(id, out var runId))
-        return BadRequestError("invalid_run_id", "Invalid run id.");
-
-    if (string.IsNullOrWhiteSpace(request.Feedback))
-        return BadRequestError("feedback_required", "feedback is required.");
-
-    Run? run;
-    try { run = await runStore.GetAsync(runId, ct); }
-    catch (Exception ex)
+app.MapPost("/api/runs/{id}/outcome-spec/revise", ReviseOutcomeSpecAsync)
+    .WithName("ReviseCoordinatorOutcomeSpec")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec revise", runId);
-        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
-    }
-
-    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    var outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
-
-    return outcome switch
-    {
-        CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
-        CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be revised." }),
-        CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
-        _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
-    };
-});
+        operation.Description ??= "Requests a revised outcome spec while keeping the coordinator parked at the gate.";
+        return Task.CompletedTask;
+    });
 
 // -----------------------------------------------------------------------
 // Coordinator orchestration (Feature 008 Phase 2) — work plan, children, steering.
@@ -141,198 +68,52 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", async (
 
 // GET /api/runs/{coordinatorRunId}/work-plan — the persisted work plan (subtasks + dependencies)
 // for a coordinator run. 404 when the run is not a coordinator run / has no work plan yet.
-app.MapGet("/api/runs/{coordinatorRunId}/work-plan", async (
-    HttpContext httpContext,
-    string coordinatorRunId,
-    IRunStore runStore,
-    CoordinatorRunService coordinator,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return BadRequestError("invalid_run_id", "Invalid run id.");
-
-    Run? run;
-    try { run = await runStore.GetAsync(runId, ct); }
-    catch (Exception ex)
+app.MapGet("/api/runs/{coordinatorRunId}/work-plan", GetCoordinatorWorkPlanAsync)
+    .WithName("GetCoordinatorWorkPlan")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        logger.LogError(ex, "Failed to fetch run {RunId} for work-plan", runId);
-        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
-    }
-
-    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
-
-    var plan = await ReadWorkPlanWithBriefWaitAsync(coordinator, coordinatorRunId, ct);
-    if (plan is null) return NotFoundError("work_plan_not_found", "The coordinator work plan was not found.");
-
-    return Results.Json(MapWorkPlan(plan));
-});
+        operation.Description ??= "Returns the persisted coordinator work plan, including subtasks, dependencies, and assembly status.";
+        return Task.CompletedTask;
+    });
 
 // GET /api/runs/{coordinatorRunId}/children — dispatched child runs paired with subtask status.
 // Returns an empty array when nothing has been dispatched yet (or no plan exists).
-app.MapGet("/api/runs/{coordinatorRunId}/children", async (
-    HttpContext httpContext,
-    string coordinatorRunId,
-    IRunStore runStore,
-    CoordinatorRunService coordinator,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return BadRequestError("invalid_run_id", "Invalid run id.");
-
-    Run? run;
-    try { run = await runStore.GetAsync(runId, ct); }
-    catch (Exception ex)
+app.MapGet("/api/runs/{coordinatorRunId}/children", GetCoordinatorChildrenAsync)
+    .WithName("GetCoordinatorChildren")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        logger.LogError(ex, "Failed to fetch run {RunId} for children", runId);
-        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
-    }
-
-    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
-
-    var children = await coordinator.GetChildrenAsync(coordinatorRunId, ct);
-    return Results.Json(children.Select(MapChild).ToList());
-});
+        operation.Description ??= "Lists child runs currently attached to the coordinator work plan.";
+        return Task.CompletedTask;
+    });
 
 // POST /api/runs/{coordinatorRunId}/steer — relay a human steering directive to a running
 // coordinator. Body: { kind: stop|redirect|amend, targetChildRunId?, instruction }. The descoped
 // 'pause' verb, unknown verbs, and a missing instruction for redirect/amend are rejected by the
 // service with a SteeringValidationException, which maps to 400 here. createdBy is the caller.
-app.MapPost("/api/runs/{coordinatorRunId}/steer", async (
-    HttpContext httpContext,
-    string coordinatorRunId,
-    SteerRequest request,
-    IRunStore runStore,
-    CoordinatorSteeringService steering,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return BadRequestError("invalid_run_id", "Invalid run id.");
-
-    if (string.IsNullOrWhiteSpace(request.Kind))
-        return BadRequestError("kind_required", "kind is required.");
-
-    Run? run;
-    try { run = await runStore.GetAsync(runId, ct); }
-    catch (Exception ex)
+app.MapPost("/api/runs/{coordinatorRunId}/steer", SteerCoordinatorAsync)
+    .WithName("SteerCoordinator")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        logger.LogError(ex, "Failed to fetch run {RunId} for steer", runId);
-        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
-    }
-
-    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-
-    try
-    {
-        var directive = await steering.SteerAsync(
-            coordinatorRunId,
-            request.Kind!,
-            string.IsNullOrWhiteSpace(request.TargetChildRunId) ? null : request.TargetChildRunId,
-            request.Instruction ?? string.Empty,
-            caller.User,
-            caller.GitHubLogin,
-            ct);
-
-        // #226: a redirect/amend delivered to the assembly review gate on a NON-owning replica is durably
-        // deferred (the owning pod's poller drains it). Report it honestly as 202 Accepted, mirroring the
-        // /assembly/review deferred response, instead of a 201 that implies immediate local handling.
-        var statusCode = directive.Status == SteeringStatus.Deferred
-            ? StatusCodes.Status202Accepted
-            : StatusCodes.Status201Created;
-
-        return Results.Json(MapSteeringDirective(directive), statusCode: statusCode);
-    }
-    catch (SteeringValidationException ex)
-    {
-        return BadRequestError("steering_invalid", ex.Message);
-    }
-    catch (SteeringRecoveryExhaustedException ex)
-    {
-        return Results.Json(
-            new { error = "steering_recovery_exhausted", message = ex.Message },
-            statusCode: StatusCodes.Status409Conflict);
-    }
-});
+        operation.Description ??= "Sends a steering directive to a running coordinator or one of its child runs.";
+        return Task.CompletedTask;
+    });
 
 // POST /api/runs/{coordinatorRunId}/assembly/review — the ONE collective human-review gate
 // (Feature 008 Phase 3, D5). Mirrors POST /api/runs/{id}/review (owner-scoped, at-most-once) but
 // delivers the decision to the service-driven AssemblyReviewGate the collective pipeline is awaiting.
 // Body: { approved, request_changes?, feedback?, target_files? }. approve -> merge/scribe/complete;
 // request_changes -> rejection inference + re-dispatch (D6); decline -> assembly_declined.
-app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", async (
-    HttpContext httpContext,
-    string coordinatorRunId,
-    AssemblyReviewRequest request,
-    IRunStore runStore,
-    Agentweaver.Api.Coordinator.AssemblyReviewGate reviewGate,
-    IServiceScopeFactory scopeFactory,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!RunId.TryParse(coordinatorRunId, out var runId))
-        return BadRequestError("invalid_run_id", "Invalid run id.");
-
-    Run? run;
-    try { run = await runStore.GetAsync(runId, ct); }
-    catch (Exception ex)
+app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", SubmitAssemblyReviewAsync)
+    .WithName("SubmitCoordinatorAssemblyReview")
+    .WithTags("Coordinator")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        logger.LogError(ex, "Failed to fetch run {RunId} for assembly review", runId);
-        return Results.Problem("Failed to retrieve the run.", statusCode: 500);
-    }
-
-    if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-
-    var decision = new Agentweaver.Api.Coordinator.AssemblyReviewDecision(
-        Approved: request.Approved,
-        RequestChanges: request.RequestChanges,
-        Feedback: request.Feedback,
-        TargetFiles: request.TargetFiles,
-        Reviewer: caller.User);
-
-    var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
-        scopeFactory,
-        reviewGate,
-        coordinatorRunId,
-        decision,
-        caller.User,
-        caller.GitHubLogin,
-        ct).ConfigureAwait(false);
-
-    logger.LogInformation(
-        "Assembly review decision: {Decision}. RunId={RunId} Reviewer={Reviewer} Result={Result}",
-        request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
-        coordinatorRunId, caller.User, delivery);
-
-    return delivery switch
-    {
-        AssemblyReviewDeliveryResult.Accepted =>
-            Results.Json(new { runId = coordinatorRunId, accepted = true, deferred = false }),
-        AssemblyReviewDeliveryResult.Deferred =>
-            Results.Json(
-                new
-                {
-                    runId = coordinatorRunId,
-                    accepted = false,
-                    deferred = true,
-                    message = "The active coordinator will consume this review decision shortly.",
-                },
-                statusCode: StatusCodes.Status202Accepted),
-        AssemblyReviewDeliveryResult.Forbidden => ForbiddenError(),
-        // NotPending / AlreadySubmitted: no collective review is currently awaited (not yet at the gate,
-        // or already consumed).
-        _ => NoAssemblyReviewPending(),
-    };
-});
+        operation.Description ??= "Submits the single collective human review decision for an assembled coordinator run.";
+        return Task.CompletedTask;
+    });
 
 // GET /api/runs/{id}/assembly/files — the COLLECTIVE changed-file set for a coordinator run.
 // The coordinator owns no worktree; the assembled output lives on the integration branch
@@ -552,6 +333,348 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         return Results.Problem("Failed to read file content.", statusCode: 500);
     }
 });
+    }
+
+    /// <summary>
+    /// Returns the coordinator's current drafted outcome spec so an operator or persona can inspect the proposed goal framing before planning continues.
+    /// </summary>
+    /// <param name="id">The coordinator run identifier.</param>
+    /// <response code="200">Returns the current outcome spec.</response>
+    /// <response code="400">The run id was malformed.</response>
+    /// <response code="403">The caller does not own the coordinator run.</response>
+    /// <response code="404">The coordinator run or its outcome spec was not found.</response>
+    public static async Task<IResult> GetOutcomeSpecAsync(
+        HttpContext httpContext,
+        string id,
+        IRunStore runStore,
+        CoordinatorRunService coordinator,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(id, out var runId))
+            return BadRequestError("invalid_run_id", "Invalid run id.");
+
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec", runId);
+            return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+        }
+
+        if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+
+        var spec = await ReadOutcomeSpecWithBriefWaitAsync(coordinator, id, ct);
+        if (spec is null) return NotFoundError("outcome_spec_not_found", "The coordinator outcome spec was not found.");
+
+        return Results.Json(MapOutcomeSpec(spec));
+    }
+
+    /// <summary>
+    /// Confirms the drafted outcome spec so the coordinator can decompose it into a concrete work plan.
+    /// </summary>
+    /// <param name="id">The coordinator run identifier.</param>
+    /// <response code="200">Returns the confirmed outcome spec state.</response>
+    /// <response code="400">The run id was malformed.</response>
+    /// <response code="403">The caller does not own the coordinator run.</response>
+    /// <response code="404">The coordinator run was not found.</response>
+    /// <response code="409">The run is no longer active or is not waiting at the outcome-spec gate.</response>
+    public static async Task<IResult> ConfirmOutcomeSpecAsync(
+        HttpContext httpContext,
+        string id,
+        IRunStore runStore,
+        CoordinatorRunService coordinator,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(id, out var runId))
+            return BadRequestError("invalid_run_id", "Invalid run id.");
+
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec confirm", runId);
+            return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+        }
+
+        if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+
+        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var outcome = await coordinator.ConfirmOutcomeSpecAsync(id, caller.User, ct);
+
+        return outcome switch
+        {
+            CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
+            CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
+            CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
+            _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
+        };
+    }
+
+    /// <summary>
+    /// Requests a revision of the drafted outcome spec while keeping the coordinator parked at the confirmation gate.
+    /// </summary>
+    /// <param name="id">The coordinator run identifier.</param>
+    /// <param name="request">Revision feedback for the coordinator to incorporate.</param>
+    /// <response code="200">Returns the revised outcome spec state.</response>
+    /// <response code="400">The run id was malformed or feedback was missing.</response>
+    /// <response code="403">The caller does not own the coordinator run.</response>
+    /// <response code="404">The coordinator run was not found.</response>
+    /// <response code="409">The run is no longer active or is not waiting at the outcome-spec gate.</response>
+    public static async Task<IResult> ReviseOutcomeSpecAsync(
+        HttpContext httpContext,
+        string id,
+        ReviseOutcomeSpecRequest request,
+        IRunStore runStore,
+        CoordinatorRunService coordinator,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(id, out var runId))
+            return BadRequestError("invalid_run_id", "Invalid run id.");
+
+        if (string.IsNullOrWhiteSpace(request.Feedback))
+            return BadRequestError("feedback_required", "feedback is required.");
+
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for outcome-spec revise", runId);
+            return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+        }
+
+        if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+
+        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
+
+        return outcome switch
+        {
+            CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
+            CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be revised." }),
+            CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
+            _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
+        };
+    }
+
+    /// <summary>
+    /// Returns the persisted work plan for a coordinator run, including subtasks, dependencies, and collective assembly state.
+    /// </summary>
+    /// <param name="coordinatorRunId">The coordinator run identifier.</param>
+    /// <response code="200">Returns the work plan once decomposition has materialized it.</response>
+    /// <response code="400">The run id was malformed.</response>
+    /// <response code="403">The caller does not own the coordinator run.</response>
+    /// <response code="404">The coordinator run or its work plan was not found.</response>
+    public static async Task<IResult> GetCoordinatorWorkPlanAsync(
+        HttpContext httpContext,
+        string coordinatorRunId,
+        IRunStore runStore,
+        CoordinatorRunService coordinator,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return BadRequestError("invalid_run_id", "Invalid run id.");
+
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for work-plan", runId);
+            return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+        }
+
+        if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+
+        var plan = await ReadWorkPlanWithBriefWaitAsync(coordinator, coordinatorRunId, ct);
+        if (plan is null) return NotFoundError("work_plan_not_found", "The coordinator work plan was not found.");
+
+        return Results.Json(MapWorkPlan(plan));
+    }
+
+    /// <summary>
+    /// Lists the child runs currently attached to a coordinator work plan, paired with their subtask status.
+    /// </summary>
+    /// <param name="coordinatorRunId">The coordinator run identifier.</param>
+    /// <response code="200">Returns the coordinator's dispatched child runs, or an empty array before dispatch starts.</response>
+    /// <response code="400">The run id was malformed.</response>
+    /// <response code="403">The caller does not own the coordinator run.</response>
+    /// <response code="404">The coordinator run was not found.</response>
+    public static async Task<IResult> GetCoordinatorChildrenAsync(
+        HttpContext httpContext,
+        string coordinatorRunId,
+        IRunStore runStore,
+        CoordinatorRunService coordinator,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return BadRequestError("invalid_run_id", "Invalid run id.");
+
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for children", runId);
+            return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+        }
+
+        if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+
+        var children = await coordinator.GetChildrenAsync(coordinatorRunId, ct);
+        return Results.Json(children.Select(MapChild).ToList());
+    }
+
+    /// <summary>
+    /// Sends a steering directive to a running coordinator or one of its children without restarting the orchestration.
+    /// </summary>
+    /// <param name="coordinatorRunId">The coordinator run identifier.</param>
+    /// <param name="request">Directive kind plus optional child target and instruction text.</param>
+    /// <response code="201">The directive was accepted and applied or queued on the active owner replica.</response>
+    /// <response code="202">The directive was durably deferred for the owning replica to consume.</response>
+    /// <response code="400">The run id or steering payload was invalid.</response>
+    /// <response code="403">The caller does not own the coordinator run.</response>
+    /// <response code="404">The coordinator run was not found.</response>
+    /// <response code="409">The coordinator could not recover the requested steering action.</response>
+    public static async Task<IResult> SteerCoordinatorAsync(
+        HttpContext httpContext,
+        string coordinatorRunId,
+        SteerRequest request,
+        IRunStore runStore,
+        CoordinatorSteeringService steering,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return BadRequestError("invalid_run_id", "Invalid run id.");
+
+        if (string.IsNullOrWhiteSpace(request.Kind))
+            return BadRequestError("kind_required", "kind is required.");
+
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for steer", runId);
+            return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+        }
+
+        if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+
+        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+        try
+        {
+            var directive = await steering.SteerAsync(
+                coordinatorRunId,
+                request.Kind!,
+                string.IsNullOrWhiteSpace(request.TargetChildRunId) ? null : request.TargetChildRunId,
+                request.Instruction ?? string.Empty,
+                caller.User,
+                caller.GitHubLogin,
+                ct);
+
+            var statusCode = directive.Status == SteeringStatus.Deferred
+                ? StatusCodes.Status202Accepted
+                : StatusCodes.Status201Created;
+
+            return Results.Json(MapSteeringDirective(directive), statusCode: statusCode);
+        }
+        catch (SteeringValidationException ex)
+        {
+            return BadRequestError("steering_invalid", ex.Message);
+        }
+        catch (SteeringRecoveryExhaustedException ex)
+        {
+            return Results.Json(
+                new { error = "steering_recovery_exhausted", message = ex.Message },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+    }
+
+    /// <summary>
+    /// Submits the single collective human review decision for an assembled coordinator run.
+    /// </summary>
+    /// <param name="coordinatorRunId">The coordinator run identifier.</param>
+    /// <param name="request">Approval, request-changes, or decline decision plus optional feedback and target files.</param>
+    /// <response code="200">The decision was accepted on the active owner replica.</response>
+    /// <response code="202">The decision was durably deferred for the owner replica to consume.</response>
+    /// <response code="400">The run id was malformed.</response>
+    /// <response code="403">The caller does not own the coordinator run.</response>
+    /// <response code="404">The coordinator run was not found.</response>
+    /// <response code="409">No assembly review is currently pending for this coordinator run.</response>
+    public static async Task<IResult> SubmitAssemblyReviewAsync(
+        HttpContext httpContext,
+        string coordinatorRunId,
+        AssemblyReviewRequest request,
+        IRunStore runStore,
+        Agentweaver.Api.Coordinator.AssemblyReviewGate reviewGate,
+        IServiceScopeFactory scopeFactory,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            return BadRequestError("invalid_run_id", "Invalid run id.");
+
+        Run? run;
+        try { run = await runStore.GetAsync(runId, ct); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch run {RunId} for assembly review", runId);
+            return Results.Problem("Failed to retrieve the run.", statusCode: 500);
+        }
+
+        if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
+        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+
+        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+
+        var decision = new Agentweaver.Api.Coordinator.AssemblyReviewDecision(
+            Approved: request.Approved,
+            RequestChanges: request.RequestChanges,
+            Feedback: request.Feedback,
+            TargetFiles: request.TargetFiles,
+            Reviewer: caller.User);
+
+        var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
+            scopeFactory,
+            reviewGate,
+            coordinatorRunId,
+            decision,
+            caller.User,
+            caller.GitHubLogin,
+            ct).ConfigureAwait(false);
+
+        logger.LogInformation(
+            "Assembly review decision: {Decision}. RunId={RunId} Reviewer={Reviewer} Result={Result}",
+            request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+            coordinatorRunId, caller.User, delivery);
+
+        return delivery switch
+        {
+            AssemblyReviewDeliveryResult.Accepted =>
+                Results.Json(new { runId = coordinatorRunId, accepted = true, deferred = false }),
+            AssemblyReviewDeliveryResult.Deferred =>
+                Results.Json(
+                    new
+                    {
+                        runId = coordinatorRunId,
+                        accepted = false,
+                        deferred = true,
+                        message = "The active coordinator will consume this review decision shortly.",
+                    },
+                    statusCode: StatusCodes.Status202Accepted),
+            AssemblyReviewDeliveryResult.Forbidden => ForbiddenError(),
+            _ => NoAssemblyReviewPending(),
+        };
     }
 
 // Recursively flattens a git commit tree into the flat WorkspaceNode listing the Files tab renders

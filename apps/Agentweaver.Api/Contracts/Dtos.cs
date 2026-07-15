@@ -561,10 +561,15 @@ public sealed record WorkspaceFileContent
 
 public sealed record CreateProjectRequest
 {
+    /// <summary>Human-readable project name shown throughout the product.</summary>
     [JsonPropertyName("name")] public string? Name { get; init; }
+    /// <summary>Project bootstrap mode: <c>blank</c> creates an empty workspace and <c>github</c> clones a repository.</summary>
     [JsonPropertyName("origin")] public string? Origin { get; init; }                   // "blank" | "github"
+    /// <summary>Repository to clone when <see cref="Origin"/> is <c>github</c>.</summary>
     [JsonPropertyName("source_repository")] public string? SourceRepository { get; init; }
+    /// <summary>Absolute workspace path where the project should live on the server.</summary>
     [JsonPropertyName("working_directory")] public string? WorkingDirectory { get; init; }
+    /// <summary>Default provider used for future model-driven operations in the project.</summary>
     [JsonPropertyName("default_provider")] public string? DefaultProvider { get; init; }
     [JsonPropertyName("default_model_github_copilot")] public string? DefaultModelGitHubCopilot { get; init; }
     [JsonPropertyName("default_model_microsoft_foundry")] public string? DefaultModelMicrosoftFoundry { get; init; }
@@ -583,11 +588,13 @@ public sealed record CreateProjectRequest
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
 }
 
+/// <summary>Request body for renaming a project.</summary>
 public sealed record UpdateProjectNameRequest
 {
     [JsonPropertyName("name")] public string? Name { get; init; }
 }
 
+/// <summary>Request body for updating a project's default provider and model choices.</summary>
 public sealed record UpdateProjectProviderSettingsRequest
 {
     [JsonPropertyName("default_provider")] public string? DefaultProvider { get; init; }
@@ -598,6 +605,7 @@ public sealed record UpdateProjectProviderSettingsRequest
     [JsonPropertyName("outcome_spec_generation_model")] public string? OutcomeSpecGenerationModel { get; init; }
 }
 
+/// <summary>Canonical project view returned from creation, listing, and detail endpoints.</summary>
 public sealed record ProjectResponse
 {
     [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
@@ -660,8 +668,10 @@ public sealed record GitHubAuthStatusResponse
 // Casting
 // -----------------------------------------------------------------------
 
+/// <summary>Request body for creating a casting proposal from a scenario, free-text goal, analysis pass, or manual roster.</summary>
 public sealed record CreateProposalRequest
 {
+    /// <summary>Proposal mode: <c>scenario</c>, <c>free_text</c>, <c>analysis</c>, or <c>manual</c>.</summary>
     [JsonPropertyName("mode")] public required string Mode { get; init; }
     [JsonPropertyName("template_id")] public string? TemplateId { get; init; }
     [JsonPropertyName("goal")] public string? Goal { get; init; }
@@ -678,6 +688,7 @@ public sealed record AmendProposalRequest
     [JsonPropertyName("universe")] public string? Universe { get; init; }
 }
 
+/// <summary>Request body for confirming a casting proposal into the live team.</summary>
 public sealed record ConfirmProposalRequest
 {
     [JsonPropertyName("intent")] public string? Intent { get; init; }
@@ -734,6 +745,7 @@ public sealed record TeamMemberDto
     [JsonPropertyName("charter_updated_at")] public DateTimeOffset? CharterUpdatedAt { get; init; }
 }
 
+/// <summary>Confirmed team view returned after a casting proposal is materialized.</summary>
 public sealed record TeamDto
 {
     [JsonPropertyName("project_name")] public required string ProjectName { get; init; }
@@ -800,6 +812,7 @@ public sealed record SyncCommitRequest
 // Memory / Decision Inbox
 // -----------------------------------------------------------------------
 
+/// <summary>Request body for submitting a pending decision-inbox entry for team review.</summary>
 public sealed record SubmitDecisionInboxRequest
 {
     [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
@@ -810,6 +823,7 @@ public sealed record SubmitDecisionInboxRequest
     [JsonPropertyName("rationale")] public string? Rationale { get; init; }
 }
 
+/// <summary>Request body for creating an already-promoted project decision.</summary>
 public sealed record CreateDecisionRequest
 {
     [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
@@ -828,6 +842,7 @@ public sealed record UpdateDecisionRequest
     [JsonPropertyName("superseded_by_id")] public int? SupersededById { get; init; }
 }
 
+/// <summary>Request body for recording one agent memory against a project.</summary>
 public sealed record RecordMemoryRequest
 {
     [JsonPropertyName("session_id")] public string? SessionId { get; init; }
@@ -837,6 +852,7 @@ public sealed record RecordMemoryRequest
     [JsonPropertyName("tags")] public string? Tags { get; init; }
 }
 
+/// <summary>Request body for starting or rehydrating the current cross-agent working session for a project.</summary>
 public sealed record StartSessionRequest
 {
     [JsonPropertyName("session_id")] public string? SessionId { get; init; }
@@ -846,6 +862,7 @@ public sealed record StartSessionRequest
     [JsonPropertyName("serialized_state")] public string? SerializedState { get; init; }
 }
 
+/// <summary>Request body for updating or ending the current project session.</summary>
 public sealed record UpdateSessionRequest
 {
     [JsonPropertyName("focus_area")] public string? FocusArea { get; init; }

@@ -28,11 +28,14 @@ public static class CastingEndpoints
     public static void MapCastingEndpoints(this WebApplication app)
     {
 // GET /api/casting/templates — list all team templates from the catalog
-app.MapGet("/api/casting/templates", (CastingService castingService, CatalogReader catalog) =>
-{
-    var templates = catalog.LoadTemplates();
-    return Results.Ok(templates.Select(CastingMappings.ToDto));
-});
+app.MapGet("/api/casting/templates", ListCastingTemplates)
+    .WithName("ListCastingTemplates")
+    .WithTags("Casting")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Lists reusable casting templates for common scenario-driven team shapes.";
+        return Task.CompletedTask;
+    });
 
 // GET /api/projects/{id}/casting/universes — list allowed universe names for a project
 app.MapGet("/api/projects/{id}/casting/universes", async (
@@ -60,89 +63,24 @@ app.MapGet("/api/projects/{id}/casting/universes", async (
 });
 
 // GET /api/catalog/roles — list all available role archetypes
-app.MapGet("/api/catalog/roles", (CastingService castingService) =>
-{
-    var roles = castingService.GetAllRoles();
-    return Results.Ok(roles);
-});
+app.MapGet("/api/catalog/roles", ListCatalogRoles)
+    .WithName("ListCatalogRoles")
+    .WithTags("Casting")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Lists the role archetypes available for manual or generated team proposals.";
+        return Task.CompletedTask;
+    });
 
 // POST /api/projects/{id}/casting/proposals — create a new proposal
-app.MapPost("/api/projects/{id}/casting/proposals", async (
-    string id,
-    CreateProposalRequest request,
-    CastingService castingService,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    var mode = (request.Mode ?? string.Empty).ToLowerInvariant();
-
-    if (mode is not ("scenario" or "free_text" or "analysis" or "manual"))
-        return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
-
-    try
+app.MapPost("/api/projects/{id}/casting/proposals", CreateCastingProposalAsync)
+    .WithName("CreateCastingProposal")
+    .WithTags("Casting")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        switch (mode)
-        {
-            case "scenario":
-            {
-                if (string.IsNullOrWhiteSpace(request.TemplateId))
-                    return Results.BadRequest(new { error = "template_id is required for scenario mode." });
-
-                var (proposal, _) = await castingService.ProposeScenarioCastAsync(
-                    id, request.TemplateId, request.Universe, ct);
-                return Results.Ok(CastingMappings.ToDto(proposal));
-            }
-            case "free_text":
-            {
-                var (proposal, _) = await castingService.ProposeFreetextCastAsync(
-                    id, request.Goal ?? "", request.Universe, request.ModelId, ct, request.TeamSize);
-                return Results.Ok(CastingMappings.ToDto(proposal));
-            }
-            case "analysis":
-            {
-                var (proposal, _) = await castingService.ProposeAnalysisCastAsync(
-                    id, request.Universe, request.ModelId, ct, request.TeamSize);
-                return Results.Ok(CastingMappings.ToDto(proposal));
-            }
-            case "manual":
-            {
-                if (request.RoleIds is null || request.RoleIds.Count == 0)
-                    return Results.BadRequest(new { error = "role_ids is required for manual mode." });
-
-                var (proposal, _) = await castingService.ProposeManualCastAsync(
-                    id, request.RoleIds, request.Universe, ct);
-                return Results.Ok(CastingMappings.ToDto(proposal));
-            }
-            default:
-                return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
-        }
-    }
-    catch (ProjectNotFoundException)
-    {
-        return Results.NotFound();
-    }
-    catch (ProjectUnavailableException)
-    {
-        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
-    }
-    catch (SquadLayoutConflictException ex)
-    {
-        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
-    }
-    catch (ModelRunFailedException ex)
-    {
-        return Results.Conflict(new { error = ex.Message, code = "model_run_failed" });
-    }
-    catch (ArgumentException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to create proposal for project {ProjectId}", id);
-        return Results.Problem("Failed to create proposal.", statusCode: 500);
-    }
-});
+        operation.Description ??= "Creates a draft team proposal for a project from scenario, free-text, analysis, or manual role inputs.";
+        return Task.CompletedTask;
+    });
 
 // GET /api/projects/{id}/casting/proposals — list active proposals for a project
 app.MapGet("/api/projects/{id}/casting/proposals", (
@@ -222,57 +160,14 @@ app.MapMethods("/api/projects/{id}/casting/proposals/{proposalId}", ["PATCH"], a
 });
 
 // POST /api/projects/{id}/casting/proposals/{proposalId}/confirm — confirm proposal
-app.MapPost("/api/projects/{id}/casting/proposals/{proposalId}/confirm", async (
-    string id,
-    string proposalId,
-    ConfirmProposalRequest request,
-    CastingService castingService,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    try
+app.MapPost("/api/projects/{id}/casting/proposals/{proposalId}/confirm", ConfirmCastingProposalAsync)
+    .WithName("ConfirmCastingProposal")
+    .WithTags("Casting")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        var team = await castingService.ConfirmProposalAsync(id, proposalId, request.Intent, ct);
-        var teamDto = new TeamDto
-        {
-            ProjectName = team.ProjectName,
-            Universe = team.Universe,
-            Members = team.Members.Select(m => CastingMappings.ToDto(m)).ToList(),
-            Layout = "canonical",
-            MigrationAvailable = false,
-        };
-        return Results.Ok(teamDto);
-    }
-    catch (ProposalNotFoundException)
-    {
-        return Results.NotFound();
-    }
-    catch (ProjectNotFoundException)
-    {
-        return Results.NotFound();
-    }
-    catch (ProjectUnavailableException)
-    {
-        return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
-    }
-    catch (RequiresChoiceException ex)
-    {
-        return Results.Conflict(new { error = ex.Message, code = "requires_choice" });
-    }
-    catch (SquadLayoutConflictException ex)
-    {
-        return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
-    }
-    catch (ArgumentException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to confirm proposal {ProposalId} for project {ProjectId}", proposalId, id);
-        return Results.Problem("Failed to confirm proposal.", statusCode: 500);
-    }
-});
+        operation.Description ??= "Confirms a draft casting proposal and materializes it into the project's live team.";
+        return Task.CompletedTask;
+    });
 
 // DELETE /api/projects/{id}/casting/proposals/{proposalId} — reject proposal
 app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", (
@@ -290,5 +185,178 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", (
         return Results.NotFound();
     }
 });
+    }
+
+    /// <summary>
+    /// Lists the reusable team templates that can seed scenario-style casting proposals.
+    /// </summary>
+    /// <response code="200">Returns the catalog templates and their role layouts.</response>
+    public static IResult ListCastingTemplates(CastingService castingService, CatalogReader catalog)
+    {
+        var templates = catalog.LoadTemplates();
+        return Results.Ok(templates.Select(CastingMappings.ToDto));
+    }
+
+    /// <summary>
+    /// Lists the role archetypes that can be referenced in manual casting proposals.
+    /// </summary>
+    /// <response code="200">Returns the available role ids, titles, summaries, and default models.</response>
+    public static IResult ListCatalogRoles(CastingService castingService)
+    {
+        var roles = castingService.GetAllRoles();
+        return Results.Ok(roles);
+    }
+
+    /// <summary>
+    /// Creates a draft team proposal for a project from a template, free-text goal, repository analysis, or manual role selection.
+    /// </summary>
+    /// <param name="id">The project that will own the proposed team.</param>
+    /// <param name="request">Casting mode plus the mode-specific inputs needed to assemble a proposal.</param>
+    /// <response code="200">Returns the generated proposal, warnings, and rationale.</response>
+    /// <response code="400">The casting mode or its required inputs were invalid.</response>
+    /// <response code="404">The project was not found.</response>
+    /// <response code="409">The project is unavailable or the requested layout conflicted with policy.</response>
+    /// <response code="500">Proposal generation failed unexpectedly.</response>
+    /// <remarks>
+    /// Agents should call this before confirming a team so they can inspect the proposed roster, models, and warnings.
+    /// </remarks>
+    public static async Task<IResult> CreateCastingProposalAsync(
+        string id,
+        CreateProposalRequest request,
+        CastingService castingService,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        var mode = (request.Mode ?? string.Empty).ToLowerInvariant();
+
+        if (mode is not ("scenario" or "free_text" or "analysis" or "manual"))
+            return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
+
+        try
+        {
+            switch (mode)
+            {
+                case "scenario":
+                {
+                    if (string.IsNullOrWhiteSpace(request.TemplateId))
+                        return Results.BadRequest(new { error = "template_id is required for scenario mode." });
+
+                    var (proposal, _) = await castingService.ProposeScenarioCastAsync(
+                        id, request.TemplateId, request.Universe, ct);
+                    return Results.Ok(CastingMappings.ToDto(proposal));
+                }
+                case "free_text":
+                {
+                    var (proposal, _) = await castingService.ProposeFreetextCastAsync(
+                        id, request.Goal ?? "", request.Universe, request.ModelId, ct, request.TeamSize);
+                    return Results.Ok(CastingMappings.ToDto(proposal));
+                }
+                case "analysis":
+                {
+                    var (proposal, _) = await castingService.ProposeAnalysisCastAsync(
+                        id, request.Universe, request.ModelId, ct, request.TeamSize);
+                    return Results.Ok(CastingMappings.ToDto(proposal));
+                }
+                case "manual":
+                {
+                    if (request.RoleIds is null || request.RoleIds.Count == 0)
+                        return Results.BadRequest(new { error = "role_ids is required for manual mode." });
+
+                    var (proposal, _) = await castingService.ProposeManualCastAsync(
+                        id, request.RoleIds, request.Universe, ct);
+                    return Results.Ok(CastingMappings.ToDto(proposal));
+                }
+                default:
+                    return Results.BadRequest(new { error = "mode must be scenario, free_text, analysis, or manual." });
+            }
+        }
+        catch (ProjectNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (ProjectUnavailableException)
+        {
+            return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+        }
+        catch (SquadLayoutConflictException ex)
+        {
+            return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+        }
+        catch (ModelRunFailedException ex)
+        {
+            return Results.Conflict(new { error = ex.Message, code = "model_run_failed" });
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to create proposal for project {ProjectId}", id);
+            return Results.Problem("Failed to create proposal.", statusCode: 500);
+        }
+    }
+
+    /// <summary>
+    /// Confirms a draft proposal and materializes it into the project's live team.
+    /// </summary>
+    /// <param name="id">The project that owns the proposal.</param>
+    /// <param name="proposalId">The proposal identifier returned by the casting proposal endpoints.</param>
+    /// <param name="request">Optional operator intent that clarifies why the team is being confirmed.</param>
+    /// <response code="200">Returns the confirmed team layout now active for the project.</response>
+    /// <response code="400">The proposal confirmation request was invalid.</response>
+    /// <response code="404">The project or proposal was not found.</response>
+    /// <response code="409">The proposal cannot be confirmed until the caller resolves a choice or layout conflict.</response>
+    /// <response code="500">Confirmation failed unexpectedly.</response>
+    public static async Task<IResult> ConfirmCastingProposalAsync(
+        string id,
+        string proposalId,
+        ConfirmProposalRequest request,
+        CastingService castingService,
+        ILogger<Program> logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            var team = await castingService.ConfirmProposalAsync(id, proposalId, request.Intent, ct);
+            var teamDto = new TeamDto
+            {
+                ProjectName = team.ProjectName,
+                Universe = team.Universe,
+                Members = team.Members.Select(m => CastingMappings.ToDto(m)).ToList(),
+                Layout = "canonical",
+                MigrationAvailable = false,
+            };
+            return Results.Ok(teamDto);
+        }
+        catch (ProposalNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (ProjectNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (ProjectUnavailableException)
+        {
+            return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
+        }
+        catch (RequiresChoiceException ex)
+        {
+            return Results.Conflict(new { error = ex.Message, code = "requires_choice" });
+        }
+        catch (SquadLayoutConflictException ex)
+        {
+            return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to confirm proposal {ProposalId} for project {ProjectId}", proposalId, id);
+            return Results.Problem("Failed to confirm proposal.", statusCode: 500);
+        }
     }
 }

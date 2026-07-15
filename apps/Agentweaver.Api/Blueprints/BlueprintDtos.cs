@@ -76,18 +76,25 @@ public sealed record BespokeRoleDto
 
 public sealed record ListBlueprintsResponse
 {
+    /// <summary>The catalog blueprints available to apply or inspect.</summary>
     [JsonPropertyName("blueprints")] public required IReadOnlyList<BlueprintDto> Blueprints { get; init; }
 }
 
+/// <summary>Request body for generating a blueprint draft from prose.</summary>
 public sealed record GenerateBlueprintRequest
 {
+    /// <summary>Natural-language description of the team or workflow shape to generate.</summary>
     [JsonPropertyName("description")] public string? Description { get; init; }
+    /// <summary>Optional project id whose existing defaults should ground model selection and validation.</summary>
     [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+    /// <summary>Optional repository hint that helps the model tailor workflows and roles to the target codebase.</summary>
     [JsonPropertyName("target_repository")] public string? TargetRepository { get; init; }
 }
 
+/// <summary>Generated blueprint payload returned from the blueprint-generation endpoint.</summary>
 public sealed record GenerateBlueprintResponse
 {
+    /// <summary>The validated blueprint draft inferred from the prompt.</summary>
     [JsonPropertyName("blueprint")] public required BlueprintDto Blueprint { get; init; }
     /// <summary>
     /// Present when the LLM found no suitable library workflow and <c>IWorkflowGenerator</c> produced
@@ -95,25 +102,30 @@ public sealed record GenerateBlueprintResponse
     /// creation so the workflow is materialized to the project workspace on apply.
     /// </summary>
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
+    /// <summary>Non-fatal generation warnings the caller may want to inspect before applying the result.</summary>
     [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
+/// <summary>Request body for validating a blueprint payload offline.</summary>
 public sealed record ValidateBlueprintRequest
 {
     [JsonPropertyName("blueprint")] public BlueprintDto? Blueprint { get; init; }
 }
 
+/// <summary>Validation result for an inline or generated blueprint.</summary>
 public sealed record ValidateBlueprintResponse
 {
     [JsonPropertyName("valid")] public required bool Valid { get; init; }
     [JsonPropertyName("errors")] public required IReadOnlyList<string> Errors { get; init; }
 }
 
+/// <summary>Request body for asking the backend to recommend a catalog blueprint for a GitHub repository.</summary>
 public sealed record SuggestBlueprintRequest
 {
     [JsonPropertyName("repository")] public string? Repository { get; init; }
 }
 
+/// <summary>Repository-to-blueprint recommendation returned by the suggestion endpoint.</summary>
 public sealed record SuggestBlueprintResponse
 {
     [JsonPropertyName("recommended_blueprint")] public BlueprintDto? RecommendedBlueprint { get; init; }
