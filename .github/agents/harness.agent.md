@@ -109,14 +109,47 @@ real live API, never simulated):
      buffering/interpretation logic beyond this inline formatting pipe — a
      one-line shell pipe is the whole point; a separate tool/wrapper would
      reintroduce fixed code between PersonaActor and its output.
-   - Dispatch a fresh **`PersonaActor`** sub-agent via the `task` tool (`mode:
-     sync` — this is a gate; you need the finished transcript back before
-     judging). The dispatch prompt supplies, stated plainly as text: the persona
-     name, the full persona-core brief + surface-adapter text verbatim, **the
+   - **A background shell process's output does not automatically appear
+     anywhere the operator can see it.** Starting the tail above as a
+     background/async shell call only makes it accumulate output in a buffer
+     that sits there until something explicitly reads it back — nothing
+     streams it into your own visible responses on its own. If you start the
+     tail and then simply wait for PersonaActor to finish, the operator sees
+     nothing until you relay it yourself; a "fire and forget" tail is silent in
+     practice even though it is genuinely capturing every line underneath.
+     Verified directly: starting an async tail against a real transcript file
+     and appending a turn to it produced the correctly formatted line inside
+     the background process immediately, but that line only became visible
+     after an explicit read-back of that process's output — it never appeared
+     anywhere before that read. Reporting the process merely as "running" does
+     not surface its content either; you have to read and relay the
+     accumulated output yourself.
+   - Because of that, dispatch PersonaActor via the `task` tool in **background
+     mode**, not sync, specifically so you can keep working (reading the tail)
+     while it runs instead of blocking on a single call until it completes:
+     the dispatch prompt supplies, stated plainly as text, the persona name,
+     the full persona-core brief + surface-adapter text verbatim, **the
      concrete goal statement for this run** (the one piece of per-invocation
      content the now-goal-agnostic persona-core file no longer carries itself),
-     the resolved target base URL and bearer token, whether `-k`/`--insecure` is
-     needed, and the transcript file path to append to.
+     the resolved target base URL and bearer token, whether `-k`/`--insecure`
+     is needed, and the transcript file path to append to.
+   - While PersonaActor's background dispatch is still running, repeatedly (on
+     a short interval, or once per your own reasoning turn — whichever the
+     runtime naturally gives you) read back the tail process's accumulated
+     output and include any new `TURN ... | THOUGHT: ...` lines verbatim in
+     your own visible response to the operator. This relaying step — not the
+     tail process by itself — is what actually makes the run visible; skipping
+     it reproduces the exact bug this section exists to prevent. This is a
+     deliberate, narrow use of background-dispatch-plus-polling: each poll
+     immediately produces a real, relayed line of value for the human watching,
+     which is what justifies it here (unlike polling that exists only to check
+     "are you done yet" with nothing to show for each check).
+   - Once PersonaActor's background dispatch reports completion, stop the tail
+     process, take the final transcript path and factual summary PersonaActor
+     returned, and continue to steps 3–4 below exactly as if it had been a
+     single blocking call — the only thing that changed is that you dispatched
+     it in background mode so you could narrate its progress live; the
+     judging/evidence flow afterward is unaffected.
 2. **PersonaActor drives, one turn at a time, live.** `.github/agents/
    persona-actor.agent.md` fully impersonates the named persona in a fresh,
    isolated context: it pursues the concrete goal statement you handed it, using
@@ -266,8 +299,10 @@ the transcript path, start the parsed live tail of it described above (`Get-
 Content scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl -Wait`
 piped through the `ConvertFrom-Json` formatting step on PowerShell, `tail -f`
 piped through the `jq` formatting step on macOS/Linux) as its own background
-process so you can watch turns land in real time, then dispatch `PersonaActor`
-via `task` (`mode: sync`) with a prompt like:
+process, then dispatch `PersonaActor` via `task` (**`mode: background`** —
+not `sync`, precisely so you remain free to poll and relay the tail while it
+runs; see the note above about why a fire-and-forget tail is silent without
+this) with a prompt like:
 
 ```
 agent_type: "PersonaActor"
@@ -289,8 +324,11 @@ prompt: |
   transcript path + your factual summary.
 ```
 
-While PersonaActor runs, the live tail you started prints a readable line per
-turn as it is appended — for example:
+While PersonaActor's background dispatch runs, actively read back the tail
+process's accumulated output at intervals and relay the new lines yourself, in
+your own visible response, as they arrive — a background shell's output does
+not appear to the operator on its own; you have to poll it and say it. For
+example, across a few of your own turns while waiting:
 
 ```
 TURN 1 | GET /openapi/v1.yaml -> 200 | THOUGHT: Fetch live OpenAPI spec to discover real capabilities before acting, per surface adapter.
@@ -298,12 +336,12 @@ TURN 2 | GET /api/blueprints -> 200 | THOUGHT: List built-in blueprints to find 
 TURN 3 | POST /api/projects -> 201 | THOUGHT: 'blueprint-pm-and-software-development' is an exact match: PM roster merged with full engineering roster. Create the project with this blueprint.
 ```
 
-This is purely so the operator can watch the run happen, not something
-PersonaActor or the dispatch depends on; stop the tail once PersonaActor
-returns. The transcript file on disk is untouched by this formatting — it
-remains the same raw, verbatim JSONL PersonaActor writes, and that raw file is
-still the durable record you hand to Judge afterward regardless of whether
-anyone tailed it live.
+This relaying is presentation-only for the human watching — it is not
+something PersonaActor's run or the dispatch depends on; stop the tail once
+PersonaActor's background dispatch reports completion. The transcript file on
+disk is untouched by any of this — it remains the same raw, verbatim JSONL
+PersonaActor writes, and that raw file is still the durable record you hand
+to Judge afterward regardless of whether anyone watched it live.
 
 PersonaActor internally curls the spec, then curls whatever operation it
 resolves from it, appending each real request/response pair to the transcript
