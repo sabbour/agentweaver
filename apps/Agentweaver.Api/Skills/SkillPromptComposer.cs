@@ -10,12 +10,19 @@ namespace Agentweaver.Api.Skills;
 /// Assembles the progressive-disclosure skill section for an agent's system prompt and materializes
 /// the assigned skills into the run worktree so the agent can read the full <c>SKILL.md</c> on demand.
 ///
-/// Progressive disclosure: only the skill NAME + DESCRIPTION metadata is injected into the prompt up
+/// Progressive disclosure: when a skill's body can be written to the worktree, only its NAME +
+/// DESCRIPTION metadata plus a pointer to the on-disk <c>SKILL.md</c> is injected into the prompt up
 /// front. The full instruction body (and bundled resources) are written to disk under
 /// <c>.agentweaver/skills/&lt;slug&gt;/</c> and read only when the agent decides a skill is relevant.
 /// That directory is added to the worktree's git exclude so materialized skills never pollute the
 /// agent's commit/diff. Only <see cref="SkillStatus.Active"/> skills assigned to this agent are
 /// materialized, so removed or malformed skills never silently remain active.
+///
+/// <para>Delivery is fail-closed on CONTENT: a <c>SKILL.md</c> pointer is only emitted for a skill
+/// whose file was actually written. If no writable worktree is available (e.g. pod-per-run/warm-pool
+/// execution where the agent runs on a different filesystem) or a write fails, the skill's full
+/// instructions are inlined directly into the prompt block instead of emitting a dangling
+/// <c>SKILL.md</c> reference the agent could never read (issue #336).</para>
 /// </summary>
 public sealed class SkillPromptComposer
 {
@@ -66,7 +73,13 @@ public sealed class SkillPromptComposer
         if (skills.Count == 0)
             return null;
 
-        var materialized = new List<(Skill Skill, string Dir)>();
+        // Track, per skill, whether its SKILL.md was genuinely written to a location the agent can
+        // read. This is what makes composition fail-CLOSED on delivery: a skill only gets a lazy-load
+        // `SKILL.md` pointer when that file actually exists; otherwise its full instructions are
+        // inlined so the content still reaches the agent (see BuildMetadataBlock). Emitting a pointer
+        // to a file that was never materialized was the #336 defect — the agent saw a dangling
+        // `.agentweaver/skills/.../SKILL.md` reference with no file behind it.
+        var composed = new List<SkillComposition>();
         if (haveWorktree)
         {
             foreach (var (skill, dir) in wanted)
@@ -74,39 +87,71 @@ public sealed class SkillPromptComposer
                 try
                 {
                     Materialize(worktreePath, dir, skill);
-                    materialized.Add((skill, dir));
+                    composed.Add(new SkillComposition(skill, dir, Materialized: true));
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to materialize skill '{Skill}' into worktree", skill.Name);
+                    // Do NOT drop the skill: fall back to inlining its instructions so an assigned
+                    // skill is never silently lost just because a file write failed.
+                    _logger.LogWarning(ex,
+                        "Failed to materialize skill '{Skill}' into worktree; inlining its instructions instead", skill.Name);
+                    composed.Add(new SkillComposition(skill, dir, Materialized: false));
                 }
             }
         }
         else
         {
-            materialized.AddRange(wanted);
+            // No writable worktree on this host (e.g. pod-per-run / warm-pool execution, where the
+            // agent runs on a different filesystem than the one composing the prompt). A SKILL.md
+            // pointer would be a dangling reference the agent cannot read, so inline the full
+            // instructions to guarantee delivery.
+            _logger.LogInformation(
+                "No materialization target for {Count} assigned skill(s) of agent '{Agent}' (worktree '{Worktree}' unavailable); inlining full instructions into the system prompt.",
+                wanted.Count, agentName, string.IsNullOrEmpty(worktreePath) ? "(none)" : worktreePath);
+            foreach (var (skill, dir) in wanted)
+                composed.Add(new SkillComposition(skill, dir, Materialized: false));
         }
 
-        return BuildMetadataBlock(materialized);
+        return BuildMetadataBlock(composed);
     }
 
-    private static string BuildMetadataBlock(IReadOnlyList<(Skill Skill, string Dir)> skills)
+    /// <summary>One assigned skill and whether its SKILL.md was written to the worktree.</summary>
+    private readonly record struct SkillComposition(Skill Skill, string Dir, bool Materialized);
+
+    private static string BuildMetadataBlock(IReadOnlyList<SkillComposition> skills)
     {
         var sb = new StringBuilder();
         sb.AppendLine(SkillPromptMarkers.SectionHeading);
         sb.AppendLine();
         sb.AppendLine(
-            "You have specialized skill modules assigned to you. Only their NAME and DESCRIPTION are shown here. " +
-            "When — and only when — a skill is relevant to the current task, read its full instructions from the " +
-            "referenced `SKILL.md` file before applying it. Do not read them all up front.");
+            "You have specialized skill modules assigned to you. Apply a skill only when it is relevant " +
+            "to the current task. For a skill shown with a `SKILL.md` path, read that file for its full " +
+            "instructions when the skill is relevant (do not read them all up front). For a skill whose " +
+            "instructions are inlined below, the full instructions are already present here.");
         sb.AppendLine();
-        foreach (var (skill, dir) in skills)
+        foreach (var (skill, dir, materialized) in skills)
         {
             sb.AppendLine($"- **{skill.Name}**: {skill.Description}");
-            sb.AppendLine($"  Full instructions: `{SkillsRelativeDir}/{dir}/SKILL.md`");
+            if (materialized)
+            {
+                sb.AppendLine($"  Full instructions: `{SkillsRelativeDir}/{dir}/SKILL.md`");
+            }
+            else
+            {
+                // Inline the full instructions verbatim so the skill's content reaches the agent even
+                // when no on-disk SKILL.md could be materialized for it.
+                sb.AppendLine("  Full instructions (inlined — no on-disk SKILL.md available for this run):");
+                sb.AppendLine();
+                foreach (var line in NormalizeLines(skill.Instructions))
+                    sb.AppendLine(line.Length == 0 ? string.Empty : "  " + line);
+                sb.AppendLine();
+            }
         }
         return sb.ToString().TrimEnd();
     }
+
+    private static IEnumerable<string> NormalizeLines(string text) =>
+        (text ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
 
     /// <summary>Deletes materialized skill dirs under the worktree that are not in the current set.</summary>
     private void ReconcileStaleDirs(string worktreePath, IEnumerable<string> keepDirs)

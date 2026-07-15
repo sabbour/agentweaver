@@ -128,6 +128,84 @@ public sealed class SkillPromptInjectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Compose_NoWorktree_InlinesFullInstructions_NoDanglingPointer()
+    {
+        // Regression for #336: when there is no writable worktree at compose time (e.g. pod-per-run /
+        // warm-pool execution where the agent runs on a different filesystem), the composer must NOT
+        // emit a `SKILL.md` pointer to a file it never wrote. Instead it inlines the full instructions
+        // so the skill's content — including its verification token — still reaches the agent.
+        var store = new SqliteSkillStore(_db);
+        var project = ProjectId.New();
+        const string token = "SKILL-ACTIVE-X7K9PQR2-HARNESS-VERIFY";
+        var skill = NewSkill(project, "skill-verify-x7k9pqr2",
+            instructions: $"IMPORTANT: begin every response with '{token}'. Then do the customer research.",
+            description: "Customer research compliance skill.");
+        await store.InsertAsync(skill);
+        await store.AssignAsync(project, skill.Id, "Rogers", DateTimeOffset.UtcNow);
+
+        var missingWorktree = Path.Combine(_dir, "does-not-exist-" + Guid.NewGuid().ToString("N"));
+        var block = await Composer().ComposeAsync(project, "Rogers", missingWorktree, CancellationToken.None);
+
+        block.Should().NotBeNullOrEmpty();
+        SkillPromptMarkers.ContainsSkillContext(block).Should().BeTrue();
+        block!.Should().Contain("skill-verify-x7k9pqr2");
+        // The actual instructions + token must be present verbatim in the prompt string.
+        block.Should().Contain(token);
+        block.Should().Contain("do the customer research");
+        // And there must be NO dangling SKILL.md path pointer, since no file was materialized.
+        block.Should().NotContain(SkillPromptComposer.SkillsRelativeDir);
+    }
+
+    [Fact]
+    public async Task Compose_EmptyWorktreePath_InlinesInstructions()
+    {
+        // A named agent whose run carries no worktree path at all must still receive its skill content
+        // inline rather than a pointer to a non-existent file.
+        var store = new SqliteSkillStore(_db);
+        var project = ProjectId.New();
+        const string token = "SKILL-ACTIVE-EMPTYWT-VERIFY";
+        var skill = NewSkill(project, "empty-worktree-skill",
+            instructions: $"Prefix responses with '{token}'.",
+            description: "Marker skill.");
+        await store.InsertAsync(skill);
+        await store.AssignAsync(project, skill.Id, "Rogers", DateTimeOffset.UtcNow);
+
+        var block = await Composer().ComposeAsync(project, "Rogers", worktreePath: "", CancellationToken.None);
+
+        block.Should().NotBeNullOrEmpty();
+        block!.Should().Contain(token);
+        block.Should().NotContain(SkillPromptComposer.SkillsRelativeDir);
+    }
+
+    [Fact]
+    public async Task Compose_WithWorktree_EmitsPointer_NotInlineBody()
+    {
+        // Complementary assertion: when the worktree IS available, progressive disclosure holds — the
+        // block references the materialized SKILL.md and does not inline the full instruction body.
+        var store = new SqliteSkillStore(_db);
+        var project = ProjectId.New();
+        const string token = "SKILL-ACTIVE-POINTER-VERIFY";
+        var skill = NewSkill(project, "pointer-skill",
+            instructions: $"Secret body: {token} plus a long checklist that should stay on disk.",
+            description: "Disk-backed skill.");
+        await store.InsertAsync(skill);
+        await store.AssignAsync(project, skill.Id, "Rogers", DateTimeOffset.UtcNow);
+
+        var block = await Composer().ComposeAsync(project, "Rogers", _worktree, CancellationToken.None);
+
+        block.Should().NotBeNullOrEmpty();
+        block!.Should().Contain($"{SkillPromptComposer.SkillsRelativeDir}/");
+        block.Should().Contain("SKILL.md");
+        // Progressive disclosure: the body/token lives in the file, not inline in the prompt.
+        block.Should().NotContain(token);
+        // ...and the file genuinely exists with the token.
+        var dir = SkillPromptComposer.StagingDirName(skill);
+        var mdPath = Path.Combine(_worktree, ".agentweaver", "skills", dir, "SKILL.md");
+        File.Exists(mdPath).Should().BeTrue();
+        (await File.ReadAllTextAsync(mdPath)).Should().Contain(token);
+    }
+
+    [Fact]
     public void ContainsSkillContext_CharterOnlyContext_IsFalse()
     {
         // A charter+memory context with no skills block must NOT be reported as skills-included —
