@@ -1223,6 +1223,8 @@ app.MapPost("/api/runs/{id}/retry", async (
     string id,
     IRunStore runStore,
     CoordinatorRunService coordinator,
+    CoordinatorSteeringService steering,
+    IRunOptionsStore runOptions,
     RunOrchestrator orchestrator,
     IProjectStore projectStore,
     ILogger<Program> logger,
@@ -1278,6 +1280,46 @@ app.MapPost("/api/runs/{id}/retry", async (
     var isCoordinatorRun = run.ParentRunId is null
         && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
 
+    // #332: a coordinator run that failed AFTER completing upstream planning/subtask work should
+    // RESUME from its last failure point (re-run only the failed subtask, preserve completed work
+    // and the confirmed outcome spec, keep the original run options like auto_approve_tools) rather
+    // than restart the whole lifecycle from outcome-spec drafting. This reuses the same parked-
+    // coordinator recovery the /steer redirect path uses. When there is no recoverable work plan
+    // (failed at/before outcome-spec drafting) or auto-recovery is exhausted, we fall through to the
+    // fresh full-restart mint below.
+    if (isCoordinatorRun)
+    {
+        bool resumed;
+        try
+        {
+            resumed = await steering
+                .TryResumeFailedCoordinatorRunForRetryAsync(run.Id.ToString(), run.SubmittingUser, ct)
+                .ConfigureAwait(false);
+        }
+        catch (SteeringRecoveryExhaustedException ex)
+        {
+            logger.LogInformation(
+                ex, "Coordinator run {RunId} retry: in-place recovery exhausted; minting a fresh restart", runId);
+            resumed = false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to resume coordinator run {RunId} in place for retry", runId);
+            return Results.Problem("Failed to resume the coordinator run.", statusCode: 500);
+        }
+
+        if (resumed)
+        {
+            return Results.Ok(new RetryRunResponse
+            {
+                RunId = run.Id.ToString(),
+                RetriedFrom = null,
+                Status = RunStatus.InProgress.ToApiString(),
+                Resumed = true,
+            });
+        }
+    }
+
     RunId newRunId;
     try
     {
@@ -1293,7 +1335,10 @@ app.MapPost("/api/runs/{id}/retry", async (
         }
         else if (isCoordinatorRun)
         {
-            // Interactive coordinator run: reuse the normal interactive start seam.
+            // Interactive coordinator run: reuse the normal interactive start seam. Preserve the
+            // source run's launch options (#332) — auto_approve_tools / autopilot must NOT silently
+            // reset to false on retry, which would be an unexpected behavior change from the original.
+            var sourceOptions = runOptions.Get(run.Id.ToString());
             newRunId = await coordinator.StartCoordinatorRunAsync(
                 run.ProjectId!.Value,
                 run.Task,
@@ -1301,8 +1346,8 @@ app.MapPost("/api/runs/{id}/retry", async (
                 run.RepositoryPath,
                 run.OriginatingBranch,
                 run.ModelId,
-                autoApproveTools: false,
-                autopilot: false,
+                autoApproveTools: sourceOptions.AutoApproveTools,
+                autopilot: sourceOptions.Autopilot,
                 ct,
                 retriedFrom: run.Id.ToString())
                 .ConfigureAwait(false);

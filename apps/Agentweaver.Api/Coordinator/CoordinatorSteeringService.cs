@@ -522,6 +522,91 @@ public sealed class CoordinatorSteeringService
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Resumes a FAILED coordinator run in place from its last failure point for
+    /// <c>POST /api/runs/{id}/retry</c> (#332), reusing the exact parked-coordinator recovery the
+    /// <c>/steer redirect</c> path uses. Only the genuinely-incomplete subtasks
+    /// (failed / rai_flagged / blocked) are re-dispatched; already-completed upstream work
+    /// (research / proposal / PRD / UX) and the confirmed outcome spec are PRESERVED — the coordinator
+    /// does NOT re-draft the outcome spec from scratch. Because the SAME run id is un-terminalized
+    /// (never a fresh run), the run's original <see cref="RunOptions"/> (e.g. auto_approve_tools) are
+    /// kept intact rather than reset to defaults.
+    /// <para>
+    /// Returns <c>true</c> when the run had a recoverable work plan and was resumed. Returns
+    /// <c>false</c> when there is no recoverable work plan (e.g. the run failed at or before
+    /// outcome-spec drafting, or a dispatch/assembly loop is still live) — the caller then mints a
+    /// fresh coordinator run instead. Propagates <see cref="SteeringRecoveryExhaustedException"/> when
+    /// every affected subtask is already over the per-subtask recovery cap; the caller treats that as
+    /// "resume impossible" and falls back to a fresh full restart.
+    /// </para>
+    /// </summary>
+    public async Task<bool> TryResumeFailedCoordinatorRunForRetryAsync(
+        string coordinatorRunId, string createdBy, CancellationToken ct)
+    {
+        const string kind = SteeringKind.Redirect;
+        const string instruction =
+            "Retry: resume from the last failure point. Re-run only the failed/blocked subtask(s) and " +
+            "preserve all already-completed work and the confirmed outcome spec — do not re-draft the spec.";
+        var createdAt = DateTimeOffset.UtcNow;
+
+        // Persist a synthetic redirect directive (same shape SteerAsync writes) so the shared
+        // resume path has a directive row to collapse to `applied` on success.
+        int directiveId;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var directive = new SteeringDirective
+            {
+                CoordinatorRunId = coordinatorRunId,
+                TargetChildRunId = null,
+                Kind = kind,
+                Instruction = instruction,
+                Status = SteeringStatus.Pending,
+                CreatedBy = createdBy,
+                CreatedAt = createdAt,
+                Source = SteeringSource.Coordinator,
+            };
+            db.SteeringDirectives.Add(directive);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            directiveId = directive.Id;
+        }
+
+        SteeringDirectiveView? resumed;
+        try
+        {
+            resumed = await TryResumeParkedCoordinatorAsync(
+                coordinatorRunId, directiveId, kind, instruction, createdBy, createdAt, ct)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Recovery exhausted (or any resume failure): the synthetic directive never took effect,
+            // so discard it before letting the caller fall back to a fresh restart.
+            await DiscardDirectiveAsync(directiveId, ct).ConfigureAwait(false);
+            throw;
+        }
+
+        if (resumed is not null)
+            return true;
+
+        // Not resumable (no work plan / still live): drop the synthetic directive so it does not
+        // linger as an undrained `pending` row, then let the caller mint a fresh run.
+        await DiscardDirectiveAsync(directiveId, ct).ConfigureAwait(false);
+        return false;
+    }
+
+    private async Task DiscardDirectiveAsync(int directiveId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var directive = await db.SteeringDirectives
+            .FirstOrDefaultAsync(d => d.Id == directiveId, ct).ConfigureAwait(false);
+        if (directive is null)
+            return;
+        db.SteeringDirectives.Remove(directive);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
     // -----------------------------------------------------------------------
     // UNIFIED AUTONOMOUS STEERING (rev8 §3) — the single façade every source normalizes into.
     // -----------------------------------------------------------------------

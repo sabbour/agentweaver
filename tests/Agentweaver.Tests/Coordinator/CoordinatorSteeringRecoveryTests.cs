@@ -504,6 +504,88 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     // -----------------------------------------------------------------------
+    // #332: POST /api/runs/{id}/retry resumes a FAILED coordinator run in place from its last
+    // failure point (reusing the parked-coordinator recovery) instead of restarting the whole
+    // coordinator lifecycle from outcome-spec drafting.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task RetryResume_OnFailedCoordinator_WithFailedSubtask_ResumesFromFailurePoint_PreservingCompletedWork()
+    {
+        // A late-stage failure: upstream planning subtasks already succeeded (assemble_ready) and only
+        // the final build subtask failed. Retry must re-run ONLY the failed subtask, preserve the
+        // completed ones AND the confirmed outcome spec, and un-terminalize the SAME run.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "assembly_blocked: subtask_failed");
+        var (planId, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyFailed, new[]
+        {
+            SubtaskStatus.AssembleReady, // research — done upstream, must be preserved
+            SubtaskStatus.AssembleReady, // proposal/PRD/UX — done upstream, must be preserved
+            SubtaskStatus.Failed,        // final build subtask — the failure point
+        });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = false;
+
+        var resumed = await _sut.TryResumeFailedCoordinatorRunForRetryAsync(coord, "owner", default);
+
+        resumed.Should().BeTrue("a failed coordinator with a recoverable work plan resumes in place");
+
+        // Only the failed subtask is re-dispatched; completed upstream work is preserved.
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady, "completed upstream work is preserved");
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.AssembleReady, "completed upstream work is preserved");
+        (await GetSubtaskAsync(ids[2])).Status.Should().Be(SubtaskStatus.Pending, "only the failed subtask is re-dispatched");
+
+        // The run is un-terminalized (live again) and dispatch is re-armed against the preserved frontier.
+        (await _runStore.GetAsync(RunId.Parse(coord)))!.Status.Should().Be(RunStatus.InProgress);
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.Dispatching);
+        _dispatch.StartDispatchCalls.Should().ContainSingle().Which.CoordinatorRunId.Should().Be(coord);
+
+        // The confirmed outcome spec is NOT re-drafted — it stays exactly as it was.
+        (await GetOutcomeSpecStatusAsync(coord)).Should().Be("confirmed",
+            "resume must not re-draft the outcome spec from scratch");
+
+        // The synthetic retry directive collapsed to a terminal `applied` (never left as a ghost row).
+        (await GetDirectiveStatusesAsync(coord)).Should().OnlyContain(s => s == SteeringStatus.Applied);
+    }
+
+    [Fact]
+    public async Task RetryResume_OnFailedCoordinator_WithNoWorkPlan_ReturnsFalse_ForFreshRestart()
+    {
+        // Failed before any work plan existed (e.g. at/before outcome-spec drafting). There is nothing
+        // to resume, so the method reports false and the caller mints a fresh coordinator run instead.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "failed: drafting");
+
+        var resumed = await _sut.TryResumeFailedCoordinatorRunForRetryAsync(coord, "owner", default);
+
+        resumed.Should().BeFalse("no recoverable work plan — the caller falls back to a fresh restart");
+        (await _runStore.GetAsync(RunId.Parse(coord)))!.Status.Should().Be(RunStatus.Failed, "the source run is untouched");
+        _dispatch.StartDispatchCalls.Should().BeEmpty();
+
+        // The synthetic retry directive is discarded (no lingering `pending` ghost row).
+        (await GetDirectiveStatusesAsync(coord)).Should().BeEmpty("a non-resumable retry leaves no directive behind");
+    }
+
+    [Fact]
+    public async Task RetryResume_WhenEveryAffectedSubtaskOverAttemptCap_Throws_ForFreshRestartFallback()
+    {
+        // Auto-recovery is exhausted: the endpoint catches this and mints a fresh full restart.
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "assembly_blocked: subtask_failed");
+        var (_, ids) = await SeedPlanAsync(coord, WorkPlanStatus.AssemblyFailed, new[] { SubtaskStatus.Failed });
+        await SetRecoveryAttemptsAsync(ids[0], 3); // == cap
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = false;
+
+        var act = async () => await _sut.TryResumeFailedCoordinatorRunForRetryAsync(coord, "owner", default);
+
+        await act.Should().ThrowAsync<SteeringRecoveryExhaustedException>();
+        (await _runStore.GetAsync(RunId.Parse(coord)))!.Status.Should().Be(RunStatus.Failed, "the run stays failed for a fresh restart");
+        _dispatch.StartDispatchCalls.Should().BeEmpty();
+        (await GetDirectiveStatusesAsync(coord)).Should().BeEmpty("the synthetic directive is discarded when recovery is exhausted");
+    }
+
+    // -----------------------------------------------------------------------
     // Seed + read helpers (real EF + real run store).
     // -----------------------------------------------------------------------
 
@@ -635,6 +717,24 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         return (await db.WorkPlans.AsNoTracking().FirstAsync(w => w.Id == planId)).Status;
+    }
+
+    private async Task<string?> GetOutcomeSpecStatusAsync(string coordinatorRunId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return (await db.OutcomeSpecs.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.CoordinatorRunId == coordinatorRunId))?.Status;
+    }
+
+    private async Task<IReadOnlyList<string>> GetDirectiveStatusesAsync(string coordinatorRunId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.SteeringDirectives.AsNoTracking()
+            .Where(d => d.CoordinatorRunId == coordinatorRunId)
+            .Select(d => d.Status)
+            .ToListAsync();
     }
 
     private async Task<IReadOnlyList<int>> CurrentFrontierAsync(int planId)

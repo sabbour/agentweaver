@@ -86,6 +86,32 @@ public sealed class RunRetryTests : IDisposable
     }
 
     // =========================================================================
+    // (a2) #332: interactive coordinator retry PRESERVES the source run's launch options
+    // (auto_approve_tools / autopilot) instead of resetting them to false.
+    // =========================================================================
+    [Fact]
+    public async Task InteractiveCoordinatorRetry_PreservesAutoApproveToolsAndAutopilot()
+    {
+        var projectId = await CreateProjectAsync();
+        var source = await SeedRunAsync(
+            RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: ProjectId.Parse(projectId));
+
+        // The original run was launched with auto-approve + autopilot enabled.
+        var runOptions = _factory.Services.GetRequiredService<IRunOptionsStore>();
+        runOptions.Set(source.Id.ToString(), new RunOptions(AutoApproveTools: true, Autopilot: true));
+
+        var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+        resp.StatusCode.Should().Be(HttpStatusCode.Created, "no work plan exists, so the retry mints a fresh coordinator run");
+        var newId = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        // The freshly minted retry run carries the SAME launch options — not the pre-#332 hardcoded false.
+        var newOptions = runOptions.Get(newId);
+        newOptions.AutoApproveTools.Should().BeTrue("auto_approve_tools must be preserved across a coordinator retry (#332)");
+        newOptions.Autopilot.Should().BeTrue("autopilot must be preserved across a coordinator retry (#332)");
+    }
+
+    // =========================================================================
     // (b) Pickup-origin retry preserves origin + accountable user, no new backlog task.
     // =========================================================================
     [Fact]
