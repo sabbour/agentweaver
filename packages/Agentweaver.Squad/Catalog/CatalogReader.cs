@@ -223,7 +223,15 @@ public sealed class CatalogReader
             dto.Roster ?? [],
             workflows,
             dto.ReviewPolicy ?? "default",
-            dto.SandboxProfile ?? "default"), null);
+            dto.SandboxProfile ?? "default")
+        {
+            SkillBindings = (dto.SkillBindings ?? [])
+                .Where(binding => !string.IsNullOrWhiteSpace(binding.RoleId))
+                .Select(binding => new BlueprintSkillBinding(
+                    binding.RoleId!,
+                    binding.Skills?.Where(skill => !string.IsNullOrWhiteSpace(skill)).ToArray() ?? []))
+                .ToArray(),
+        }, null);
     }
 
     public string? LoadCharterTemplate(string roleId)
@@ -304,7 +312,12 @@ public sealed class CatalogReader
         [property: JsonPropertyName("workflow")] string? Workflow,
         [property: JsonPropertyName("workflows")] IReadOnlyList<string>? Workflows,
         [property: JsonPropertyName("review_policy")] string? ReviewPolicy,
-        [property: JsonPropertyName("sandbox_profile")] string? SandboxProfile);
+        [property: JsonPropertyName("sandbox_profile")] string? SandboxProfile,
+        [property: JsonPropertyName("skill_bindings")] IReadOnlyList<BlueprintSkillBindingDto>? SkillBindings);
+
+    private sealed record BlueprintSkillBindingDto(
+        [property: JsonPropertyName("role_id")] string? RoleId,
+        [property: JsonPropertyName("skills")] IReadOnlyList<string>? Skills);
 }
 
 /// <summary>A blueprint resource and its source-scoped loading outcome.</summary>

@@ -23,6 +23,7 @@ public sealed record BlueprintDto
     [JsonPropertyName("workflows")] public IReadOnlyList<string>? Workflows { get; init; }
     [JsonPropertyName("review_policy")] public string? ReviewPolicy { get; init; }
     [JsonPropertyName("sandbox_profile")] public string? SandboxProfile { get; init; }
+    [JsonPropertyName("skill_bindings")] public IReadOnlyList<BlueprintSkillBindingDto>? SkillBindings { get; init; }
     /// <summary>Bespoke (non-catalog) roles minted by generation; each id also appears in <see cref="Roster"/>.</summary>
     [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
 
@@ -40,6 +41,7 @@ public sealed record BlueprintDto
         Workflows = b.Workflows,
         ReviewPolicy = b.ReviewPolicy,
         SandboxProfile = b.SandboxProfile,
+        SkillBindings = b.SkillBindings.Select(BlueprintSkillBindingDto.FromModel).ToList(),
         BespokeRoles = b.BespokeRoles.Select(BespokeRoleDto.FromModel).ToList(),
         Exportability = exportability is null ? null : BlueprintExportabilityDto.FromModel(exportability),
     };
@@ -56,6 +58,9 @@ public sealed record BlueprintDto
         BespokeRoles = BespokeRoles is { Count: > 0 }
             ? BespokeRoles.Select(r => r.ToModel()).ToList()
             : [],
+        SkillBindings = SkillBindings is { Count: > 0 }
+            ? SkillBindings.Select(binding => binding.ToModel()).ToList()
+            : [],
     };
 }
 
@@ -70,6 +75,20 @@ public sealed record BlueprintExportabilityDto
         Status = exportability.Status,
         Codes = exportability.Codes,
     };
+}
+
+public sealed record BlueprintSkillBindingDto
+{
+    [JsonPropertyName("role_id")] public string? RoleId { get; init; }
+    [JsonPropertyName("skills")] public IReadOnlyList<string>? Skills { get; init; }
+
+    public static BlueprintSkillBindingDto FromModel(BlueprintSkillBinding binding) => new()
+    {
+        RoleId = binding.RoleId,
+        Skills = binding.Skills,
+    };
+    public BlueprintSkillBinding ToModel() => new(RoleId ?? string.Empty, Skills ?? []);
+    public BlueprintSkillBinding ToModel() => new(RoleId ?? string.Empty, Skills ?? []);
 }
 
 /// <summary>Wire shape for a <see cref="BespokeRole"/> (snake_case). Mirrors its three fields.</summary>

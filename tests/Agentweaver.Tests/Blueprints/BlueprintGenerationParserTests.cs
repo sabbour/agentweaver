@@ -107,6 +107,18 @@ public sealed class BlueprintGenerationParserTests
         result.Blueprint!.BespokeRoles.Should().BeEmpty();
     }
 
+    [Fact]
+    public void Parse_SkillBindings_ArePreserved()
+    {
+        var result = BlueprintGenerationParser.Parse(
+            """{"id":"x","name":"X","description":"d","roster":["lead-architect"],"workflow":"default","review_policy":"default","sandbox_profile":"default","skill_bindings":[{"role_id":"lead-architect","skills":["architecture-decisions","system-design"]}]}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Blueprint!.SkillBindings.Should().ContainSingle();
+        result.Blueprint.SkillBindings[0].RoleId.Should().Be("lead-architect");
+        result.Blueprint.SkillBindings[0].Skills.Should().Equal("architecture-decisions", "system-design");
+    }
+
     public static IEnumerable<object[]> PersonaDrivenBlueprints()
     {
         yield return ["ambiguous travel operations", """{"id":"travel-ops","name":"Travel Ops","description":"Coordinates trip research, itinerary writing, and review.","roster":["customer-researcher","docs-writer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];

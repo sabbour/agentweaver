@@ -735,6 +735,7 @@ public sealed record CastProposalDto
 public sealed record TeamMemberDto
 {
     [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("role_id")] public required string RoleId { get; init; }
     [JsonPropertyName("role_title")] public required string RoleTitle { get; init; }
     [JsonPropertyName("charter_path")] public required string CharterPath { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }

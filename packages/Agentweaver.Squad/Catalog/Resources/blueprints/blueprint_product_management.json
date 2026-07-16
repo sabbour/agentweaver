@@ -5,5 +5,13 @@
   "roster": ["lead-pm", "customer-researcher", "prototype-designer", "docs-writer", "product-marketing-manager", "ux-designer"],
   "workflows": ["pm-discovery", "content-authoring"],
   "review_policy": "default",
-  "sandbox_profile": "restricted"
+  "sandbox_profile": "restricted",
+  "skill_bindings": [
+    { "role_id": "lead-pm", "skills": ["prd-prioritization"] },
+    { "role_id": "customer-researcher", "skills": ["customer-research-evidence"] },
+    { "role_id": "prototype-designer", "skills": ["prototype-ux"] },
+    { "role_id": "docs-writer", "skills": ["docs-release-notes"] },
+    { "role_id": "product-marketing-manager", "skills": ["positioning"] },
+    { "role_id": "ux-designer", "skills": ["prototype-ux", "ui-accessibility"] }
+  ]
 }

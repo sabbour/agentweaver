@@ -18,6 +18,7 @@ public sealed record BlueprintDto
     [JsonPropertyName("workflows")] public IReadOnlyList<string>? Workflows { get; init; }
     [JsonPropertyName("review_policy")] public string? ReviewPolicy { get; init; }
     [JsonPropertyName("sandbox_profile")] public string? SandboxProfile { get; init; }
+    [JsonPropertyName("skill_bindings")] public IReadOnlyList<BlueprintSkillBindingDto>? SkillBindings { get; init; }
     [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
     [JsonPropertyName("exportability")] public BlueprintExportabilityDto? Exportability { get; init; }
@@ -27,6 +28,12 @@ public sealed record BlueprintExportabilityDto
 {
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("codes")] public IReadOnlyList<string>? Codes { get; init; }
+}
+
+public sealed record BlueprintSkillBindingDto
+{
+    [JsonPropertyName("role_id")] public string? RoleId { get; init; }
+    [JsonPropertyName("skills")] public IReadOnlyList<string>? Skills { get; init; }
 }
 
 public sealed record BespokeRoleDto
