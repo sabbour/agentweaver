@@ -224,7 +224,9 @@ public sealed class GitHubDeviceFlowTests
         capturedScopeParam.Split(' ')
             .Should().Contain("repo");
         capturedScopeParam.Split(' ')
-            .Should().Contain("read:org");
+            .Should().Contain("read:user");
+        capturedScopeParam.Split(' ')
+            .Should().NotContain("read:org");
     }
 
     // =========================================================================
