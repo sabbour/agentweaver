@@ -1492,8 +1492,16 @@ export interface PortForwardSessionDto {
 }
 
 // ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
-export type SkillProvenance = 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync';
+export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync';
 export type SkillStatus = 'active' | 'missing' | 'malformed';
+
+export function isSkillProvenance(value: unknown): value is SkillProvenance {
+  return value === 'built-in'
+    || value === 'repo-import'
+    || value === 'file-upload'
+    || value === 'manual'
+    || value === 'connected-repo-sync';
+}
 
 // GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
 export interface SkillDto {

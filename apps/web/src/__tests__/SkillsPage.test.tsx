@@ -165,6 +165,14 @@ describe('SkillsPage — catalog', () => {
     expect(screen.getByText('connected-repo-sync')).toBeTruthy();
   });
 
+  it('renders built-in catalog skill provenance emitted by the server', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([makeSkill({ provenance: 'built-in' })]);
+
+    renderPage();
+
+    expect(await screen.findByText('built-in')).toBeTruthy();
+  });
+
   it('shows the empty state when the catalog is empty', async () => {
     vi.mocked(apiClient.listSkills).mockResolvedValue([]);
 

@@ -1,4 +1,5 @@
 import { getSessionToken } from '../config';
+import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
   AmendProposalRequest,
@@ -49,6 +50,8 @@ import type {
   RunDetail,
   RuntimeInfo,
   SandboxPolicy,
+  SkillDetailDto,
+  SkillDto,
   ServerInfo,
   StartOrchestrationMode,
   StartOrchestrationResponse,
@@ -91,6 +94,65 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function isSkillStatus(value: unknown): value is 'active' | 'missing' | 'malformed' {
+  return value === 'active' || value === 'missing' || value === 'malformed';
+}
+
+function isSkillDto(value: unknown): value is SkillDto {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.description === 'string'
+    && isSkillProvenance(value.provenance)
+    && isOptionalString(value.source_repository)
+    && isOptionalString(value.source_location)
+    && isSkillStatus(value.status)
+    && typeof value.content_hash === 'string'
+    && typeof value.resource_count === 'number'
+    && isStringArray(value.assigned_agents)
+    && typeof value.created_at === 'string'
+    && typeof value.updated_at === 'string';
+}
+
+function isSkillDetailDto(value: unknown): value is SkillDetailDto {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.description === 'string'
+    && typeof value.instructions === 'string'
+    && Array.isArray(value.resources)
+    && value.resources.every((resource) => isRecord(resource)
+      && typeof resource.relative_path === 'string'
+      && typeof resource.content === 'string')
+    && isSkillProvenance(value.provenance)
+    && isOptionalString(value.source_repository)
+    && isOptionalString(value.source_location)
+    && isSkillStatus(value.status)
+    && typeof value.content_hash === 'string'
+    && typeof value.created_at === 'string'
+    && typeof value.updated_at === 'string';
+}
+
+function parseSkillList(payload: unknown): SkillDto[] {
+  if (!Array.isArray(payload)) throw new TypeError('Invalid skill list response.');
+
+  const skills: SkillDto[] = [];
+  for (const skill of payload) {
+    if (!isSkillDto(skill)) throw new TypeError('Invalid skill list response.');
+    skills.push(skill);
+  }
+  return skills;
+}
+
+function parseSkillDetail(payload: unknown): SkillDetailDto {
+  if (!isSkillDetailDto(payload)) throw new TypeError('Invalid skill detail response.');
+  return payload;
 }
 
 function isBlueprint(value: unknown): value is Blueprint {
@@ -524,11 +586,11 @@ export class AgentweaverApiClient {
 
   // Skills (issues #51/#56) — per-project catalog + agent assignments.
   listSkills(projectId: string): Promise<import('./types').SkillDto[]> {
-    return this.request<import('./types').SkillDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skills`);
+    return this.request<unknown>('GET', `/projects/${encodeURIComponent(projectId)}/skills`).then(parseSkillList);
   }
 
   getSkill(projectId: string, skillId: string): Promise<import('./types').SkillDetailDto> {
-    return this.request<import('./types').SkillDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`);
+    return this.request<unknown>('GET', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`).then(parseSkillDetail);
   }
 
   deleteSkill(projectId: string, skillId: string): Promise<void> {

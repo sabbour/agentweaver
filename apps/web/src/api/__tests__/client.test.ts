@@ -1,5 +1,72 @@
 import { AgentweaverApiClient, ApiError } from '../client';
+import type { SkillProvenance } from '../types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+function serverSkill(provenance: string) {
+  return {
+    id: 'skill-1',
+    name: 'system-design',
+    description: 'Design distributed systems.',
+    provenance,
+    source_repository: null,
+    source_location: null,
+    status: 'active',
+    content_hash: 'abc123',
+    resource_count: 0,
+    assigned_agents: [],
+    created_at: '2026-07-16T00:00:00Z',
+    updated_at: '2026-07-16T00:00:00Z',
+  };
+}
+
+function serverSkillDetail(provenance: string) {
+  return {
+    ...serverSkill(provenance),
+    instructions: 'Document architecture decisions.',
+    resources: [],
+  };
+}
+
+describe('AgentweaverApiClient skill catalog contract', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('deserializes the server built-in provenance as the typed catalog value', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify([serverSkill('built-in')]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    const skills = await client.listSkills('project-1');
+    const provenance: SkillProvenance = skills[0]!.provenance;
+
+    expect(provenance).toBe('built-in');
+  });
+
+  it('rejects list and detail responses with unknown provenance values', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify([serverSkill('external-import')]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(serverSkillDetail('external-import')),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await expect(client.listSkills('project-1')).rejects.toThrow('Invalid skill list response.');
+    await expect(client.getSkill('project-1', 'skill-1')).rejects.toThrow('Invalid skill detail response.');
+  });
+});
+
 describe('AgentweaverApiClient keepalive', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
