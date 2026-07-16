@@ -53,6 +53,27 @@ public static class WorkflowDefinitionYamlSerializer
             }
         }
 
+        if (definition.Trigger is { } trigger)
+        {
+            sb.AppendLine();
+            sb.AppendLine("trigger:");
+            Line(sb, "  type", TriggerType(trigger.Type));
+            if (trigger.Type == WorkflowTriggerType.Schedule)
+            {
+                Line(sb, "  interval", ScheduleInterval(trigger.Interval));
+                if (trigger.Interval == WorkflowScheduleInterval.Weekly && trigger.DayOfWeek is { } dow)
+                    Line(sb, "  day_of_week", dow.ToString().ToLowerInvariant());
+                if (trigger.Interval == WorkflowScheduleInterval.Monthly && trigger.DayOfMonth is { } dom)
+                    sb.AppendLine($"  day_of_month: {dom}");
+                if (trigger.TimeOfDay is { } timeOfDay)
+                    Line(sb, "  time_of_day", timeOfDay.ToString("HH:mm"));
+            }
+            else if (trigger.Type == WorkflowTriggerType.Event)
+            {
+                Line(sb, "  event_name", trigger.EventName);
+            }
+        }
+
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
 
@@ -111,5 +132,20 @@ public static class WorkflowDefinitionYamlSerializer
         WorkflowNodeType.Scribe => "scribe",
         WorkflowNodeType.Terminal => "terminal",
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
+    };
+
+    private static string TriggerType(WorkflowTriggerType type) => type switch
+    {
+        WorkflowTriggerType.Schedule => "schedule",
+        WorkflowTriggerType.Event => "event",
+        _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
+    };
+
+    private static string? ScheduleInterval(WorkflowScheduleInterval? interval) => interval switch
+    {
+        WorkflowScheduleInterval.Daily => "daily",
+        WorkflowScheduleInterval.Weekly => "weekly",
+        WorkflowScheduleInterval.Monthly => "monthly",
+        _ => null,
     };
 }

@@ -91,6 +91,65 @@ public sealed record WorkflowNode
     public IReadOnlyList<string> Branches { get; init; } = [];
 }
 
+/// <summary>The kind of automation trigger a workflow declares (issue #53).</summary>
+public enum WorkflowTriggerType
+{
+    /// <summary>Starts a run automatically on a recurring cadence (daily/weekly/monthly).</summary>
+    Schedule,
+
+    /// <summary>Starts a run automatically when a named event fires.</summary>
+    Event,
+}
+
+/// <summary>
+/// The recurring cadence unit for a <see cref="WorkflowTriggerType.Schedule"/> trigger. Arbitrary cron
+/// expressions and sub-daily precision are explicitly out of scope (see
+/// specs/workflows-automation/trigger-tasks-for-scheduled-and-event-workflows.md) — only these three
+/// coarse cadences are supported.
+/// </summary>
+public enum WorkflowScheduleInterval
+{
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+/// <summary>
+/// An optional, first-class automation trigger for a workflow (issue #53). When present, a schedule
+/// trigger is evaluated by <c>WorkflowScheduleTriggerService</c> and an event trigger is evaluated by
+/// <c>WorkflowEventTriggerService</c> — both start a run automatically (via a Ready backlog task bound
+/// to this workflow) instead of requiring a manual/on-demand start. A workflow with no
+/// <see cref="WorkflowDefinition.Trigger"/> (the default, null) is entirely unaffected and continues to
+/// start only via the existing manual/backlog-pickup paths — fully backward compatible.
+/// </summary>
+public sealed record WorkflowTrigger
+{
+    public required WorkflowTriggerType Type { get; init; }
+
+    /// <summary>Required for <see cref="WorkflowTriggerType.Schedule"/>: the cadence unit.</summary>
+    public WorkflowScheduleInterval? Interval { get; init; }
+
+    /// <summary>Required when <see cref="Interval"/> is <see cref="WorkflowScheduleInterval.Weekly"/>:
+    /// the day of week the schedule fires on.</summary>
+    public DayOfWeek? DayOfWeek { get; init; }
+
+    /// <summary>Required when <see cref="Interval"/> is <see cref="WorkflowScheduleInterval.Monthly"/>:
+    /// the day of month (1-28) the schedule fires on. Capped at 28 so every month has that day (no
+    /// drift for shorter months, e.g. February).</summary>
+    public int? DayOfMonth { get; init; }
+
+    /// <summary>Required for Schedule triggers: the UTC time of day the schedule fires at.</summary>
+    public TimeOnly? TimeOfDay { get; init; }
+
+    /// <summary>
+    /// Required for <see cref="WorkflowTriggerType.Event"/>: the event name this workflow starts a run
+    /// for (e.g. "issue.opened"). NOTE: matching an inbound event to this name IS implemented (see
+    /// <c>WorkflowEventTriggerService</c>), but no concrete external event SOURCE (e.g. a GitHub
+    /// webhook receiver) is wired to call it yet — this is the trigger mechanism/interface only.
+    /// </summary>
+    public string? EventName { get; init; }
+}
+
 /// <summary>
 /// An explicit board column declared in a workflow definition. When a workflow declares at least one
 /// stage the Kanban board derives its columns from this list instead of the hardcoded defaults.
@@ -139,4 +198,11 @@ public sealed record WorkflowDefinition
     /// (Problems, Human Review, Active, Done) for full backward compatibility.
     /// </summary>
     public IReadOnlyList<WorkflowStageDefinition> Stages { get; init; } = [];
+
+    /// <summary>
+    /// Optional automation trigger (issue #53). Null (the default) means "no automation" — the
+    /// workflow only starts on-demand via the existing manual/backlog-pickup paths, exactly as before
+    /// this feature. Non-null means a schedule or event fires a run automatically.
+    /// </summary>
+    public WorkflowTrigger? Trigger { get; init; }
 }

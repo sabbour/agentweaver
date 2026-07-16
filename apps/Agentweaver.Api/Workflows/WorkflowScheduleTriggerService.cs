@@ -1,0 +1,154 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Agentweaver.Domain;
+
+namespace Agentweaver.Api.Workflows;
+
+/// <summary>
+/// Background scheduler for schedule-triggered workflows (issue #53). On each tick, for every active
+/// project, checks each of the project's valid workflows that declare a <see cref="WorkflowTrigger"/>
+/// of type <see cref="WorkflowTriggerType.Schedule"/> and, when the cadence's current occurrence is
+/// due (<see cref="WorkflowScheduleEvaluator"/>) and has not already fired, creates a Ready backlog
+/// task bound to that workflow (<see cref="WorkflowTriggerBacklogFactory"/>) so the existing
+/// <see cref="Coordinator.CoordinatorHeartbeatService"/> pickup path claims it and starts a run —
+/// there is no bespoke run-start path here, so the same pickup-capacity bounds, exactly-once claim,
+/// and board visibility apply as for every other backlog task.
+///
+/// <para>Idempotency (fire-at-most-once per occurrence) piggybacks on the SAME "does a task with this
+/// synthetic source path already exist" check the backlog-capture endpoint uses for external-id
+/// idempotency (<see cref="IBacklogTaskStore.GetExistingTitlesFromSourceAsync"/>): the source path
+/// encodes the workflow id + the due occurrence's period key, so a fresh occurrence always gets a
+/// fresh key and a repeated tick within the same occurrence is a no-op. As with that existing
+/// idempotency check, this is a check-then-insert (not a DB-enforced unique constraint), so an
+/// extremely narrow multi-replica race remains theoretically possible — the same known limitation the
+/// existing capture-by-external-id path already has.</para>
+///
+/// <para>A workflow with no trigger (the default, <see cref="WorkflowDefinition.Trigger"/> is null) is
+/// entirely unaffected — this scheduler only ever reads workflows that declare
+/// <c>trigger: {type: schedule, ...}</c>, so on-demand/manual start behavior is unchanged.</para>
+/// </summary>
+public sealed class WorkflowScheduleTriggerService : BackgroundService
+{
+    public const string CapturedBy = "automation:schedule-trigger";
+
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<WorkflowScheduleTriggerService> _logger;
+    private readonly TimeProvider _timeProvider;
+    private readonly bool _enabled;
+    private readonly TimeSpan _interval;
+
+    public WorkflowScheduleTriggerService(
+        IServiceScopeFactory scopeFactory,
+        IConfiguration configuration,
+        ILogger<WorkflowScheduleTriggerService> logger,
+        TimeProvider? timeProvider = null)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+
+        // Master enable flag (default true), mirroring Coordinator:HeartbeatEnabled so hermetic web
+        // tests can disable it to stay deterministic.
+        _enabled = configuration.GetValue("Workflows:ScheduleTriggerEnabled", true);
+
+        var seconds = configuration.GetValue("Workflows:ScheduleTriggerIntervalSeconds", 60);
+        _interval = TimeSpan.FromSeconds(Math.Max(1, seconds));
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!_enabled)
+        {
+            _logger.LogInformation("Workflow schedule trigger disabled (Workflows:ScheduleTriggerEnabled=false)");
+            return;
+        }
+
+        using var timer = new PeriodicTimer(_interval);
+        while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+        {
+            await RunTickAsync(_timeProvider.GetUtcNow(), stoppingToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs one tick against an explicit <paramref name="now"/> — the test seam that keeps this fully
+    /// unit-testable without any wall-clock dependency or sleeping.
+    /// </summary>
+    public async Task RunTickAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var sp = scope.ServiceProvider;
+        var projectStore = sp.GetRequiredService<IProjectStore>();
+        var backlogStore = sp.GetRequiredService<IBacklogTaskStore>();
+        var registry = sp.GetRequiredService<WorkflowRegistry>();
+
+        IReadOnlyList<Project> projects = await projectStore.ListAsync(ct).ConfigureAwait(false);
+        foreach (var project in projects)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (project.State != ProjectState.Active)
+                continue;
+
+            try
+            {
+                await TickProjectAsync(project, now, registry, backlogStore, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;   // shutdown — stop the service cleanly
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Workflow schedule trigger: project {ProjectId} tick failed", project.Id);
+                // Isolated; next project still processed.
+            }
+        }
+    }
+
+    private async Task TickProjectAsync(
+        Project project,
+        DateTimeOffset now,
+        WorkflowRegistry registry,
+        IBacklogTaskStore backlogStore,
+        CancellationToken ct)
+    {
+        var set = registry.GetOrLoad(project);
+        foreach (var result in set.Available)
+        {
+            ct.ThrowIfCancellationRequested();
+            var def = result.Definition;
+            if (def?.Trigger is not { Type: WorkflowTriggerType.Schedule } trigger)
+                continue;
+
+            if (!WorkflowScheduleEvaluator.TryGetDueOccurrence(trigger, now, out var periodKey, out _))
+                continue;
+
+            var idempotencyKey = BuildIdempotencyKey(def.Id, periodKey);
+            var alreadyFired = await backlogStore
+                .GetExistingTitlesFromSourceAsync(project.Id, idempotencyKey, ct)
+                .ConfigureAwait(false);
+            if (alreadyFired.Count > 0)
+                continue;   // this occurrence already fired
+
+            var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
+                backlogStore,
+                project,
+                def,
+                title: $"Scheduled run: {def.Name}",
+                description: $"Automatically triggered by the '{def.Id}' workflow's schedule trigger (occurrence {periodKey}).",
+                capturedBy: CapturedBy,
+                idempotencyKey: idempotencyKey,
+                now: now,
+                ct: ct).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "Workflow schedule trigger: fired workflow {WorkflowId} for project {ProjectId} (task {TaskId}, occurrence {PeriodKey})",
+                def.Id, project.Id, task.Id, periodKey);
+        }
+    }
+
+    internal static string BuildIdempotencyKey(string workflowId, string periodKey) =>
+        $"workflow-schedule-trigger:{workflowId}:{periodKey}";
+}

@@ -355,6 +355,8 @@ builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbe
 
 // Workflows (Feature 010) + Diagnostics (Feature 011)
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
+builder.Services.AddHostedService<Agentweaver.Api.Workflows.WorkflowScheduleTriggerService>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.AppInsightsMetricsService>();
@@ -971,6 +973,7 @@ else
     app.MapDecisionsEndpoints();
     app.MapMemoryEndpoints();
     app.MapWorkflowDefinitionEndpoints();
+    app.MapWorkflowTriggerEndpoints();
     app.MapDiagnosticsEndpoints();
     app.MapMetricsEndpoints();
     app.MapNotificationsEndpoints();
