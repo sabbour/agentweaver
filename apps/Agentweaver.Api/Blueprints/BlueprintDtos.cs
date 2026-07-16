@@ -26,7 +26,11 @@ public sealed record BlueprintDto
     /// <summary>Bespoke (non-catalog) roles minted by generation; each id also appears in <see cref="Roster"/>.</summary>
     [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
 
-    public static BlueprintDto FromModel(Blueprint b) => new()
+    [JsonPropertyName("exportability")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BlueprintExportabilityDto? Exportability { get; init; }
+
+    public static BlueprintDto FromModel(Blueprint b, BlueprintExportability? exportability = null) => new()
     {
         Id = b.Id,
         Name = b.Name,
@@ -37,6 +41,7 @@ public sealed record BlueprintDto
         ReviewPolicy = b.ReviewPolicy,
         SandboxProfile = b.SandboxProfile,
         BespokeRoles = b.BespokeRoles.Select(BespokeRoleDto.FromModel).ToList(),
+        Exportability = exportability is null ? null : BlueprintExportabilityDto.FromModel(exportability),
     };
 
     public Blueprint ToModel() => new(
@@ -51,6 +56,19 @@ public sealed record BlueprintDto
         BespokeRoles = BespokeRoles is { Count: > 0 }
             ? BespokeRoles.Select(r => r.ToModel()).ToList()
             : [],
+    };
+}
+
+/// <summary>Stable availability diagnostics for a built-in blueprint.</summary>
+public sealed record BlueprintExportabilityDto
+{
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("codes")] public required IReadOnlyList<string> Codes { get; init; }
+
+    public static BlueprintExportabilityDto FromModel(BlueprintExportability exportability) => new()
+    {
+        Status = exportability.Status,
+        Codes = exportability.Codes,
     };
 }
 

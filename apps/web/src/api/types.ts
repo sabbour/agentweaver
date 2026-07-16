@@ -205,6 +205,10 @@ export interface Blueprint {
   workflows: string[];
   review_policy: string;
   sandbox_profile: string;
+  exportability?: {
+    status: 'exportable' | 'unavailable';
+    codes: string[];
+  };
 }
 
 export interface ListBlueprintsResponse {

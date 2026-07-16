@@ -12,6 +12,11 @@ Generated and user-supplied blueprints are validated before they can be applied.
 - `review_policy` is coherent with the supported policy set;
 - `sandbox_profile` is one of the supported profiles (`default` or `restricted`).
 
+Built-in catalog entries are also checked through the production workflow parser and runtime graph
+binder at startup. `GET /api/blueprints` returns additive `exportability` diagnostics for every
+parsed built-in (`exportable` or `unavailable` plus stable codes). Unavailable entries remain visible
+for troubleshooting, but cannot be suggested, selected, or applied.
+
 If generation returns an invalid blueprint, the API reports plain-language validation details and offers two safe next steps: regenerate with a clearer prompt or edit the draft and validate it again. Invalid blueprints are not saved or applied.
 
 ## Generated blueprint hardening

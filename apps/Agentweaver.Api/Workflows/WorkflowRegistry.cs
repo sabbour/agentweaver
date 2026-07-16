@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Agentweaver.Api;
+using Agentweaver.Api.Blueprints;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Microsoft.Extensions.Logging;
@@ -39,14 +40,14 @@ public sealed class WorkflowRegistry
     private sealed record CachedSet(string Signature, ProjectWorkflowSet Set);
 
     private readonly ConcurrentDictionary<ProjectId, CachedSet> _cache = new();
-    private readonly CatalogReader? _catalog;
+    private readonly CatalogConformanceSnapshot? _catalog;
     private readonly ILogger<WorkflowRegistry>? _logger;
 
     /// <summary>Parameterless constructor for tests and back-compat; no catalog library workflows loaded.</summary>
     public WorkflowRegistry() { }
 
-    /// <summary>Production constructor: catalog library workflows are loaded alongside the built-in default.</summary>
-    public WorkflowRegistry(CatalogReader catalog, ILogger<WorkflowRegistry>? logger = null)
+    /// <summary>Production constructor: only conformance-checked catalog workflows enter the registry.</summary>
+    public WorkflowRegistry(CatalogConformanceSnapshot catalog, ILogger<WorkflowRegistry>? logger = null)
     {
         _catalog = catalog;
         _logger = logger;
@@ -123,12 +124,12 @@ public sealed class WorkflowRegistry
         // catalog definition (project customization over library).
         if (_catalog is not null)
         {
-            foreach (var (yaml, source) in _catalog.LoadAllWorkflowYamls())
+            foreach (var catalogResult in _catalog.Workflows.Where(result =>
+                         result.IsValid &&
+                         result.Definition is not null &&
+                         !string.Equals(result.Definition.Id, BuiltInWorkflows.DefaultWorkflowId, StringComparison.OrdinalIgnoreCase)))
             {
-                var catalogResult = ValidateBindable(
-                    WorkflowDefinitionLoader.Load(yaml, source, isBuiltIn: true));
-                if (catalogResult.Definition is not null)
-                    reservedIds.Add(catalogResult.Definition.Id);
+                reservedIds.Add(catalogResult.Definition!.Id);
                 AddResult(catalogResult, results, idToIndex, _logger);
             }
         }

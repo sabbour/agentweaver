@@ -30,6 +30,7 @@ public sealed class BlueprintService
         new(KnownSandboxProfiles, StringComparer.OrdinalIgnoreCase);
 
     private readonly CatalogReader _catalog;
+    private readonly CatalogConformanceSnapshot _catalogSnapshot;
     private readonly CastingService _casting;
     private readonly IProjectStore _projectStore;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
@@ -46,9 +47,11 @@ public sealed class BlueprintService
         WorkflowRegistry workflowRegistry,
         IBlueprintGenerator generator,
         IWorkflowGenerator workflowGenerator,
-        ILogger<BlueprintService> logger)
+        ILogger<BlueprintService> logger,
+        CatalogConformanceSnapshot? catalogSnapshot = null)
     {
         _catalog = catalog;
+        _catalogSnapshot = catalogSnapshot ?? new CatalogConformanceSnapshot(catalog);
         _casting = casting;
         _projectStore = projectStore;
         _sandboxPolicyStore = sandboxPolicyStore;
@@ -58,9 +61,18 @@ public sealed class BlueprintService
         _logger = logger;
     }
 
-    public IReadOnlyList<Blueprint> GetPredefined() => _catalog.LoadAllBlueprints();
+    /// <summary>Returns only catalog assets proven exportable by the immutable production snapshot.</summary>
+    public IReadOnlyList<Blueprint> GetPredefined() => _catalogSnapshot.Blueprints
+        .Where(entry => entry.IsExportable)
+        .Select(entry => entry.Blueprint)
+        .ToList();
 
-    public Blueprint? GetPredefinedById(string id) => _catalog.LoadBlueprint(id);
+    /// <summary>Returns all parsed blueprints with availability diagnostics for API/MCP/web display.</summary>
+    public IReadOnlyList<CatalogBlueprintEntry> GetPredefinedCatalog() => _catalogSnapshot.Blueprints;
+
+    public Blueprint? GetPredefinedById(string id) => _catalogSnapshot.FindBlueprint(id) is { IsExportable: true } entry
+        ? entry.Blueprint
+        : null;
 
     /// <summary>
     /// Validates a blueprint against the schema and the role constraint: every roster role id must
@@ -160,6 +172,14 @@ public sealed class BlueprintService
             foreach (var roleId in duplicateRoles)
                 errors.Add($"roster contains duplicate role '{roleId}'.");
 
+            var duplicateWorkflows = blueprint.Workflows
+                .Where(workflow => !string.IsNullOrWhiteSpace(workflow))
+                .GroupBy(workflow => workflow, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key);
+            foreach (var workflowId in duplicateWorkflows)
+                errors.Add($"workflows contains duplicate workflow '{workflowId}'.");
+
             // Validate each bespoke role's shape and that it is actually rostered.
             var rosterSet = new HashSet<string>(blueprint.Roster, StringComparer.OrdinalIgnoreCase);
             foreach (var b in blueprint.BespokeRoles)
@@ -171,6 +191,8 @@ public sealed class BlueprintService
                 }
                 if (string.IsNullOrWhiteSpace(b.Charter))
                     errors.Add($"bespoke role '{b.Id}' is missing its 'charter'.");
+                else if (b.Charter.Length > 8_192)
+                    errors.Add($"bespoke role '{b.Id}' charter exceeds the 8192 character limit.");
                 if (_catalog.HasRole(b.Id))
                     errors.Add($"bespoke role '{b.Id}' collides with an existing catalog role id.");
                 if (ReservedRoles.IsReserved(b.Id) || ReservedRoles.IsReserved(b.Title))
@@ -385,11 +407,47 @@ public sealed class BlueprintService
                 path = value;
 
             if (path is null) continue;
-            var fullPath = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(projectRoot, path));
+            if (!TryResolvePathWithinProject(projectRoot, path, out var fullPath))
+            {
+                errors.Add($"bespoke role '{role.Id}' references charter file outside the project root.");
+                continue;
+            }
             if (!File.Exists(fullPath))
                 errors.Add($"bespoke role '{role.Id}' references missing charter file '{path}'.");
         }
         return errors;
+    }
+
+    private static bool TryResolvePathWithinProject(string projectRoot, string path, out string fullPath)
+    {
+        fullPath = string.Empty;
+        try
+        {
+            var root = Path.GetFullPath(projectRoot);
+            fullPath = Path.GetFullPath(Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(root, path));
+
+            var relative = Path.GetRelativePath(root, fullPath);
+            if (string.IsNullOrWhiteSpace(relative) || relative == "." || Path.IsPathRooted(relative))
+                return false;
+
+            return !relative
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.None)
+                .Any(segment => segment == "..");
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static void TryDeleteFile(string path)

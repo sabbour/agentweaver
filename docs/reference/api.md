@@ -942,8 +942,11 @@ Lists predefined blueprints.
 Response `200 OK`:
 
 ```json
-{ "blueprints": [ { "...": "BlueprintDto" } ] }
+{ "blueprints": [ { "...": "BlueprintDto", "exportability": { "status": "exportable", "codes": [] } } ] }
 ```
+
+`exportability` is additive catalog availability metadata. `status` is `exportable` or
+`unavailable`; `codes` contains stable, sanitized diagnostic codes when unavailable.
 
 ### POST /api/blueprints/generate
 

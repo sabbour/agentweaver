@@ -312,6 +312,7 @@ function TemplateRosterList({ blueprint }: { blueprint: Blueprint }) {
 
 function TemplateRow({ blueprint, selected, onSelect }: { blueprint: Blueprint; selected: boolean; onSelect: () => void }) {
   const styles = useStyles();
+  const unavailable = blueprint.exportability?.status === 'unavailable';
   const workflows = workflowList(blueprint);
   const workflowLabel = workflows.length === 1 ? workflows[0] : `${workflows.length} workflows`;
   const workflowAria = workflows.length === 1 ? `Workflow: ${workflows[0]}` : `Workflows: ${workflows.join(', ')}`;
@@ -327,17 +328,21 @@ function TemplateRow({ blueprint, selected, onSelect }: { blueprint: Blueprint; 
     >
       <div
         className={mergeClasses(styles.templateRow, selected && styles.templateRowSelected)}
-        onClick={onSelect}
+        onClick={unavailable ? undefined : onSelect}
         role="radio"
-        aria-checked={selected}
-        aria-label={blueprint.name}
-        tabIndex={0}
-        onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } }}
+        aria-checked={unavailable ? false : selected}
+        aria-disabled={unavailable}
+        aria-label={unavailable ? `${blueprint.name} is unavailable: ${blueprint.exportability?.codes.join(', ')}` : blueprint.name}
+        tabIndex={unavailable ? -1 : 0}
+        onKeyDown={(event) => {
+          if (!unavailable && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(); }
+        }}
       >
         <span className={styles.rowIcon}><SparkleRegular /></span>
         <div className={styles.rowMain}>
           <span className={styles.rowTitle}>{blueprint.name}</span>
           {blueprint.description && <span className={styles.rowDesc}>{blueprint.description}</span>}
+          {unavailable && <span className={styles.rowDesc}>Unavailable: {blueprint.exportability?.codes.join(', ')}</span>}
         </div>
         <div className={styles.rowTrailing}>
           {workflows.length > 0 && (
@@ -385,7 +390,7 @@ export function BlueprintTemplatePicker({
           <TemplateRow
             key={bp.id}
             blueprint={bp}
-            selected={value.kind === 'predefined' && value.blueprint.id === bp.id}
+            selected={bp.exportability?.status !== 'unavailable' && value.kind === 'predefined' && value.blueprint.id === bp.id}
             onSelect={() => onChange({ kind: 'predefined', blueprint: bp })}
           />
         ))}

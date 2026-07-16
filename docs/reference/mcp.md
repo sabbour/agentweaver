@@ -1048,7 +1048,7 @@ List the predefined Agentweaver blueprints.
 
 **Parameters**: none
 
-**Returns**: Array of blueprint objects, each with `id`, `name`, `description`, `roster`, `workflow`, `review_policy`, and `sandbox_profile`.
+**Returns**: Array of blueprint objects, each with `id`, `name`, `description`, `roster`, `workflow`, `review_policy`, `sandbox_profile`, and additive `exportability: { status, codes }`. `status` is `exportable` or `unavailable`; `codes` contains stable, sanitized diagnostic codes when unavailable.
 
 ---
 

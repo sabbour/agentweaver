@@ -17,19 +17,14 @@ built-in default and any project-authored workflows in `.agentweaver/workflows/`
 |----|------|--------------------------|---------|---------------|
 | `software-delivery` | Software Delivery | Software Development, Product & Software Delivery | Event | ✅ Runnable |
 | `bug-fix` | Bug Fix | — (referenced by Software Development, Product & Software Delivery) | Event | ✅ Runnable |
-| `code-review` | Code Review | — (referenced by Software Development) | Manual | ✅ Runnable |
 | `content-authoring` | Content Authoring | Content Authoring, Product Management | Event | ✅ Runnable |
 | `pm-discovery` | Product Management Discovery | Product Management, Product & Software Delivery | Event | ✅ Runnable |
-| `agent-evaluation` | Agent Evaluation | AI Agent Engineering | Event | ⚠️ **Not runnable** — uses `fan_out`/`fan_in` |
-| `incident-response` | Incident Response | Platform Reliability / SRE | Event | ✅ Runnable |
+| `agent-evaluation` | Agent Evaluation | AI Agent Engineering | Event | ✅ Runnable |
+| `incident-response` | Incident Response | — | Event | ✅ Runnable |
+| `infra-ops` | Infrastructure Operations | — | Event | ✅ Runnable |
 
-> **Binder status** reflects whether the workflow binds onto the live MAF run graph today (see
-> [workflow-binder.md](workflow-binder.md)). Six of the seven library workflows bind and run: their
-> `peer_review` nodes are wired (as verdict gates or plain turns) and every transition has an executor
-> mapping. **`agent-evaluation` does not yet run** — its `fan_out`/`fan_in` nodes are accepted by the
-> loader but not yet wired to a runtime executor, so building it throws a `WorkflowBindException` at
-> build time. It remains in the catalog as the reference shape for the forthcoming parallel-dispatch
-> support.
+> **Binder status** reflects the production loader and live MAF graph binder. All seven embedded
+> library workflows are parsed and bindability-checked before they can be exposed by the registry.
 
 ---
 
@@ -84,25 +79,6 @@ triage (prompt)
 
 ---
 
-## `code-review`
-
-**Purpose**: Standalone review that produces feedback without merging.
-
-**When to use**: A task that asks for a review of an existing change, draft PR, or proposed approach
-where the output is feedback only (no deployment or merge).
-
-**Node structure**:
-
-```
-review (peer_review)
-  → feedback (prompt)
-    → scribe → done
-```
-
-**Trigger**: Manual only (user explicitly initiates).
-
----
-
 ## `content-authoring`
 
 **Purpose**: Content creation pipeline for articles, documentation, and long-form written output.
@@ -153,11 +129,6 @@ research (prompt)
 
 ## `agent-evaluation`
 
-> ⚠️ **Not runnable yet.** This workflow uses `fan_out`/`fan_in` nodes, which the loader accepts but the
-> binder does not yet wire to a runtime executor. Attempting to run it throws a `WorkflowBindException`
-> at build time. It is kept in the catalog as the canonical parallel-evaluation shape and as a few-shot
-> example for workflow generation. See [workflow-binder.md §5](workflow-binder.md).
-
 **Purpose**: AI agent evaluation with parallel evaluation runs and a mandatory safety gate.
 
 **When to use**: A task that evaluates an AI agent's capabilities, safety properties, or performance.
@@ -167,8 +138,8 @@ The safety gate must clear before an evaluation report is produced.
 
 ```
 eval-setup (prompt)
-  → eval-run (fan_out)
-    → eval-collect (fan_in, target: eval-run)
+  → eval-run (prompt)
+    → eval-collect (prompt)
       → safety-gate (check, gate_kind: rai)
             when: revise        → eval-setup
             when: safety-failed → terminal-safety-failed
@@ -176,8 +147,9 @@ eval-setup (prompt)
             when: review        → report (prompt) → scribe → done
 ```
 
-**Key characteristics**: `fan_out`/`fan_in` pair for parallel eval runs; safety gate blocks the
-report if content safety fails.
+**Key characteristics**: sequential setup, evaluation, and collection stages; the safety gate blocks
+the report if content safety fails. The workflow is bindable today; future parallel dispatch remains
+an execution enhancement rather than a catalog requirement.
 
 ---
 
@@ -208,7 +180,7 @@ triage (prompt)
 
 | Blueprint | Default workflow | Full workflow set |
 |-----------|-----------------|-------------------|
-| Software Development | `software-delivery` | `software-delivery`, `bug-fix`, `code-review` |
+| Software Development | `software-delivery` | `software-delivery`, `bug-fix` |
 | Product Management | `pm-discovery` | `pm-discovery`, `content-authoring` |
 | Content Authoring | `content-authoring` | `content-authoring` |
 | Product & Software Delivery | `pm-discovery` | `pm-discovery`, `software-delivery`, `bug-fix` |

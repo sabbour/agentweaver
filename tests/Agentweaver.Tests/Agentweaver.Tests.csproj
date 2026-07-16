@@ -30,6 +30,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="CatalogFixtures\workflows\shadow_target.yaml" LogicalName="Agentweaver.Tests.CatalogFixtures.workflows.shadow_target.yaml" />
+    <EmbeddedResource Include="CatalogFixtures\blueprints\malformed_role.json" LogicalName="Agentweaver.Tests.CatalogFixtures.blueprints.malformed_role.json" />
+    <EmbeddedResource Include="CatalogFixtures\roles\malformed_role.json" LogicalName="Agentweaver.Tests.CatalogFixtures.roles.malformed_role.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 

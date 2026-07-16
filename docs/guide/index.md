@@ -67,10 +67,10 @@ A **Blueprint** is a reusable team definition: roles, workflows, review policy, 
 |---|---|
 | `software-delivery` | Code changes, features, refactors |
 | `bug-fix` | Targeted bug investigations and fixes |
-| `code-review` | Automated review of a diff or branch |
 | `content-authoring` | Drafting docs, blog posts, articles |
 | `pm-discovery` | Product discovery, research, specs |
 | `incident-response` | Live incidents and postmortems |
+| `infra-ops` | Infrastructure operations and remediation |
 | `agent-evaluation` | Testing and evaluating agent outputs |
 
 When you submit a task, an LLM pass automatically matches it to the best-fit workflow. You can also author your own or generate one from a description.

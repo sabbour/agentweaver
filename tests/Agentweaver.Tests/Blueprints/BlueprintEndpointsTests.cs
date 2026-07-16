@@ -39,7 +39,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
-    public async Task GetBlueprints_ReturnsSixPredefined_WithCatalogRosters()
+    public async Task GetBlueprints_ReturnsFivePredefined_WithCatalogRostersAndExportability()
     {
         var response = await _client.GetAsync("/api/blueprints");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -69,6 +69,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             b.GetProperty("workflow").GetString().Should().NotBeNullOrWhiteSpace();
             b.GetProperty("review_policy").GetString().Should().NotBeNullOrWhiteSpace();
             b.GetProperty("sandbox_profile").GetString().Should().NotBeNullOrWhiteSpace();
+            b.GetProperty("exportability").GetProperty("status").GetString().Should().Be("exportable");
+            b.GetProperty("exportability").GetProperty("codes").EnumerateArray().Should().BeEmpty();
         }
     }
 

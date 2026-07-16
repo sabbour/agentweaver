@@ -359,6 +359,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.HeartbeatStatusStore>(
 builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbeatService>();
 
 // Workflows (Feature 010) + Diagnostics (Feature 011)
+builder.Services.AddSingleton<Agentweaver.Api.Blueprints.CatalogConformanceSnapshot>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
 // GitHub webhook receiver (issue #53 follow-up): the real external event source wired to the event

@@ -310,6 +310,29 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     expect(req.blueprint).toBeUndefined();
   });
 
+  it('shows unavailable blueprints for diagnostics but does not select them', async () => {
+    vi.mocked(apiClient.listBlueprints).mockResolvedValue([
+      BP_BACKEND,
+      {
+        ...BP_DOCS,
+        exportability: { status: 'unavailable', codes: ['workflow_unavailable'] },
+      },
+    ]);
+
+    await openBlankDialog();
+    const unavailable = await screen.findByRole('radio', { name: /Docs Team is unavailable/ });
+    expect(unavailable.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByText('Unavailable: workflow_unavailable')).toBeDefined();
+
+    fireEvent.click(unavailable);
+    fillNameAndFolder();
+    fireEvent.click(screen.getByRole('button', { name: 'Create', hidden: true }));
+
+    await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
+    const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
+    expect(req.blueprint_id).toBeUndefined();
+  });
+
   it('submits the inline blueprint when a generated blueprint is applied', async () => {
     vi.mocked(apiClient.generateBlueprint).mockResolvedValue({
       blueprint: GENERATED,

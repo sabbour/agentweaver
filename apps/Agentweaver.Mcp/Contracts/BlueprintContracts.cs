@@ -20,6 +20,13 @@ public sealed record BlueprintDto
     [JsonPropertyName("sandbox_profile")] public string? SandboxProfile { get; init; }
     [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
+    [JsonPropertyName("exportability")] public BlueprintExportabilityDto? Exportability { get; init; }
+}
+
+public sealed record BlueprintExportabilityDto
+{
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("codes")] public IReadOnlyList<string>? Codes { get; init; }
 }
 
 public sealed record BespokeRoleDto
