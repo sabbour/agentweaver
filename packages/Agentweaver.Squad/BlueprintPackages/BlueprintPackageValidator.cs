@@ -15,14 +15,7 @@ public static class BlueprintPackageValidator
     private static readonly Regex HashPattern = new(@"\A[0-9a-f]{64}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex ProducerPattern = new(@"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex RevisionPattern = new(@"\A[0-9a-f]{7,64}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-    private static readonly Regex RepositoryPattern = new(
-        @"\Ahttps://(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:[/?#](?:[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=]|%[0-9A-Fa-f]{2})*)?\z",
-        RegexOptions.CultureInvariant,
-        TimeSpan.FromSeconds(1));
-    private static readonly Regex Rfc3339Pattern = new(
-        @"\A[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]+)?(?:Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))\z",
-        RegexOptions.CultureInvariant,
-        TimeSpan.FromSeconds(1));
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly byte[] PayloadSetPrefix = "blueprint-package-payload-set-v1\0"u8.ToArray();
 
     public static BlueprintPackageValidationResult Validate(BlueprintPackageSource source)
@@ -98,11 +91,12 @@ public static class BlueprintPackageValidator
     /// <summary>Hashes exact sorted UTF-8 paths and raw payload bytes with length-delimited framing.</summary>
     public static string CalculatePayloadSetDigest(IReadOnlyDictionary<string, ImmutableArray<byte>> payloads)
     {
+        ArgumentNullException.ThrowIfNull(payloads);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(PayloadSetPrefix);
         foreach (var payload in payloads.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
-            AppendLengthPrefixed(hash, Encoding.UTF8.GetBytes(payload.Key));
+            AppendLengthPrefixed(hash, EncodePathUtf8(payload.Key));
             AppendLengthPrefixed(hash, payload.Value.AsSpan());
         }
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
@@ -209,18 +203,8 @@ public static class BlueprintPackageValidator
         var createdText = OptionalString(element, "created_at", "provenance", errors);
         if (source is not ("catalog" or "generated" or "imported")) errors.Add("provenance.source is invalid.");
         if (producer is not null && !ProducerPattern.IsMatch(producer)) errors.Add("provenance.producer has an invalid grammar.");
-        if (repository is not null && !IsRepositoryUri(repository))
-            errors.Add("provenance.repository must be a strict absolute HTTPS URI.");
         if (revision is not null && !RevisionPattern.IsMatch(revision)) errors.Add("provenance.revision must be a lower-case hexadecimal revision.");
-        DateTimeOffset? created = null;
-        if (createdText is not null)
-        {
-            if (!Rfc3339Pattern.IsMatch(createdText) || !DateTimeOffset.TryParse(createdText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
-                errors.Add("provenance.created_at must use the package RFC 3339 timestamp profile.");
-            else
-                created = parsed;
-        }
-        return source is null ? null : new BlueprintPackageProvenance(source, producer, repository, revision, created);
+        return source is null ? null : new BlueprintPackageProvenance(source, producer, repository, revision, createdText);
     }
 
     private static void ValidateInventory(BlueprintPackageSource source, BlueprintPackageManifest manifest, List<string> errors)
@@ -265,16 +249,6 @@ public static class BlueprintPackageValidator
         }
     }
 
-    private static bool IsRepositoryUri(string repository)
-    {
-        if (repository.Length > 2048 || !RepositoryPattern.IsMatch(repository)) return false;
-        return Uri.TryCreate(repository, UriKind.Absolute, out var uri)
-            && uri.Scheme == Uri.UriSchemeHttps
-            && !string.IsNullOrEmpty(uri.Host)
-            && string.IsNullOrEmpty(uri.UserInfo)
-            && uri.Port is >= -1 and <= 65535;
-    }
-
     private static void ValidatePayload(BlueprintPackageDefinition definition, ImmutableArray<byte> bytes, List<string> errors)
     {
         if (bytes.Length > BlueprintPackageLimits.MaximumPayloadBytes)
@@ -291,7 +265,7 @@ public static class BlueprintPackageValidator
         {
             try
             {
-                var text = new UTF8Encoding(false, true).GetString(bytes.AsSpan());
+                var text = StrictUtf8.GetString(bytes.AsSpan());
                 if (text.IndexOf('\0') >= 0) errors.Add($"text payload contains NUL: {definition.Path}");
             }
             catch (DecoderFallbackException) { errors.Add($"text payload is not valid UTF-8: {definition.Path}"); }
@@ -305,7 +279,7 @@ public static class BlueprintPackageValidator
             using var document = StrictJson.Parse(bytes.AsSpan());
             return CanonicalJson.Write(document.RootElement);
         }
-        var text = new UTF8Encoding(false, true).GetString(bytes.AsSpan()).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var text = StrictUtf8.GetString(bytes.AsSpan()).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         return text.EndsWith('\n') ? text : $"{text}\n";
     }
 
@@ -397,6 +371,19 @@ public static class BlueprintPackageValidator
         BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)value.Length);
         hash.AppendData(length);
         hash.AppendData(value);
+    }
+
+    private static byte[] EncodePathUtf8(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        try
+        {
+            return StrictUtf8.GetBytes(path);
+        }
+        catch (EncoderFallbackException exception)
+        {
+            throw new ArgumentException("Payload paths must be valid Unicode.", nameof(path), exception);
+        }
     }
 }
 

@@ -1,7 +1,6 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "https://agentweaver.dev/metaschemas/blueprint-package-v1",
   "$id": "https://agentweaver.dev/schemas/blueprint-package-v1.json",
-  "x-agentweaver-canonical-number-token-max-length": 4096,
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -178,9 +177,8 @@
         },
         "repository": {
           "type": "string",
-          "format": "uri",
           "maxLength": 2048,
-          "pattern": "^https://(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+\\])(?::(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:[/?#](?:[A-Za-z0-9\\-._~:/?#[\\]@!$&'()*+,;=]|%[0-9A-Fa-f]{2})*)?(?![\\s\\S])"
+          "x-agentweaver-https-repository-uri": true
         },
         "revision": {
           "type": "string",
@@ -188,8 +186,7 @@
         },
         "created_at": {
           "type": "string",
-          "format": "date-time",
-          "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))(?![\\s\\S])"
+          "x-agentweaver-rfc3339-timestamp": true
         }
       }
     },
@@ -197,9 +194,5 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}(?![\\s\\S])"
     }
-  },
-  "x-agentweaver-vocabulary": {
-    "id": "https://agentweaver.dev/vocab/blueprint-package-v1",
-    "required": true
   }
 }

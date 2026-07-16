@@ -19,6 +19,7 @@
     <EmbeddedResource Include="Catalog\Resources\**\*" />
     <EmbeddedResource Include="Templates\agentweaver-squad-coordinator.md" />
     <EmbeddedResource Include="BlueprintPackages\Schemas\blueprint-package-v1.schema.json" />
+    <EmbeddedResource Include="BlueprintPackages\Schemas\blueprint-package-v1.meta.schema.json" />
   </ItemGroup>
 
 </Project>

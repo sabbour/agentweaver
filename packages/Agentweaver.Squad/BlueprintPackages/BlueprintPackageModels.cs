@@ -74,7 +74,7 @@ public sealed record BlueprintPackageProvenance(
     string? Producer,
     string? Repository,
     string? Revision,
-    DateTimeOffset? CreatedAt);
+    string? CreatedAt);
 
 /// <summary>All package identities calculated without reformatting raw manifest bytes.</summary>
 public sealed record BlueprintPackageDigests(

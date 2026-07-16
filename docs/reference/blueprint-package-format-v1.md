@@ -25,13 +25,18 @@ The exact schema is exposed by `BlueprintPackageSchema.Json`.
 alternate extensions, or unlisted files. Every inventory entry must have one payload, and every
 payload must have exactly one inventory entry.
 
-The distributed schema uses the declared
-`x-agentweaver-canonical-definition-path` assertion from the
-`https://agentweaver.dev/vocab/blueprint-package-v1` vocabulary to require that `path` equals the
-path in the table for that entry's `kind` and `id`. Generic Draft 2020-12 validators can validate
-the standard structural keywords but do not evaluate this cross-property assertion. Tools must run
-`BlueprintPackageSchema.ValidateCustomKeywords` (or `BlueprintPackageValidator.Validate`, which
-does so) after their standard schema validation.
+The distributed schema names the Agentweaver metaschema
+`https://agentweaver.dev/metaschemas/blueprint-package-v1`. Its required
+`https://agentweaver.dev/vocab/blueprint-package-v1` vocabulary declares these assertions:
+`x-agentweaver-canonical-definition-path`, `x-agentweaver-https-repository-uri`, and
+`x-agentweaver-rfc3339-timestamp`. They require the definition path to equal the path in the table
+for its `kind` and `id`, and enforce the repository URI and timestamp profiles below.
+
+An implementation that supports this metaschema and required vocabulary must evaluate all three
+keywords. A generic Draft 2020-12 validator that does not support the vocabulary must fail schema
+loading or report that it cannot validate this contract; it must not claim that unknown keywords
+were enforced. Such consumers must use `BlueprintPackageSchema.ValidateCustomKeywords` (or
+`BlueprintPackageValidator.Validate`, which invokes it) in addition to their standard validation.
 
 ```json
 {
@@ -74,11 +79,14 @@ amplifying canonicalization work while preserving exact decimal semantics within
 optional provenance object is bounded to
 the `catalog`, `generated`, or `imported` source, a bounded producer token, an absolute HTTPS
 repository URI with RFC 3986 percent escapes, a lower-case hexadecimal revision, and a timestamp.
-Repository URIs reject credentials, whitespace, controls, malformed percent escapes, and ports
-outside 0 through 65535. The timestamp profile is RFC 3339 calendar date and time with seconds
-`00` through `59`, an optional fractional second, and either `Z` or a numeric offset from
-`-14:00` through `+14:00`; `14:00` is the only permitted offset at hour 14. Leap seconds are not
-supported.
+Repository URIs use ASCII DNS names with nonempty letter-or-digit-bounded labels (or bracketed
+IPv6), reject credentials, whitespace, controls, malformed percent escapes, invalid domains, and
+ports outside 0 through 65535. The timestamp profile is an exact proleptic Gregorian RFC 3339
+date and time with seconds `00` through `59`, an optional unbounded decimal fraction, and either
+`Z` or a numeric offset from `-14:00` through `+14:00`; `14:00` is the only permitted offset at
+hour 14. Leap seconds and year `0000` are not supported. The timestamp is validated textually and
+preserved as supplied, so valid precision beyond `DateTimeOffset` ticks (for example,
+`9999-12-31T23:59:59.99999999Z`) is accepted without rounding.
 
 Before hashing, decoding, parsing, or canonicalizing any payload, validation preflights the
 definition count, every declared and raw payload size, and the aggregate raw payload bytes. A
@@ -105,4 +113,6 @@ Use `BlueprintPackageValidator.Validate(BlueprintPackageSource)`. Supply raw man
 path-to-byte payload set. The source copies these inputs, and successful results expose immutable
 manifest, byte, and collection snapshots. `CalculatePayloadSetDigest` accepts the same immutable
 path-to-byte payload set and hashes the exact bytes; it does not trust inventory metadata. Validation
-is pure: it performs no archive extraction, file I/O, network access, or persistence.
+is pure: it performs no archive extraction, file I/O, network access, or persistence. The public
+payload-set helper uses strict UTF-8 for path strings and rejects invalid UTF-16 rather than
+replacement-encoding it before hashing.

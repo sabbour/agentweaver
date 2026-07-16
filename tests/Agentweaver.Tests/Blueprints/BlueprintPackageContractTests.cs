@@ -273,9 +273,14 @@ public sealed class BlueprintPackageContractTests
 
     [Theory]
     [InlineData("https://github.com/example/blueprints", "2026-07-16T10:54:27Z", true)]
+    [InlineData("https://github.com/example/%2Fblueprints", "9999-12-31T23:59:59.99999999Z", true)]
+    [InlineData("https://[2001:db8::1]:65535/blueprints", "2024-02-29T10:54:27-14:00", true)]
     [InlineData("http://github.com/example/blueprints", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com/example/blueprints", "2026-07-16", false)]
     [InlineData("https://github.com/example/%ZZ", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://user@github.com/example", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github..com/example", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github.com:65536/example", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://user:password@github.com/example", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com/example\n", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com/example\r", "2026-07-16T10:54:27Z", false)]
@@ -286,20 +291,32 @@ public sealed class BlueprintPackageContractTests
     [InlineData("https://github.com/example", "2026-07-16T10:54:27+14:00", true)]
     [InlineData("https://github.com/example", "2026-07-16T10:54:27+14:01", false)]
     [InlineData("https://github.com/example", "2026-07-16T10:54:60Z", false)]
-    public void SchemaAndRuntime_ProvenanceGrammarHaveParity(string repository, string createdAt, bool expected)
+    [InlineData("https://github.com/example", "2026-02-29T10:54:27Z", false)]
+    [InlineData("https://github.com/example", "0000-01-01T00:00:00Z", false)]
+    public void SchemaRuntimeAndCustomKeywords_ProvenanceGrammarHaveParity(string repository, string createdAt, bool expected)
     {
         using var schema = JsonDocument.Parse(BlueprintPackageSchema.Json);
         var provenance = schema.RootElement.GetProperty("properties").GetProperty("provenance").GetProperty("properties");
-        var repositoryPattern = provenance.GetProperty("repository").GetProperty("pattern").GetString()!;
-        var createdAtPattern = provenance.GetProperty("created_at").GetProperty("pattern").GetString()!;
+        provenance.GetProperty("repository").GetProperty(BlueprintPackageSchema.HttpsRepositoryUriKeyword).GetBoolean().Should().BeTrue();
+        provenance.GetProperty("created_at").GetProperty(BlueprintPackageSchema.Rfc3339TimestampKeyword).GetBoolean().Should().BeTrue();
 
-        (new Regex(repositoryPattern).IsMatch(repository) && new Regex(createdAtPattern).IsMatch(createdAt)).Should().Be(expected);
-        BlueprintPackageValidator.Validate(CreateDefinitionSource(
+        var source = CreateDefinitionSource(
             "blueprint",
             "engineering",
             "definitions/blueprints/engineering.json",
             repository: repository,
-            createdAt: createdAt)).IsValid.Should().Be(expected);
+            createdAt: createdAt);
+        using var manifest = JsonDocument.Parse(source.RawManifest.ToArray());
+        var customKeywordErrors = new List<string>();
+        BlueprintPackageSchema.ValidateCustomKeywords(manifest.RootElement, customKeywordErrors);
+        var result = BlueprintPackageValidator.Validate(source);
+
+        (BlueprintPackageSchema.IsHttpsRepositoryUri(repository) && BlueprintPackageSchema.IsRfc3339Timestamp(createdAt))
+            .Should().Be(expected);
+        customKeywordErrors.Any().Should().Be(!expected);
+        result.IsValid.Should().Be(expected);
+        if (expected)
+            result.Package!.Manifest.Provenance!.CreatedAt.Should().Be(createdAt);
     }
 
     [Fact]
@@ -377,18 +394,37 @@ public sealed class BlueprintPackageContractTests
     public void Schema_IsStrictAndMirrorsManifestGrammar()
     {
         using var schema = JsonDocument.Parse(BlueprintPackageSchema.Json);
+        using var metaSchema = JsonDocument.Parse(BlueprintPackageSchema.MetaSchemaJson);
         schema.RootElement.GetProperty("$id").GetString().Should().Be(BlueprintPackageSchema.Id);
+        schema.RootElement.GetProperty("$schema").GetString().Should().Be(BlueprintPackageSchema.MetaSchemaId);
+        metaSchema.RootElement.GetProperty("$id").GetString().Should().Be(BlueprintPackageSchema.MetaSchemaId);
+        metaSchema.RootElement.GetProperty("$vocabulary").GetProperty(BlueprintPackageSchema.VocabularyId).GetBoolean().Should().BeTrue();
         schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
         schema.RootElement.GetProperty("properties").GetProperty("definitions").GetProperty("maxItems").GetInt32()
             .Should().Be(BlueprintPackageLimits.MaximumDefinitions);
         schema.RootElement.GetProperty("properties").GetProperty("provenance").GetProperty("additionalProperties").GetBoolean()
             .Should().BeFalse();
-        schema.RootElement.GetProperty("x-agentweaver-canonical-number-token-max-length").GetInt32()
-            .Should().Be(BlueprintPackageLimits.MaximumCanonicalNumberTokenLength);
-        schema.RootElement.GetProperty("x-agentweaver-vocabulary").GetProperty("id").GetString()
-            .Should().Be(BlueprintPackageSchema.VocabularyId);
         schema.RootElement.GetProperty("properties").GetProperty("definitions").GetProperty("items")
             .GetProperty(BlueprintPackageSchema.CanonicalDefinitionPathKeyword).GetBoolean().Should().BeTrue();
+        var provenance = schema.RootElement.GetProperty("properties").GetProperty("provenance").GetProperty("properties");
+        provenance.GetProperty("repository").GetProperty(BlueprintPackageSchema.HttpsRepositoryUriKeyword).GetBoolean().Should().BeTrue();
+        provenance.GetProperty("created_at").GetProperty(BlueprintPackageSchema.Rfc3339TimestampKeyword).GetBoolean().Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(0xD800)]
+    [InlineData(0xDC00)]
+    public void CalculatePayloadSetDigest_RejectsUnpairedSurrogatePaths(int invalidCodeUnit)
+    {
+        var invalidPath = new string((char)invalidCodeUnit, 1);
+        var payloads = new Dictionary<string, ImmutableArray<byte>>
+        {
+            [invalidPath] = ImmutableArray.Create((byte)1),
+        };
+
+        Action action = () => BlueprintPackageValidator.CalculatePayloadSetDigest(payloads);
+
+        action.Should().Throw<ArgumentException>().WithMessage("Payload paths must be valid Unicode.*");
     }
 
     [Fact]
