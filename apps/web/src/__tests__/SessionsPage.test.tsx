@@ -9,6 +9,7 @@ import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     listAssistantRuns: vi.fn(),
+    deleteRun: vi.fn(),
   },
 }));
 
@@ -74,5 +75,57 @@ describe('SessionsPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('location-probe').textContent).toBe('/assistant?project=proj-7');
     });
+  });
+
+  it('shows a confirmation dialog before deleting a session', async () => {
+    render(
+      <Wrapper>
+        <SessionsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText('Inspect backlog');
+    fireEvent.click(screen.getByTestId('sessions-row-delete'));
+
+    expect(await screen.findByText('Delete this conversation?')).toBeTruthy();
+    expect(apiClient.deleteRun).not.toHaveBeenCalled();
+  });
+
+  it('deletes the session and removes it from the list on confirm', async () => {
+    vi.mocked(apiClient.deleteRun).mockResolvedValue(undefined as never);
+
+    render(
+      <Wrapper>
+        <SessionsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText('Inspect backlog');
+    fireEvent.click(screen.getByTestId('sessions-row-delete'));
+    await screen.findByText('Delete this conversation?');
+
+    fireEvent.click(screen.getByTestId('sessions-delete-confirm'));
+
+    await waitFor(() => expect(apiClient.deleteRun).toHaveBeenCalledWith('run-1'));
+    await waitFor(() => expect(screen.queryByText('Inspect backlog')).toBeNull());
+  });
+
+  it('shows an inline error and keeps the row if delete fails', async () => {
+    vi.mocked(apiClient.deleteRun).mockRejectedValue(new Error('boom'));
+
+    render(
+      <Wrapper>
+        <SessionsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText('Inspect backlog');
+    fireEvent.click(screen.getByTestId('sessions-row-delete'));
+    await screen.findByText('Delete this conversation?');
+
+    fireEvent.click(screen.getByTestId('sessions-delete-confirm'));
+
+    expect(await screen.findByText('boom')).toBeTruthy();
+    expect(screen.getByText('Inspect backlog')).toBeTruthy();
   });
 });
