@@ -51,29 +51,36 @@ describe('AgentweaverApiClient AbortSignal plumbing', () => {
       vi.unstubAllGlobals();
     });
 
-    it('uses the project-scoped preview and applies the exact preview digest', async () => {
+    it('uses the backend skill-default routes and sends blueprint_id with the exact preview digest', async () => {
       const fetchMock = vi.fn()
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ digest: 'preview-1' }),
+          text: async () => JSON.stringify({
+            blueprint_id: 'blueprint-software-development',
+            blueprint_version: 'version-1',
+            digest: 'preview-1',
+            can_apply: true,
+            errors: [],
+            assignments: [],
+          }),
         })
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ digest: 'preview-1', applied: true, actions: [], blockers: [] }),
+          text: async () => JSON.stringify({ outcome: 'applied', errors: [], preview: null }),
         });
       vi.stubGlobal('fetch', fetchMock);
       const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
 
-      await client.previewBlueprintSkillDefaults('project/1');
-      await client.applyBlueprintSkillDefaults('project/1', 'preview-1');
+      await client.previewBlueprintSkillDefaults('project/1', 'blueprint-software-development');
+      await client.applyBlueprintSkillDefaults('project/1', 'blueprint-software-development', 'preview-1');
 
-      expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.test/api/projects/project%2F1/skills/defaults/preview');
+      expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.test/api/projects/project%2F1/skill-defaults/preview');
       expect(fetchMock.mock.calls[0][1].method).toBe('POST');
-      expect(fetchMock.mock.calls[0][1].body).toBe('{}');
-      expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.test/api/projects/project%2F1/skills/defaults/apply');
-      expect(fetchMock.mock.calls[1][1].body).toBe('{"digest":"preview-1"}');
+      expect(fetchMock.mock.calls[0][1].body).toBe('{"blueprint_id":"blueprint-software-development"}');
+      expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.test/api/projects/project%2F1/skill-defaults/apply');
+      expect(fetchMock.mock.calls[1][1].body).toBe('{"blueprint_id":"blueprint-software-development","digest":"preview-1"}');
     });
   });
 
