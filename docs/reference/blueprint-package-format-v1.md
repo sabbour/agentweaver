@@ -74,7 +74,7 @@ a lower-case hexadecimal revision, and an RFC 3339 timestamp.
 | Digest | Definition |
 | --- | --- |
 | `RawManifestSha256` | SHA-256 of the exact supplied `manifest.json` bytes. No parse/serialize round trip occurs. |
-| `PayloadSetSha256` | SHA-256 of sorted inventory `(path, size, sha256)` records. |
+| `PayloadSetSha256` | SHA-256 of sorted path UTF-8 bytes and exact raw payload bytes, each length-prefixed with an unsigned 64-bit big-endian length. |
 | `SemanticSha256` | SHA-256 of package identity, compatibility, sorted definitions, and canonical payload semantics. JSON object keys are sorted; JSON numbers are normalized from their lexical tokens without floating-point conversion. Text payload line endings are normalized to LF. |
 | `ContainerSha256` | Optional transport-provided SHA-256. It is compared with the optional manifest declaration but v1 does not define a container/archive format. |
 
@@ -85,6 +85,7 @@ while retaining exact raw-manifest integrity.
 ## Validation API
 
 Use `BlueprintPackageValidator.Validate(BlueprintPackageSource)`. Supply raw manifest bytes and the
-path-to-byte payload set. A successful result contains the parsed immutable manifest, preserved raw
-manifest bytes, and the digest set. Validation is pure: it performs no archive extraction, file I/O,
-network access, or persistence.
+path-to-byte payload set. The source copies these inputs, and successful results expose immutable
+manifest, byte, and collection snapshots. `CalculatePayloadSetDigest` accepts the same immutable
+path-to-byte payload set and hashes the exact bytes; it does not trust inventory metadata. Validation
+is pure: it performs no archive extraction, file I/O, network access, or persistence.

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using System.Text.RegularExpressions;
 
@@ -14,9 +15,9 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
         TimeSpan.FromSeconds(1));
 
-    private readonly string[] _preRelease;
+    private readonly ImmutableArray<string> _preRelease;
 
-    private SemanticVersion(string major, string minor, string patch, string[] preRelease, string? build)
+    private SemanticVersion(string major, string minor, string patch, ImmutableArray<string> preRelease, string? build)
     {
         Major = major;
         Minor = minor;
@@ -28,14 +29,22 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
     public string Major { get; }
     public string Minor { get; }
     public string Patch { get; }
-    public IReadOnlyList<string> PreRelease => _preRelease;
+    public ImmutableArray<string> PreRelease => _preRelease;
     public string? Build { get; }
 
     public static bool TryParse(string? value, out SemanticVersion? version)
     {
         version = null;
-        if (value is null || value.Length > 512) return false;
-        var match = Pattern.Match(value);
+        if (value is null) return false;
+        Match match;
+        try
+        {
+            match = Pattern.Match(value);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
         if (!match.Success) return false;
 
         var prerelease = match.Groups["pre"].Success
@@ -51,7 +60,7 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
             match.Groups["major"].Value,
             match.Groups["minor"].Value,
             match.Groups["patch"].Value,
-            prerelease,
+            [.. prerelease],
             match.Groups["build"].Success ? match.Groups["build"].Value : null);
         return true;
     }
@@ -82,7 +91,16 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
 
     public bool Equals(SemanticVersion? other) => other is not null && CompareTo(other) == 0;
     public override bool Equals(object? obj) => obj is SemanticVersion version && Equals(version);
-    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(ToString());
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Major, StringComparer.Ordinal);
+        hash.Add(Minor, StringComparer.Ordinal);
+        hash.Add(Patch, StringComparer.Ordinal);
+        hash.Add(_preRelease.Length);
+        foreach (var identifier in _preRelease) hash.Add(identifier, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
     public override string ToString() =>
         $"{Major}.{Minor}.{Patch}{(_preRelease.Length == 0 ? string.Empty : $"-{string.Join('.', _preRelease)}")}{(Build is null ? string.Empty : $"+{Build}")}";
 

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -7,27 +7,26 @@ namespace Agentweaver.Squad.BlueprintPackages;
 /// <summary>Immutable input to the definitions-only Blueprint package contract.</summary>
 public sealed class BlueprintPackageSource
 {
-    private readonly ReadOnlyDictionary<string, byte[]> _payloads;
-    private readonly byte[] _rawManifest;
+    private readonly ImmutableDictionary<string, ImmutableArray<byte>> _payloads;
+    private readonly ImmutableArray<byte> _rawManifest;
 
     public BlueprintPackageSource(
         ReadOnlySpan<byte> rawManifest,
         IEnumerable<KeyValuePair<string, byte[]>> payloads,
         string? containerSha256 = null)
     {
-        _rawManifest = rawManifest.ToArray();
-        _payloads = new ReadOnlyDictionary<string, byte[]>(
-            payloads.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value.ToArray(),
-                StringComparer.Ordinal));
+        _rawManifest = ImmutableArray.CreateRange(rawManifest.ToArray());
+        _payloads = payloads.ToImmutableDictionary(
+            pair => pair.Key,
+            pair => ImmutableArray.CreateRange(pair.Value.ToArray()),
+            StringComparer.Ordinal);
         ContainerSha256 = containerSha256;
     }
 
     /// <summary>Manifest bytes exactly as supplied. They are never parsed and re-serialized for hashing.</summary>
-    public ReadOnlyMemory<byte> RawManifest => _rawManifest;
+    public ImmutableArray<byte> RawManifest => _rawManifest;
     /// <summary>Payload files, keyed by their package-relative path.</summary>
-    public IReadOnlyDictionary<string, byte[]> Payloads => _payloads;
+    public IReadOnlyDictionary<string, ImmutableArray<byte>> Payloads => _payloads;
     /// <summary>Optional digest calculated by a container transport; no container format is defined here.</summary>
     public string? ContainerSha256 { get; }
 }
@@ -35,7 +34,7 @@ public sealed class BlueprintPackageSource
 /// <summary>A validated package. This layer deliberately does not read or write archives or persistence stores.</summary>
 public sealed record BlueprintPackage(
     BlueprintPackageManifest Manifest,
-    ReadOnlyMemory<byte> RawManifest,
+    ImmutableArray<byte> RawManifest,
     BlueprintPackageDigests Digests);
 
 /// <summary>Version-one manifest model.</summary>
@@ -43,7 +42,7 @@ public sealed record BlueprintPackageManifest(
     string SchemaVersion,
     string PackageId,
     SemanticVersion Version,
-    IReadOnlyList<BlueprintPackageDefinition> Definitions,
+    ImmutableArray<BlueprintPackageDefinition> Definitions,
     BlueprintPackageCompatibility? Compatibility,
     BlueprintPackageProvenance? Provenance,
     string? ContainerSha256);
@@ -87,19 +86,19 @@ public sealed record BlueprintPackageDigests(
 /// <summary>Validation outcome; diagnostics are stable, bounded strings suitable for callers to surface.</summary>
 public sealed class BlueprintPackageValidationResult
 {
-    private BlueprintPackageValidationResult(BlueprintPackage? package, IReadOnlyList<string> errors)
+    private BlueprintPackageValidationResult(BlueprintPackage? package, ImmutableArray<string> errors)
     {
         Package = package;
         Errors = errors;
     }
 
     public BlueprintPackage? Package { get; }
-    public IReadOnlyList<string> Errors { get; }
-    public bool IsValid => Package is not null && Errors.Count == 0;
+    public ImmutableArray<string> Errors { get; }
+    public bool IsValid => Package is not null && Errors.Length == 0;
 
     internal static BlueprintPackageValidationResult Success(BlueprintPackage package) => new(package, []);
     internal static BlueprintPackageValidationResult Failure(IEnumerable<string> errors) =>
-        new(null, errors.Take(BlueprintPackageLimits.MaximumErrors).ToArray());
+        new(null, errors.Take(BlueprintPackageLimits.MaximumErrors).ToImmutableArray());
 }
 
 /// <summary>Hard limits shared by the parser, validation rules, and JSON schema.</summary>

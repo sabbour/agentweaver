@@ -12,8 +12,8 @@
       "additionalProperties": false,
       "required": ["id", "version"],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62})$" },
-        "version": { "type": "string", "maxLength": 512 }
+        "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,63})$" },
+        "version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" }
       }
     },
     "definitions": {
@@ -26,11 +26,29 @@
         "required": ["kind", "id", "path", "size", "sha256"],
         "properties": {
           "kind": { "enum": ["blueprint", "role", "workflow", "skill"] },
-          "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62})$" },
+          "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,63})$" },
           "path": { "type": "string", "maxLength": 240 },
           "size": { "type": "integer", "minimum": 0, "maximum": 1048576 },
           "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
-        }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "blueprint" } } },
+            "then": { "properties": { "path": { "pattern": "^definitions/blueprints/[a-z0-9](?:[a-z0-9-]{0,63})\\.json$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "role" } } },
+            "then": { "properties": { "path": { "pattern": "^definitions/roles/[a-z0-9](?:[a-z0-9-]{0,63})\\.json$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "workflow" } } },
+            "then": { "properties": { "path": { "pattern": "^definitions/workflows/[a-z0-9](?:[a-z0-9-]{0,63})\\.yaml$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "skill" } } },
+            "then": { "properties": { "path": { "pattern": "^definitions/skills/[a-z0-9](?:[a-z0-9-]{0,63})\\.md$" } } }
+          }
+        ]
       }
     },
     "compatibility": {
@@ -38,8 +56,8 @@
       "additionalProperties": false,
       "required": ["minimum_agentweaver_version"],
       "properties": {
-        "minimum_agentweaver_version": { "type": "string", "maxLength": 512 },
-        "maximum_agentweaver_version": { "type": "string", "maxLength": 512 }
+        "minimum_agentweaver_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+        "maximum_agentweaver_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" }
       }
     },
     "provenance": {
@@ -49,9 +67,9 @@
       "properties": {
         "source": { "enum": ["catalog", "generated", "imported"] },
         "producer": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
-        "repository": { "type": "string", "pattern": "^https://[^\\s]{1,2040}$" },
+        "repository": { "type": "string", "format": "uri", "maxLength": 2048, "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:/[^\\s]*)?$" },
         "revision": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time", "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$" }
       }
     },
     "container_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }

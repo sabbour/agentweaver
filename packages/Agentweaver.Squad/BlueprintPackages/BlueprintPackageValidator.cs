@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
+using System.Collections.Immutable;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -8,22 +11,28 @@ namespace Agentweaver.Squad.BlueprintPackages;
 /// <summary>Strict, side-effect-free validator for Blueprint package v1.</summary>
 public static class BlueprintPackageValidator
 {
-    private static readonly Regex IdPattern = new("^[a-z0-9](?:[a-z0-9-]{0,62})$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex IdPattern = new("^[a-z0-9](?:[a-z0-9-]{0,63})$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex HashPattern = new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex ProducerPattern = new("^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex RevisionPattern = new("^[0-9a-f]{7,64}$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex RepositoryPattern = new("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:/[^\\s]*)?$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex Rfc3339Pattern = new(
+        "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+    private static readonly byte[] PayloadSetPrefix = "blueprint-package-payload-set-v1\0"u8.ToArray();
 
     public static BlueprintPackageValidationResult Validate(BlueprintPackageSource source)
     {
         ArgumentNullException.ThrowIfNull(source);
         var errors = new List<string>();
         if (source.RawManifest.Length > BlueprintPackageLimits.MaximumManifestBytes)
-            errors.Add("manifest exceeds the maximum byte length.");
+            return BlueprintPackageValidationResult.Failure(["manifest exceeds the maximum byte length."]);
 
         JsonDocument? document = null;
         try
         {
-            document = StrictJson.Parse(source.RawManifest.Span);
+            document = StrictJson.Parse(source.RawManifest.AsSpan());
         }
         catch (JsonException exception)
         {
@@ -33,24 +42,33 @@ public static class BlueprintPackageValidator
         if (document is null) return BlueprintPackageValidationResult.Failure(errors);
         using (document)
         {
-            var manifest = ParseManifest(document.RootElement, errors);
+            BlueprintPackageManifest? manifest;
+            try
+            {
+                manifest = ParseManifest(document.RootElement, errors);
+            }
+            catch (JsonException exception)
+            {
+                errors.Add($"manifest is not strict JSON: {exception.Message}");
+                return BlueprintPackageValidationResult.Failure(errors);
+            }
             if (manifest is null) return BlueprintPackageValidationResult.Failure(errors);
 
             ValidateInventory(source, manifest, errors);
             if (errors.Count > 0) return BlueprintPackageValidationResult.Failure(errors);
 
-            var rawManifest = source.RawManifest.ToArray();
+            var rawManifest = source.RawManifest;
             var digests = new BlueprintPackageDigests(
                 SemanticSha256: CalculateSemanticDigest(manifest, source.Payloads),
-                PayloadSetSha256: CalculatePayloadSetDigest(manifest.Definitions),
-                RawManifestSha256: BlueprintPackageHash.Sha256(rawManifest),
+                PayloadSetSha256: CalculatePayloadSetDigest(source.Payloads),
+                RawManifestSha256: BlueprintPackageHash.Sha256(rawManifest.AsSpan()),
                 ContainerSha256: source.ContainerSha256 ?? manifest.ContainerSha256);
 
             return BlueprintPackageValidationResult.Success(new BlueprintPackage(manifest, rawManifest, digests));
         }
     }
 
-    public static string CalculateSemanticDigest(BlueprintPackageManifest manifest, IReadOnlyDictionary<string, byte[]> payloads)
+    public static string CalculateSemanticDigest(BlueprintPackageManifest manifest, IReadOnlyDictionary<string, ImmutableArray<byte>> payloads)
     {
         var builder = new StringBuilder();
         builder.Append("blueprint-package-v1\0")
@@ -70,13 +88,17 @@ public static class BlueprintPackageValidator
         return BlueprintPackageHash.Sha256Utf8(builder.ToString());
     }
 
-    public static string CalculatePayloadSetDigest(IEnumerable<BlueprintPackageDefinition> definitions)
+    /// <summary>Hashes exact sorted UTF-8 paths and raw payload bytes with length-delimited framing.</summary>
+    public static string CalculatePayloadSetDigest(IReadOnlyDictionary<string, ImmutableArray<byte>> payloads)
     {
-        var builder = new StringBuilder("blueprint-package-payload-set-v1\0");
-        foreach (var definition in definitions.OrderBy(item => item.Path, StringComparer.Ordinal))
-            builder.Append(definition.Path).Append('\0').Append(definition.Size.ToString(CultureInfo.InvariantCulture))
-                .Append('\0').Append(definition.Sha256).Append('\0');
-        return BlueprintPackageHash.Sha256Utf8(builder.ToString());
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(PayloadSetPrefix);
+        foreach (var payload in payloads.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            AppendLengthPrefixed(hash, Encoding.UTF8.GetBytes(payload.Key));
+            AppendLengthPrefixed(hash, payload.Value.AsSpan());
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
     private static BlueprintPackageManifest? ParseManifest(JsonElement root, List<string> errors)
@@ -111,7 +133,7 @@ public static class BlueprintPackageValidator
             : new BlueprintPackageManifest(schemaVersion, packageId, version, definitions, compatibility, provenance, container);
     }
 
-    private static IReadOnlyList<BlueprintPackageDefinition> ParseDefinitions(JsonElement definitions, List<string> errors)
+    private static ImmutableArray<BlueprintPackageDefinition> ParseDefinitions(JsonElement definitions, List<string> errors)
     {
         if (definitions.GetArrayLength() is < 1 or > BlueprintPackageLimits.MaximumDefinitions)
         {
@@ -145,7 +167,7 @@ public static class BlueprintPackageValidator
             if (kindText is not null && id is not null && path is not null && hash is not null && size >= 0 && TryKind(kindText, out kind))
                 result.Add(new BlueprintPackageDefinition(kind, id, path, size, hash));
         }
-        return result;
+        return [.. result];
     }
 
     private static BlueprintPackageCompatibility? ParseCompatibility(JsonElement element, List<string> errors)
@@ -181,13 +203,13 @@ public static class BlueprintPackageValidator
         var createdText = OptionalString(element, "created_at", "provenance", errors);
         if (source is not ("catalog" or "generated" or "imported")) errors.Add("provenance.source is invalid.");
         if (producer is not null && !ProducerPattern.IsMatch(producer)) errors.Add("provenance.producer has an invalid grammar.");
-        if (repository is not null && (!Uri.TryCreate(repository, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || repository.Any(char.IsWhiteSpace) || repository.Length > 2048))
+        if (repository is not null && (repository.Length > 2048 || !RepositoryPattern.IsMatch(repository)))
             errors.Add("provenance.repository must be a bounded https URL.");
         if (revision is not null && !RevisionPattern.IsMatch(revision)) errors.Add("provenance.revision must be a lower-case hexadecimal revision.");
         DateTimeOffset? created = null;
         if (createdText is not null)
         {
-            if (!DateTimeOffset.TryParse(createdText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+            if (!Rfc3339Pattern.IsMatch(createdText) || !DateTimeOffset.TryParse(createdText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
                 errors.Add("provenance.created_at must be RFC 3339 date-time.");
             else
                 created = parsed;
@@ -211,8 +233,13 @@ public static class BlueprintPackageValidator
                 continue;
             }
             total += bytes.Length;
+            if (bytes.Length > BlueprintPackageLimits.MaximumPayloadBytes)
+            {
+                errors.Add($"payload exceeds the byte limit: {definition.Path}");
+                continue;
+            }
             if (bytes.Length != definition.Size) errors.Add($"inventory size does not match: {definition.Path}");
-            if (BlueprintPackageHash.Sha256(bytes) != definition.Sha256) errors.Add($"inventory SHA-256 does not match: {definition.Path}");
+            if (BlueprintPackageHash.Sha256(bytes.AsSpan()) != definition.Sha256) errors.Add($"inventory SHA-256 does not match: {definition.Path}");
             ValidatePayload(definition, bytes, errors);
         }
         if (total > BlueprintPackageLimits.MaximumTotalPayloadBytes) errors.Add("payload set exceeds the total byte limit.");
@@ -221,7 +248,7 @@ public static class BlueprintPackageValidator
                 errors.Add($"payload is not listed in the inventory: {path}");
     }
 
-    private static void ValidatePayload(BlueprintPackageDefinition definition, byte[] bytes, List<string> errors)
+    private static void ValidatePayload(BlueprintPackageDefinition definition, ImmutableArray<byte> bytes, List<string> errors)
     {
         if (bytes.Length > BlueprintPackageLimits.MaximumPayloadBytes)
         {
@@ -230,28 +257,28 @@ public static class BlueprintPackageValidator
         }
         if (definition.Kind is BlueprintPackageDefinitionKind.Blueprint or BlueprintPackageDefinitionKind.Role)
         {
-            try { using var ignored = StrictJson.Parse(bytes); }
+            try { using var ignored = StrictJson.Parse(bytes.AsSpan()); }
             catch (JsonException exception) { errors.Add($"JSON payload is invalid ({definition.Path}): {exception.Message}"); }
         }
         else
         {
             try
             {
-                var text = new UTF8Encoding(false, true).GetString(bytes);
+                var text = new UTF8Encoding(false, true).GetString(bytes.AsSpan());
                 if (text.IndexOf('\0') >= 0) errors.Add($"text payload contains NUL: {definition.Path}");
             }
             catch (DecoderFallbackException) { errors.Add($"text payload is not valid UTF-8: {definition.Path}"); }
         }
     }
 
-    private static string CanonicalPayload(BlueprintPackageDefinition definition, byte[] bytes)
+    private static string CanonicalPayload(BlueprintPackageDefinition definition, ImmutableArray<byte> bytes)
     {
         if (definition.Kind is BlueprintPackageDefinitionKind.Blueprint or BlueprintPackageDefinitionKind.Role)
         {
-            using var document = StrictJson.Parse(bytes);
+            using var document = StrictJson.Parse(bytes.AsSpan());
             return CanonicalJson.Write(document.RootElement);
         }
-        var text = new UTF8Encoding(false, true).GetString(bytes).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var text = new UTF8Encoding(false, true).GetString(bytes.AsSpan()).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         return text.EndsWith('\n') ? text : $"{text}\n";
     }
 
@@ -295,8 +322,12 @@ public static class BlueprintPackageValidator
         Required(parent, name, JsonValueKind.Object, context, errors);
     private static JsonElement? RequiredArray(JsonElement parent, string name, string context, List<string> errors) =>
         Required(parent, name, JsonValueKind.Array, context, errors);
-    private static string? RequiredString(JsonElement parent, string name, string context, List<string> errors) =>
-        Required(parent, name, JsonValueKind.String, context, errors)?.GetString();
+    private static string? RequiredString(JsonElement parent, string name, string context, List<string> errors)
+    {
+        var value = Required(parent, name, JsonValueKind.String, context, errors);
+        return value is null ? null : ReadString(value.Value, name, context, errors);
+    }
+
     private static string? OptionalString(JsonElement parent, string name, string context, List<string> errors)
     {
         if (!parent.TryGetProperty(name, out var value)) return null;
@@ -305,7 +336,7 @@ public static class BlueprintPackageValidator
             errors.Add($"{context}.{name} must be a string.");
             return null;
         }
-        return value.GetString();
+        return ReadString(value, name, context, errors);
     }
 
     private static long RequiredInteger(JsonElement parent, string name, string context, List<string> errors)
@@ -333,6 +364,27 @@ public static class BlueprintPackageValidator
             return null;
         }
         return value;
+    }
+
+    private static string? ReadString(JsonElement value, string name, string context, List<string> errors)
+    {
+        try
+        {
+            return value.GetString();
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
+        {
+            errors.Add($"{context}.{name} is not a valid JSON string.");
+            return null;
+        }
+    }
+
+    private static void AppendLengthPrefixed(IncrementalHash hash, ReadOnlySpan<byte> value)
+    {
+        Span<byte> length = stackalloc byte[sizeof(ulong)];
+        BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)value.Length);
+        hash.AppendData(length);
+        hash.AppendData(value);
     }
 }
 
@@ -397,14 +449,15 @@ internal static class StrictJson
             if (!escaped)
             {
                 if (current == (byte)'\\') { escaped = true; continue; }
+                if (highSurrogatePending) throw new JsonException("unpaired Unicode high surrogate.");
                 if (current == (byte)'"')
                 {
-                    if (highSurrogatePending) throw new JsonException("unpaired Unicode high surrogate.");
                     inString = false;
                 }
                 continue;
             }
             escaped = false;
+            if (highSurrogatePending && current != (byte)'u') throw new JsonException("unpaired Unicode high surrogate.");
             if (current != (byte)'u') continue;
             if (index + 4 >= utf8.Length) throw new JsonException("incomplete Unicode escape.");
             var codeUnit = ParseHex(utf8[(index + 1)..(index + 5)]);
