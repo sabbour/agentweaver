@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  DialogTrigger,
   Spinner,
   Text,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { AddRegular } from '@fluentui/react-icons';
+import { AddRegular, DeleteRegular } from '@fluentui/react-icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
@@ -31,16 +38,27 @@ const useStyles = makeStyles({
   },
   row: {
     display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    gap: tokens.spacingVerticalXXS,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalM,
-    textAlign: 'left',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
-    cursor: 'pointer',
     width: '100%',
+  },
+  rowMain: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXXS,
+    textAlign: 'left',
+    cursor: 'pointer',
+    flexGrow: 1,
+    minWidth: 0,
+    border: 'none',
+    background: 'none',
+    padding: 0,
   },
   rowTitle: {
     fontWeight: tokens.fontWeightSemibold,
@@ -48,6 +66,9 @@ const useStyles = makeStyles({
   rowMeta: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
+  },
+  dialogError: {
+    color: tokens.colorPaletteRedForeground1,
   },
   loadingState: {
     display: 'flex',
@@ -91,6 +112,9 @@ export function SessionsPage() {
   const [runs, setRuns] = useState<AssistantRunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AssistantRunSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const assistantBasePath = useMemo(() => {
     const params = new URLSearchParams();
     if (projectId) params.set('project', projectId);
@@ -123,6 +147,31 @@ export function SessionsPage() {
     navigate(`/assistant?${params.toString()}`);
   };
   const startNew = () => navigate(assistantBasePath);
+
+  const requestDelete = (run: AssistantRunSummary) => {
+    setDeleteError(null);
+    setDeleteTarget(run);
+  };
+
+  const closeDeleteDialog = () => {
+    if (deleting) return;
+    setDeleteTarget(null);
+    setDeleteError(null);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    const runId = deleteTarget.run_id;
+    setDeleting(true);
+    setDeleteError(null);
+    apiClient.deleteRun(runId)
+      .then(() => {
+        setRuns((prev) => prev.filter((r) => r.run_id !== runId));
+        setDeleteTarget(null);
+      })
+      .catch((err) => setDeleteError(formatError(err)))
+      .finally(() => setDeleting(false));
+  };
 
   return (
     <div className={styles.root} data-testid="sessions-page">
@@ -164,19 +213,52 @@ export function SessionsPage() {
       {!loading && !error && runs.length > 0 && (
         <div className={styles.list} data-testid="sessions-list">
           {runs.map((run) => (
-            <button
-              key={run.run_id}
-              type="button"
-              className={styles.row}
-              data-testid="sessions-row"
-              onClick={() => openRun(run.run_id)}
-            >
-              <Text className={styles.rowTitle}>{run.title?.trim() || 'Untitled conversation'}</Text>
-              <Text className={styles.rowMeta}>{`${run.status} \u00b7 ${formatCreatedAt(run.created_at)}`}</Text>
-            </button>
+            <div key={run.run_id} className={styles.row} data-testid="sessions-row">
+              <button
+                type="button"
+                className={styles.rowMain}
+                onClick={() => openRun(run.run_id)}
+              >
+                <Text className={styles.rowTitle}>{run.title?.trim() || 'Untitled conversation'}</Text>
+                <Text className={styles.rowMeta}>{`${run.status} \u00b7 ${formatCreatedAt(run.created_at)}`}</Text>
+              </button>
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<DeleteRegular />}
+                aria-label="Delete session"
+                data-testid="sessions-row-delete"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  requestDelete(run);
+                }}
+              />
+            </div>
           ))}
         </div>
       )}
+
+      <Dialog open={deleteTarget !== null} onOpenChange={(_, data) => { if (!data.open) closeDeleteDialog(); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete this conversation?</DialogTitle>
+            <DialogContent>
+              This cannot be undone.
+              {deleteError && <Text className={styles.dialogError}>{deleteError}</Text>}
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="secondary" disabled={deleting} onClick={closeDeleteDialog}>
+                  Cancel
+                </Button>
+              </DialogTrigger>
+              <Button appearance="primary" disabled={deleting} onClick={confirmDelete} data-testid="sessions-delete-confirm">
+                {deleting ? <Spinner size="tiny" /> : 'Delete'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }

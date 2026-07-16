@@ -34,4 +34,20 @@ public interface IRunEventStream
     /// remaining buffered events and then complete normally.
     /// </summary>
     ValueTask CompleteAsync(string runId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the persisted (durable) events for a run with <c>Sequence &gt; fromSequence</c>,
+    /// ordered by sequence, WITHOUT tailing the live channel. Unlike <see cref="SubscribeAsync"/>,
+    /// this never blocks waiting for future events — it is a point-in-time snapshot read, used e.g.
+    /// to rehydrate in-memory conversational state for a run whose live entry was evicted (idle
+    /// timeout, pod restart, cross-pod routing) from a run that is NOT necessarily terminal/completed
+    /// (for which <see cref="SubscribeAsync"/> would otherwise poll/wait indefinitely).
+    /// </summary>
+    /// <remarks>
+    /// Default implementation throws — the two production stores (SQLite, EF) override it with a
+    /// real durable read. Test doubles that never exercise rehydration are exempt, mirroring the
+    /// <see cref="IRunStore.GetRunsBySubmittingUserAsync"/> convention above.
+    /// </remarks>
+    Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not implement GetPersistedEventsAsync.");
 }

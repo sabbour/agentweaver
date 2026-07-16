@@ -189,6 +189,13 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return ValueTask.CompletedTask;
     }
 
+    /// <inheritdoc />
+    public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default)
+    {
+        IReadOnlyList<RunEvent> events = LoadFromSequence(runId, fromSequence, ct);
+        return Task.FromResult(events);
+    }
+
     private static Channel<RunEvent> CreateChannel() =>
         Channel.CreateBounded<RunEvent>(new BoundedChannelOptions(ChannelCapacity)
         {
