@@ -25,6 +25,8 @@ All routes are project-scoped under `/api/projects/{id}/skills`.
 | `GET` | `/api/projects/{id}/skills/assignments` | List all skill-to-agent assignments in the project. |
 | `PUT` | `/api/projects/{id}/skills/{skillId}/assignments/{agentName}` | Assign a skill to an agent. |
 | `DELETE` | `/api/projects/{id}/skills/{skillId}/assignments/{agentName}` | Unassign a skill from an agent. |
+| `POST` | `/api/projects/{id}/skill-defaults/preview` | Preview predefined blueprint defaults for the confirmed team; returns a digest and makes no changes. |
+| `POST` | `/api/projects/{id}/skill-defaults/apply` | Atomically apply a matching preview using `blueprint_id` and `digest`; stale previews return `409`. |
 
 ### Import source restrictions
 
@@ -45,7 +47,7 @@ raw.githubusercontent.com are allowed."* This is an SSRF guard, not a convenienc
 | `id` | Project-local skill id. |
 | `name` | `SKILL.md` frontmatter name. Unique per project. |
 | `description` | Short description shown in the catalog and prompt metadata. |
-| `provenance` | `connected-repo-sync`, `repo-import`, `file-upload`, or `manual`. |
+| `provenance` | `built-in`, `connected-repo-sync`, `repo-import`, `file-upload`, or `manual`. |
 | `source_repository` | Connected repo identifier or imported repo URL when applicable. |
 | `source_location` | Skill folder path in the source when applicable. |
 | `status` | `active`, `missing`, or `malformed`. |
@@ -80,6 +82,8 @@ The MCP skill tools mirror the REST surface except multipart upload, which is we
 | `skill_sync` | Sync recognized skill directories from the connected repository. |
 | `skill_import_preview` | Preview candidate skills from GitHub/Git/raw SKILL.md sources. |
 | `skill_import` | Import one or more previewed locations from GitHub/Git/raw SKILL.md sources. |
+| `skill_defaults_preview` | Preview explicit bundled defaults and receive the apply digest. |
+| `skill_defaults_apply` | Atomically apply a matching defaults preview. |
 | `skill_assignments_list` | List all project assignments. |
 | `skill_assign` | Assign a skill to an agent. |
 | `skill_unassign` | Remove an assignment. |

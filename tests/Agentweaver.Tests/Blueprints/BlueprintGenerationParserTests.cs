@@ -149,6 +149,7 @@ public sealed class BlueprintGenerationParserTests
             workflowRegistry: new WorkflowRegistry(new CatalogConformanceSnapshot(catalog)),
             generator: null!,
             workflowGenerator: null!,
+            skillDefaults: null!,
             logger: NullLogger<BlueprintService>.Instance);
 
         var validation = service.Validate(parsed.Blueprint!);

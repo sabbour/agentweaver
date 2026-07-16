@@ -34,8 +34,6 @@ public sealed class BuiltInSkillAssetTests
         "writing-editing-fact-checking",
     ];
 
-    // This is an expectation-only coverage plan. It deliberately does not create Blueprint bindings
-    // or runtime assignments; those remain a later delivery phase.
     private static readonly IReadOnlyDictionary<string, string[]> ExpectedRoleSkills =
         new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
@@ -159,7 +157,7 @@ public sealed class BuiltInSkillAssetTests
     }
 
     [Fact]
-    public void BundledSkills_CoverTheCurrentBlueprintRoleRoster_WithoutBindings()
+    public void BundledSkills_CoverTheCurrentBlueprintRoleRoster()
     {
         var actualRoles = BlueprintFiles
             .SelectMany(path => ReadRoster(path))

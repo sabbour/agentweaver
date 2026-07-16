@@ -317,7 +317,9 @@ public sealed class ProjectService
 
         try
         {
-            await DeleteAsync(id, runStore, workflowRegistry, ct).ConfigureAwait(false);
+            // Creation compensation must finish even when the request cancellation token fired.
+            // Otherwise a cancelled defaults apply can leave a project record/workspace behind.
+            await DeleteAsync(id, runStore, workflowRegistry, CancellationToken.None).ConfigureAwait(false);
         }
         finally
         {

@@ -32,4 +32,26 @@ public interface ISkillStore
 
     /// <summary>Active skills assigned to a specific agent — the progressive-disclosure input at prompt time.</summary>
     Task<IReadOnlyList<Skill>> ListActiveSkillsForAgentAsync(ProjectId projectId, string agentName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically materializes a previously previewed built-in-default plan. The store verifies the
+    /// complete catalog/assignment state fingerprint inside its write transaction before changing
+    /// anything, so a stale preview cannot partially apply.
+    /// </summary>
+    Task<SkillDefaultsStoreApplyResult> ApplyDefaultsAsync(
+        SkillDefaultsStorePlan plan,
+        CancellationToken ct = default);
+}
+
+public sealed record SkillDefaultsStorePlan(
+    ProjectId ProjectId,
+    string ExpectedStateFingerprint,
+    IReadOnlyList<Skill> SkillsToInsert,
+    IReadOnlyList<Skill> SkillsToActivate,
+    IReadOnlyList<SkillAssignment> AssignmentsToAdd);
+
+public enum SkillDefaultsStoreApplyResult
+{
+    Applied,
+    Stale,
 }

@@ -346,6 +346,7 @@ builder.Services.AddSingleton<ProjectService>();
 }
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();

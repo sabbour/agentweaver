@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Casting;
+using Agentweaver.Api.Skills;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.SandboxFs;
@@ -49,6 +50,7 @@ public sealed class BlueprintService
     private readonly WorkflowRegistry _workflowRegistry;
     private readonly IBlueprintGenerator _generator;
     private readonly IWorkflowGenerator _workflowGenerator;
+    private readonly SkillDefaultsService _skillDefaults;
     private readonly ILogger<BlueprintService> _logger;
 
     public BlueprintService(
@@ -59,6 +61,7 @@ public sealed class BlueprintService
         WorkflowRegistry workflowRegistry,
         IBlueprintGenerator generator,
         IWorkflowGenerator workflowGenerator,
+        SkillDefaultsService skillDefaults,
         ILogger<BlueprintService> logger,
         CatalogConformanceSnapshot? catalogSnapshot = null)
     {
@@ -70,6 +73,7 @@ public sealed class BlueprintService
         _workflowRegistry = workflowRegistry;
         _generator = generator;
         _workflowGenerator = workflowGenerator;
+        _skillDefaults = skillDefaults;
         _logger = logger;
     }
 
@@ -281,6 +285,7 @@ public sealed class BlueprintService
         string projectId,
         Blueprint blueprint,
         string? generatedWorkflowYaml = null,
+        bool applySkillDefaults = false,
         CancellationToken ct = default)
     {
         var pid = ProjectId.Parse(projectId);
@@ -345,6 +350,21 @@ public sealed class BlueprintService
         await _casting
             .ConfirmProposalAsync(projectId, proposal.ProposalId, intent: "new", ct)
             .ConfigureAwait(false);
+
+        // Defaults are never retrofitted merely because an existing project applies a blueprint.
+        // New predefined-project creation opts in explicitly after team confirmation.
+        if (applySkillDefaults && blueprint.SkillBindings.Count > 0)
+        {
+            var preview = await _skillDefaults.PreviewAsync(pid, blueprint, ct).ConfigureAwait(false);
+            if (!preview.CanApply)
+                throw new InvalidOperationException(
+                    $"Skill defaults could not be applied: {string.Join(" ", preview.Errors)}");
+
+            var applied = await _skillDefaults.ApplyAsync(pid, blueprint, preview.Digest, ct).ConfigureAwait(false);
+            if (!string.Equals(applied.Outcome, "applied", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Skill defaults could not be applied: {string.Join(" ", applied.Errors)}");
+        }
 
         var now = DateTimeOffset.UtcNow;
         await _projectStore.UpdateDefaultWorkflowAsync(pid, blueprint.Workflow, now, ct).ConfigureAwait(false);
