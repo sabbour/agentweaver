@@ -3,6 +3,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain.BlueprintPackages;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
 
 namespace Agentweaver.Tests.Blueprints;
 
@@ -50,6 +51,47 @@ public sealed class SqliteOwnerBlueprintPackageLibraryTests
 
         outcomes.Select(x => x.Disposition).Should().Contain(BlueprintPackagePersistDisposition.Created);
         outcomes.Select(x => x.Disposition).Should().NotContain(BlueprintPackagePersistDisposition.ImmutableConflict);
+    }
+
+    [Fact]
+    public async Task Persist_RacingDeleteAfterVersionRead_ReturnsCompleteIdempotentAggregate()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var package = AggregatePackage();
+        var seed = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        await seed.PersistAsync(package);
+
+        var versionRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueAggregateRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var persister = new SqliteOwnerBlueprintPackageLibrary(
+            testDb.Db,
+            new Owner("owner-a"),
+            _ =>
+            {
+                versionRead.TrySetResult();
+                return continueAggregateRead.Task;
+            });
+        var deleter = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+
+        var persist = persister.PersistAsync(package);
+        await versionRead.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var deleteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var delete = Task.Run(async () =>
+        {
+            deleteStarted.TrySetResult();
+            return await deleter.DeletePackageAsync(package.PackageId);
+        });
+        await deleteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        continueAggregateRead.SetResult();
+
+        var result = await persist;
+        var deleteFailure = await Record.ExceptionAsync(() => delete);
+        if (deleteFailure is not null)
+            deleteFailure.Should().BeOfType<SqliteException>().Which.SqliteErrorCode.Should().Be(6);
+
+        result.Disposition.Should().Be(BlueprintPackagePersistDisposition.Idempotent);
+        result.Version.Should().NotBeNull();
+        AssertComplete(result.Version!, package);
     }
 
     [Fact]
@@ -146,10 +188,20 @@ public sealed class SqliteOwnerBlueprintPackageLibraryTests
     private static void AssertCompleteOrNotFound(OwnerBlueprintPackageVersion? saved, BlueprintPackageWrite package)
     {
         if (saved is null) return;
+        AssertComplete(saved, package);
+    }
+
+    private static void AssertComplete(OwnerBlueprintPackageVersion saved, BlueprintPackageWrite package)
+    {
         saved.RawManifest.Should().Equal(package.RawManifest);
-        saved.Payloads.Should().ContainSingle().Which.Bytes.Should().Equal(package.Payloads.Single().Bytes);
-        saved.Acquisitions.Should().ContainSingle().Which.Should().Be(package.Acquisitions.Single());
+        saved.Payloads.Select(x => x.Path).Should().Equal(package.Payloads.Select(x => x.Path));
+        foreach (var (actual, expected) in saved.Payloads.Zip(package.Payloads))
+            actual.Bytes.Should().Equal(expected.Bytes);
+        saved.Acquisitions.Should().Equal(package.Acquisitions);
+        saved.ContentDigest.Should().Be(package.ContentDigest);
         saved.PayloadSetDigest.Should().Be(package.PayloadSetDigest);
+        saved.RawManifestSha256.Should().Be(package.RawManifestSha256);
+        saved.ContainerSha256.Should().Be(package.ContainerSha256);
     }
 
     private static BlueprintPackageWrite Package(string version = "1.0.0", byte[]? raw = null, byte[]? payload = null, string packageId = "engineering")
@@ -160,6 +212,25 @@ public sealed class SqliteOwnerBlueprintPackageLibraryTests
         return new(packageId, version, raw, payloads,
             Digest([9]), BlueprintPackagePayloadSetDigest.Calculate(payloads), Digest(raw), null, [new("validated")]);
     }
+
+    private static BlueprintPackageWrite AggregatePackage() =>
+        new(
+            "persist-delete-" + Guid.NewGuid().ToString("N"),
+            "1.0.0",
+            [0, 255, 13],
+            [
+                new("definitions/blueprints/a.json", [1, 2, 3]),
+                new("definitions/blueprints/b.json", [4, 5, 6]),
+            ],
+            Digest([9]),
+            BlueprintPackagePayloadSetDigest.Calculate(
+                [
+                    new("definitions/blueprints/a.json", [1, 2, 3]),
+                    new("definitions/blueprints/b.json", [4, 5, 6]),
+                ]),
+            Digest([0, 255, 13]),
+            Digest([7]),
+            [new("validated", "producer-a", "repo-a", "one"), new("imported", "producer-b", "repo-b", "two")]);
 
     private static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     private sealed record Owner(string OwnerId) : IAuthenticatedOwnerContext;

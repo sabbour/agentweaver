@@ -7,30 +7,45 @@ using System.Data;
 namespace Agentweaver.Api.Infrastructure.Ef;
 
 /// <summary>PostgreSQL EF implementation of the owner-private immutable Blueprint package library.</summary>
-public sealed class EfOwnerBlueprintPackageLibrary(
-    IDbContextFactory<MemoryDbContext> factory,
-    IAuthenticatedOwnerContext ownerContext) : IOwnerBlueprintPackageLibrary
+public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibrary
 {
-    private readonly IDbContextFactory<MemoryDbContext> _factory = factory;
-    private readonly IAuthenticatedOwnerContext _ownerContext = ownerContext;
+    private readonly IDbContextFactory<MemoryDbContext> _factory;
+    private readonly IAuthenticatedOwnerContext _ownerContext;
+    private readonly Func<CancellationToken, Task>? _afterVersionRead;
+
+    public EfOwnerBlueprintPackageLibrary(
+        IDbContextFactory<MemoryDbContext> factory,
+        IAuthenticatedOwnerContext ownerContext)
+        : this(factory, ownerContext, null)
+    {
+    }
+
+    internal EfOwnerBlueprintPackageLibrary(
+        IDbContextFactory<MemoryDbContext> factory,
+        IAuthenticatedOwnerContext ownerContext,
+        Func<CancellationToken, Task>? afterVersionRead)
+    {
+        _factory = factory;
+        _ownerContext = ownerContext;
+        _afterVersionRead = afterVersionRead;
+    }
 
     public async Task<BlueprintPackagePersistResult> PersistAsync(BlueprintPackageWrite package, CancellationToken ct = default)
     {
         BlueprintPackageLibraryLimits.Validate(package);
         var version = BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Normalize(package.CanonicalVersion);
         var owner = Owner();
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-        var existing = await ReadVersionAsync(db, owner, package.PackageId, version, ct).ConfigureAwait(false);
+        var existing = await ReadVersionConsistentlyAsync(owner, package.PackageId, version, ct).ConfigureAwait(false);
         if (existing is not null)
         {
-            await transaction.RollbackAsync(ct).ConfigureAwait(false);
             return SameIdentity(existing, package)
                 ? new(BlueprintPackagePersistDisposition.Idempotent, existing)
                 : new(BlueprintPackagePersistDisposition.ImmutableConflict);
         }
 
         var created = DateTimeOffset.UtcNow;
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         try
         {
             await db.Database.ExecuteSqlInterpolatedAsync(
@@ -75,11 +90,11 @@ public sealed class EfOwnerBlueprintPackageLibrary(
 
     public async Task<OwnerBlueprintPackageVersion?> GetVersionAsync(string packageId, string canonicalVersion, CancellationToken ct = default)
     {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct).ConfigureAwait(false);
-        var result = await ReadVersionAsync(db, Owner(), packageId, BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Normalize(canonicalVersion), ct).ConfigureAwait(false);
-        await transaction.CommitAsync(ct).ConfigureAwait(false);
-        return result;
+        return await ReadVersionConsistentlyAsync(
+            Owner(),
+            packageId,
+            BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Normalize(canonicalVersion),
+            ct).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<OwnerBlueprintPackageEntry>> ListAsync(CancellationToken ct = default)
@@ -112,11 +127,22 @@ public sealed class EfOwnerBlueprintPackageLibrary(
             .ExecuteDeleteAsync(ct).ConfigureAwait(false) > 0;
     }
 
-    private static async Task<OwnerBlueprintPackageVersion?> ReadVersionAsync(MemoryDbContext db, string owner, string packageId, string version, CancellationToken ct)
+    private async Task<OwnerBlueprintPackageVersion?> ReadVersionConsistentlyAsync(string owner, string packageId, string version, CancellationToken ct)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct).ConfigureAwait(false);
+        var result = await ReadVersionAsync(db, owner, packageId, version, ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return result;
+    }
+
+    private async Task<OwnerBlueprintPackageVersion?> ReadVersionAsync(MemoryDbContext db, string owner, string packageId, string version, CancellationToken ct)
     {
         var record = await db.BlueprintPackageVersions.AsNoTracking().FirstOrDefaultAsync(x =>
             x.OwnerId == owner && x.PackageId == packageId && x.CanonicalVersion == version, ct).ConfigureAwait(false);
         if (record is null) return null;
+        if (_afterVersionRead is not null)
+            await _afterVersionRead(ct).ConfigureAwait(false);
         var payloads = await db.BlueprintPackagePayloads.AsNoTracking().Where(x =>
             x.OwnerId == owner && x.PackageId == packageId && x.CanonicalVersion == version).OrderBy(x => x.Path).ToListAsync(ct).ConfigureAwait(false);
         var acquisitions = await db.BlueprintPackageAcquisitions.AsNoTracking().Where(x =>

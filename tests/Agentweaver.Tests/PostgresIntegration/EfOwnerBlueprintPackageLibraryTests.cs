@@ -24,6 +24,37 @@ public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task Persist_RacingDeleteAfterVersionRead_ReturnsCompleteIdempotentAggregate()
+    {
+        var package = AggregatePackage("persist-delete-" + Guid.NewGuid().ToString("N"));
+        var seed = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-persist-delete"));
+        await seed.PersistAsync(package);
+
+        var versionRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueAggregateRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var persister = new EfOwnerBlueprintPackageLibrary(
+            pg.Factory,
+            new Owner("owner-persist-delete"),
+            _ =>
+            {
+                versionRead.TrySetResult();
+                return continueAggregateRead.Task;
+            });
+        var deleter = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-persist-delete"));
+
+        var persist = persister.PersistAsync(package);
+        await versionRead.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await deleter.DeletePackageAsync(package.PackageId);
+        continueAggregateRead.SetResult();
+
+        var result = await persist;
+
+        result.Disposition.Should().Be(BlueprintPackagePersistDisposition.Idempotent);
+        result.Version.Should().NotBeNull();
+        AssertComplete(result.Version!, package);
+    }
+
+    [PostgresFact]
     public async Task Persist_ConcurrentDifferentVersionsForNewPackage_CreatesBothCompleteAggregates()
     {
         var id = "concurrent-" + Guid.NewGuid().ToString("N");
@@ -188,11 +219,37 @@ public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
     private static void AssertComplete(OwnerBlueprintPackageVersion saved, BlueprintPackageWrite package)
     {
         saved.RawManifest.Should().Equal(package.RawManifest);
-        saved.Payloads.Should().ContainSingle().Which.Bytes.Should().Equal(package.Payloads.Single().Bytes);
-        saved.Acquisitions.Should().ContainSingle().Which.Should().Be(package.Acquisitions.Single());
+        saved.Payloads.Select(x => x.Path).Should().Equal(package.Payloads.Select(x => x.Path));
+        foreach (var (actual, expected) in saved.Payloads.Zip(package.Payloads))
+            actual.Bytes.Should().Equal(expected.Bytes);
+        saved.Acquisitions.Should().Equal(package.Acquisitions);
+        saved.ContentDigest.Should().Be(package.ContentDigest);
         saved.PayloadSetDigest.Should().Be(package.PayloadSetDigest);
+        saved.RawManifestSha256.Should().Be(package.RawManifestSha256);
+        saved.ContainerSha256.Should().Be(package.ContainerSha256);
     }
 
     private static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static BlueprintPackageWrite AggregatePackage(string id)
+    {
+        var raw = new byte[] { 0, 255, 13 };
+        var payloads = new[]
+        {
+            new BlueprintPackagePayload("definitions/blueprints/a.json", [1, 2, 3]),
+            new BlueprintPackagePayload("definitions/blueprints/b.json", [4, 5, 6]),
+        };
+        return new(
+            id,
+            "1.0.0",
+            raw,
+            payloads,
+            Digest([2]),
+            BlueprintPackagePayloadSetDigest.Calculate(payloads),
+            Digest(raw),
+            Digest([7]),
+            [new("validated", "producer-a", "repo-a", "one"), new("imported", "producer-b", "repo-b", "two")]);
+    }
+
     private sealed record Owner(string OwnerId) : IAuthenticatedOwnerContext;
 }

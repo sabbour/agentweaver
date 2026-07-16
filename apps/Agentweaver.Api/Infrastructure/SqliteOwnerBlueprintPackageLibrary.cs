@@ -5,11 +5,26 @@ using Microsoft.Data.Sqlite;
 namespace Agentweaver.Api.Infrastructure;
 
 /// <summary>SQLite implementation of the owner-private immutable Blueprint package library.</summary>
-public sealed class SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticatedOwnerContext ownerContext)
-    : IOwnerBlueprintPackageLibrary
+public sealed class SqliteOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibrary
 {
-    private readonly SqliteDb _db = db;
-    private readonly IAuthenticatedOwnerContext _ownerContext = ownerContext;
+    private readonly SqliteDb _db;
+    private readonly IAuthenticatedOwnerContext _ownerContext;
+    private readonly Func<CancellationToken, Task>? _afterVersionRead;
+
+    public SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticatedOwnerContext ownerContext)
+        : this(db, ownerContext, null)
+    {
+    }
+
+    internal SqliteOwnerBlueprintPackageLibrary(
+        SqliteDb db,
+        IAuthenticatedOwnerContext ownerContext,
+        Func<CancellationToken, Task>? afterVersionRead)
+    {
+        _db = db;
+        _ownerContext = ownerContext;
+        _afterVersionRead = afterVersionRead;
+    }
 
     public async Task<BlueprintPackagePersistResult> PersistAsync(BlueprintPackageWrite package, CancellationToken ct = default)
     {
@@ -133,7 +148,7 @@ public sealed class SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticat
             .ThenByDescending(x => x.CanonicalVersion, StringComparer.Ordinal).ToArray();
     }
 
-    private static async Task<OwnerBlueprintPackageVersion?> ReadVersionAsync(SqliteConnection connection, SqliteTransaction? transaction, string owner, string packageId, string version, CancellationToken ct)
+    private async Task<OwnerBlueprintPackageVersion?> ReadVersionAsync(SqliteConnection connection, SqliteTransaction? transaction, string owner, string packageId, string version, CancellationToken ct)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -154,6 +169,8 @@ public sealed class SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticat
         var raw = reader.GetFieldValue<byte[]>(4).ToArray();
         var created = ParseTimestamp(reader.GetString(5));
         await reader.DisposeAsync().ConfigureAwait(false);
+        if (_afterVersionRead is not null)
+            await _afterVersionRead(ct).ConfigureAwait(false);
         var payloads = await ReadPayloadsAsync(connection, transaction, owner, packageId, version, ct).ConfigureAwait(false);
         var acquisitions = await ReadAcquisitionsAsync(connection, transaction, owner, packageId, version, ct).ConfigureAwait(false);
         return new(packageId, version, raw, payloads, content, payloadDigest, rawDigest, container, acquisitions, created);
