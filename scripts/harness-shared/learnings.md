@@ -370,3 +370,14 @@ team_cast.inputSchema.required = ['project_id','goal','confirm_proposal_id','con
 - status: fixed
 
 The smoke script (scripts/mcp-harness/smoke/mcp-cli-smoke.mjs) had no logic to handle the coordinator_status=awaiting_confirmation state. Any coordinator goal that produces a reviewable outcome spec suspends at this gate; with no confirm call, the smoke test polled for 240s then timed out as a false failure. Fix: detect coordinator_status=awaiting_confirmation in the poll loop and call coordinator_outcome_spec_confirm (the correct real tool, confirmed in CoordinatorTools.cs) once before continuing to poll. Point-3 verification: MCP coordinator_outcome_spec_confirm calls POST /api/runs/{id}/outcome-spec/confirm -> CoordinatorRunService.ConfirmOutcomeSpecAsync -> SubmitDecisionAsync -- the exact same backend resume seam used by the API surface (confirmed working in #272). No MCP-specific blocker exists; the confirm mechanism genuinely works over MCP. The issue was purely that the smoke path never invoked it.
+
+---
+
+## generation-seam scenarios must not send null adapterVersion/personaCoreVersion
+
+- date: 2026-07-16
+- category: bug
+- surface: api
+- status: fixed
+
+generated-artifacts-seam (kind: 'generation-seam') is a structural, non-persona scenario -- loadPersona() correctly returns null for it. run-persona.mjs previously set metadata.adapterVersion/personaCoreVersion to null in that case, which failed scripts/harness-judge/core.mjs validateEvidenceShape (REQUIRED_JOIN_KEY_FIELDS requires non-empty strings for every surface), crashing with 'invalid normalized evidence: metadata.adapterVersion/personaCoreVersion must be a non-empty string' instead of producing a verdict. Fixed by falling back to the same 'unknown' sentinel already used for this exact no-persona case in scripts/mcp-harness/run-persona.mjs (adapterVersion/personaCoreVersion) and scripts/ui-harness/agent-driver-ui/tools.mjs (targetRevision), via a new NO_PERSONA_VERSION_SENTINEL constant in scripts/api-harness/run-persona.mjs. Real persona scenarios are unaffected -- they still report their genuine content-hash-derived versions; the shared verdict-schema.mjs validation itself was left unchanged.
