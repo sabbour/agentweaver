@@ -15,6 +15,17 @@ public sealed record BlueprintValidationResult(bool Valid, IReadOnlyList<string>
     public static BlueprintValidationResult Ok() => new(true, []);
 }
 
+internal enum CharterPathResolutionKind
+{
+    ExistingSafe,
+    MissingOrdinary,
+    InvalidUnsafe,
+}
+
+internal sealed record CharterPathResolution(
+    CharterPathResolutionKind Kind,
+    string? ResolvedPath = null);
+
 /// <summary>
 /// Application service for blueprints (Feature 012): list predefined, validate against the schema
 /// and the role constraint (rosters may reference only catalog roles), apply a blueprint to a
@@ -392,7 +403,7 @@ public sealed class BlueprintService
         return null;
     }
 
-    private static IReadOnlyList<string> ValidateBespokeCharterReferences(Blueprint blueprint, string projectRoot)
+    internal static IReadOnlyList<string> ValidateBespokeCharterReferences(Blueprint blueprint, string projectRoot)
     {
         var errors = new List<string>();
         foreach (var role in blueprint.BespokeRoles)
@@ -408,32 +419,24 @@ public sealed class BlueprintService
                 path = value;
 
             if (path is null) continue;
-            if (!TryResolvePathWithinProject(projectRoot, path, out _, out var fileExists))
-            {
+            var resolution = ResolvePathWithinProject(projectRoot, path);
+            if (resolution.Kind == CharterPathResolutionKind.InvalidUnsafe)
                 errors.Add($"bespoke role '{role.Id}' references charter file outside the project root.");
-                continue;
-            }
-            if (!fileExists)
+            else if (resolution.Kind == CharterPathResolutionKind.MissingOrdinary)
                 errors.Add($"bespoke role '{role.Id}' references missing charter file '{path}'.");
         }
         return errors;
     }
 
-    internal static bool TryResolvePathWithinProject(
-        string projectRoot,
-        string path,
-        out string fullPath,
-        out bool fileExists)
+    internal static CharterPathResolution ResolvePathWithinProject(string projectRoot, string path)
     {
-        fullPath = string.Empty;
-        fileExists = false;
         const int maxPathLength = 32_768;
 
         if (string.IsNullOrWhiteSpace(projectRoot) ||
             string.IsNullOrWhiteSpace(path) ||
             projectRoot.Length > maxPathLength ||
             path.Length > maxPathLength)
-            return false;
+            return InvalidPath();
 
         try
         {
@@ -441,20 +444,22 @@ public sealed class BlueprintService
             var candidate = Path.GetFullPath(Path.IsPathRooted(path)
                 ? path
                 : Path.Combine(root, path));
+            if (root.Length > maxPathLength || candidate.Length > maxPathLength)
+                return InvalidPath();
 
             var relative = Path.GetRelativePath(root, candidate);
             if (string.IsNullOrWhiteSpace(relative) || relative == "." || Path.IsPathRooted(relative))
-                return false;
+                return InvalidPath();
 
             var segments = relative
                 .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.None);
             if (segments.Any(segment => segment is ".." or ""))
-                return false;
+                return InvalidPath();
 
-            if (!TryGetExistingPathAttributes(root, out var rootAttributes) ||
+            if (GetExistingPathStatus(root, out var rootAttributes) != ExistingPathStatus.Exists ||
                 rootAttributes.HasFlag(FileAttributes.ReparsePoint) ||
                 HasLinkTarget(root))
-                return false;
+                return InvalidPath();
 
             var realRoot = RealPath.Resolve(root);
             var current = root;
@@ -462,92 +467,110 @@ public sealed class BlueprintService
             {
                 var segment = segments[index];
                 current = Path.Combine(current, segment);
-                if (!TryGetExistingPathAttributes(current, out var attributes))
+                switch (GetExistingPathStatus(current, out var attributes))
                 {
-                    // All ancestors were proven contained. A later component cannot exist after
-                    // this missing one, so report the normal missing-file validation outcome.
-                    fullPath = candidate;
-                    return true;
+                    case ExistingPathStatus.MissingOrdinary:
+                        // Every prior component was resolved and proved contained. This is the
+                        // sole path that may receive the normal missing-charter diagnostic.
+                        return new CharterPathResolution(CharterPathResolutionKind.MissingOrdinary);
+                    case ExistingPathStatus.InvalidUnsafe:
+                        return InvalidPath();
                 }
 
                 if (!TryGetSymbolicLinkStatus(current, out var isSymbolicLink))
-                    return false;
+                    return InvalidPath();
 
                 if ((attributes.HasFlag(FileAttributes.ReparsePoint) || isSymbolicLink) &&
                     (OperatingSystem.IsWindows() || !isSymbolicLink))
-                    return false;
+                    return InvalidPath();
 
                 var realCurrent = RealPath.Resolve(current);
                 if (!IsPathWithin(realRoot, realCurrent))
-                    return false;
+                    return InvalidPath();
 
                 if (index < segments.Length - 1)
                     continue;
 
-                fullPath = realCurrent;
-                fileExists = !attributes.HasFlag(FileAttributes.Directory);
-                return true;
+                return new CharterPathResolution(CharterPathResolutionKind.ExistingSafe, realCurrent);
             }
 
-            return false;
+            return InvalidPath();
         }
         catch (ArgumentException)
         {
-            return false;
+            return InvalidPath();
         }
         catch (NotSupportedException)
         {
-            return false;
+            return InvalidPath();
         }
         catch (PathTooLongException)
         {
-            return false;
+            return InvalidPath();
         }
         catch (IOException)
         {
-            return false;
+            return InvalidPath();
         }
         catch (UnauthorizedAccessException)
         {
-            return false;
+            return InvalidPath();
         }
     }
+
+    private static CharterPathResolution InvalidPath() =>
+        new(CharterPathResolutionKind.InvalidUnsafe);
 
     private static bool IsPathWithin(string root, string candidate)
     {
         var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var normalizedCandidate = candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        return string.Equals(normalizedCandidate, normalizedRoot, StringComparison.Ordinal) ||
+               normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
-    private static bool TryGetExistingPathAttributes(string path, out FileAttributes attributes)
+    private enum ExistingPathStatus
+    {
+        Exists,
+        MissingOrdinary,
+        InvalidUnsafe,
+    }
+
+    private static ExistingPathStatus GetExistingPathStatus(string path, out FileAttributes attributes)
     {
         try
         {
             attributes = File.GetAttributes(path);
-            return true;
+            return ExistingPathStatus.Exists;
         }
         catch (FileNotFoundException)
         {
             attributes = default;
-            return !HasLinkTarget(path);
+            return IsOrdinaryMissingPath(path)
+                ? ExistingPathStatus.MissingOrdinary
+                : ExistingPathStatus.InvalidUnsafe;
         }
         catch (DirectoryNotFoundException)
         {
             attributes = default;
-            return !HasLinkTarget(path);
+            return IsOrdinaryMissingPath(path)
+                ? ExistingPathStatus.MissingOrdinary
+                : ExistingPathStatus.InvalidUnsafe;
         }
         catch (UnauthorizedAccessException)
         {
             attributes = default;
-            return false;
+            return ExistingPathStatus.InvalidUnsafe;
         }
         catch (IOException)
         {
             attributes = default;
-            return false;
+            return ExistingPathStatus.InvalidUnsafe;
         }
     }
+
+    private static bool IsOrdinaryMissingPath(string path) =>
+        TryGetSymbolicLinkStatus(path, out var isSymbolicLink) && !isSymbolicLink;
 
     private static bool HasLinkTarget(string path)
     {
