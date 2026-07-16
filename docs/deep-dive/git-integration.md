@@ -178,15 +178,15 @@ The merge algorithm then checks:
 4. the worktree branch is not already contained in the originating branch;
 5. the target branch can be advanced safely.
 
-If the originating branch is checked out in the base workspace and the working tree is clean, Agentweaver updates both the branch ref and the working tree with a hard reset to the merge result. If the base workspace has unrelated uncommitted changes, Agentweaver falls back to a ref-only merge so local files are preserved; the user will need to pull/reset the checkout to see the new branch tip.
+If the originating branch is checked out in the base workspace and the working tree is clean, Agentweaver updates both the branch ref and the working tree with a hard reset to the merge result. If the base workspace has uncommitted changes, Agentweaver attempts to reconcile them onto the merge result with the same hard reset — but only when doing so is provably lossless (every dirty path's current content already matches the merge result). If any dirty path holds content that diverges from the merge result, Agentweaver refuses the merge (a retriable `Blocked` outcome) instead of silently discarding that content or leaving the branch ref and working tree out of sync.
 
 Conflicts are terminal for that merge attempt. The run becomes `merge_failed`, conflicting files are stored where available, and the worktree is preserved for inspection.
 
 ## Detached state and dirty worktrees
 
-A detached HEAD in the base repository is not treated as "the originating branch is checked out." In that case Agentweaver uses the ref-only path and updates the branch ref without touching the working tree.
+A detached HEAD in the base repository is not treated as "the originating branch is checked out." In that case Agentweaver uses the ref-only path and updates the branch ref without touching the working tree. This is safe specifically because nothing reads the working tree/index relative to that ref while it is not checked out.
 
-When the originating branch is checked out, Agentweaver checks for conditions that would make a hard reset unsafe:
+When the originating branch IS checked out, a ref-only update is never safe: it would advance HEAD's branch ref while leaving the index/working tree pointed at the old tree, so any path the merge added or changed but the stale index doesn't have appears as a staged deletion — even though it is fully present and correct in the new HEAD commit (this was the root cause of issue #348, where a completed run's working directory was left with staged deletions of its own committed output). So when the originating branch is checked out, Agentweaver checks for conditions that would make a hard reset unsafe:
 
 - a merge, rebase, cherry-pick, revert, or bisect in progress;
 - conflicted index entries;
@@ -194,7 +194,7 @@ When the originating branch is checked out, Agentweaver checks for conditions th
 - modified or deleted tracked files;
 - untracked files that would be overwritten by the merge result.
 
-Sequencer state and conflicted indexes block the merge. Other dirty-working-tree cases can use ref-only merge because the branch ref can be advanced without overwriting local files.
+Sequencer state and conflicted indexes always block the merge outright — the user must resolve them first. For the remaining dirty-working-tree cases, Agentweaver compares each dirty path's current content (working-directory bytes, or the index blob if no working-directory copy exists) against the merge result tree. If every dirty path is byte-identical to the result (or has no content on disk/in the index at all — e.g. a stale staged deletion of a file the run never touched), the working tree is reconciled with a hard reset and the merge proceeds (`merge_mode: working-tree-reconciled`). Otherwise the merge is blocked rather than corrupting the working directory or silently discarding local edits.
 
 ## Coordinator integration branches
 
@@ -338,9 +338,9 @@ Reasoning model: one repository branch update at a time keeps branch-tip reasoni
 
 ### Dirty base checkout
 
-If the originating branch is checked out and dirty, Agentweaver either blocks unsafe states or uses a ref-only merge. Ref-only merge preserves local files but leaves the working directory behind the branch ref.
+If the originating branch is checked out and dirty, Agentweaver either blocks unsafe states outright (sequencer in progress, conflicted index) or attempts to reconcile the working tree onto the merge result with a hard reset. Reconciliation only proceeds when it is provably lossless — every dirty path's current content already matches the merge result tree. Otherwise the merge is blocked; Agentweaver never advances the branch ref while leaving the checked-out working tree/index unsynced with it, since that desync is what produced staged deletions of committed content in issue #348.
 
-Reasoning model: advancing a ref is safe when updating files is not, but users need an explicit sync step afterward.
+Reasoning model: advancing a ref while a branch is checked out is only safe when the index/working tree end up matching that ref exactly — so a ref-only update must never be used for a checked-out branch, only reconcile-then-reset or a hard block.
 
 ### Interrupted commit or merge
 
@@ -424,7 +424,7 @@ If rebuilding the git integration subsystem, implement it in this order:
 - The diff shown for review is against the originating branch, not just the last commit.
 - A missing physical worktree can be recoverable if the database row and git branch still exist.
 - A missing branch is much harder to recover because git has lost the candidate content reference.
-- Dirty checked-out target branches may merge ref-only, so the working directory can lag behind the branch ref.
+- Dirty checked-out target branches either reconcile onto the merge result via a hard reset (when safe) or block the merge outright — they never merge ref-only while checked out, since that would desync the index/working tree from the advanced ref.
 - Coordinator children are not isolated like normal runs; they intentionally share an orchestration worktree.
 - Worktree deletes on Azure Files SMB can transiently fail with `Directory not empty`; `WorktreeManager.DeleteDirectoryResilient` retries with backoff and never silently proceeds while the directory still exists (see [Resilient worktree deletion](#resilient-worktree-deletion-on-azure-files-smb)).
 - The GitHub API usage is raw `HttpClient`, not Octokit.

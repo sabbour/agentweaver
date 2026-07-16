@@ -88,80 +88,176 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
-    // HM-2 — Checked-out branch, modified tracked file → ref-only fallback;
-    // the merge succeeds without touching the working tree. The user's local
-    // changes are preserved; the branch ref advances.
+    // HM-2 — Checked-out branch, modified tracked file that genuinely diverges
+    // from the merge result → the merge is refused (Blocked/409) rather than
+    // silently advancing the ref underneath content that would be corrupted.
+    // Regression test for #348: a ref-only fallback here would advance HEAD's
+    // branch ref while leaving the stale index/working tree behind, making the
+    // agent's newly-added file appear as a staged deletion even though it is
+    // present in the new HEAD commit.
     // =========================================================================
     [Fact]
-    public async Task Approve_CheckedOut_ModifiedTrackedFile_FallsBackToRefOnly_Merges()
+    public async Task Approve_CheckedOut_ModifiedTrackedFile_DivergesFromResult_Blocks()
     {
         var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
             dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
 
-        // Dirty the main working tree: modify the tracked readme.txt without staging.
+        // Dirty the main working tree: modify the tracked readme.txt without staging,
+        // with content that differs from the merge result (readme.txt is untouched by
+        // the agent, so the result tree still has the original "initial content").
         File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "locally modified content");
 
         var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
 
-        // With the fix, a dirty working tree falls back to ref-only merge instead of blocking.
+        // The dirty tracked file diverges from the merge result and cannot be safely
+        // reconciled, so the merge must be blocked rather than silently succeeding.
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "uncommitted content that diverges from the merge result must block the merge (retriable 409), " +
+            "never silently advance the ref underneath it");
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("awaiting_review");
+        body.GetProperty("error").GetString().Should().Contain("cannot be safely reconciled",
+            "the blocked reason must explain that the divergent local content could not be reconciled");
+
+        // The branch ref must NOT have advanced — no mutation occurred.
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().BeNull(
+            "a blocked merge must not mutate the originating branch ref");
+
+        // The user's local edit must be untouched.
+        File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("locally modified content",
+            "a blocked merge must not touch the working tree");
+
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var runAfterBlock = await runStore.GetAsync(run.Id);
+        runAfterBlock!.Status.Should().Be(RunStatus.AwaitingReview,
+            "the run must remain awaiting_review after a blocked (retriable) merge attempt");
+    }
+
+    // =========================================================================
+    // HM-2b — Checked-out branch, a tracked file staged as deleted whose content
+    // is UNCHANGED by the merge (the real-world #348 shape: an index that has
+    // fallen behind HEAD for a path the run never touched) → the merge
+    // reconciles the working tree via a hard reset instead of leaving the
+    // stale staged deletion behind. This is the exact production scenario from
+    // issue #348: a completed run left the working directory with staged
+    // deletions of files that were actually present and correct in HEAD.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_StagedDeletionMatchingResult_ReconcilesAndRestoresFile()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
+
+        // Simulate a stale index: readme.txt is staged as deleted (index has no entry)
+        // and also removed from disk, but the agent's run never touched readme.txt, so
+        // the merge result tree still has it with its original, unchanged content.
+        using (var repo = new Repository(repoPath))
+        {
+            Commands.Remove(repo, "readme.txt", removeFromWorkingDirectory: true);
+        }
+        File.Exists(Path.Combine(repoPath, "readme.txt")).Should().BeFalse(
+            "sanity: readme.txt must be gone from both the index and the working directory");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
         response.StatusCode.Should().Be(HttpStatusCode.OK,
-            "a dirty working tree must fall back to ref-only merge (not 409-block) because MergeRefOnly does not touch the working tree");
+            "a stale staged deletion whose content is unchanged by the merge must reconcile, not block");
 
         var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
-        result.Should().NotBeNull();
         result!.Status.Should().Be("merged");
         result.MergeResult.Should().StartWith("merged:");
 
-        // The originating branch ref must have advanced to include the agent's file.
-        using var repoAfter = new Repository(repoPath);
-        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().NotBeNull(
-            "the ref-only fallback must advance the main branch ref to include the agent's file");
+        // The reconciliation must have restored readme.txt on disk with its original content —
+        // this is the core #348 regression check: no staged deletion of committed content survives.
+        File.Exists(Path.Combine(repoPath, "readme.txt")).Should().BeTrue(
+            "reconciliation must restore readme.txt to the working directory since the merge result " +
+            "tree still contains it unchanged");
+        File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("initial content");
 
-        // The dirty file must NOT have been overwritten — no hard reset occurred.
-        File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("locally modified content",
-            "the ref-only fallback must not touch the main working tree — the user's local changes are preserved");
-
-        // The run must be in merged status.
-        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        var runAfterMerge = await runStore.GetAsync(run.Id);
-        runAfterMerge!.Status.Should().Be(RunStatus.Merged,
-            "the run must transition to merged after the ref-only fallback merge");
+        // The working directory must end up perfectly clean relative to the new HEAD —
+        // no staged deletions, no dangling index/workdir desync.
+        using (var repoAfter = new Repository(repoPath))
+        {
+            var status = repoAfter.RetrieveStatus(new StatusOptions { IncludeUntracked = true });
+            status.IsDirty.Should().BeFalse(
+                "after reconciliation the working directory must exactly match the new HEAD — " +
+                "no staged deletions of content the merge actually produced");
+            repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().NotBeNull(
+                "the reconciled merge must still advance the main branch ref to include the agent's file");
+        }
     }
 
     // =========================================================================
     // HM-3 — Checked-out branch, untracked file collides with a path added by
-    // the merge → ref-only fallback; merge succeeds, untracked file preserved.
+    // the merge but holds genuinely different content → the merge is refused
+    // (Blocked/409) rather than silently discarding either version.
     // =========================================================================
     [Fact]
-    public async Task Approve_CheckedOut_UntrackedFileCollides_FallsBackToRefOnly_Merges()
+    public async Task Approve_CheckedOut_UntrackedFileCollides_DivergesFromResult_Blocks()
     {
         // The agent adds "collision.txt" — a path that does not yet exist on main.
         var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
             dir => File.WriteAllText(Path.Combine(dir, "collision.txt"), "agent added this"));
 
-        // Place an untracked file at the same path in the main working tree.
+        // Place an untracked file at the same path in the main working tree, with
+        // content that differs from what the agent added.
         File.WriteAllText(Path.Combine(repoPath, "collision.txt"), "local untracked version");
 
         var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
 
-        // With the fix, untracked collision falls back to ref-only merge (not 409-block).
+        // An untracked collision with genuinely different content cannot be safely
+        // reconciled (a hard reset would silently overwrite the local file), so the
+        // merge must block instead of merging around it.
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "an untracked collision with diverging content must block the merge (retriable 409), " +
+            "never silently overwrite or silently skip it");
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("awaiting_review");
+
+        // The untracked file must be preserved — no mutation occurred.
+        File.ReadAllText(Path.Combine(repoPath, "collision.txt")).Should().Be("local untracked version",
+            "a blocked merge must not touch the untracked file in the main working tree");
+
+        // The branch ref must NOT have advanced.
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["collision.txt"].Should().BeNull(
+            "a blocked merge must not mutate the originating branch ref");
+    }
+
+    // =========================================================================
+    // HM-3b — Checked-out branch, untracked file collides with a path added by
+    // the merge but holds IDENTICAL content → safe to reconcile; the merge
+    // succeeds and the working tree ends up tracking the (now-identical) file.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_UntrackedFileCollides_IdenticalContent_Reconciles()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "collision.txt"), "same content"));
+
+        // Untracked file with content byte-identical to what the agent added.
+        File.WriteAllText(Path.Combine(repoPath, "collision.txt"), "same content");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
         response.StatusCode.Should().Be(HttpStatusCode.OK,
-            "an untracked collision must fall back to ref-only merge since MergeRefOnly does not overwrite untracked files");
+            "an untracked collision with identical content is always safe to reconcile");
 
         var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
         result!.Status.Should().Be("merged");
-        result.MergeResult.Should().StartWith("merged:");
 
-        // The untracked file must be preserved — no hard reset occurred.
-        File.ReadAllText(Path.Combine(repoPath, "collision.txt")).Should().Be("local untracked version",
-            "the ref-only fallback must not touch the untracked file in the main working tree");
-
-        // The branch ref must have advanced to include the agent's version of the file.
         using var repoAfter = new Repository(repoPath);
-        repoAfter.Branches["main"]!.Tip.Tree["collision.txt"].Should().NotBeNull(
-            "the ref-only fallback must advance the main branch ref to include the agent's file");
+        repoAfter.Branches["main"]!.Tip.Tree["collision.txt"].Should().NotBeNull();
+        var status = repoAfter.RetrieveStatus(new StatusOptions { IncludeUntracked = true });
+        status.IsDirty.Should().BeFalse(
+            "after reconciliation collision.txt must be tracked and the working directory clean");
     }
 
     // =========================================================================
@@ -728,18 +824,24 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
-    // HM-14 — Dirty working tree fallback emits merge.completed with
-    // merge_mode = "ref-only" in the SSE event payload so the UI can hint
-    // the user to run `git pull`.
+    // HM-14 — A reconciled dirty-working-tree merge emits merge.completed with
+    // merge_mode = "working-tree-reconciled" in the SSE event payload, distinct
+    // from both "working-tree-reset" (clean checkout) and "ref-only" (branch not
+    // checked out) so the UI/logs can tell the three paths apart.
     // =========================================================================
     [Fact]
-    public async Task Approve_CheckedOut_DirtyWorkingTree_MergeCompletedEvent_HasRefOnlyMergeMode()
+    public async Task Approve_CheckedOut_ReconciledDirtyWorkingTree_MergeCompletedEvent_HasReconciledMergeMode()
     {
         var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
             dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
 
-        // Dirty the working tree to trigger the ref-only fallback.
-        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "locally modified content");
+        // Dirty the working tree in a way that is safely reconcilable: stage readme.txt
+        // as deleted (and remove it from disk) even though the merge result leaves its
+        // content unchanged — the real-world #348 shape.
+        using (var repo = new Repository(repoPath))
+        {
+            Commands.Remove(repo, "readme.txt", removeFromWorkingDirectory: true);
+        }
 
         var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
@@ -748,20 +850,23 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
         result!.Status.Should().Be("merged");
 
-        // Inspect the SSE stream entry for a merge.completed event with merge_mode = "ref-only".
+        // Inspect the SSE stream entry for a merge.completed event with the reconciled mode.
         var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
         var streamEntry = streamStore.Get(run.Id.ToString());
         streamEntry.Should().NotBeNull();
 
         var snapshot = streamEntry!.GetSnapshotSince(0);
         var mergeCompletedEvent = snapshot.Events.FirstOrDefault(e => e.Type == EventTypes.MergeCompleted);
-        mergeCompletedEvent.Should().NotBeNull("a merge.completed event must be emitted after the ref-only fallback merge");
+        mergeCompletedEvent.Should().NotBeNull("a merge.completed event must be emitted after the reconciled merge");
 
         var payloadJson = JsonSerializer.Serialize(mergeCompletedEvent!.Payload);
         payloadJson.Should().Contain("\"merge_mode\"",
             "the merge.completed payload must include a merge_mode field");
-        payloadJson.Should().Contain("ref-only",
-            "merge_mode must be 'ref-only' when the dirty working tree fallback was used");
+        payloadJson.Should().Contain("working-tree-reconciled",
+            "merge_mode must be 'working-tree-reconciled' when the dirty checked-out working tree was reconciled");
+
+        // The file must actually be restored on disk — the whole point of reconciling.
+        File.Exists(Path.Combine(repoPath, "readme.txt")).Should().BeTrue();
     }
 
     // =========================================================================

@@ -38,7 +38,12 @@ public sealed record MergeOutcome
     /// <summary>Final commit SHA on the originating branch after the merge. Populated when Kind == Merged.</summary>
     public string? CommitHash { get; init; }
 
-    /// <summary>"ref-only" when the branch was not checked out; "working-tree-reset" when it was. Populated when Kind == Merged.</summary>
+    /// <summary>
+    /// "ref-only" when the branch was not checked out; "working-tree-reset" when it was
+    /// checked out and clean; "working-tree-reconciled" when it was checked out and dirty
+    /// but was safely reconciled onto the merge result via a Hard Reset. Populated when
+    /// Kind == Merged.
+    /// </summary>
     public string? MergeMode { get; init; }
 
     /// <summary>SHA of the originating branch tip before the merge. Populated when Kind == Merged.</summary>
