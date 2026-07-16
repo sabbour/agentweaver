@@ -5,6 +5,21 @@ export default withMermaid({
   description: 'Orchestrate AI agent teams that build and ship code — with full observability and human oversight at every step.',
   base: '/agentweaver/',
   ignoreDeadLinks: true,
+  vite: {
+    resolve: {
+      // The landing page reuses production sources outside the docs root.
+      // Resolve their public runtime packages from docs/node_modules in clean Pages builds.
+      dedupe: [
+        '@fluentui/react-components',
+        '@fluentui/react-icons',
+        '@xyflow/react',
+        'dagre',
+        'react',
+        'react-dom',
+        'react-router-dom',
+      ],
+    },
+  },
   markdown: {
     // Endpoint headings end in route params like `{id}`/`{path}`, which
     // markdown-it-attrs otherwise parses as an (empty) attribute block and
