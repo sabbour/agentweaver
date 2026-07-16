@@ -28,10 +28,12 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
                                        captured_by, created_at, committed_at, claimed_at, run_id,
-                                       workflow_override_id, archived_at, source_file_path)
+                                       workflow_override_id, archived_at, source_file_path,
+                                       parent_prd_run_id, promotion_key, promotion_reason)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
                     $capturedBy, $createdAt, $committedAt, $claimedAt, $runId,
-                    $workflowOverrideId, $archivedAt, $sourceFilePath);
+                    $workflowOverrideId, $archivedAt, $sourceFilePath,
+                    $parentPrdRunId, $promotionKey, $promotionReason);
             """;
         BindFullRow(command, task);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -68,6 +70,93 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         return await ReadAllAsync(command, ct).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<BacklogTaskDependency>> ListDependenciesAsync(
+        ProjectId projectId,
+        IReadOnlyCollection<BacklogTaskId> taskIds,
+        CancellationToken ct = default)
+    {
+        if (taskIds.Count == 0)
+            return Array.Empty<BacklogTaskDependency>();
+
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        var taskPlaceholders = AddTaskIdParameters(command, taskIds);
+        command.CommandText =
+            $"""
+            SELECT project_id, task_id, depends_on_task_id, created_at
+              FROM backlog_task_dependencies
+             WHERE project_id = $projectId
+               AND task_id IN ({taskPlaceholders})
+             ORDER BY task_id, depends_on_task_id;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+
+        var results = new List<BacklogTaskDependency>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            results.Add(new BacklogTaskDependency
+            {
+                ProjectId = ProjectId.Parse(reader.GetString(0)),
+                TaskId = BacklogTaskId.Parse(reader.GetString(1)),
+                DependsOnTaskId = BacklogTaskId.Parse(reader.GetString(2)),
+                CreatedAt = DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            });
+        }
+
+        return results;
+    }
+
+    public async Task<IReadOnlyList<BacklogDependencyStatus>> ListDependencyStatusesAsync(
+        ProjectId projectId,
+        IReadOnlyCollection<BacklogTaskId> taskIds,
+        CancellationToken ct = default)
+    {
+        if (taskIds.Count == 0)
+            return Array.Empty<BacklogDependencyStatus>();
+
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        var taskPlaceholders = AddTaskIdParameters(command, taskIds);
+        command.CommandText =
+            $"""
+            SELECT d.task_id,
+                   d.depends_on_task_id,
+                   prerequisite.title,
+                   prerequisite.run_id,
+                   r.status,
+                   CASE
+                       WHEN prerequisite.archived_at IS NULL
+                        AND prerequisite.run_id IS NOT NULL
+                        AND r.run_id IS NOT NULL
+                        AND r.status = 'merged'
+                       THEN 1 ELSE 0
+                   END AS is_satisfied
+              FROM backlog_task_dependencies d
+              JOIN backlog_tasks prerequisite ON prerequisite.task_id = d.depends_on_task_id
+              LEFT JOIN runs r ON r.run_id = prerequisite.run_id
+             WHERE d.project_id = $projectId
+               AND d.task_id IN ({taskPlaceholders})
+             ORDER BY d.task_id, d.depends_on_task_id;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+
+        var results = new List<BacklogDependencyStatus>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            results.Add(new BacklogDependencyStatus(
+                BacklogTaskId.Parse(reader.GetString(0)),
+                BacklogTaskId.Parse(reader.GetString(1)),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : RunId.Parse(reader.GetString(3)),
+                reader.IsDBNull(4) ? null : RunStatusExtensions.ParseStatus(reader.GetString(4)),
+                reader.GetInt64(5) == 1));
+        }
+
+        return results;
+    }
+
     public async Task<IReadOnlyList<BacklogTask>> ListReadyForClaimAsync(
         ProjectId projectId, int limit, CancellationToken ct = default)
     {
@@ -76,6 +165,19 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.CommandText = SelectSql +
             """
              WHERE project_id = $projectId AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
+               AND NOT EXISTS (
+                    SELECT 1
+                      FROM backlog_task_dependencies d
+                      JOIN backlog_tasks prerequisite ON prerequisite.task_id = d.depends_on_task_id
+                      LEFT JOIN runs r ON r.run_id = prerequisite.run_id
+                     WHERE d.task_id = backlog_tasks.task_id
+                       AND (
+                           prerequisite.archived_at IS NOT NULL
+                           OR prerequisite.run_id IS NULL
+                           OR r.run_id IS NULL
+                           OR r.status <> 'merged'
+                       )
+               )
              ORDER BY order_key ASC, committed_at ASC, task_id ASC
              LIMIT $limit;
             """;
@@ -94,7 +196,20 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
               FROM backlog_tasks bt
               JOIN projects p ON p.project_id = bt.project_id
              WHERE bt.state = 'ready' AND bt.run_id IS NULL AND bt.archived_at IS NULL
-               AND p.state = 'active';
+               AND p.state = 'active'
+               AND NOT EXISTS (
+                    SELECT 1
+                      FROM backlog_task_dependencies d
+                      JOIN backlog_tasks prerequisite ON prerequisite.task_id = d.depends_on_task_id
+                      LEFT JOIN runs r ON r.run_id = prerequisite.run_id
+                     WHERE d.task_id = bt.task_id
+                       AND (
+                           prerequisite.archived_at IS NOT NULL
+                           OR prerequisite.run_id IS NULL
+                           OR r.run_id IS NULL
+                           OR r.status <> 'merged'
+                       )
+               );
             """;
 
         var value = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
@@ -121,7 +236,14 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$description", (object?)description ?? DBNull.Value);
         command.Parameters.AddWithValue("$taskId", id.ToString());
         command.Parameters.AddWithValue("$projectId", projectId.ToString());
-        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
+        try
+        {
+            return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteConstraint)
+        {
+            throw new BacklogTaskDependencyException("task_is_dependency");
+        }
     }
 
     public async Task<bool> UpdateWorkflowOverrideAsync(
@@ -153,7 +275,14 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """;
         command.Parameters.AddWithValue("$taskId", id.ToString());
         command.Parameters.AddWithValue("$projectId", projectId.ToString());
-        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
+        try
+        {
+            return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteConstraint)
+        {
+            throw new BacklogTaskDependencyException("task_is_dependency");
+        }
     }
 
     public async Task<bool> TryArchiveAsync(
@@ -377,7 +506,20 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 UPDATE backlog_tasks
                    SET state = 'claimed', run_id = $runId, claimed_at = $claimedAt
                  WHERE task_id = $taskId AND project_id = $projectId
-                   AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL;
+                   AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
+                   AND NOT EXISTS (
+                        SELECT 1
+                          FROM backlog_task_dependencies d
+                          JOIN backlog_tasks prerequisite ON prerequisite.task_id = d.depends_on_task_id
+                          LEFT JOIN runs r ON r.run_id = prerequisite.run_id
+                         WHERE d.task_id = backlog_tasks.task_id
+                           AND (
+                               prerequisite.archived_at IS NOT NULL
+                               OR prerequisite.run_id IS NULL
+                               OR r.run_id IS NULL
+                               OR r.status <> 'merged'
+                           )
+                   );
                 """;
             claim.Parameters.AddWithValue("$runId", coordinatorRun.Id.ToString());
             claim.Parameters.AddWithValue("$claimedAt", Ts(claimedAt));
@@ -546,16 +688,20 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$workflowOverrideId", (object?)task.WorkflowOverrideId ?? DBNull.Value);
         command.Parameters.AddWithValue("$archivedAt", NullableTs(task.ArchivedAt));
         command.Parameters.AddWithValue("$sourceFilePath", (object?)task.SourceFilePath ?? DBNull.Value);
+        command.Parameters.AddWithValue("$parentPrdRunId", (object?)task.ParentPrdRunId?.ToString() ?? DBNull.Value);
+        command.Parameters.AddWithValue("$promotionKey", (object?)task.PromotionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$promotionReason", (object?)task.PromotionReason ?? DBNull.Value);
     }
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
     //           6=captured_by 7=created_at 8=committed_at 9=claimed_at 10=run_id 11=workflow_override_id
-    //           12=archived_at 13=source_file_path
+    //           12=archived_at 13=source_file_path 14=parent_prd_run_id 15=promotion_key 16=promotion_reason
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
               captured_by, created_at, committed_at, claimed_at, run_id,
-              workflow_override_id, archived_at, source_file_path
+              workflow_override_id, archived_at, source_file_path,
+              parent_prd_run_id, promotion_key, promotion_reason
           FROM backlog_tasks
         """;
 
@@ -575,7 +721,24 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         WorkflowOverrideId = r.IsDBNull(11) ? null : r.GetString(11),
         ArchivedAt  = r.IsDBNull(12) ? null : DateTimeOffset.Parse(r.GetString(12), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         SourceFilePath = r.IsDBNull(13) ? null : r.GetString(13),
+        ParentPrdRunId = r.IsDBNull(14) ? null : RunId.Parse(r.GetString(14)),
+        PromotionKey = r.IsDBNull(15) ? null : r.GetString(15),
+        PromotionReason = r.IsDBNull(16) ? null : r.GetString(16),
     };
+
+    private static string AddTaskIdParameters(SqliteCommand command, IReadOnlyCollection<BacklogTaskId> taskIds)
+    {
+        var placeholders = new List<string>(taskIds.Count);
+        var index = 0;
+        foreach (var taskId in taskIds)
+        {
+            var name = $"$taskId{index++}";
+            placeholders.Add(name);
+            command.Parameters.AddWithValue(name, taskId.ToString());
+        }
+
+        return string.Join(", ", placeholders);
+    }
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
     private static object NullableTs(DateTimeOffset? v) => v is null ? DBNull.Value : Ts(v.Value);

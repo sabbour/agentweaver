@@ -141,6 +141,22 @@ public sealed class SqliteToPostgresMigrator
         _logger.LogInformation("  BacklogTasks: {Migrated}/{Total} migrated, {Skipped} skipped.",
             btMigrated, backlogTasks.Count, backlogTasks.Count - btMigrated);
 
+        var backlogDependencies = await ReadBacklogTaskDependenciesAsync(conn, ct);
+        _logger.LogInformation("Migrating {Count} backlog task dependencies...", backlogDependencies.Count);
+        var depMigrated = 0;
+        foreach (var rec in backlogDependencies)
+        {
+            if (!await db.BacklogTaskDependencies.AnyAsync(
+                d => d.TaskId == rec.TaskId && d.DependsOnTaskId == rec.DependsOnTaskId, ct))
+            {
+                db.BacklogTaskDependencies.Add(rec);
+                depMigrated++;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+        _logger.LogInformation("  BacklogTaskDependencies: {Migrated}/{Total} migrated, {Skipped} skipped.",
+            depMigrated, backlogDependencies.Count, backlogDependencies.Count - depMigrated);
+
         // cast_proposals might not exist on older databases
         try
         {
@@ -328,7 +344,8 @@ public sealed class SqliteToPostgresMigrator
             """
             SELECT task_id, project_id, title, description, state, order_key,
                    captured_by, created_at, committed_at, claimed_at, run_id,
-                   workflow_override_id, archived_at, source_file_path
+                   workflow_override_id, archived_at, source_file_path,
+                   parent_prd_run_id, promotion_key, promotion_reason
               FROM backlog_tasks;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -350,6 +367,32 @@ public sealed class SqliteToPostgresMigrator
                 WorkflowOverrideId = reader.IsDBNull(11) ? null : reader.GetString(11),
                 ArchivedAt = reader.IsDBNull(12) ? null : ParseTs(reader.GetString(12)),
                 SourceFilePath = reader.IsDBNull(13) ? null : reader.GetString(13),
+                ParentPrdRunId = reader.IsDBNull(14) ? null : reader.GetString(14),
+                PromotionKey = reader.IsDBNull(15) ? null : reader.GetString(15),
+                PromotionReason = reader.IsDBNull(16) ? null : reader.GetString(16),
+            });
+        }
+        return results;
+    }
+
+    private static async Task<List<BacklogTaskDependencyRecord>> ReadBacklogTaskDependenciesAsync(SqliteConnection conn, CancellationToken ct)
+    {
+        var results = new List<BacklogTaskDependencyRecord>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT project_id, task_id, depends_on_task_id, created_at
+              FROM backlog_task_dependencies;
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new BacklogTaskDependencyRecord
+            {
+                ProjectId = reader.GetString(0),
+                TaskId = reader.GetString(1),
+                DependsOnTaskId = reader.GetString(2),
+                CreatedAt = ParseTs(reader.GetString(3)),
             });
         }
         return results;

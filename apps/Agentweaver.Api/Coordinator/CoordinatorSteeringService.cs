@@ -869,7 +869,7 @@ public sealed class CoordinatorSteeringService
         var replyKind = await ClassifyOutcomeSpecReplyAsync(coordinatorRunId, spec!, instruction, createdBy, ct)
             .ConfigureAwait(false);
         var outcome = replyKind == OutcomeSpecReplyKind.Confirm
-            ? await _coordinatorRunService.ConfirmOutcomeSpecAsync(coordinatorRunId, createdBy, ct).ConfigureAwait(false)
+            ? await _coordinatorRunService.ConfirmOutcomeSpecAsync(coordinatorRunId, createdBy, allowTaskPromotion: false, ct).ConfigureAwait(false)
             : await _coordinatorRunService.ReviseOutcomeSpecAsync(coordinatorRunId, instruction, createdBy, ct).ConfigureAwait(false);
 
         if (outcome != CoordinatorGateOutcome.Accepted)

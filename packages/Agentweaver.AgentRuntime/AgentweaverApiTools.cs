@@ -30,6 +30,7 @@ internal static class AgentweaverApiTools
         "project_list_runs",
         "backlog_capture_task",
         "backlog_get_board",
+        "backlog_get_task",
         "run_status",
         "run_show_artifacts",
         "coordinator_work_plan_get",
@@ -317,6 +318,21 @@ internal static class AgentweaverApiTools
             },
             "backlog_get_board",
             "MCP-equivalent Agentweaver backlog_get_board scoped to the current project. Returns the board as JSON.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Project ID. Must be the current coordinator project.")] string project_id,
+                [Description("Backlog task ID to inspect")] string task_id,
+                CancellationToken ct = default) =>
+            {
+                EnsureCurrentProject(projectId, project_id);
+                return await GetJsonAsync(
+                    http,
+                    $"api/projects/{projectId}/backlog/tasks/{Uri.EscapeDataString(task_id)}",
+                    ct).ConfigureAwait(false);
+            },
+            "backlog_get_task",
+            "MCP-equivalent Agentweaver backlog_get_task scoped to the current project. Returns one enriched backlog task as JSON.");
 
         yield return AIFunctionFactory.Create(
             async (

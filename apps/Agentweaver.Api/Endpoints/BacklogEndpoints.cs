@@ -1,4 +1,5 @@
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Backlog;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
@@ -22,6 +23,7 @@ public static class BacklogEndpoints
             CaptureBacklogTaskRequest request,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
+            BacklogTaskReadModelFactory readModelFactory,
             IGitHubTokenStore tokenStore,
             IGitHubTokenScopeProvider scopeProvider,
             CancellationToken ct) =>
@@ -54,7 +56,7 @@ public static class BacklogEndpoints
                 var existingTask = existing.FirstOrDefault(t =>
                     string.Equals(t.SourceFilePath, externalId, StringComparison.Ordinal));
                 if (existingTask is not null)
-                    return Results.Ok(MapTask(existingTask));
+                    return Results.Ok(await readModelFactory.BuildTaskDtoAsync(existingTask, ct));
             }
             var orderKey = KeyForIndex(BucketKeys(existing, BacklogTaskState.Backlog), targetIndex: null, movingTaskId: null);
 
@@ -72,7 +74,25 @@ public static class BacklogEndpoints
             };
             await backlogStore.InsertAsync(task, ct);
             return Results.Created(
-                $"/api/projects/{projectId}/backlog/tasks/{task.Id}", MapTask(task));
+                $"/api/projects/{projectId}/backlog/tasks/{task.Id}", await readModelFactory.BuildTaskDtoAsync(task, ct));
+        });
+
+        app.MapGet("/api/projects/{projectId}/backlog/tasks/{taskId}", async (
+            HttpContext httpContext,
+            string projectId,
+            string taskId,
+            IProjectStore projectStore,
+            IBacklogTaskStore backlogStore,
+            BacklogTaskReadModelFactory readModelFactory,
+            CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
+                return Results.BadRequest(new { error = "Invalid id." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            if (auth.Error is not null) return auth.Error;
+
+            var task = await backlogStore.GetAsync(pid, tid, ct);
+            return task is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(task, ct));
         });
 
         // PATCH /api/projects/{projectId}/backlog/tasks/{taskId} — edit (FR-005)
@@ -83,6 +103,7 @@ public static class BacklogEndpoints
             EditBacklogTaskRequest request,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
+            BacklogTaskReadModelFactory readModelFactory,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
@@ -97,7 +118,7 @@ public static class BacklogEndpoints
             if (!updated) return Results.NotFound();
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
-            return task is null ? Results.NotFound() : Results.Ok(MapTask(task));
+            return task is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(task, ct));
         });
 
         // DELETE /api/projects/{projectId}/backlog/tasks/{taskId} — delete (FR-005)
@@ -114,7 +135,15 @@ public static class BacklogEndpoints
             var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
             if (auth.Error is not null) return auth.Error;
 
-            var deleted = await backlogStore.TryDeleteAsync(pid, tid, ct);
+            bool deleted;
+            try
+            {
+                deleted = await backlogStore.TryDeleteAsync(pid, tid, ct);
+            }
+            catch (BacklogTaskDependencyException)
+            {
+                return Results.Conflict(new { error = "task_is_dependency" });
+            }
             if (deleted) return Results.NoContent();
 
             // Distinguish "claimed (not deletable)" from "not found in project".
@@ -131,6 +160,7 @@ public static class BacklogEndpoints
             MoveBacklogTaskRequest? request,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
+            BacklogTaskReadModelFactory readModelFactory,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
@@ -157,7 +187,7 @@ public static class BacklogEndpoints
             }
 
             var updated = await backlogStore.GetAsync(pid, tid, ct);
-            return updated is null ? Results.NotFound() : Results.Ok(MapTask(updated));
+            return updated is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(updated, ct));
         });
 
         // POST /api/projects/{projectId}/backlog/ready-all — bulk Backlog -> Ready (FR-006/010)
@@ -186,6 +216,7 @@ public static class BacklogEndpoints
             MoveBacklogTaskRequest? request,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
+            BacklogTaskReadModelFactory readModelFactory,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
@@ -218,7 +249,7 @@ public static class BacklogEndpoints
             }
 
             var updated = await backlogStore.GetAsync(pid, tid, ct);
-            return updated is null ? Results.NotFound() : Results.Ok(MapTask(updated));
+            return updated is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(updated, ct));
         });
 
         // POST /api/projects/{projectId}/backlog/tasks/{taskId}/reorder — within-bucket reorder (FR-018a)
@@ -229,6 +260,7 @@ public static class BacklogEndpoints
             ReorderBacklogTaskRequest request,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
+            BacklogTaskReadModelFactory readModelFactory,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
@@ -260,7 +292,7 @@ public static class BacklogEndpoints
             }
 
             var updated = await backlogStore.GetAsync(pid, tid, ct);
-            return updated is null ? Results.NotFound() : Results.Ok(MapTask(updated));
+            return updated is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(updated, ct));
         });
 
         // POST /api/projects/{projectId}/backlog/tasks/{taskId}/archive — remove task card off-board.
@@ -270,6 +302,7 @@ public static class BacklogEndpoints
             string taskId,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
+            BacklogTaskReadModelFactory readModelFactory,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
@@ -281,7 +314,7 @@ public static class BacklogEndpoints
             if (!archived) return Results.NotFound();
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
-            return task is null ? Results.NotFound() : Results.Ok(MapTask(task));
+            return task is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(task, ct));
         });
 
         // GET /api/projects/{projectId}/board — full board (FR-013..016a/019)
@@ -397,24 +430,6 @@ public static class BacklogEndpoints
         var hi = index < count ? orderedKeys[index] : null;
         return OrderKey.Between(lo, hi);
     }
-
-    private static BacklogTaskDto MapTask(BacklogTask t) => new()
-    {
-        TaskId = t.Id.ToString(),
-        ProjectId = t.ProjectId.ToString(),
-        Title = t.Title,
-        Description = t.Description,
-        State = t.State.ToApiString(),
-        OrderKey = t.OrderKey,
-        CapturedBy = t.CapturedBy,
-        CreatedAt = t.CreatedAt,
-        CommittedAt = t.CommittedAt,
-        ClaimedAt = t.ClaimedAt,
-        RunId = t.RunId?.ToString(),
-        WorkflowOverrideId = t.WorkflowOverrideId,
-        ArchivedAt = t.ArchivedAt,
-        ExternalId = t.SourceFilePath,
-    };
 
     private static BacklogSettingsDto MapSettings(Project p) => new()
     {

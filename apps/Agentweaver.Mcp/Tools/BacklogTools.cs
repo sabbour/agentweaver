@@ -147,6 +147,22 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
+    [McpServerTool(Name = "backlog_get_task"), Description("Get one enriched backlog task, including blocking dependency status.")]
+    public async Task<string> BacklogGetTaskAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Task ID")] string task_id,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var result = await api.GetAsync<JsonElement>(
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}", ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
     [McpServerTool(Name = "backlog_archive_task"), Description("Archive a backlog task off the active board. Claimed tasks also archive their linked coordinator run card.")]
     public async Task<string> BacklogArchiveTaskAsync(
         [Description("Project ID")] string project_id,

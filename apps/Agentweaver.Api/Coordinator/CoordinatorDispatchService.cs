@@ -2888,6 +2888,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 public static class WorkPlanStatus
 {
     public const string Planned = "planned";
+    public const string Delegated = "delegated";
     public const string Dispatching = "dispatching";
     public const string Assembling = "assembling";
     public const string InReview = "in_review";

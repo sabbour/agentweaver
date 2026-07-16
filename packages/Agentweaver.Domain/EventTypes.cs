@@ -227,6 +227,12 @@ public static class EventTypes
     public const string CoordinatorWorkPlan = "coordinator.work_plan";
 
     /// <summary>
+    /// Emitted once when a coordinator promotes PRD stories into standalone backlog tasks instead of
+    /// persisting them as inline subtasks.
+    /// </summary>
+    public const string CoordinatorStoriesPromoted = "coordinator.stories_promoted";
+
+    /// <summary>
     /// Terminal signal emitted on a coordinator CHILD run's existing run stream when the child
     /// completes its trimmed pipeline (agent + RAI) and is ready to be collected/assembled by
     /// the coordinator. This is the minimal child-side hand-off; the coordinator-level

@@ -383,6 +383,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     public static async Task<IResult> ConfirmOutcomeSpecAsync(
         HttpContext httpContext,
         string id,
+        ConfirmOutcomeSpecRequest? request,
         IRunStore runStore,
         CoordinatorRunService coordinator,
         ILogger<Program> logger,
@@ -403,7 +404,11 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
 
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-        var outcome = await coordinator.ConfirmOutcomeSpecAsync(id, caller.User, ct);
+        var outcome = await coordinator.ConfirmOutcomeSpecAsync(
+            id,
+            caller.User,
+            request?.AllowTaskPromotion ?? false,
+            ct);
 
         return outcome switch
         {
@@ -747,6 +752,7 @@ static OutcomeSpecResponse MapOutcomeSpec(OutcomeSpec spec) => new()
     ClarifyingQuestions = spec.ClarifyingQuestions,
     Status = spec.Status,
     ConfirmedBy = spec.ConfirmedBy,
+    AllowTaskPromotion = spec.AllowTaskPromotion,
 };
 
 // Reads the current persisted spec after a confirm/revise so the response mirrors the

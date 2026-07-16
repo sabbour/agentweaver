@@ -62,6 +62,7 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
     /// a specific confirm/revise/null result (e.g. to prove fail-closed behavior on model outage).
     /// </summary>
     public FakeOutcomeSpecReplyClassifier ReplyClassifier { get; } = new();
+    public FakeStoryIndependenceClassifier StoryIndependenceClassifier { get; } = new();
 
     private HttpClient CreateClientWithKey(string apiKey)
     {
@@ -129,6 +130,9 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
             // call. Tests can drive its Override to force confirm/revise/null (fail-closed) results.
             RemoveService<Agentweaver.Api.Coordinator.IOutcomeSpecReplyClassifier>(services);
             services.AddSingleton<Agentweaver.Api.Coordinator.IOutcomeSpecReplyClassifier>(ReplyClassifier);
+
+            RemoveService<Agentweaver.Api.Coordinator.IStoryIndependenceClassifier>(services);
+            services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClassifier>(StoryIndependenceClassifier);
 
             // Any other agent path still fails closed (signed out) so it never reaches the network.
             // This is a real IGitHubTokenStore, not a mock.

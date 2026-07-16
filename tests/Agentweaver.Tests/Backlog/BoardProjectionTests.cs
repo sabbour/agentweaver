@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Backlog;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -144,7 +145,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
         var projector = new WorkflowStageProjector();
-        var service = new BoardProjectionService(backlogStore, runStore, projector, _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, projector, _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var projectA = MakeProject();
         var projectB = MakeProject();
@@ -218,7 +219,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var projects = new SqliteProjectStore(testDb.Db);
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
-        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var project = MakeProject();
         await projects.InsertAsync(project);
@@ -246,7 +247,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
         var projector = new WorkflowStageProjector();
-        var service = new BoardProjectionService(backlogStore, runStore, projector, _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, projector, _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var project = MakeProject();
         await projects.InsertAsync(project);
@@ -275,7 +276,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var projects = new SqliteProjectStore(testDb.Db);
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
-        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var project = MakeProject();
         await projects.InsertAsync(project);
@@ -312,7 +313,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var projects = new SqliteProjectStore(testDb.Db);
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
-        var service = new BoardProjectionService(backlogStore, runStore, emptyProjector, _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, emptyProjector, _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var project = MakeProject();
         await projects.InsertAsync(project);
@@ -343,7 +344,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
         var projector = new WorkflowStageProjector();
-        var service = new BoardProjectionService(backlogStore, runStore, projector, _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, projector, _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var project = MakeProject();
         await projects.InsertAsync(project);
@@ -402,7 +403,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var projects = new SqliteProjectStore(testDb.Db);
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
-        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var project = MakeProject();
         await projects.InsertAsync(project);
@@ -473,7 +474,7 @@ public sealed class BoardProjectionTests : IAsyncDisposable
         var projects = new SqliteProjectStore(testDb.Db);
         var backlogStore = new SqliteBacklogTaskStore(testDb.Db);
         var runStore = new SqliteRunStore(testDb.Db);
-        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry());
+        var service = new BoardProjectionService(backlogStore, runStore, new WorkflowStageProjector(), _scopeFactory, projects, new WorkflowRegistry(), new BacklogTaskReadModelFactory(backlogStore));
 
         var project = MakeProject();
         await projects.InsertAsync(project);

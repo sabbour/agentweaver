@@ -21,6 +21,16 @@ public interface IBacklogTaskStore
     /// <summary>All tasks for a project (Backlog + Ready + Claimed), ordered by (state, order_key).</summary>
     Task<IReadOnlyList<BacklogTask>> ListByProjectAsync(ProjectId projectId, CancellationToken ct = default);
 
+    Task<IReadOnlyList<BacklogTaskDependency>> ListDependenciesAsync(
+        ProjectId projectId,
+        IReadOnlyCollection<BacklogTaskId> taskIds,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<BacklogDependencyStatus>> ListDependencyStatusesAsync(
+        ProjectId projectId,
+        IReadOnlyCollection<BacklogTaskId> taskIds,
+        CancellationToken ct = default);
+
     /// <summary>Ready, unclaimed tasks for a project ordered by (order_key ASC, committed_at ASC,
     /// task_id ASC), capped at <paramref name="limit"/>. Deterministic top-N claim candidates.</summary>
     Task<IReadOnlyList<BacklogTask>> ListReadyForClaimAsync(

@@ -329,6 +329,17 @@ public sealed class AgentweaverApiToolsTests
         var result = await InvokeAsync(tool, new());
         result.Should().Contain("could not reach the Agentweaver API");
     }
+
+    [Fact]
+    public void CoordinatorBuild_IncludesTaskInspectionTool()
+    {
+        var http = new HttpClient(new FakeHttpHandler(HttpStatusCode.OK, "{}"))
+            { BaseAddress = new Uri("http://localhost/") };
+
+        var tools = AgentweaverApiTools.Build(ProjectId, "Coordinator", "http://localhost", null, http);
+
+        tools.Select(t => t.Name).Should().Contain("backlog_get_task");
+    }
 }
 
 /// <summary>Fake HttpMessageHandler that throws a fixed exception on every send, simulating a

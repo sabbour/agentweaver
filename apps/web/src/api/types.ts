@@ -587,6 +587,7 @@ export interface OutcomeSpec {
   clarifyingQuestions?: string[];
   status: OutcomeSpecStatus;
   confirmedBy?: string;
+  allowTaskPromotion?: boolean;
 }
 
 export type StartOrchestrationMode = 'define_outcome' | 'direct';
@@ -873,6 +874,23 @@ export interface BacklogTaskDto {
   claimed_at?: string | null;
   run_id?: string | null;
   archived_at?: string | null;
+  workflow_override_id?: string | null;
+  external_id?: string | null;
+  parent_prd_run_id?: string | null;
+  promotion_key?: string | null;
+  promotion_reason?: string | null;
+  depends_on_task_ids?: string[];
+  is_blocked?: boolean;
+  blocked_reason?: string | null;
+  is_ready_to_start?: boolean;
+  blocking_dependencies?: BlockingDependencyDto[];
+}
+
+export interface BlockingDependencyDto {
+  task_id: string;
+  title: string;
+  run_id?: string | null;
+  run_status?: string | null;
 }
 
 // A Backlog/Ready intake card (board column kind === "intake").
@@ -886,7 +904,16 @@ export interface TaskCardDto {
   captured_by: string;
   created_at: string;
   committed_at?: string | null;
+  workflow_override_id?: string | null;
   archived_at?: string | null;
+  parent_prd_run_id?: string | null;
+  promotion_key?: string | null;
+  promotion_reason?: string | null;
+  depends_on_task_ids?: string[];
+  is_blocked?: boolean;
+  blocked_reason?: string | null;
+  is_ready_to_start?: boolean;
+  blocking_dependencies?: BlockingDependencyDto[];
 }
 
 // A coordinator-run card placed in a workflow column (read-only).

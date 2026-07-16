@@ -16,4 +16,7 @@ public sealed class BacklogTaskRecord
     public string? WorkflowOverrideId { get; set; }
     public DateTimeOffset? ArchivedAt { get; set; }
     public string? SourceFilePath { get; set; }
+    public string? ParentPrdRunId { get; set; }
+    public string? PromotionKey { get; set; }
+    public string? PromotionReason { get; set; }
 }

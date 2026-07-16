@@ -535,6 +535,9 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("AllowTaskPromotion")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ClarifyingQuestions")
                         .HasColumnType("TEXT");
 

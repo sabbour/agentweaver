@@ -43,6 +43,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
+    public DbSet<BacklogTaskDependencyRecord> BacklogTaskDependencies => Set<BacklogTaskDependencyRecord>();
     public DbSet<WorkflowRunRecord> WorkflowRuns => Set<WorkflowRunRecord>();
     public DbSet<CastProposalRecord> CastProposals => Set<CastProposalRecord>();
     public DbSet<SkillRecord> Skills => Set<SkillRecord>();
@@ -147,6 +148,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<RunRevisionRecord>();
             model.Ignore<ProjectRecord>();
             model.Ignore<BacklogTaskRecord>();
+            model.Ignore<BacklogTaskDependencyRecord>();
             model.Ignore<WorkflowRunRecord>();
             model.Ignore<CastProposalRecord>();
             model.Ignore<WorkflowCheckpointRecord>();
@@ -264,6 +266,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.WorkflowOverrideId).HasColumnName("workflow_override_id");
             e.Property(t => t.ArchivedAt).HasColumnName("archived_at");
             e.Property(t => t.SourceFilePath).HasColumnName("source_file_path");
+            e.Property(t => t.ParentPrdRunId).HasColumnName("parent_prd_run_id");
+            e.Property(t => t.PromotionKey).HasColumnName("promotion_key");
+            e.Property(t => t.PromotionReason).HasColumnName("promotion_reason");
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
                 .HasDatabaseName("IX_backlog_tasks_project_state_orderkey");
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
@@ -274,6 +279,21 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .HasDatabaseName("IX_backlog_tasks_run")
                 .IsUnique()
                 .HasFilter("run_id IS NOT NULL");
+            e.HasIndex(t => new { t.ParentPrdRunId, t.PromotionKey })
+                .HasDatabaseName("IX_backlog_tasks_parent_promotion_key")
+                .IsUnique()
+                .HasFilter("parent_prd_run_id IS NOT NULL AND promotion_key IS NOT NULL");
+        });
+
+        model.Entity<BacklogTaskDependencyRecord>(e =>
+        {
+            e.ToTable("backlog_task_dependencies").HasKey(d => new { d.TaskId, d.DependsOnTaskId });
+            e.Property(d => d.ProjectId).HasColumnName("project_id");
+            e.Property(d => d.TaskId).HasColumnName("task_id");
+            e.Property(d => d.DependsOnTaskId).HasColumnName("depends_on_task_id");
+            e.Property(d => d.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(d => new { d.ProjectId, d.TaskId }).HasDatabaseName("IX_backlog_task_dependencies_project_task");
+            e.HasIndex(d => d.DependsOnTaskId).HasDatabaseName("IX_backlog_task_dependencies_prerequisite");
         });
 
         model.Entity<WorkflowRunRecord>(e =>

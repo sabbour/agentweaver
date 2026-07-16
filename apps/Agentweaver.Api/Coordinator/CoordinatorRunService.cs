@@ -324,7 +324,7 @@ public sealed class CoordinatorRunService
                     var spec = await GetOutcomeSpecAsync(runId, _appStopping).ConfigureAwait(false);
                     if (spec?.Status == "awaiting_confirmation")
                     {
-                        var outcome = await ConfirmOutcomeSpecAsync(runId, confirmedBy, _appStopping).ConfigureAwait(false);
+                        var outcome = await ConfirmOutcomeSpecAsync(runId, confirmedBy, allowTaskPromotion: false, _appStopping).ConfigureAwait(false);
                         if (outcome == CoordinatorGateOutcome.Accepted)
                             return;
                     }
@@ -355,10 +355,18 @@ public sealed class CoordinatorRunService
     /// finalize and terminate (Phase 1). Returns <see cref="CoordinatorGateOutcome"/> so the HTTP
     /// layer can map to 202 / 409 without holding any orchestration state.
     /// </summary>
-    public Task<CoordinatorGateOutcome> ConfirmOutcomeSpecAsync(string runId, string confirmedBy, CancellationToken ct) =>
+    public Task<CoordinatorGateOutcome> ConfirmOutcomeSpecAsync(
+        string runId,
+        string confirmedBy,
+        bool allowTaskPromotion,
+        CancellationToken ct) =>
         SubmitDecisionAsync(
             runId,
-            new CoordinatorOutcomeSpecDecision(Confirmed: true, Revise: false, ConfirmedBy: confirmedBy),
+            new CoordinatorOutcomeSpecDecision(
+                Confirmed: true,
+                Revise: false,
+                ConfirmedBy: confirmedBy,
+                AllowTaskPromotion: allowTaskPromotion),
             ct);
 
     /// <summary>
@@ -1039,11 +1047,13 @@ public sealed class CoordinatorRunService
         if (action == CoordinatorRecoveryAction.FinalizeNoSubtasks)
         {
             var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
+            var delegated = planState?.Status == WorkPlanStatus.Delegated;
+            var result = delegated ? "delegated_to_backlog" : spec?.Status ?? "confirmed";
             var terminal = spec?.Status == "declined" ? RunStatus.Declined : RunStatus.Completed;
             var entry0 = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
             await _runStore.TrySetTerminalStatusAsync(
-                run.Id, terminal, DateTimeOffset.UtcNow, spec?.Status ?? "confirmed", ct).ConfigureAwait(false);
-            entry0.RecordNext(EventTypes.RunCompleted, new { result = spec?.Status ?? "confirmed" });
+                run.Id, terminal, DateTimeOffset.UtcNow, result, ct).ConfigureAwait(false);
+            entry0.RecordNext(EventTypes.RunCompleted, new { result });
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
             _factory.DeleteCheckpoints(runId);
@@ -1517,13 +1527,25 @@ public sealed class CoordinatorRunService
     {
         var parsedRunId = RunId.Parse(runId);
         var status = outcome.Status == "confirmed" ? RunStatus.Completed : RunStatus.Declined;
+        var result = outcome.Status;
+        if (outcome.Status == "confirmed" && await IsDelegatedPlanAsync(runId).ConfigureAwait(false))
+            result = "delegated_to_backlog";
 
         await _runStore.TrySetTerminalStatusAsync(
-            parsedRunId, status, DateTimeOffset.UtcNow, outcome.Status, CancellationToken.None).ConfigureAwait(false);
+            parsedRunId, status, DateTimeOffset.UtcNow, result, CancellationToken.None).ConfigureAwait(false);
 
-        entry.RecordNext(EventTypes.RunCompleted, new { result = outcome.Status });
+        entry.RecordNext(EventTypes.RunCompleted, new { result });
         _streamStore.Complete(runId);
         _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
+    }
+
+    private async Task<bool> IsDelegatedPlanAsync(string runId)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .AnyAsync(w => w.CoordinatorRunId == runId && w.Status == WorkPlanStatus.Delegated)
+            .ConfigureAwait(false);
     }
 
     private async Task FailRunSafeAsync(string runId, RunStreamEntry entry, string reason = "watch_loop_error")

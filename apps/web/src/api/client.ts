@@ -635,8 +635,8 @@ export class AgentweaverApiClient {
     return this.request<OutcomeSpec>('GET', `/runs/${encodeURIComponent(runId)}/outcome-spec`);
   }
 
-  confirmOutcomeSpec(runId: string): Promise<OutcomeSpec | null> {
-    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, {});
+  confirmOutcomeSpec(runId: string, allowTaskPromotion = false): Promise<OutcomeSpec | null> {
+    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, { allowTaskPromotion });
   }
 
   reviseOutcomeSpec(runId: string, feedback: string): Promise<OutcomeSpec | null> {
@@ -765,6 +765,10 @@ export class AgentweaverApiClient {
 
   captureBacklogTask(projectId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks`, body);
+  }
+
+  getBacklogTask(projectId: string, taskId: string): Promise<BacklogTaskDto> {
+    return this.request<BacklogTaskDto>('GET', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
   }
 
   editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {

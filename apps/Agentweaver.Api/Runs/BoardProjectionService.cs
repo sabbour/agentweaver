@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Backlog;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -26,6 +27,7 @@ public sealed class BoardProjectionService
     private readonly IProjectStore _projectStore;
     private readonly WorkflowRegistry _workflowRegistry;
     private readonly PendingToolApprovalRunsQuery _pendingApprovalQuery;
+    private readonly BacklogTaskReadModelFactory _taskReadModels;
 
     public BoardProjectionService(
         IBacklogTaskStore backlogStore,
@@ -33,8 +35,9 @@ public sealed class BoardProjectionService
         IWorkflowStageProjector stageProjector,
         IServiceScopeFactory scopeFactory,
         IProjectStore projectStore,
-        WorkflowRegistry workflowRegistry)
-        : this(backlogStore, runStore, stageProjector, scopeFactory, projectStore, workflowRegistry,
+        WorkflowRegistry workflowRegistry,
+        BacklogTaskReadModelFactory taskReadModels)
+        : this(backlogStore, runStore, stageProjector, scopeFactory, projectStore, workflowRegistry, taskReadModels,
               new PendingToolApprovalRunsQuery(scopeFactory))
     {
     }
@@ -46,6 +49,7 @@ public sealed class BoardProjectionService
         IServiceScopeFactory scopeFactory,
         IProjectStore projectStore,
         WorkflowRegistry workflowRegistry,
+        BacklogTaskReadModelFactory taskReadModels,
         PendingToolApprovalRunsQuery pendingApprovalQuery)
     {
         _backlogStore = backlogStore;
@@ -54,12 +58,14 @@ public sealed class BoardProjectionService
         _scopeFactory = scopeFactory;
         _projectStore = projectStore;
         _workflowRegistry = workflowRegistry;
+        _taskReadModels = taskReadModels;
         _pendingApprovalQuery = pendingApprovalQuery;
     }
 
     public async Task<BoardDto> GetBoardAsync(ProjectId projectId, bool includeTerminalHistory, CancellationToken ct)
     {
         var tasks = await _backlogStore.ListByProjectAsync(projectId, ct).ConfigureAwait(false);
+        var taskReadModels = await _taskReadModels.BuildAsync(projectId, tasks, ct).ConfigureAwait(false);
         var runs = await _runStore.GetRunsByProjectAsync(projectId, includeChildren: false, ct).ConfigureAwait(false);
 
         // Resolve the effective workflow so board columns can be derived from its stage definitions.
@@ -75,8 +81,8 @@ public sealed class BoardProjectionService
 
         var columns = new List<BoardColumnDto>
         {
-            BuildIntakeColumn("backlog", "Backlog", tasks, BacklogTaskState.Backlog),
-            BuildIntakeColumn("ready", "Ready", tasks, BacklogTaskState.Ready),
+            BuildIntakeColumn("backlog", "Backlog", tasks, taskReadModels, BacklogTaskState.Backlog),
+            BuildIntakeColumn("ready", "Ready", tasks, taskReadModels, BacklogTaskState.Ready),
         };
 
         // Active (non-terminal) coordinator run ids backing the board — the set the per-agent
@@ -163,26 +169,18 @@ public sealed class BoardProjectionService
     }
 
     private static BoardColumnDto BuildIntakeColumn(
-        string id, string label, IReadOnlyList<BacklogTask> tasks, BacklogTaskState state)
+        string id,
+        string label,
+        IReadOnlyList<BacklogTask> tasks,
+        IReadOnlyDictionary<BacklogTaskId, BacklogTaskReadModel> taskReadModels,
+        BacklogTaskState state)
     {
         var cards = tasks
             .Where(t => t.State == state)
             .OrderBy(t => t.OrderKey, StringComparer.Ordinal)
             .ThenBy(t => t.CommittedAt ?? t.CreatedAt)
             .ThenBy(t => t.Id.ToString(), StringComparer.Ordinal)
-            .Select(t => (object)new TaskCardDto
-            {
-                TaskId = t.Id.ToString(),
-                Title = t.Title,
-                Description = t.Description,
-                State = state.ToApiString(),
-                OrderKey = t.OrderKey,
-                CapturedBy = t.CapturedBy,
-                CreatedAt = t.CreatedAt,
-                CommittedAt = t.CommittedAt,
-                WorkflowOverrideId = t.WorkflowOverrideId,
-                ArchivedAt = t.ArchivedAt,
-            })
+            .Select(t => (object)BacklogTaskReadModelFactory.ToTaskCardDto(taskReadModels[t.Id]))
             .ToList();
         return new BoardColumnDto { Id = id, Kind = "intake", Label = label, Cards = cards };
     }

@@ -46,7 +46,7 @@ export interface CoordinatorRunModel {
   steer: (req: SteerCoordinatorRequest) => Promise<unknown>;
   sendMessage: (instruction: string) => Promise<unknown>;
   stop: () => Promise<unknown>;
-  confirmOutcomeSpec: () => Promise<unknown>;
+  confirmOutcomeSpec: (allowTaskPromotion?: boolean) => Promise<unknown>;
   reviseOutcomeSpec: (feedback: string) => Promise<unknown>;
   reviewAssembly: (decision: AssemblyReviewDecision, comment?: string) => Promise<unknown>;
 }
@@ -129,7 +129,7 @@ export function useCoordinatorRunModel(runId: string, runStatus?: string): Coord
   const steer = useCallback((req: SteerCoordinatorRequest) => apiClient.steerCoordinator(runId, req), [runId]);
   const sendMessage = useCallback((instruction: string) => apiClient.steerCoordinator(runId, { kind: 'send', instruction }), [runId]);
   const stop = useCallback(() => apiClient.steerCoordinator(runId, { kind: 'stop' }), [runId]);
-  const confirmOutcomeSpec = useCallback(() => apiClient.confirmOutcomeSpec(runId), [runId]);
+  const confirmOutcomeSpec = useCallback((allowTaskPromotion?: boolean) => apiClient.confirmOutcomeSpec(runId, allowTaskPromotion ?? false), [runId]);
   const reviseOutcomeSpec = useCallback((feedback: string) => apiClient.reviseOutcomeSpec(runId, feedback), [runId]);
   const reviewAssembly = useCallback(
     (decision: AssemblyReviewDecision, comment?: string) => apiClient.reviewAssembly(runId, decision, comment),

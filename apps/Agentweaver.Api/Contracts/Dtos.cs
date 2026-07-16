@@ -1109,6 +1109,12 @@ public sealed record ReviseOutcomeSpecRequest
     [JsonPropertyName("feedback")] public string? Feedback { get; init; }
 }
 
+/// <summary>Request body for POST /api/runs/{id}/outcome-spec/confirm.</summary>
+public sealed record ConfirmOutcomeSpecRequest
+{
+    [JsonPropertyName("allowTaskPromotion")] public bool AllowTaskPromotion { get; init; }
+}
+
 /// <summary>
 /// Response body for GET /api/runs/{id}/outcome-spec. Field names mirror the web client's
 /// <c>OutcomeSpec</c> interface. Server state is rendered as-is (Principle III).
@@ -1129,6 +1135,9 @@ public sealed record OutcomeSpecResponse
     [JsonPropertyName("confirmedBy")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ConfirmedBy { get; init; }
+
+    [JsonPropertyName("allowTaskPromotion")]
+    public bool AllowTaskPromotion { get; init; }
 }
 
 // -----------------------------------------------------------------------
@@ -1293,6 +1302,14 @@ public sealed record ReorderBacklogTaskRequest
     [JsonPropertyName("target_index")] public int TargetIndex { get; init; }
 }
 
+public sealed record BlockingDependencyDto
+{
+    [JsonPropertyName("task_id")] public required string TaskId { get; init; }
+    [JsonPropertyName("title")] public required string Title { get; init; }
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("run_status")] public string? RunStatus { get; init; }
+}
+
 /// <summary>Full backlog-task projection returned by capture/edit/move/reorder.</summary>
 public sealed record BacklogTaskDto
 {
@@ -1310,6 +1327,14 @@ public sealed record BacklogTaskDto
     [JsonPropertyName("workflow_override_id")] public string? WorkflowOverrideId { get; init; }
     [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
     [JsonPropertyName("external_id")] public string? ExternalId { get; init; }
+    [JsonPropertyName("parent_prd_run_id")] public string? ParentPrdRunId { get; init; }
+    [JsonPropertyName("promotion_key")] public string? PromotionKey { get; init; }
+    [JsonPropertyName("promotion_reason")] public string? PromotionReason { get; init; }
+    [JsonPropertyName("depends_on_task_ids")] public required IReadOnlyList<string> DependsOnTaskIds { get; init; }
+    [JsonPropertyName("is_blocked")] public bool IsBlocked { get; init; }
+    [JsonPropertyName("blocked_reason")] public string? BlockedReason { get; init; }
+    [JsonPropertyName("is_ready_to_start")] public bool IsReadyToStart { get; init; }
+    [JsonPropertyName("blocking_dependencies")] public required IReadOnlyList<BlockingDependencyDto> BlockingDependencies { get; init; }
 }
 
 /// <summary>Per-project pickup settings (FR-008a + unattended seeding).</summary>
@@ -1348,6 +1373,14 @@ public sealed record TaskCardDto
     [JsonPropertyName("committed_at")] public DateTimeOffset? CommittedAt { get; init; }
     [JsonPropertyName("workflow_override_id")] public string? WorkflowOverrideId { get; init; }
     [JsonPropertyName("archived_at")] public DateTimeOffset? ArchivedAt { get; init; }
+    [JsonPropertyName("parent_prd_run_id")] public string? ParentPrdRunId { get; init; }
+    [JsonPropertyName("promotion_key")] public string? PromotionKey { get; init; }
+    [JsonPropertyName("promotion_reason")] public string? PromotionReason { get; init; }
+    [JsonPropertyName("depends_on_task_ids")] public required IReadOnlyList<string> DependsOnTaskIds { get; init; }
+    [JsonPropertyName("is_blocked")] public bool IsBlocked { get; init; }
+    [JsonPropertyName("blocked_reason")] public string? BlockedReason { get; init; }
+    [JsonPropertyName("is_ready_to_start")] public bool IsReadyToStart { get; init; }
+    [JsonPropertyName("blocking_dependencies")] public required IReadOnlyList<BlockingDependencyDto> BlockingDependencies { get; init; }
 }
 
 /// <summary>A coordinator-run card placed in a workflow column.</summary>
