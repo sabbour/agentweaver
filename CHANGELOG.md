@@ -5,6 +5,11 @@ All notable changes to Agentweaver are documented in this file, generated from t
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, `test`); merge commits and routine `chore(squad)` state-sync commits are omitted for readability. Regenerate with `python scripts/gen-changelog.py` if the history needs to be rebuilt.
 
 
+## [v0.9.67] - 2026-07-16
+
+### Fixed
+- fix(assistant): root-cause fix for "operator assistant chat frequently terminates mid-turn" — `k8s/api-deployment.yaml` had no `terminationGracePeriodSeconds`/`preStop` hook, so every rolling deploy (multiple/day in this repo) sent SIGTERM and the Generic Host's default 30s `ShutdownTimeout` cancelled `RequestAborted` well before legitimate long assistant turns (60-100+s across multiple MCP tool calls) could finish. Added `terminationGracePeriodSeconds: 120` + a `preStop: sleep 5` hook to the API deployment, and set `ConfigureHostOptions(o => o.ShutdownTimeout = TimeSpan.FromSeconds(100))` in `Program.cs` to pair with it, so in-flight assistant turns now drain instead of being forcibly cancelled during deploys
+
 ## [v0.9.66] - 2026-07-16
 
 ### Added
