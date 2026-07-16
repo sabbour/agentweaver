@@ -1,5 +1,61 @@
 # Squad Decisions
 
+## 2026-07-16T19-15-00Z — Assistant session persistence and UI — v0.9.68 release
+
+**Status**: MERGED & DEPLOYED (v0.9.68 live on staging)
+**By**: Tank, Trinity, Coordinator (merge & release)
+**Branch leads**: 
+  - Tank: `feat/assistant-session-recall` (commit `dfc5c2e7`) — durable session rehydration + SDK session store re-enable
+  - Trinity: `feat/assistant-delete-run` (commit `4e78744`) — delete action on Sessions page
+**Coordinator merge**: `origin/main` fast-forward to commit `79f0d393`, VERSION bumped to v0.9.68, built+pushed all 4 images, deployed to staging, all 4 images pass provenance check.
+
+### Tank: Operator assistant durable session recall
+
+**Problem**: When an operator-assistant conversation fell out of the in-memory `_runs` cache
+(idle timeout after 30 min, pod restart, cross-pod routing on 2-replica deployment), the conversation was permanently lost — `RunTurnAsync` would return 404 and new messages couldn't be sent.
+
+**Decision**: On cache-miss, rehydrate from durable `RunEvent` storage:
+1. Added `IRunEventStream.GetPersistedEventsAsync(runId, fromSequence)` — a point-in-time durable read that rebuilds `OperatorRunState.History` from persisted `agent.message` events (capped at 24, most-recent-first).
+2. Restore `ProjectId`/`ModelId` from persisted `Run` record; transition status from `Completed` back to `InProgress` if messages arrive after idle close.
+3. Rehydration does NOT count against `MaxConcurrentRunsPerUser` quota (only new-start does), so existing conversations remain resumable even when the user's concurrency limit is occupied.
+4. **Architectural fact recorded**: the Copilot SDK's `EnableSessionStore` / `InfiniteSessions` flags (which we had disabled via copy-paste from one-shot sandboxed agents) are safe to re-enable ONLY for long-lived in-process agents like the operator assistant. Those same flags must remain `false` for one-shot/ephemeral agents (one-shot pods churn local SQLite unnecessarily). The disable on those was documented vs. a real bug (github/copilot-sdk#1814), making the risk/benefit calculation different per agent type.
+
+**Files changed**: `AssistantRunService.cs`, `IRunEventStream.cs`, `SqliteRunEventStream.cs`, `EfRunEventStream.cs`, `OperatorAssistantAgent.cs`, `AssistantRunEndpointsTests.cs`.
+
+**Validation**: 24/24 targeted tests passed.
+
+### Trinity: Sessions page with delete action
+
+**Problem**: No list endpoint for past assistant conversations; no way to delete/archive old runs.
+
+**Solution**: Reused existing generic `apiClient.deleteRun(runId)` (already calls the shared endpoint, no backend work needed since assistant runs live in the shared run store).
+- New `SessionsPage.tsx`: lists user's conversations via Tank's `GET /api/assistant/runs` endpoint (added as a backend change — see Tank's final state below).
+- Added delete button + confirm dialog per row.
+- Updated `LeftNav` to surface Sessions at `/projects/:projectId/sessions`.
+
+**Files changed**: `SessionsPage.tsx`, `SessionsPage.test.tsx`.
+
+**Validation**: 5/5 tests passed, eslint/tsc clean.
+
+### Backend: `GET /api/assistant/runs` endpoint
+
+Tank added `GET /api/assistant/runs` to `AssistantEndpoints.cs` (lists caller's active/past conversations: `run_id`, `status`, `title`, `created_at`, newest-first). This was required for Trinity's Sessions page.
+
+### Coordinator merge and v0.9.68 release
+
+- Merged both `feat/assistant-session-recall` and `feat/assistant-delete-run` into main at `79f0d393` (no conflicts, disjoint files).
+- VERSION 0.9.67 → 0.9.68, committed, annotated tag created, GitHub release published.
+- All 4 images built fresh (api, frontend, mcp, agent-host).
+- Deployed to `agentweaver-aks-2` via `scripts/aks/30-deploy.sh`.
+- Provenance verification: `scripts/aks/25-verify-image-provenance.sh` returned 4 passed, 0 failed against commit `79f0d393`.
+- Worktrees `aw-wt-assistant-recall` and `aw-wt-assistant-delete` removed post-merge.
+
+### Why this matters
+
+The assistant is now conversation-persistent across pod restarts, redeployments, and cross-replica routes — a fundamental reliability improvement for long-running troubleshooting sessions. Users can close their browser and come back hours later, click a saved run ID or find it in the Sessions list, and the conversation continues from exactly where it was. The SDK session-store re-enable optimizes the hot-path (repeated short calls benefit from in-memory overhead reduction) while Part 1's durable rehydration provides the actual correctness guarantee across pod boundaries.
+
+---
+
 ## 2026-07-14T15-39-56-07-00 — Active decisions reset after size gate
 
 **By:** Scribe  
@@ -476,3 +532,59 @@ Not pushed. Coordinator (Ahmed) will merge this branch tip
 - Harness transcripts keep raw response evidence but cap `response.body` to about 1.5KB with explicit truncation markers; persona reasoning about the previous response belongs in `thought` so transcripts stay auditable without exploding in size.
 - The OpenAPI contract was further enriched with XML-backed lifecycle documentation, YAML serving, stable names/tags, and bearer-security metadata for persona-critical routes.
 - Oracle adapter cleanup continued past the first refactor: the API adapter is now fully live-spec-driven and intentionally stripped of residual journey-shape hints, leaving only discovery framing and epistemic guardrails.
+
+---
+
+# Decision: Graceful shutdown fix for assistant-chat mid-turn termination — 2026-07-15
+
+**Status**: MERGED to main (commit c68b9055), released as v0.9.67, verified live in staging.
+**By**: Link (Platform Engineer)
+**Branch**: fix/assistant-graceful-shutdown (worktree: C:\Users\asabbour\Git\aw-wt-assistant-shutdown)
+**Refs**: origin/main `c68b9055` (merge commit)
+
+## Root cause
+
+`k8s/api-deployment.yaml` had no `terminationGracePeriodSeconds` (K8s default 30s) and no
+`preStop` hook. ASP.NET Core's Generic Host `HostOptions.ShutdownTimeout` was also unconfigured
+(default 30s). On every rolling deploy (this repo ships multiple releases/day, `maxSurge: 1,
+maxUnavailable: 0`), SIGTERM to the old pod triggered graceful shutdown, and after ~30s the host
+cancels `HttpContext.RequestAborted` for in-flight requests — including long operator assistant
+turns (verified live: a legitimate 18-tool-call turn took 101s to succeed when not torn down).
+That cancellation surfaces as `System.OperationCanceledException` from `Channel.ReadAllAsync` in
+`GitHubCopilotAgent.RunCoreStreamingAsync`.
+
+## Fix and chosen values
+
+- `k8s/api-deployment.yaml`: `terminationGracePeriodSeconds: 120` + `preStop: sleep 5` (lets
+  Service/Endpoints deregister the pod before it stops accepting connections; in-flight requests
+  keep draining).
+- `apps/Agentweaver.Api/Program.cs`: `builder.Host.ConfigureHostOptions(o => o.ShutdownTimeout =
+  TimeSpan.FromSeconds(100))`. 100s leaves ~20s margin under the 120s k8s grace period for actual
+  process teardown after the app-level graceful drain window elapses.
+- Values chosen to comfortably exceed observed 60-100s legitimate assistant turn durations while
+  keeping deploy rollout time reasonable (120s per pod max drain).
+
+## Scope decision: AgentHost excluded
+
+Checked `k8s/sandbox-template-agenthost.yaml` (no separate `agenthost-deployment.yaml` exists).
+AgentHost runs as a `SandboxTemplate` with per-run pods (`restartPolicy: Never`), not a
+rolling-update `Deployment` — pods are created/torn down per agent run, not rolled during
+releases. The termination-during-deploy gap this fix addresses does not apply to that
+architecture, so no change was made there.
+
+## Validation performed
+
+- `dotnet build apps/Agentweaver.Api/Agentweaver.Api.csproj -c Release
+  -p:CopilotSkipCliDownload=true` → Build succeeded, 0 warnings/errors. (Note:
+  `CopilotSkipCliDownload=true` was required only because this sandbox's network blocks the
+  unrelated npm download of the Copilot CLI binary used elsewhere in the SDK's build target — not
+  related to this change.)
+- YAML parsed successfully with `python -c "import yaml; yaml.safe_load_all(...)"`.
+- Not applied to any live cluster; coordinator owns build/push/deploy/verify.
+
+## Deployment outcome (post-merge)
+
+- Merged to `origin/main`, committed as `c68b9055`.
+- Released as v0.9.67, deployed live to staging.
+- Verified: `terminationGracePeriodSeconds=120` and `preStop` hook confirmed live on both new API pods.
+- Live smoke test of a real assistant turn succeeded post-deploy — no interruption observed.

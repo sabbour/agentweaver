@@ -135,3 +135,12 @@ Process note: #312 (Link2's fix) reopened by coordinator pending live v0.9.50-rc
 
 ## 2026-07-14T15:15:00Z — Queue-depth metric + deploy-path validation
 Link's durable backlog-ready metric for #108 was rubber-duck approved and shipped in v0.9.50-rc1. Separate release-path verification also confirmed the #251/#303 tag-resolution/provenance chain still holds on the shipped build.
+
+## 2026-07-15T17:30:00Z — Graceful shutdown fix for in-flight assistant termination (v0.9.67)
+Root cause: `k8s/api-deployment.yaml` lacked `terminationGracePeriodSeconds` (default 30s) and `preStop` hook; ASP.NET Core default `ShutdownTimeout` (30s) was too short for legitimate 60-100+s multi-tool operator-assistant turns. On rolling deploy (11 releases/~31h), SIGTERM cancelled in-flight requests via `HttpContext.RequestAborted` with `System.OperationCanceledException`.
+
+Fix: `k8s/api-deployment.yaml` now has `terminationGracePeriodSeconds: 120` + `preStop: sleep 5` hook; `apps/Agentweaver.Api/Program.cs` now sets `ShutdownTimeout = TimeSpan.FromSeconds(100)` (20s margin under K8s grace period for actual process teardown).
+
+Scope exclusion: AgentHost per-run SandboxTemplate pods (`restartPolicy: Never`) not affected — no rolling deployment pattern there.
+
+Merged to main (commit `c68b9055`), released as v0.9.67, verified live in staging with post-deploy smoke test success.

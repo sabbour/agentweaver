@@ -49,7 +49,44 @@ Merged 8 inbox decisions into decisions.md (Trinity IA restructure, Cypher A2A r
 Processed Coordinator + Link (`link-deploy-smoke`) batch. Health check returned FSStorageProvider; archive/history gates did not require summarization. Merged decisions inbox into consolidated decisions covering agent preview, A2A readiness, Postgres checkpoints, AgentHost user scoping, Kata/NAP, and the Copilot-auth blocker. Wrote orchestration/session logs and updated affected agent histories. Demo paused because the custom Agentweaver GitHub App cannot mint Copilot-entitled tokens; Microsoft Foundry recommended.
 
 
-## 2026-06-28T16:05:00-07:00 — Web session exchange deployment Scribe pass
+---
+
+## 2026-07-16T19-15-00Z — Assistant session persistence & UI (v0.9.68 release)
+
+**Health check:** Pre-flight state tools confirmed ready.
+
+**Scope:** Merged two companion features for operator-assistant conversation lifecycle (durable persistence + delete/list UI), released as v0.9.68, deployed and verified live on staging.
+
+**Work completed:**
+
+1. **Decision Inbox Merge:** 3 inbox entries merged into decisions.md:
+   - Tank: Durable session rehydration + `GET /api/assistant/runs` backend endpoint
+   - Trinity: Sessions page + delete action on each conversation
+   - Architectural note: Copilot SDK session-store flags differ by agent type (re-enable for long-lived, disable for one-shot)
+
+2. **Orchestration Logs:** Created 2 files (Tank, Trinity) per spawn manifest, including branch/commit/validation/merge status for each.
+
+3. **Session Log:** Wrote summary of v0.9.68 release: two features shipped, deployed, 4/4 images verified via provenance check.
+
+4. **Agent History Updates:**
+   - **Tank:** Recorded durable rehydration work, SDK session-store architectural decision, new `GetPersistedEventsAsync` method, backend endpoint addition. 24/24 tests passed.
+   - **Trinity:** Recorded Sessions page + delete UI, LeftNav integration, removed Operator-dock nav entry. 5/5 SessionsPage tests + 81 full suite passing; followed up on console-panel cleanup decision for Coordinator.
+
+**Size gates:** decisions.md = 43,919 bytes (below 51,200, no archival needed); history files within bounds.
+
+**Merge & Deploy:**
+- Coordinator merged both branches into main at `79f0d393` (disjoint files, no conflicts).
+- VERSION 0.9.67 → 0.9.68, tagged, GitHub release created.
+- All 4 images built, pushed to ACR, deployed to staging.
+- Provenance verification: `25-verify-image-provenance.sh` returned 4 passed, 0 failed.
+- **Status: LIVE** ✓
+
+**Inbox entries processed and deleted:** 3 files
+- tank-assistant-recall.md
+- trinity-assistant-ui-bugs-346.md
+- trinity-assistant-ui-second-pass-346.md
+
+## 2026-06-28T16:05:00-07-00 — Web session exchange deployment Scribe pass
 
 Processed Tank + Link batch: health check confirmed FSStorageProvider, Tank inbox entry merged, orchestration/session logs written, Tank/Link/Scribe histories updated, and summarization gates checked. No summarization required; remaining note is user re-auth with `copilot` scope or Foundry for model credentials.
 

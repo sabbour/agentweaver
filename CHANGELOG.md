@@ -5,6 +5,11 @@ All notable changes to Agentweaver are documented in this file, generated from t
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, `test`); merge commits and routine `chore(squad)` state-sync commits are omitted for readability. Regenerate with `python scripts/gen-changelog.py` if the history needs to be rebuilt.
 
 
+## [v0.9.69] - 2026-07-16
+
+### Fixed
+- fix(assistant): revert v0.9.68's `EnableSessionStore`/`InfiniteSessions` re-enable for `OperatorAssistantAgent` — live staging immediately hit `Error: database is locked` on every new operator run. Root cause: `OperatorAssistantAgent.RunTurnAsync` creates a brand-new Copilot SDK session on every single turn (never resumes one), so with the store enabled every turn across every concurrent conversation in the pod hammered the same pod-local SQLite session file. Durable rehydration from persisted `RunEvents` (the other half of the v0.9.68 recall fix) is unaffected and remains correct
+
 ## [v0.9.68] - 2026-07-16
 
 ### Fixed

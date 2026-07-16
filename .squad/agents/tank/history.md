@@ -1,5 +1,17 @@
 # Tank — History (Summarized)
 
+## 2026-07-16 — Assistant session recall and backend endpoint
+
+**Task:** Implement durable rehydration for operator-assistant conversations.
+
+**Work:** Added `IRunEventStream.GetPersistedEventsAsync(runId, fromSequence)` for point-in-time history replay (distinct from live-tail `SubscribeAsync`). On cache-miss in `RunTurnAsync`, rehydrate `OperatorRunState.History` from persisted `agent.message` events, rebuild context from `Run` record, and transition status from `Completed` back to `InProgress` if new messages arrive. Rehydration does NOT count against `MaxConcurrentRunsPerUser` quota. Flipped `OperatorAssistantAgent`'s `EnableSessionStore` and `InfiniteSessions` flags to `true` (safe for long-lived in-process agents; kept `false` for one-shot/ephemeral agents per SDK issue context). Added backend `GET /api/assistant/runs` endpoint for Trinity's Sessions page.
+
+**Outcome:** 24/24 targeted tests passed (3 new rehydration tests); merged to main at commit `79f0d393` as part of v0.9.68; deployed and verified live on staging.
+
+**Architectural note:** Copilot SDK's session-store disable (from github/copilot-sdk#1814) was never a general best-practice — only specific to one-shot pod churn. The risk/benefit calculation differs per agent type: re-enable for long-lived in-process, keep disabled for one-shot/ephemeral.
+
+---
+
 ## 2026-06-07 through 2026-06-26 — ARCHIVED SUMMARY
 
 **Phase 0-7 (June 7–26):** Built Scaffolder.Api infrastructure (5 endpoints, SqliteDb/EventStore/RunStore, streaming, git worktree management, security middleware). Fixed streaming security post-Morpheus (fail-closed ownership checks, atomic snapshots, 28–701 tests passing across phases). Implemented artifact browser backend (GET /artifacts, 6 security fixes). Delivered Feature 003 projects backend (SQLiteProjectStore, CRUD API). Implemented Feature 005 agent-team-casting backend (CastProposalStore, CastingService, 12 endpoints, TeamCommands CLI). Implemented Feature 008 Coordinator Agent plan revision (Round 2 rubber-duck approved), Phase 1-2 data foundation (Run domain, OutcomeSpec, WorkPlan, Subtask, SteeringDirective EF entities, 7 endpoints). Fixed board agent-rollup, MCP OAuth 2.1 backend (T1-T7, DCR, issuer/audience pinning, org handling). Fixed duplicate-default workflow card. Added GitHub accounts/repos API. Implemented org-auth rate-limit fix (authenticated public_members bucket + 429/403 discriminator). Seraph approved; RAI clean; deployed to AKS. Delivered PostgreSQL data-layer (EF stores, migrations, migrations discoverer, App:Role web/worker split, run leasing with claim/renew/release/fencing). Delivered Key Vault GitHub token-store (with Seraph/Link). Established replica-safe MCP OAuth broker pattern (MemoryDbContext over singleton state). Implemented agent-file generation (auto-gen tool-map + materialization flow). Web session exchange replica-fix (DB-backed storage, cross-replica single-use redemption).

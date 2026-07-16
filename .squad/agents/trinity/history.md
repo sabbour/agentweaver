@@ -1,20 +1,16 @@
 # Trinity — History (Summarized)
 
-## 2026-06-07 through 2026-06-18 — Foundation wave
-- Delivered the first thin CLI and React web clients over the backend API.
-- Built the run-timeline and streaming message experience, including safer Markdown rendering and reducer-based activity grouping.
-- Shipped artifact browsing, project creation flows, team/casting UI, and coordinator topology visualization.
-- Early validation waves stayed green as coverage climbed through the first major frontend feature sets.
+## 2026-07-16 — Sessions page with delete action
 
-## 2026-06-19 through 2026-06-29 — UX polish and docs wave
-- Simplified coordinator headers, added AgentRail filtering, improved GitHub project creation UX, added zoom controls, sign-in affordances, collapsible tool sections, and Kanban layout refinements.
-- Contributed to the fleet deep-dive documentation pass, docs IA restructuring, Mermaid dark-mode fixes, and documentation reconciliation work.
-- Added frontend usage/cost presentation for Feature 019 and multiple board/activity refinements.
+**Task:** Add UI for browsing and deleting past assistant conversations.
 
-## 2026-07-05 through 2026-07-11 — Release-wave frontend fixes
-- Landed the #174 tool-approval expiry UI behavior.
-- Contributed release-wave work across v0.7.11, v0.7.12, v0.8.0, v0.9.0, and v0.9.2, including messages/overview refreshes, outcome-spec gate UX fixes, conversational browser TUI shipping, calmer tool rows, and direct review CTA fixes.
-- Fixed RAI session-panel filtering and coordinator activity coalescing in the 2026-07-11 wave.
+**Work:** Implemented `SessionsPage.tsx` listing user's active/past assistant conversations via Tank's new `GET /api/assistant/runs` endpoint (run_id, status, title, created_at, newest-first). Each row navigates to `/assistant?assistant=1&runId={id}` to resume. Added delete icon button + confirm dialog per row, reusing existing generic `apiClient.deleteRun(runId)`. Updated `LeftNav` with new `Sessions` nav item at `/projects/:projectId/sessions`, gated behind `?assistant=1` flag (same as Assistant page). Removed old "Operator dock" nav entry (console panel internals left untouched). Updated API client types.
+
+**Outcome:** 5/5 SessionsPage tests passed; full frontend suite 81 tests/750 assertions passing (0 regressions); eslint/tsc clean; merged to main at commit `79f0d393` as part of v0.9.68; deployed and verified live on staging.
+
+**Follow-ups:** SessionsPage itself lacks automated tests (kept to scope); follow-up should add list/empty/error state coverage. Console panel feature (`/console`, `BrowserConsole`, `ConsolePanelContext`) left in place but no longer has nav entry — PM/Coordinator should decide later whether to fully retire.
+
+---
 
 ## 2026-07-13 through 2026-07-15 — Validation, harness, and PM-persona work
 - Closed or revalidated several issue states: #215 stale, #250 live-fixed, #186 already shipped, #306 already on main; investigated but deferred #271 retry-resume architecture work.

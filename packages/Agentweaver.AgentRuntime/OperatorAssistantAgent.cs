@@ -326,23 +326,23 @@ public sealed class OperatorAssistantAgent(
             EnableConfigDiscovery = false,
             Streaming = true,
             SessionId = $"agentweaver-operator-{conversationId}",
-            // #1814 note: EnableSessionStore=false/InfiniteSessions.Enabled=false were copy-pasted
-            // here from CopilotAIAgent/GitHubCopilotAgentRunner, citing github/copilot-sdk#1814. That
-            // issue (labeled "documentation", not a bug) is specifically about ONE-SHOT/ephemeral
-            // workloads — many short-lived sandbox pods (restartPolicy: Never) churning a local
-            // SQLite session file, which can pile up/contend across a high volume of throwaway
-            // processes. CopilotAIAgent/GitHubCopilotAgentRunner genuinely fit that shape and must
-            // keep the disable. OperatorAssistantAgent does not: it runs in-process inside the
-            // long-lived API pod across many turns of the same conversation, so the SDK's session
-            // store is safe (and useful) here — enabling it lets the SDK persist/compact its own
-            // session state across turns instead of only ever seeing a throwaway session. NOTE this
-            // is a same-pod-only optimization: the SQLite store is local-file-backed with no shared
-            // storage across our 2 replicas and no confirmed session affinity, so it will NOT survive
-            // a cross-pod route or pod restart — durable rehydration in AssistantRunService (from the
-            // persisted RunEvents log) remains the mechanism that guarantees correctness across those
-            // cases; this is additive, not a replacement.
-            EnableSessionStore = true,
-            InfiniteSessions = new InfiniteSessionConfig { Enabled = true },
+            // #1814 / v0.9.68 REGRESSION (reverted): EnableSessionStore/InfiniteSessions were briefly
+            // flipped to true here on the theory that #1814's "database is locked" only affects
+            // one-shot/ephemeral sandbox workloads, not a long-lived in-process agent. That theory was
+            // wrong for THIS agent: RunTurnAsync (below) creates a brand-new SDK session on EVERY turn
+            // (it never resumes one — see the CreateSessionAsync call in this file), so enabling the
+            // store means every turn, across every concurrent conversation in this pod, hammers the
+            // SAME pod-local SQLite session file. That is exactly the concurrent-write contention
+            // #1814 describes — it was reproduced live in staging within minutes of deploy (every new
+            // operator run failed with "Error: database is locked"). Reverted to false/disabled.
+            // Re-enabling this safely would require first switching RunTurnAsync to actually resume
+            // the deterministic SessionId across turns (like CopilotAIAgent.ResumeSessionAsync) so the
+            // SDK does one session's-worth of I/O per conversation instead of a fresh one every turn —
+            // out of scope for this hotfix. Durable rehydration in AssistantRunService (from the
+            // persisted RunEvents log) is unaffected and remains the correct fix for cross-pod/idle-
+            // timeout/restart continuity.
+            EnableSessionStore = false,
+            InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
             Model = modelId,
             Tools = tools.ToList(),
             // SECURITY (assistant sandbox, #346): the operator assistant runs IN-PROCESS in the API
