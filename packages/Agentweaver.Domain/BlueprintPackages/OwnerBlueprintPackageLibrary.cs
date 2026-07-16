@@ -18,7 +18,8 @@ public sealed record BlueprintPackageAcquisition(
     string? Producer = null,
     string? Repository = null,
     string? Revision = null,
-    DateTimeOffset? AcquiredAt = null);
+    DateTimeOffset? AcquiredAt = null,
+    string? RequestedRef = null);
 
 /// <summary>Raw bytes of one validated package payload.</summary>
 public sealed record BlueprintPackagePayload(string Path, byte[] Bytes);
@@ -184,6 +185,7 @@ public static class BlueprintPackageLibraryLimits
             ValidateProvenance(acquisition.Producer);
             ValidateProvenance(acquisition.Repository);
             ValidateProvenance(acquisition.Revision);
+            ValidateProvenance(acquisition.RequestedRef);
         }
     }
 

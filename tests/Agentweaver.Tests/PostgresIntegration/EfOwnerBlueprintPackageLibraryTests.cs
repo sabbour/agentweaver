@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
+using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Domain.BlueprintPackages;
+using Agentweaver.Tests.Blueprints;
 using FluentAssertions;
 using Npgsql;
 
@@ -10,6 +12,22 @@ namespace Agentweaver.Tests.PostgresIntegration;
 [Trait("Category", "PostgresIntegration")]
 public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
 {
+    [Fact]
+    public async Task GitHubImport_PersistsValidatedPackageThroughPostgresWithoutSkip()
+    {
+        var owner = new Owner("owner-github-import-" + Guid.NewGuid().ToString("N"));
+        var library = new EfOwnerBlueprintPackageLibrary(pg.Factory, owner);
+        var service = new GitHubBlueprintPackageImportService(ImportTestSupport.ValidClient(), library);
+
+        var result = await service.ImportAsync(
+            new GitHubBlueprintPackageLocator("octo", "private-blueprints", "package", "main"));
+        var stored = await library.GetVersionAsync(result.PackageId, result.CanonicalVersion);
+
+        result.Disposition.Should().Be(BlueprintPackagePersistDisposition.Created);
+        stored!.Acquisitions.Should().ContainSingle().Which.RequestedRef.Should().Be("main");
+        stored.Acquisitions.Single().Repository.Should().Be("https://github.com/octo/private-blueprints");
+    }
+
     [PostgresFact]
     public async Task Persist_ConcurrentSameIdentity_IsCreatedOnceAndIdempotentThereafter()
     {

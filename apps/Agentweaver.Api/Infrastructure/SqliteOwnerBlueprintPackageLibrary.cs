@@ -66,12 +66,13 @@ public sealed class SqliteOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageL
                 var source = package.Acquisitions[ordinal];
                 await ExecuteAsync(connection, (SqliteTransaction)transaction,
                     """
-                    INSERT INTO blueprint_package_acquisitions (owner_id, package_id, canonical_version, ordinal, source, producer, repository, revision, acquired_at)
-                    VALUES ($owner, $package, $version, $ordinal, $source, $producer, $repository, $revision, $acquired);
+                    INSERT INTO blueprint_package_acquisitions (owner_id, package_id, canonical_version, ordinal, source, producer, repository, revision, acquired_at, requested_ref)
+                    VALUES ($owner, $package, $version, $ordinal, $source, $producer, $repository, $revision, $acquired, $requestedRef);
                     """,
                     [("$owner", owner), ("$package", package.PackageId), ("$version", version), ("$ordinal", ordinal),
                         ("$source", source.Source), ("$producer", source.Producer), ("$repository", source.Repository),
-                        ("$revision", source.Revision), ("$acquired", source.AcquiredAt is null ? null : Timestamp(source.AcquiredAt.Value))], ct).ConfigureAwait(false);
+                        ("$revision", source.Revision), ("$acquired", source.AcquiredAt is null ? null : Timestamp(source.AcquiredAt.Value)),
+                        ("$requestedRef", source.RequestedRef)], ct).ConfigureAwait(false);
             }
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return new(BlueprintPackagePersistDisposition.Created, ToVersion(package, version, now));
@@ -192,13 +193,14 @@ public sealed class SqliteOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageL
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT source, producer, repository, revision, acquired_at FROM blueprint_package_acquisitions WHERE owner_id=$owner AND package_id=$package AND canonical_version=$version ORDER BY ordinal;";
+        command.CommandText = "SELECT source, producer, repository, revision, acquired_at, requested_ref FROM blueprint_package_acquisitions WHERE owner_id=$owner AND package_id=$package AND canonical_version=$version ORDER BY ordinal;";
         command.Parameters.AddWithValue("$owner", owner); command.Parameters.AddWithValue("$package", package); command.Parameters.AddWithValue("$version", version);
         var result = new List<BlueprintPackageAcquisition>();
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             result.Add(new(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : ParseTimestamp(reader.GetString(4))));
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : ParseTimestamp(reader.GetString(4)),
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
         return result;
     }
 

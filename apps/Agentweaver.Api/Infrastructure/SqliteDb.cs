@@ -250,7 +250,7 @@ public sealed class SqliteDb
             CREATE TABLE IF NOT EXISTS blueprint_package_acquisitions (
                 owner_id TEXT NOT NULL, package_id TEXT NOT NULL, canonical_version TEXT NOT NULL,
                 ordinal INTEGER NOT NULL, source TEXT NOT NULL, producer TEXT, repository TEXT,
-                revision TEXT, acquired_at TEXT,
+                revision TEXT, acquired_at TEXT, requested_ref TEXT,
                 PRIMARY KEY (owner_id, package_id, canonical_version, ordinal),
                 FOREIGN KEY (owner_id, package_id, canonical_version) REFERENCES blueprint_package_versions(owner_id, package_id, canonical_version) ON DELETE CASCADE
             );
@@ -264,6 +264,8 @@ public sealed class SqliteDb
             BEFORE UPDATE ON blueprint_package_acquisitions
             BEGIN SELECT RAISE(ABORT, 'blueprint package acquisitions are immutable'); END;
             """, ct);
+        await TryAlterAsync(connection,
+            "ALTER TABLE blueprint_package_acquisitions ADD COLUMN requested_ref TEXT;", ct);
 
         await MigrateLegacyMetricsSchemaAsync(connection, ct).ConfigureAwait(false);
     }

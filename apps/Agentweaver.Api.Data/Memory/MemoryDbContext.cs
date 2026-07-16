@@ -298,6 +298,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.Repository).HasColumnName("repository");
             e.Property(x => x.Revision).HasColumnName("revision");
             e.Property(x => x.AcquiredAt).HasColumnName("acquired_at");
+            e.Property(x => x.RequestedRef).HasColumnName("requested_ref");
         });
 
         model.Entity<BacklogTaskRecord>(e =>

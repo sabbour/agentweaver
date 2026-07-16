@@ -66,7 +66,8 @@ public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibra
             db.BlueprintPackageAcquisitions.AddRange(package.Acquisitions.Select((x, index) => new BlueprintPackageAcquisitionRecord
             {
                 OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version, Ordinal = index,
-                Source = x.Source, Producer = x.Producer, Repository = x.Repository, Revision = x.Revision, AcquiredAt = x.AcquiredAt,
+                Source = x.Source, Producer = x.Producer, Repository = x.Repository, Revision = x.Revision,
+                AcquiredAt = x.AcquiredAt, RequestedRef = x.RequestedRef,
             }));
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
@@ -150,7 +151,7 @@ public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibra
         return new(packageId, version, record.RawManifest.ToArray(),
             payloads.Select(x => new BlueprintPackagePayload(x.Path, x.Bytes.ToArray())).ToArray(),
             record.ContentDigest, record.PayloadSetDigest, record.RawManifestSha256, record.ContainerSha256,
-            acquisitions.Select(x => new BlueprintPackageAcquisition(x.Source, x.Producer, x.Repository, x.Revision, x.AcquiredAt)).ToArray(),
+            acquisitions.Select(x => new BlueprintPackageAcquisition(x.Source, x.Producer, x.Repository, x.Revision, x.AcquiredAt, x.RequestedRef)).ToArray(),
             record.CreatedAt);
     }
 

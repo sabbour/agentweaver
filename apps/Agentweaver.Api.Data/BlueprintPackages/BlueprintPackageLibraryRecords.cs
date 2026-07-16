@@ -41,4 +41,5 @@ public sealed class BlueprintPackageAcquisitionRecord
     public string? Repository { get; set; }
     public string? Revision { get; set; }
     public DateTimeOffset? AcquiredAt { get; set; }
+    public string? RequestedRef { get; set; }
 }
