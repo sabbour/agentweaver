@@ -41,6 +41,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private readonly IProjectStore? _projectStore;
     private readonly WorkflowRegistry? _workflowRegistry;
     private readonly IBacklogTaskStore? _backlogTaskStore;
+    private readonly IGitHubPullRequestClient? _prClient;
+    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     private readonly CheckpointManager _checkpointManager;
     private readonly JsonCheckpointStore _runsCheckpointStore;
     private readonly Func<IRevisionEffectConfirmer?>? _revisionEffectConfirmerAccessor;
@@ -136,7 +138,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         IRunEventStream? eventStream = null,
         IBacklogTaskStore? backlogTaskStore = null,
         ICheckpointStoreFactory? checkpointStoreFactory = null,
-        Func<IRevisionEffectConfirmer?>? revisionEffectConfirmerAccessor = null)
+        Func<IRevisionEffectConfirmer?>? revisionEffectConfirmerAccessor = null,
+        IGitHubPullRequestClient? prClient = null,
+        IGitHubAccessTokenProvider? accessTokenProvider = null)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
@@ -156,6 +160,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         _projectStore = projectStore;
         _workflowRegistry = workflowRegistry;
         _backlogTaskStore = backlogTaskStore;
+        _prClient = prClient;
+        _accessTokenProvider = accessTokenProvider;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -905,6 +911,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         private readonly RunWorkflowFactory _factory;
         private readonly Dictionary<string, ExecutorBinding> _agentNodes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ExecutorBinding> _peerReviewNodes = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, ExecutorBinding> _openPrNodes = new(StringComparer.Ordinal);
 
         public GenericWiringSupport(
             RunWorkflowFactory factory, string canonicalAgentNodeId, ExecutorBinding canonicalAgentBinding)
@@ -989,6 +996,37 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 reviewAgentId: node.Agent,
                 reviewAgentCharter: node.Charter);
             _peerReviewNodes[node.Id] = binding;
+            return binding;
+        }
+
+        public ExecutorBinding ResolveOpenPullRequestNode(WorkflowNode node)
+        {
+            if (_openPrNodes.TryGetValue(node.Id, out var existing))
+                return existing;
+
+            if (_factory._prClient is null || _factory._accessTokenProvider is null)
+            {
+                throw new WorkflowBindException(
+                    $"Cannot bind node '{node.Id}' (type='open_pull_request'): no IGitHubPullRequestClient/" +
+                    "IGitHubAccessTokenProvider was supplied to RunWorkflowFactory.", node.Id);
+            }
+
+            ExecutorBinding binding = new OpenPullRequestTurnExecutor(
+                _factory._prClient,
+                _factory._scopeProvider,
+                _factory._accessTokenProvider,
+                _factory._loggerFactory,
+                _factory.GetRecordingWriter,
+                projectStore: _factory._projectStore,
+                name: $"open-pull-request-{node.Id}",
+                logicalNodeId: node.Id,
+                displayLabel: node.Label ?? "Open Pull Request",
+                title: node.PrTitle,
+                body: node.PrBody,
+                baseBranch: node.PrBase,
+                headBranch: node.PrHead,
+                draft: node.PrDraft ?? false);
+            _openPrNodes[node.Id] = binding;
             return binding;
         }
 
@@ -1155,6 +1193,16 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         }
 
         public ScribeSubPath AgentScribePath(WorkflowEdge edge)
+        {
+            var inputId = $"scribe-input-{edge.From}-{edge.To}";
+            ExecutorBinding input = new VisualFunctionExecutor<AgentTurnOutput, ScribeTurnInput>(
+                inputId, "scribe", "Scribe", "scribe", "agent", false,
+                async (output, ctx, ct) =>
+                    await _factory.BuildScribeTurnInputAsync(output.RunId, "completed", ctx, ct).ConfigureAwait(false));
+            return BuildScribePath(edge, input);
+        }
+
+        public ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge)
         {
             var inputId = $"scribe-input-{edge.From}-{edge.To}";
             ExecutorBinding input = new VisualFunctionExecutor<AgentTurnOutput, ScribeTurnInput>(

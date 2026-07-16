@@ -16,6 +16,12 @@ public enum WorkflowNodeType
     /// <summary>Platform-owned build/test/preview gate; emits a peer-review style verdict.</summary>
     BuildTest,
 
+    /// <summary>
+    /// Platform-owned, non-agent action that opens a GitHub pull request on the project's connected
+    /// repository (Feature: workflows-automation open-pull-request-action). Deterministic — no LLM call.
+    /// </summary>
+    OpenPullRequest,
+
     /// <summary>A gate/condition that routes on an upstream verdict/predicate — FR-016.</summary>
     Check,
 
@@ -89,6 +95,38 @@ public sealed record WorkflowNode
     /// <summary>For a <see cref="WorkflowNodeType.Check"/> node: the set of verdicts it routes on. Each
     /// verdict MUST have a matching outgoing edge (validated, FR-016).</summary>
     public IReadOnlyList<string> Branches { get; init; } = [];
+
+    /// <summary>
+    /// For a <see cref="WorkflowNodeType.OpenPullRequest"/> node: the PR title, supporting the template
+    /// placeholders <c>{run_id}</c>, <c>{worktree_branch}</c>, <c>{originating_branch}</c>, and
+    /// <c>{outcome_summary}</c>. Null uses the executor's built-in default template.
+    /// </summary>
+    public string? PrTitle { get; init; }
+
+    /// <summary>
+    /// For a <see cref="WorkflowNodeType.OpenPullRequest"/> node: the PR body, supporting the same
+    /// template placeholders as <see cref="PrTitle"/>. Null uses the executor's built-in default
+    /// template.
+    /// </summary>
+    public string? PrBody { get; init; }
+
+    /// <summary>
+    /// For a <see cref="WorkflowNodeType.OpenPullRequest"/> node: the base branch the PR merges into.
+    /// Null defaults to the project's configured default branch (falling back to <c>main</c>).
+    /// </summary>
+    public string? PrBase { get; init; }
+
+    /// <summary>
+    /// For a <see cref="WorkflowNodeType.OpenPullRequest"/> node: the head branch to open the PR from.
+    /// Null defaults to the run's produced worktree branch.
+    /// </summary>
+    public string? PrHead { get; init; }
+
+    /// <summary>
+    /// For a <see cref="WorkflowNodeType.OpenPullRequest"/> node: whether the PR is opened as a draft.
+    /// Null defaults to false (ready for review).
+    /// </summary>
+    public bool? PrDraft { get; init; }
 }
 
 /// <summary>

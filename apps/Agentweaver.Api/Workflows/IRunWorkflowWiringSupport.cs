@@ -33,6 +33,10 @@ internal interface IRunWorkflowWiringSupport
     /// <summary>The per-node AI peer-review verdict gate (emits a <c>WorkflowReviewDecision</c>).</summary>
     ExecutorBinding ResolvePeerReviewNode(WorkflowNode node);
 
+    /// <summary>The per-node, deterministic "open pull request" action (emits a pass-through
+    /// <c>AgentTurnOutput</c> after calling the GitHub PR API; never an LLM turn).</summary>
+    ExecutorBinding ResolveOpenPullRequestNode(WorkflowNode node);
+
     /// <summary><c>AgentTurnOutput → AgentTurnInput</c>: feed one agent turn's result forward as the
     /// next agent turn's task (continuing the same worktree). For sequential <c>Agent → Agent</c>.</summary>
     ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge);
@@ -85,6 +89,11 @@ internal interface IRunWorkflowWiringSupport
     /// (<c>AgentTurnOutput → ScribeTurnInput</c>), a dedicated scribe executor, and the scribe-output
     /// executor that becomes a graph output. For workflows that record an outcome without a merge.</summary>
     ScribeSubPath AgentScribePath(WorkflowEdge edge);
+
+    /// <summary>A direct <c>OpenPullRequest → Scribe</c> completion sub-path, identical in shape to
+    /// <see cref="AgentScribePath"/> (both source executors emit <c>AgentTurnOutput</c>) but kept
+    /// distinct so the edge id embeds the open-pull-request node.</summary>
+    ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge);
 
     /// <summary>A direct <c>Review → Scribe</c> completion sub-path (approved verdict → record), with a
     /// <c>WorkflowReviewDecision → ScribeTurnInput</c> input adapter.</summary>

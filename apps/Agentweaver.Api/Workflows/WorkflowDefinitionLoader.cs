@@ -91,6 +91,11 @@ public static class WorkflowDefinitionLoader
                 Branches = n.Branches is null ? [] : [.. n.Branches
                     .Where(b => !string.IsNullOrWhiteSpace(b))
                     .Select(b => b.Trim().ToLowerInvariant())],
+                PrTitle = string.IsNullOrWhiteSpace(n.Title) ? null : n.Title,
+                PrBody = string.IsNullOrWhiteSpace(n.Body) ? null : n.Body,
+                PrBase = string.IsNullOrWhiteSpace(n.Base) ? null : n.Base.Trim(),
+                PrHead = string.IsNullOrWhiteSpace(n.Head) ? null : n.Head.Trim(),
+                PrDraft = n.Draft,
             });
         }
 
@@ -211,6 +216,7 @@ public static class WorkflowDefinitionLoader
             case "prompt": type = WorkflowNodeType.Prompt; return true;
             case "peer_review": type = WorkflowNodeType.PeerReview; return true;
             case "build_test": type = WorkflowNodeType.BuildTest; return true;
+            case "open_pull_request": type = WorkflowNodeType.OpenPullRequest; return true;
             case "check": type = WorkflowNodeType.Check; return true;
             case "fan_out": type = WorkflowNodeType.FanOut; return true;
             case "fan_in": type = WorkflowNodeType.FanIn; return true;
@@ -254,6 +260,18 @@ internal sealed class NodeYamlDto
     public string? Target { get; set; }
     public List<string>? Steps { get; set; }
     public List<string>? Branches { get; set; }
+
+    // ── open_pull_request fields (Feature: workflows-automation open-pull-request-action) ──
+    /// <summary>PR title template. Supports {run_id}/{worktree_branch}/{originating_branch}/{outcome_summary}.</summary>
+    public string? Title { get; set; }
+    /// <summary>PR body template. Supports the same placeholders as <see cref="Title"/>.</summary>
+    public string? Body { get; set; }
+    /// <summary>Base branch the PR merges into. Defaults to the project's default branch.</summary>
+    public string? Base { get; set; }
+    /// <summary>Head branch to open the PR from. Defaults to the run's worktree branch.</summary>
+    public string? Head { get; set; }
+    /// <summary>Whether to open the PR as a draft. Defaults to false.</summary>
+    public bool? Draft { get; set; }
 }
 
 internal sealed class EdgeYamlDto
