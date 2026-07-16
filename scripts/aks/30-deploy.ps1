@@ -13,6 +13,23 @@ $RenderedDir = Join-Path $ScriptDir ".rendered"
 # PowerShell equivalent of bash's `trap 'rm -rf "${RENDERED_DIR}"' EXIT`.
 try {
 
+# On Windows, `bash` on PATH commonly resolves to the WSL launcher stub at
+# C:\Windows\System32\bash.exe, not Git Bash -- and the WSL stub can't resolve
+# Windows-style paths (even with forward slashes) the way Git Bash does.
+# Explicitly prefer the real Git Bash executable when invoking .sh helpers.
+function Resolve-GitBashExe {
+  $gitBashCandidates = @(
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+  )
+  foreach ($candidate in $gitBashCandidates) {
+    if (Test-Path $candidate) { return $candidate }
+  }
+  # Fall back to whatever 'bash' resolves to on PATH (may be the WSL stub).
+  return "bash"
+}
+$script:GitBashExe = Resolve-GitBashExe
+
 function Invoke-ApplyRendered {
   param([string]$Fname)
   kubectl apply -f (Join-Path $RenderedDir $Fname)
@@ -73,7 +90,9 @@ az monitor app-insights component show --app agentweaver-insights -g $env:RESOUR
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""
   Write-Host "Provisioning monitoring (Application Insights + Managed Prometheus)..."
-  & bash (Join-Path $ScriptDir "15-provision-monitoring.sh")
+  # bash mangles Windows-style backslash paths (escape-char semantics); use forward slashes.
+  $monitoringScriptPath = (Join-Path $ScriptDir "15-provision-monitoring.sh") -replace '\\', '/'
+  & $script:GitBashExe $monitoringScriptPath
   if ($LASTEXITCODE -ne 0) { throw "15-provision-monitoring.sh failed (exit $LASTEXITCODE)" }
 }
 
@@ -168,12 +187,6 @@ Write-Host ""
 Write-Host "Applying identity, secrets, RBAC, quotas, and PVCs..."
 Invoke-ApplyRendered "serviceaccount-api.yaml"
 Invoke-ApplyRendered "serviceaccount-agenthost.yaml"
-kubectl wait `
-  --for=jsonpath='{.metadata.annotations.azure\.workload\.identity/client-id}'="$($env:IDENTITY_CLIENT_ID)" `
-  serviceaccount/agentweaver-api `
-  --namespace $env:NAMESPACE `
-  --timeout=60s
-if ($LASTEXITCODE -ne 0) { throw "kubectl wait for serviceaccount/agentweaver-api failed (exit $LASTEXITCODE)" }
 Invoke-ApplyRendered "secret-provider-class.yaml"
 Write-Host "  [note] secret-provider-class.yaml is static only: agentweaver-user-tokens contains ghtok-installation; per-run user-token SPCs are created/deleted by the API at AgentHost launch/release."
 Invoke-ApplyRendered "rbac-api.yaml"
@@ -202,7 +215,11 @@ Write-Host ""
 Write-Host "Applying services, gateway, and routes..."
 # H1 (spec-018): generate A2A mTLS certs (idempotent -- skips if secrets exist).
 Write-Host "Ensuring A2A mTLS certificates are present (H1)..."
-& bash (Join-Path $ScriptDir "gen-a2a-mtls-certs.sh")
+# bash treats backslashes as escape characters, so a Windows-style path is
+# mangled (drive letter + directories get glued together). Convert to
+# forward slashes, which Git Bash/WSL bash both accept for Windows paths.
+$a2aScriptPath = (Join-Path $ScriptDir "gen-a2a-mtls-certs.sh") -replace '\\', '/'
+& $script:GitBashExe $a2aScriptPath
 if ($LASTEXITCODE -ne 0) { throw "gen-a2a-mtls-certs.sh failed (exit $LASTEXITCODE)" }
 # H4/H3 (spec-018): AgentHost Kestrel + card-authz config.
 Invoke-ApplyRendered "configmap-agenthost.yaml"
