@@ -186,6 +186,15 @@ public static class WorkflowDefinitionLoader
             }
         }
 
+        // Parse optional automation trigger (issue #53). Malformed/unsupported cadences are rejected
+        // at definition load time with a clear message rather than silently never firing.
+        WorkflowTrigger? trigger = null;
+        if (dto.Trigger is not null)
+        {
+            if (!TryParseTrigger(dto.Trigger, source, out trigger, out error))
+                return false;
+        }
+
         definition = new WorkflowDefinition
         {
             Id = dto.Id!,
@@ -196,8 +205,107 @@ public static class WorkflowDefinitionLoader
             Nodes = nodes,
             Edges = edges,
             Stages = stages,
+            Trigger = trigger,
         };
         return true;
+    }
+
+    private static bool TryParseTrigger(
+        TriggerYamlDto dto, string source, out WorkflowTrigger? trigger, out string? error)
+    {
+        trigger = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(dto.Type))
+            return Fail(source, "trigger is missing its required 'type' ('schedule' or 'event').", out error);
+
+        switch (Normalize(dto.Type))
+        {
+            case "schedule":
+            {
+                if (string.IsNullOrWhiteSpace(dto.Interval))
+                    return Fail(source, "schedule trigger is missing its required 'interval' ('daily', 'weekly', or 'monthly').", out error);
+                if (!TryParseInterval(dto.Interval, out var interval))
+                    return Fail(source, $"schedule trigger has unknown interval '{dto.Interval}'.", out error);
+
+                if (string.IsNullOrWhiteSpace(dto.TimeOfDay))
+                    return Fail(source, "schedule trigger is missing its required 'time_of_day' (24h 'HH:mm', UTC).", out error);
+                if (!TimeOnly.TryParseExact(dto.TimeOfDay.Trim(), "HH:mm", out var timeOfDay))
+                    return Fail(source, $"schedule trigger has malformed 'time_of_day' '{dto.TimeOfDay}' — expected 24h 'HH:mm'.", out error);
+
+                DayOfWeek? dayOfWeek = null;
+                if (interval == WorkflowScheduleInterval.Weekly)
+                {
+                    if (string.IsNullOrWhiteSpace(dto.DayOfWeek))
+                        return Fail(source, "weekly schedule trigger is missing its required 'day_of_week'.", out error);
+                    if (!TryParseDayOfWeek(dto.DayOfWeek, out var dow))
+                        return Fail(source, $"schedule trigger has unknown day_of_week '{dto.DayOfWeek}'.", out error);
+                    dayOfWeek = dow;
+                }
+
+                int? dayOfMonth = null;
+                if (interval == WorkflowScheduleInterval.Monthly)
+                {
+                    if (dto.DayOfMonth is null)
+                        return Fail(source, "monthly schedule trigger is missing its required 'day_of_month'.", out error);
+                    if (dto.DayOfMonth.Value is < 1 or > 28)
+                        return Fail(source, $"schedule trigger has out-of-range day_of_month {dto.DayOfMonth.Value} (must be 1-28).", out error);
+                    dayOfMonth = dto.DayOfMonth.Value;
+                }
+
+                trigger = new WorkflowTrigger
+                {
+                    Type = WorkflowTriggerType.Schedule,
+                    Interval = interval,
+                    DayOfWeek = dayOfWeek,
+                    DayOfMonth = dayOfMonth,
+                    TimeOfDay = timeOfDay,
+                };
+                return true;
+            }
+
+            case "event":
+            {
+                if (string.IsNullOrWhiteSpace(dto.EventName))
+                    return Fail(source, "event trigger is missing its required 'event_name'.", out error);
+
+                trigger = new WorkflowTrigger
+                {
+                    Type = WorkflowTriggerType.Event,
+                    EventName = dto.EventName.Trim(),
+                };
+                return true;
+            }
+
+            default:
+                return Fail(source, $"trigger has unknown type '{dto.Type}' (expected 'schedule' or 'event').", out error);
+        }
+    }
+
+    private static bool TryParseInterval(string raw, out WorkflowScheduleInterval interval)
+    {
+        switch (Normalize(raw))
+        {
+            case "daily": interval = WorkflowScheduleInterval.Daily; return true;
+            case "weekly": interval = WorkflowScheduleInterval.Weekly; return true;
+            case "monthly": interval = WorkflowScheduleInterval.Monthly; return true;
+            default: interval = default; return false;
+        }
+    }
+
+    private static bool TryParseDayOfWeek(string raw, out DayOfWeek dayOfWeek)
+    {
+        switch (Normalize(raw))
+        {
+            case "sunday": dayOfWeek = DayOfWeek.Sunday; return true;
+            case "monday": dayOfWeek = DayOfWeek.Monday; return true;
+            case "tuesday": dayOfWeek = DayOfWeek.Tuesday; return true;
+            case "wednesday": dayOfWeek = DayOfWeek.Wednesday; return true;
+            case "thursday": dayOfWeek = DayOfWeek.Thursday; return true;
+            case "friday": dayOfWeek = DayOfWeek.Friday; return true;
+            case "saturday": dayOfWeek = DayOfWeek.Saturday; return true;
+            default: dayOfWeek = default; return false;
+        }
     }
 
     private static bool Fail(string source, string message, out string? error)
@@ -244,6 +352,7 @@ internal sealed class WorkflowYamlDto
     public List<NodeYamlDto>? Nodes { get; set; }
     public List<EdgeYamlDto>? Edges { get; set; }
     public List<StageYamlDto>? Stages { get; set; }
+    public TriggerYamlDto? Trigger { get; set; }
 }
 
 internal sealed class NodeYamlDto
@@ -286,4 +395,15 @@ internal sealed class StageYamlDto
     public string? Id { get; set; }
     public string? Label { get; set; }
     public int Order { get; set; }
+}
+
+/// <summary>YAML DTO for the optional <c>trigger:</c> block (issue #53).</summary>
+internal sealed class TriggerYamlDto
+{
+    public string? Type { get; set; }
+    public string? Interval { get; set; }
+    public string? DayOfWeek { get; set; }
+    public int? DayOfMonth { get; set; }
+    public string? TimeOfDay { get; set; }
+    public string? EventName { get; set; }
 }

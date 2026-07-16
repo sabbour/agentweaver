@@ -14,6 +14,19 @@ public sealed record WorkflowSummaryDto
     [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
     [JsonPropertyName("is_built_in")] public required bool IsBuiltIn { get; init; }
     [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
+    /// <summary>The workflow's automation trigger (issue #53), or null when it only starts on-demand.</summary>
+    [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
+}
+
+/// <summary>A workflow's automation trigger in an API response (issue #53).</summary>
+public sealed record WorkflowTriggerDto
+{
+    [JsonPropertyName("type")] public required string Type { get; init; }
+    [JsonPropertyName("interval")] public string? Interval { get; init; }
+    [JsonPropertyName("day_of_week")] public string? DayOfWeek { get; init; }
+    [JsonPropertyName("day_of_month")] public int? DayOfMonth { get; init; }
+    [JsonPropertyName("time_of_day")] public string? TimeOfDay { get; init; }
+    [JsonPropertyName("event_name")] public string? EventName { get; init; }
 }
 
 /// <summary>Response body for GET/POST the project's workflows list.</summary>
@@ -75,6 +88,8 @@ public sealed record WorkflowDetailDto
     [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
     [JsonPropertyName("nodes")] public required IReadOnlyList<WorkflowNodeDto> Nodes { get; init; }
     [JsonPropertyName("edges")] public required IReadOnlyList<WorkflowEdgeDto> Edges { get; init; }
+    /// <summary>The workflow's automation trigger (issue #53), or null when it only starts on-demand.</summary>
+    [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
 }
 
 /// <summary>Request body to save (create or update) a workflow definition by YAML (US7).</summary>
@@ -178,8 +193,30 @@ public static class WorkflowDtoMapper
             Warnings = result.Warnings,
             IsBuiltIn = result.IsBuiltIn,
             IsDefault = def is not null && string.Equals(def.Id, effectiveDefaultId, StringComparison.Ordinal),
+            Trigger = def?.Trigger is null ? null : ToTriggerDto(def.Trigger),
         };
     }
+
+    public static WorkflowTriggerDto ToTriggerDto(WorkflowTrigger trigger) => new()
+    {
+        Type = trigger.Type switch
+        {
+            WorkflowTriggerType.Schedule => "schedule",
+            WorkflowTriggerType.Event => "event",
+            _ => throw new ArgumentOutOfRangeException(nameof(trigger)),
+        },
+        Interval = trigger.Interval switch
+        {
+            WorkflowScheduleInterval.Daily => "daily",
+            WorkflowScheduleInterval.Weekly => "weekly",
+            WorkflowScheduleInterval.Monthly => "monthly",
+            _ => null,
+        },
+        DayOfWeek = trigger.DayOfWeek?.ToString().ToLowerInvariant(),
+        DayOfMonth = trigger.DayOfMonth,
+        TimeOfDay = trigger.TimeOfDay?.ToString("HH:mm"),
+        EventName = trigger.EventName,
+    };
 
     private static string NodeRoleForGraph(WorkflowNodeType t) => t switch
     {
@@ -299,6 +336,7 @@ public static class WorkflowDtoMapper
                 To = e.To,
                 When = e.When,
             }).ToList(),
+            Trigger = def.Trigger is null ? null : ToTriggerDto(def.Trigger),
         };
     }
 }
