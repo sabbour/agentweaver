@@ -340,7 +340,7 @@ internal static class StrictJson
 {
     public static JsonDocument Parse(ReadOnlySpan<byte> utf8)
     {
-        ValidateEscapedUnicode(utf8);
+        ValidateLexicalConstraints(utf8);
         var document = JsonDocument.Parse(utf8.ToArray(), new JsonDocumentOptions { AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow, MaxDepth = 64 });
         try
         {
@@ -374,7 +374,7 @@ internal static class StrictJson
         }
     }
 
-    private static void ValidateEscapedUnicode(ReadOnlySpan<byte> utf8)
+    private static void ValidateLexicalConstraints(ReadOnlySpan<byte> utf8)
     {
         var inString = false;
         var escaped = false;
@@ -385,6 +385,13 @@ internal static class StrictJson
             if (!inString)
             {
                 if (current == (byte)'"') inString = true;
+                else if (current is >= (byte)'0' and <= (byte)'9' or (byte)'-')
+                {
+                    var start = index;
+                    while (index + 1 < utf8.Length && IsNumberTokenCharacter(utf8[index + 1])) index++;
+                    if (index - start + 1 > BlueprintPackageLimits.MaximumCanonicalNumberTokenLength)
+                        throw new JsonException($"JSON number token exceeds the maximum length of {BlueprintPackageLimits.MaximumCanonicalNumberTokenLength} characters.");
+                }
                 continue;
             }
             if (!escaped)
@@ -416,6 +423,9 @@ internal static class StrictJson
         }
         if (inString || highSurrogatePending) throw new JsonException("unterminated JSON string or Unicode surrogate.");
     }
+
+    private static bool IsNumberTokenCharacter(byte value) =>
+        value is >= (byte)'0' and <= (byte)'9' or (byte)'-' or (byte)'+' or (byte)'.' or (byte)'e' or (byte)'E';
 
     private static int ParseHex(ReadOnlySpan<byte> value)
     {
@@ -450,15 +460,16 @@ internal static class CanonicalJson
     };
 
     // The result uses a one-digit-free normalized mantissa and decimal exponent. No floating point
-    // conversion occurs: 1, 1.0, and 1e0 normalize identically even for arbitrarily long numbers.
+    // conversion occurs: 1, 1.0, and 1e0 normalize identically within the package token limit.
     private static string NormalizeNumber(string raw)
     {
+        EnsureBoundedNumberToken(raw);
         var index = 0;
         var negative = raw[index] == '-';
         if (negative) index++;
         var exponentPosition = raw.IndexOfAny(['e', 'E']);
         var mantissa = exponentPosition < 0 ? raw[index..] : raw[index..exponentPosition];
-        var exponent = exponentPosition < 0 ? 0 : ParseUnboundedExponent(raw[(exponentPosition + 1)..]);
+        var exponent = exponentPosition < 0 ? 0 : ParseBoundedExponent(raw[(exponentPosition + 1)..]);
         var decimalPosition = mantissa.IndexOf('.');
         var integer = decimalPosition < 0 ? mantissa : mantissa[..decimalPosition];
         var fraction = decimalPosition < 0 ? string.Empty : mantissa[(decimalPosition + 1)..];
@@ -474,10 +485,17 @@ internal static class CanonicalJson
         return $"{(negative ? "-" : string.Empty)}{digits}{(exponent == 0 ? string.Empty : $"e{exponent.ToString(CultureInfo.InvariantCulture)}")}";
     }
 
-    private static System.Numerics.BigInteger ParseUnboundedExponent(string raw)
+    private static System.Numerics.BigInteger ParseBoundedExponent(string raw)
     {
+        EnsureBoundedNumberToken(raw);
         var sign = raw[0] is '+' or '-' ? raw[..1] : string.Empty;
         var digits = sign.Length == 0 ? raw : raw[1..];
         return System.Numerics.BigInteger.Parse($"{sign}{digits}", CultureInfo.InvariantCulture);
+    }
+
+    private static void EnsureBoundedNumberToken(string raw)
+    {
+        if (raw.Length > BlueprintPackageLimits.MaximumCanonicalNumberTokenLength)
+            throw new JsonException($"JSON number token exceeds the maximum length of {BlueprintPackageLimits.MaximumCanonicalNumberTokenLength} characters.");
     }
 }

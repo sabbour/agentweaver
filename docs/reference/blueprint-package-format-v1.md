@@ -59,7 +59,11 @@ strings, not as 32- or 64-bit numbers, so comparison is unbounded. A compatibili
 be greater than its optional maximum.
 
 Limits are 1 MiB manifest bytes, 256 definitions, 1 MiB per payload, 16 MiB total payload bytes,
-240 path characters, and 64 identifier characters. The optional provenance object is bounded to
+240 path characters, and 64 identifier characters. Every JSON numeric token in the manifest and
+JSON blueprint or role payloads is limited to 4,096 characters (including sign, decimal point, and
+exponent) before exact canonicalization. This fail-closed bound prevents oversized exponents from
+amplifying canonicalization work while preserving exact decimal semantics within the limit. The
+optional provenance object is bounded to
 the `catalog`, `generated`, or `imported` source, a bounded producer token, an HTTPS repository,
 a lower-case hexadecimal revision, and an RFC 3339 timestamp.
 

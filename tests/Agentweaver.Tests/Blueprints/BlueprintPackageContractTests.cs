@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Squad.BlueprintPackages;
@@ -93,6 +94,35 @@ public sealed class BlueprintPackageContractTests
         result.Errors.Should().Contain(error => error.Contains("duplicate JSON property", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("1")]
+    [InlineData("1e")]
+    public void Validate_RejectsOversizedJsonNumberTokensPromptly(string prefix)
+    {
+        var literal = prefix + new string('9', 1_000_000);
+        var source = CreateSource(("definitions/blueprints/engineering.json", Encoding.UTF8.GetBytes($$"""{"weight":{{literal}}}""")));
+        var stopwatch = Stopwatch.StartNew();
+
+        var result = BlueprintPackageValidator.Validate(source);
+
+        stopwatch.Stop();
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(
+            $"JSON payload is invalid (definitions/blueprints/engineering.json): JSON number token exceeds the maximum length of {BlueprintPackageLimits.MaximumCanonicalNumberTokenLength} characters.");
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public void Validate_AcceptsCanonicalNumberAtTokenLimit()
+    {
+        var literal = "1e" + new string('7', BlueprintPackageLimits.MaximumCanonicalNumberTokenLength - 2);
+        var source = CreateSource(("definitions/blueprints/engineering.json", Encoding.UTF8.GetBytes($$"""{"weight":{{literal}}}""")));
+
+        var result = BlueprintPackageValidator.Validate(source);
+
+        result.IsValid.Should().BeTrue(string.Join("; ", result.Errors));
+    }
+
     [Fact]
     public void SemanticVersion_UsesUnboundedNumericComparison()
     {
@@ -114,6 +144,8 @@ public sealed class BlueprintPackageContractTests
             .Should().Be(BlueprintPackageLimits.MaximumDefinitions);
         schema.RootElement.GetProperty("properties").GetProperty("provenance").GetProperty("additionalProperties").GetBoolean()
             .Should().BeFalse();
+        schema.RootElement.GetProperty("x-agentweaver-canonical-number-token-max-length").GetInt32()
+            .Should().Be(BlueprintPackageLimits.MaximumCanonicalNumberTokenLength);
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentweaver.dev/schemas/blueprint-package-v1.json",
+  "x-agentweaver-canonical-number-token-max-length": 4096,
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "package", "definitions"],
