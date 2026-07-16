@@ -50,6 +50,7 @@ public sealed class CoordinatorWorkflowFactory
     public CoordinatorWorkflowFactory(
         IWorkflowAgentFactory agentFactory,
         ICoordinatorSpecDrafter drafter,
+        IStoryIndependenceClassifier storyIndependenceClassifier,
         RunStreamStore streamStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
@@ -77,6 +78,7 @@ public sealed class CoordinatorWorkflowFactory
             streamStore,
             scopeFactory,
             loggerFactory,
+            storyIndependenceClassifier,
             configuration["Providers:GitHubCopilot:Model"] ?? CoordinatorModelDefaults.DefaultCopilotModel,
             configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000",
             configuration["Auth:ApiKey"]

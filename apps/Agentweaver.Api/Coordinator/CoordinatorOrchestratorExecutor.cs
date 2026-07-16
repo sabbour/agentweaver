@@ -80,6 +80,7 @@ public sealed class CoordinatorOrchestratorExecutor
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CoordinatorOrchestratorExecutor> _logger;
+    private readonly IStoryIndependenceClassifier _storyIndependenceClassifier;
     private readonly string _defaultCopilotModel;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
@@ -90,6 +91,7 @@ public sealed class CoordinatorOrchestratorExecutor
         RunStreamStore streamStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
+        IStoryIndependenceClassifier storyIndependenceClassifier,
         string defaultCopilotModel,
         string? apiBaseUrl,
         string? apiKey)
@@ -99,6 +101,7 @@ public sealed class CoordinatorOrchestratorExecutor
         _scopeFactory = scopeFactory;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorOrchestratorExecutor>();
+        _storyIndependenceClassifier = storyIndependenceClassifier ?? throw new ArgumentNullException(nameof(storyIndependenceClassifier));
         _defaultCopilotModel = string.IsNullOrWhiteSpace(defaultCopilotModel) ? CoordinatorModelDefaults.DefaultCopilotModel : defaultCopilotModel;
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
@@ -169,7 +172,7 @@ public sealed class CoordinatorOrchestratorExecutor
         var (drafts2, cycleNote) = BreakCycles(drafts);
         drafts = drafts2;
 
-        var partition = PartitionStories(drafts);
+        var partition = await PartitionStoriesAsync(input, spec, drafts, ct).ConfigureAwait(false);
         var promotionService = scope.ServiceProvider.GetRequiredService<IBacklogPromotionService>();
         var promotedTaskIds = new List<BacklogTaskId>();
         if (partition.PromotedIndices.Count > 0 && RunId.TryParse(input.RunId, out var parentPrdRunId))
@@ -194,7 +197,7 @@ public sealed class CoordinatorOrchestratorExecutor
                 promotedInputs,
                 ct).ConfigureAwait(false);
             promotedTaskIds.AddRange(promotionResult.Tasks.Select(t => t.Id));
-            EmitPromotedStoriesEvent(input.RunId, promotionResult.Tasks);
+            EmitPromotedStoriesEvent(input.RunId, promotionResult.Tasks, partition.ComponentAuditRationalesByStoryKey);
         }
 
         var inlineDrafts = partition.InlineIndices.Select(index => drafts[index]).ToList();
@@ -532,8 +535,6 @@ public sealed class CoordinatorOrchestratorExecutor
                 - "scope": string. The exact context/files the subagent should read AND the specific
                   work it must perform. Paths in this prose are descriptive and are NOT used to infer
                   outputs.
-                - "estimated_subtasks": integer 1..20. The number of independently assignable worker
-                  subtasks this story's own coordinator would likely create.
                 - "promotion_override": null | "run" | "inline". If the title contains a
                   case-insensitive [run] or [inline] token, copy that override here and REMOVE the
                   token from the title. Never emit both overrides for one story.
@@ -680,19 +681,6 @@ public sealed class CoordinatorOrchestratorExecutor
                     continue;
                 }
 
-                var estimatedSubtasks = 1;
-                if (el.TryGetProperty("estimated_subtasks", out var estimatedElement)
-                    && estimatedElement.ValueKind == JsonValueKind.Number
-                    && estimatedElement.TryGetInt32(out var estimatedValue))
-                    estimatedSubtasks = estimatedValue;
-                if (estimatedSubtasks is < 1 or > 20)
-                {
-                    _logger.LogWarning(
-                        "Coordinator decomposition skipped item {Index} for run {RunId}: estimated_subtasks {EstimatedSubtasks} is outside 1..20",
-                        originalIndex, runId, estimatedSubtasks);
-                    continue;
-                }
-
                 var dependsOn = new List<int>();
                 if (el.TryGetProperty("depends_on", out var deps) && deps.ValueKind == JsonValueKind.Array)
                 {
@@ -735,7 +723,6 @@ public sealed class CoordinatorOrchestratorExecutor
                     dependsOn,
                     NormalizeCharter(Read("charter")),
                     declaredOutputPaths,
-                    estimatedSubtasks,
                     overrideParse.Override)));
             }
 
@@ -804,7 +791,6 @@ public sealed class CoordinatorOrchestratorExecutor
                 Isolation: "worktree",
                 DependsOn: [],
                 DeclaredOutputPaths: declaredOutputPaths,
-                EstimatedSubtasks: 1,
                 PromotionOverride: "inline")
         ];
     }
@@ -1453,10 +1439,14 @@ public sealed class CoordinatorOrchestratorExecutor
         return (rebuilt, note);
     }
 
-    internal static PromotionPartitionResult PartitionStories(IReadOnlyList<SubtaskDraft> drafts)
+    internal async Task<PromotionPartitionResult> PartitionStoriesAsync(
+        CoordinatorDraftInput input,
+        OutcomeSpec spec,
+        IReadOnlyList<SubtaskDraft> drafts,
+        CancellationToken ct)
     {
         if (drafts.Count == 0)
-            return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal));
+            return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal));
 
         var adjacency = new List<HashSet<int>>(Enumerable.Range(0, drafts.Count).Select(_ => new HashSet<int>()));
         for (var i = 0; i < drafts.Count; i++)
@@ -1475,6 +1465,7 @@ public sealed class CoordinatorOrchestratorExecutor
         var inline = new List<int>();
         var reasons = new Dictionary<int, string>();
         var promotedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var auditRationales = new Dictionary<string, string>(StringComparer.Ordinal);
         var visited = new bool[drafts.Count];
 
         for (var start = 0; start < drafts.Count; start++)
@@ -1507,6 +1498,7 @@ public sealed class CoordinatorOrchestratorExecutor
             var promote = false;
             var rootIndex = component.OrderBy(i => i).First();
             string rootReason;
+            string? rootAuditRationale = null;
             if (runOverride.Count > 0)
             {
                 promote = true;
@@ -1519,20 +1511,20 @@ public sealed class CoordinatorOrchestratorExecutor
             }
             else
             {
-                var threshold = component
-                    .Where(i => drafts[i].EstimatedSubtasks >= 3)
-                    .OrderByDescending(i => drafts[i].EstimatedSubtasks)
-                    .ThenBy(i => i)
-                    .FirstOrDefault(-1);
-                if (threshold >= 0)
+                var classification = await _storyIndependenceClassifier.ClassifyAsync(
+                    BuildStoryClassificationContext(input, spec, drafts, component),
+                    ct).ConfigureAwait(false);
+                if (classification?.IsIndependentDeliverable == true)
                 {
                     promote = true;
-                    rootIndex = threshold;
-                    rootReason = $"Estimated {drafts[threshold].EstimatedSubtasks} worker subtasks (threshold: 3).";
+                    rootReason = "LLM judged this dependency component to be an independent deliverable.";
+                    rootAuditRationale = classification.IndependenceRationale;
                 }
                 else
                 {
-                    rootReason = "Estimated below promotion threshold.";
+                    rootReason = classification is null
+                        ? "Classifier unavailable; kept inline by fail-closed default."
+                        : $"Kept inline: {classification.IndependenceRationale}";
                 }
             }
 
@@ -1542,6 +1534,8 @@ public sealed class CoordinatorOrchestratorExecutor
                 {
                     promoted.Add(index);
                     promotedKeys.Add(drafts[index].StoryKey);
+                    if (!string.IsNullOrWhiteSpace(rootAuditRationale))
+                        auditRationales[drafts[index].StoryKey] = rootAuditRationale;
                     reasons[index] = index == rootIndex
                         ? rootReason
                         : $"Promoted with dependency component rooted at {drafts[rootIndex].StoryKey}.";
@@ -1551,9 +1545,46 @@ public sealed class CoordinatorOrchestratorExecutor
                     inline.Add(index);
                 }
             }
+
+            if (promote && !string.IsNullOrWhiteSpace(rootAuditRationale))
+            {
+                _logger.LogInformation(
+                    "Coordinator promotion classifier for run {RunId} promoted component rooted at {StoryKey}: {Rationale}",
+                    input.RunId,
+                    drafts[rootIndex].StoryKey,
+                    rootAuditRationale);
+            }
         }
 
-        return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys);
+        return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys, auditRationales);
+    }
+
+    private static StoryIndependenceClassificationContext BuildStoryClassificationContext(
+        CoordinatorDraftInput input,
+        OutcomeSpec spec,
+        IReadOnlyList<SubtaskDraft> drafts,
+        IReadOnlyList<int> component)
+    {
+        var componentSet = component.ToHashSet();
+        StoryComponentInput Map(int index) => new(
+            drafts[index].StoryKey,
+            drafts[index].Title,
+            drafts[index].Scope,
+            drafts[index].DependsOn
+                .Select(dep => drafts[dep - 1].StoryKey)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(key => key, StringComparer.Ordinal)
+                .ToList());
+
+        return new StoryIndependenceClassificationContext(
+            input.RunId,
+            input.ProjectId,
+            input.SubmittingUser,
+            spec.DesiredOutcome,
+            spec.Scope,
+            spec.Assumptions,
+            component.OrderBy(i => i).Select(Map).ToList(),
+            Enumerable.Range(0, drafts.Count).Where(i => !componentSet.Contains(i)).Select(Map).ToList());
     }
 
     internal static PromotionOverrideParseResult ParsePromotionOverride(string title, string? declaredOverride)
@@ -1602,7 +1633,10 @@ public sealed class CoordinatorOrchestratorExecutor
         return builder.ToString().Trim();
     }
 
-    private void EmitPromotedStoriesEvent(string runId, IReadOnlyList<BacklogTask> tasks)
+    private void EmitPromotedStoriesEvent(
+        string runId,
+        IReadOnlyList<BacklogTask> tasks,
+        IReadOnlyDictionary<string, string> componentAuditRationalesByStoryKey)
     {
         var entry = _streamStore.Get(runId);
         entry?.RecordNext(EventTypes.CoordinatorStoriesPromoted, new
@@ -1613,6 +1647,10 @@ public sealed class CoordinatorOrchestratorExecutor
                 taskId = task.Id.ToString(),
                 key = task.PromotionKey,
                 reason = task.PromotionReason,
+                independenceRationale = task.PromotionKey is not null
+                    && componentAuditRationalesByStoryKey.TryGetValue(task.PromotionKey, out var rationale)
+                    ? rationale
+                    : null,
             }).ToList(),
         });
     }
@@ -1807,7 +1845,6 @@ public sealed class CoordinatorOrchestratorExecutor
         IReadOnlyList<int> DependsOn,
         string? Charter = null,
         IReadOnlyList<string>? DeclaredOutputPaths = null,
-        int EstimatedSubtasks = 1,
         string? PromotionOverride = null);
 
     private sealed record AssignedSubtask(SubtaskDraft Draft, string AgentName, string SelectedModelId);
@@ -1833,7 +1870,8 @@ public sealed class CoordinatorOrchestratorExecutor
         IReadOnlyList<int> PromotedIndices,
         IReadOnlyList<int> InlineIndices,
         IReadOnlyDictionary<int, string> PromotionReasons,
-        IReadOnlySet<string> PromotedKeys);
+        IReadOnlySet<string> PromotedKeys,
+        IReadOnlyDictionary<string, string> ComponentAuditRationalesByStoryKey);
 
     internal sealed record PromotionOverrideParseResult(string? Override, string CleanTitle, bool IsValid);
 }

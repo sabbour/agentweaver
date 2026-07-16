@@ -26,7 +26,7 @@ public sealed class BacklogPromotionServiceTests
         var service = new BacklogPromotionService(BuildSqliteConfig(), runStore, testDb.Db);
         var stories = new[]
         {
-            new PromotedStoryInput("story-a", "Story A", "First promoted story", "estimated_subtasks>=3", []),
+            new PromotedStoryInput("story-a", "Story A", "First promoted story", "llm_judged_independent_deliverable", []),
             new PromotedStoryInput("story-b", "Story B", "Depends on A", "explicit [run] override", ["story-a"]),
         };
 
@@ -64,11 +64,11 @@ public sealed class BacklogPromotionServiceTests
 
         var service = new BacklogPromotionService(BuildSqliteConfig(), runStore, testDb.Db);
         await service.PromoteAsync(project.Id, parentRun.Id, "Coordinator", [
-            new PromotedStoryInput("story-a", "Story A", "First promoted story", "estimated_subtasks>=3", [])
+            new PromotedStoryInput("story-a", "Story A", "First promoted story", "llm_judged_independent_deliverable", [])
         ]);
 
         var act = async () => await service.PromoteAsync(project.Id, parentRun.Id, "Coordinator", [
-            new PromotedStoryInput("story-a", "Story A changed", "First promoted story", "estimated_subtasks>=3", [])
+            new PromotedStoryInput("story-a", "Story A changed", "First promoted story", "llm_judged_independent_deliverable", [])
         ]);
 
         (await act.Should().ThrowAsync<PromotionKeyConflictException>())

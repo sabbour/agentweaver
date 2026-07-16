@@ -514,6 +514,7 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         var coordWorkflowFactory = new CoordinatorWorkflowFactory(
             agentFactory,
             new ThrowingSpecDrafter(),
+            new ThrowingStoryIndependenceClassifier(),
             streamStore,
             _scopeFactory,
             loggerFactory,
@@ -817,6 +818,14 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     {
         public Task<OutcomeSpecDraft> DraftAsync(CoordinatorDraftInput input, string charter, string? memoryContext, CancellationToken ct)
             => throw new NotImplementedException("DraftAsync is not called in the FailRunSafeAsync path");
+    }
+
+    private sealed class ThrowingStoryIndependenceClassifier : IStoryIndependenceClassifier
+    {
+        public Task<StoryIndependenceClassificationResult?> ClassifyAsync(
+            StoryIndependenceClassificationContext context,
+            CancellationToken ct) =>
+            throw new NotImplementedException("ClassifyAsync is not called in the FailRunSafeAsync path");
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

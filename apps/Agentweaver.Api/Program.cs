@@ -169,6 +169,8 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelector,
     Agentweaver.Api.Coordinator.WorkflowSelector>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IOutcomeSpecReplyClassifier,
     Agentweaver.Api.Coordinator.CopilotOutcomeSpecReplyClassifier>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClassifier,
+    Agentweaver.Api.Coordinator.CopilotStoryIndependenceClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
