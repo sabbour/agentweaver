@@ -79,26 +79,26 @@ public static class BlueprintPackageSchema
         if (string.IsNullOrEmpty(value) || value.Length > 2048 || !value.StartsWith("https://", StringComparison.Ordinal))
             return false;
 
-        for (var index = 0; index < value.Length; index++)
-        {
-            var character = value[index];
-            if (character > 0x7f || char.IsControl(character) || char.IsWhiteSpace(character)
-                || !"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[\\]@!$&'()*+,;=%".Contains(character))
-                return false;
-            if (character == '%'
-                && (index + 2 >= value.Length || !IsHex(value[index + 1]) || !IsHex(value[index + 2])))
-                return false;
-        }
+        const int authorityStart = 8;
+        if (value.IndexOf('\\') >= 0 || !HasAtMostOneDelimiter(value, '?', authorityStart)
+            || !HasAtMostOneDelimiter(value, '#', authorityStart))
+            return false;
 
-        var authorityEnd = value.IndexOfAny(['/', '?', '#'], "https://".Length);
-        var authority = value["https://".Length..(authorityEnd < 0 ? value.Length : authorityEnd)];
+        var queryStart = value.IndexOf('?', authorityStart);
+        var fragmentStart = value.IndexOf('#', authorityStart);
+        if (queryStart >= 0 && fragmentStart >= 0 && fragmentStart < queryStart)
+            return false;
+
+        var pathStart = value.IndexOf('/', authorityStart);
+        var authorityEnd = FirstNonNegative(pathStart, queryStart, fragmentStart, value.Length);
+        var authority = value[authorityStart..authorityEnd];
         if (authority.Length == 0 || authority.Contains('@', StringComparison.Ordinal) || !IsValidAuthority(authority))
             return false;
 
-        return Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            && uri.Scheme == Uri.UriSchemeHttps
-            && !string.IsNullOrEmpty(uri.Host)
-            && string.IsNullOrEmpty(uri.UserInfo);
+        var pathEnd = FirstNonNegative(queryStart, fragmentStart, value.Length);
+        return IsValidUriComponent(value.AsSpan(authorityEnd, pathEnd - authorityEnd))
+            && (queryStart < 0 || IsValidUriComponent(value.AsSpan(queryStart + 1, (fragmentStart < 0 ? value.Length : fragmentStart) - queryStart - 1)))
+            && (fragmentStart < 0 || IsValidUriComponent(value.AsSpan(fragmentStart + 1)));
     }
 
     /// <summary>Returns whether text is an exact Gregorian RFC 3339 timestamp in the package profile.</summary>
@@ -153,7 +153,9 @@ public static class BlueprintPackageSchema
                 if (authority[closingBracket + 1] != ':') return false;
                 port = authority[(closingBracket + 2)..];
             }
-            if (!IPAddress.TryParse(host, out var address) || address.AddressFamily != AddressFamily.InterNetworkV6)
+            if (host.Contains('%', StringComparison.Ordinal)
+                || !IPAddress.TryParse(host, out var address)
+                || address.AddressFamily != AddressFamily.InterNetworkV6)
                 return false;
         }
         else
@@ -173,6 +175,46 @@ public static class BlueprintPackageSchema
         }
         return port is null || IsValidPort(port);
     }
+
+    private static bool HasAtMostOneDelimiter(string value, char delimiter, int start)
+    {
+        var first = value.IndexOf(delimiter, start);
+        return first < 0 || value.IndexOf(delimiter, first + 1) < 0;
+    }
+
+    private static int FirstNonNegative(int first, int second, int fallback)
+    {
+        if (first < 0) return second < 0 ? fallback : second;
+        return second < 0 ? first : Math.Min(first, second);
+    }
+
+    private static int FirstNonNegative(int first, int second, int third, int fallback) =>
+        FirstNonNegative(FirstNonNegative(first, second, fallback), third, fallback);
+
+    private static bool IsValidUriComponent(ReadOnlySpan<char> component)
+    {
+        for (var index = 0; index < component.Length; index++)
+        {
+            var character = component[index];
+            if (character == '%')
+            {
+                if (index + 2 >= component.Length || !IsHex(component[index + 1]) || !IsHex(component[index + 2]))
+                    return false;
+                index += 2;
+                continue;
+            }
+
+            if (!IsUnreserved(character) && !IsSubDelimiter(character) && character is not (':' or '@' or '/'))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsUnreserved(char value) =>
+        char.IsAsciiLetterOrDigit(value) || value is '-' or '.' or '_' or '~';
+
+    private static bool IsSubDelimiter(char value) => value is '!' or '$' or '&' or '\'' or '(' or ')' or '*' or '+' or ',' or ';' or '=';
 
     private static bool IsValidDnsOrIpv4Host(string host)
     {

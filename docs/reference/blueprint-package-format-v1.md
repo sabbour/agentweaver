@@ -80,8 +80,12 @@ optional provenance object is bounded to
 the `catalog`, `generated`, or `imported` source, a bounded producer token, an absolute HTTPS
 repository URI with RFC 3986 percent escapes, a lower-case hexadecimal revision, and a timestamp.
 Repository URIs use ASCII DNS names with nonempty letter-or-digit-bounded labels (or bracketed
-IPv6), reject credentials, whitespace, controls, malformed percent escapes, invalid domains, and
-ports outside 0 through 65535. The timestamp profile is an exact proleptic Gregorian RFC 3339
+IPv6), reject credentials, raw backslashes, whitespace, controls, non-ASCII characters, malformed
+percent escapes in every component, invalid domains, and ports outside 0 through 65535. The URI is
+validated lexically before any normalization: brackets are permitted only as the balanced delimiters
+of a bracketed IPv6 authority host; path, query, and fragment must not contain raw brackets. A URI
+has at most one raw `?` query delimiter and one raw `#` fragment delimiter, and the fragment
+delimiter follows the query delimiter when both are present. The timestamp profile is an exact proleptic Gregorian RFC 3339
 date and time with seconds `00` through `59`, an optional unbounded decimal fraction, and either
 `Z` or a numeric offset from `-14:00` through `+14:00`; `14:00` is the only permitted offset at
 hour 14. Leap seconds and year `0000` are not supported. The timestamp is validated textually and

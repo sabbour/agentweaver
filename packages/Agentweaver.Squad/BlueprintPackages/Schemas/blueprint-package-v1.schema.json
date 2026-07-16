@@ -178,6 +178,7 @@
         "repository": {
           "type": "string",
           "maxLength": 2048,
+          "description": "Absolute HTTPS repository URI using the package lexical RFC 3986 profile.",
           "x-agentweaver-https-repository-uri": true
         },
         "revision": {

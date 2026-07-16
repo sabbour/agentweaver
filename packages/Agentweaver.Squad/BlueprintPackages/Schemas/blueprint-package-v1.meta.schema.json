@@ -20,6 +20,7 @@
           "type": "boolean"
         },
         "x-agentweaver-https-repository-uri": {
+          "description": "Requires the Blueprint Package v1 lexical HTTPS repository URI profile.",
           "type": "boolean"
         },
         "x-agentweaver-rfc3339-timestamp": {

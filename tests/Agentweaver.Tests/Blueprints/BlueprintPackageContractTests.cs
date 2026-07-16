@@ -275,12 +275,23 @@ public sealed class BlueprintPackageContractTests
     [InlineData("https://github.com/example/blueprints", "2026-07-16T10:54:27Z", true)]
     [InlineData("https://github.com/example/%2Fblueprints", "9999-12-31T23:59:59.99999999Z", true)]
     [InlineData("https://[2001:db8::1]:65535/blueprints", "2024-02-29T10:54:27-14:00", true)]
+    [InlineData("https://[2001:db8::1]:65535/a%2Fb?ref=release%2Fv1#readme%20copy", "2026-07-16T10:54:27Z", true)]
     [InlineData("http://github.com/example/blueprints", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com/example/blueprints", "2026-07-16", false)]
     [InlineData("https://github.com/example/%ZZ", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github.com/example?ref=%ZZ", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github.com/example#readme%ZZ", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://user@github.com/example", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github..com/example", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com:65536/example", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://example.com/a\\b", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://example.com/a[b]", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://example.com/a#b#c", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://example.com/a?one?two", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://example.com/a#fragment?query", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://[2001:db8::1/example", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://[2001:db8::1]]/example", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://[not-an-ipv6]/example", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://user:password@github.com/example", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com/example\n", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com/example\r", "2026-07-16T10:54:27Z", false)]
@@ -296,8 +307,14 @@ public sealed class BlueprintPackageContractTests
     public void SchemaRuntimeAndCustomKeywords_ProvenanceGrammarHaveParity(string repository, string createdAt, bool expected)
     {
         using var schema = JsonDocument.Parse(BlueprintPackageSchema.Json);
+        using var metaSchema = JsonDocument.Parse(BlueprintPackageSchema.MetaSchemaJson);
         var provenance = schema.RootElement.GetProperty("properties").GetProperty("provenance").GetProperty("properties");
         provenance.GetProperty("repository").GetProperty(BlueprintPackageSchema.HttpsRepositoryUriKeyword).GetBoolean().Should().BeTrue();
+        provenance.GetProperty("repository").GetProperty("description").GetString()
+            .Should().Be("Absolute HTTPS repository URI using the package lexical RFC 3986 profile.");
+        metaSchema.RootElement.GetProperty("allOf")[1].GetProperty("properties")
+            .GetProperty(BlueprintPackageSchema.HttpsRepositoryUriKeyword).GetProperty("description").GetString()
+            .Should().Be("Requires the Blueprint Package v1 lexical HTTPS repository URI profile.");
         provenance.GetProperty("created_at").GetProperty(BlueprintPackageSchema.Rfc3339TimestampKeyword).GetBoolean().Should().BeTrue();
 
         var source = CreateDefinitionSource(
