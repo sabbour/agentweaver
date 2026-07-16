@@ -40,6 +40,10 @@ public sealed class GitHubOrgAuthorizationMiddleware
         // OpenAPI contract (spec-006 api-harness): pure endpoint/schema metadata, no live data —
         // the LLM-driven curl harness needs to fetch this before it has authenticated.
         "/openapi",
+        // GitHub webhook receiver (issue #53 follow-up): GitHub's delivery has no Agentweaver bearer
+        // token/org membership to check — the HMAC-SHA256 signature verification inside the endpoint
+        // itself (GitHubWebhookEndpoints) IS this path's authentication.
+        "/api/webhooks/github",
     ];
 
     public GitHubOrgAuthorizationMiddleware(

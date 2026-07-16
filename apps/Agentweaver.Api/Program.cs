@@ -359,6 +359,10 @@ builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbe
 // Workflows (Feature 010) + Diagnostics (Feature 011)
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
+// GitHub webhook receiver (issue #53 follow-up): the real external event source wired to the event
+// trigger mechanism above. See Webhooks/GitHubWebhookOptions.cs — secret is config-only, never hardcoded.
+builder.Services.Configure<Agentweaver.Api.Webhooks.GitHubWebhookOptions>(
+    builder.Configuration.GetSection(Agentweaver.Api.Webhooks.GitHubWebhookOptions.SectionName));
 builder.Services.AddHostedService<Agentweaver.Api.Workflows.WorkflowScheduleTriggerService>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
@@ -981,6 +985,7 @@ else
     app.MapMemoryEndpoints();
     app.MapWorkflowDefinitionEndpoints();
     app.MapWorkflowTriggerEndpoints();
+    app.MapGitHubWebhookEndpoints();
     app.MapDiagnosticsEndpoints();
     app.MapMetricsEndpoints();
     app.MapNotificationsEndpoints();
