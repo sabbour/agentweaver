@@ -48,6 +48,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<CastProposalRecord> CastProposals => Set<CastProposalRecord>();
     public DbSet<SkillRecord> Skills => Set<SkillRecord>();
     public DbSet<SkillAssignmentRecord> SkillAssignments => Set<SkillAssignmentRecord>();
+    public DbSet<BlueprintPackageLibraryRecord> BlueprintPackageLibrary => Set<BlueprintPackageLibraryRecord>();
+    public DbSet<BlueprintPackageVersionRecord> BlueprintPackageVersions => Set<BlueprintPackageVersionRecord>();
+    public DbSet<BlueprintPackagePayloadRecord> BlueprintPackagePayloads => Set<BlueprintPackagePayloadRecord>();
+    public DbSet<BlueprintPackageAcquisitionRecord> BlueprintPackageAcquisitions => Set<BlueprintPackageAcquisitionRecord>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -154,6 +158,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<WorkflowCheckpointRecord>();
             model.Ignore<SkillRecord>();
             model.Ignore<SkillAssignmentRecord>();
+            model.Ignore<BlueprintPackageLibraryRecord>();
+            model.Ignore<BlueprintPackageVersionRecord>();
+            model.Ignore<BlueprintPackagePayloadRecord>();
+            model.Ignore<BlueprintPackageAcquisitionRecord>();
             return;
         }
 
@@ -247,6 +255,49 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.OutcomeSpecGenerationModel).HasColumnName("outcome_spec_generation_model");
             e.Property(p => p.AllowedWorkflowIds).HasColumnName("allowed_workflow_ids");
             e.HasIndex(p => p.State).HasDatabaseName("IX_projects_state");
+        });
+
+        model.Entity<BlueprintPackageLibraryRecord>(e =>
+        {
+            e.ToTable("blueprint_package_library").HasKey(x => new { x.OwnerId, x.PackageId });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+        });
+        model.Entity<BlueprintPackageVersionRecord>(e =>
+        {
+            e.ToTable("blueprint_package_versions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersion });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
+            e.Property(x => x.ContentDigest).HasColumnName("content_digest");
+            e.Property(x => x.PayloadSetDigest).HasColumnName("payload_set_digest");
+            e.Property(x => x.RawManifestSha256).HasColumnName("raw_manifest_sha256");
+            e.Property(x => x.ContainerSha256).HasColumnName("container_sha256");
+            e.Property(x => x.RawManifest).HasColumnName("raw_manifest");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+        });
+        model.Entity<BlueprintPackagePayloadRecord>(e =>
+        {
+            e.ToTable("blueprint_package_payloads").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersion, x.Path });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
+            e.Property(x => x.Path).HasColumnName("path");
+            e.Property(x => x.Bytes).HasColumnName("bytes");
+        });
+        model.Entity<BlueprintPackageAcquisitionRecord>(e =>
+        {
+            e.ToTable("blueprint_package_acquisitions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersion, x.Ordinal });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
+            e.Property(x => x.Ordinal).HasColumnName("ordinal");
+            e.Property(x => x.Source).HasColumnName("source");
+            e.Property(x => x.Producer).HasColumnName("producer");
+            e.Property(x => x.Repository).HasColumnName("repository");
+            e.Property(x => x.Revision).HasColumnName("revision");
+            e.Property(x => x.AcquiredAt).HasColumnName("acquired_at");
         });
 
         model.Entity<BacklogTaskRecord>(e =>

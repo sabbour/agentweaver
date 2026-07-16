@@ -224,6 +224,47 @@ public sealed class SqliteDb
         await TryAlterAsync(connection,
             "CREATE INDEX IF NOT EXISTS idx_skill_assignments_agent ON skill_assignments (project_id, agent_name);", ct);
 
+        // Owner-private immutable Blueprint package library. Package payloads, raw manifests and
+        // descriptive acquisition records share the same owner/package/version key; stores write
+        // these rows in one transaction and never update a version after insertion.
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS blueprint_package_library (
+                owner_id TEXT NOT NULL, package_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                PRIMARY KEY (owner_id, package_id)
+            );
+            CREATE TABLE IF NOT EXISTS blueprint_package_versions (
+                owner_id TEXT NOT NULL, package_id TEXT NOT NULL, canonical_version TEXT NOT NULL,
+                content_digest TEXT NOT NULL, payload_set_digest TEXT NOT NULL,
+                raw_manifest_sha256 TEXT NOT NULL, container_sha256 TEXT, raw_manifest BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (owner_id, package_id, canonical_version),
+                FOREIGN KEY (owner_id, package_id) REFERENCES blueprint_package_library(owner_id, package_id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS blueprint_package_payloads (
+                owner_id TEXT NOT NULL, package_id TEXT NOT NULL, canonical_version TEXT NOT NULL,
+                path TEXT NOT NULL, bytes BLOB NOT NULL,
+                PRIMARY KEY (owner_id, package_id, canonical_version, path),
+                FOREIGN KEY (owner_id, package_id, canonical_version) REFERENCES blueprint_package_versions(owner_id, package_id, canonical_version) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS blueprint_package_acquisitions (
+                owner_id TEXT NOT NULL, package_id TEXT NOT NULL, canonical_version TEXT NOT NULL,
+                ordinal INTEGER NOT NULL, source TEXT NOT NULL, producer TEXT, repository TEXT,
+                revision TEXT, acquired_at TEXT,
+                PRIMARY KEY (owner_id, package_id, canonical_version, ordinal),
+                FOREIGN KEY (owner_id, package_id, canonical_version) REFERENCES blueprint_package_versions(owner_id, package_id, canonical_version) ON DELETE CASCADE
+            );
+            CREATE TRIGGER IF NOT EXISTS trg_blueprint_package_versions_no_update
+            BEFORE UPDATE ON blueprint_package_versions
+            BEGIN SELECT RAISE(ABORT, 'blueprint package versions are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_blueprint_package_payloads_no_update
+            BEFORE UPDATE ON blueprint_package_payloads
+            BEGIN SELECT RAISE(ABORT, 'blueprint package payloads are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_blueprint_package_acquisitions_no_update
+            BEFORE UPDATE ON blueprint_package_acquisitions
+            BEGIN SELECT RAISE(ABORT, 'blueprint package acquisitions are immutable'); END;
+            """, ct);
+
         await MigrateLegacyMetricsSchemaAsync(connection, ct).ConfigureAwait(false);
     }
 

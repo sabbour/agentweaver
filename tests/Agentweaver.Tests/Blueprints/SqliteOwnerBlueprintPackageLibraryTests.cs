@@ -1,0 +1,107 @@
+using System.Security.Cryptography;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Domain.BlueprintPackages;
+using Agentweaver.Tests.Helpers;
+using FluentAssertions;
+
+namespace Agentweaver.Tests.Blueprints;
+
+public sealed class SqliteOwnerBlueprintPackageLibraryTests
+{
+    [Fact]
+    public async Task Persist_RoundTripsExactRawBytes_AndIsIdempotent()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        var package = Package(raw: [0, 255, 13], payload: [8, 0, 9]);
+
+        (await store.PersistAsync(package)).Disposition.Should().Be(BlueprintPackagePersistDisposition.Created);
+        (await store.PersistAsync(package)).Disposition.Should().Be(BlueprintPackagePersistDisposition.Idempotent);
+        var saved = await store.GetVersionAsync("engineering", "1.0.0");
+
+        saved!.RawManifest.Should().Equal(package.RawManifest);
+        saved.Payloads.Single().Bytes.Should().Equal(package.Payloads.Single().Bytes);
+        saved.ContentDigest.Should().Be(package.ContentDigest);
+        saved.PayloadSetDigest.Should().Be(package.PayloadSetDigest);
+        saved.RawManifestSha256.Should().Be(package.RawManifestSha256);
+    }
+
+    [Fact]
+    public async Task Persist_SameVersionDifferentIdentity_ReturnsImmutableConflict()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        await store.PersistAsync(Package(payload: [1]));
+
+        var result = await store.PersistAsync(Package(payload: [2]));
+
+        result.Disposition.Should().Be(BlueprintPackagePersistDisposition.ImmutableConflict);
+    }
+
+    [Fact]
+    public async Task Persist_ConcurrentSameIdentity_IsCreatedOnceAndOtherwiseIdempotent()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var package = Package();
+        var first = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        var second = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+
+        var outcomes = await Task.WhenAll(first.PersistAsync(package), second.PersistAsync(package));
+
+        outcomes.Select(x => x.Disposition).Should().Contain(BlueprintPackagePersistDisposition.Created);
+        outcomes.Select(x => x.Disposition).Should().NotContain(BlueprintPackagePersistDisposition.ImmutableConflict);
+    }
+
+    [Fact]
+    public async Task OwnerScope_HidesAndCannotDeleteAnotherOwnersPackage()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var first = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        var second = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-b"));
+        await first.PersistAsync(Package());
+
+        (await second.GetVersionAsync("engineering", "1.0.0")).Should().BeNull();
+        (await second.ListAsync()).Should().BeEmpty();
+        (await second.DeletePackageAsync("engineering")).Should().BeFalse();
+        (await first.GetVersionAsync("engineering", "1.0.0")).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task List_OrdersArbitrarilyLargeSemVerWithoutNumericTruncation()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        var low = new string('9', 300) + ".0.0";
+        var high = "1" + new string('0', 300) + ".0.0";
+        await store.PersistAsync(Package(version: low, payload: [1]));
+        await store.PersistAsync(Package(version: high, payload: [2]));
+
+        var versions = (await store.ListAsync()).Single().Versions;
+
+        versions.Select(x => x.CanonicalVersion).Should().Equal(high, low);
+    }
+
+    [Fact]
+    public async Task Persist_RejectsCredentialLikeProvenanceBeforeWrite()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        var package = Package() with { Acquisitions = [new("import", Repository: "https://user:password@example.invalid/repo")] };
+
+        var action = () => store.PersistAsync(package);
+
+        await action.Should().ThrowAsync<ArgumentException>();
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    private static BlueprintPackageWrite Package(string version = "1.0.0", byte[]? raw = null, byte[]? payload = null)
+    {
+        raw ??= [1, 2, 3];
+        payload ??= [4, 5, 6];
+        return new("engineering", version, raw, [new("definitions/blueprints/engineering.json", payload)],
+            Digest([9]), Digest(payload), Digest(raw), null, [new("validated")]);
+    }
+
+    private static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private sealed record Owner(string OwnerId) : IAuthenticatedOwnerContext;
+}
