@@ -142,7 +142,10 @@ public sealed class GitHubTokenAuthMiddleware
             // (endpoint is AllowAnonymous). It MUST be reachable without a Bearer token —
             // it is the call that EXCHANGES the code FOR the token. Without this exemption the
             // token middleware 401s it before the anonymous endpoint runs → sign-in loop.
-            || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase))
+            || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
+            // GitHub webhook receiver (issue #53 follow-up): GitHub's delivery carries no Agentweaver
+            // bearer token. Its own HMAC-SHA256 signature check (GitHubWebhookEndpoints) is the auth.
+            || context.Request.Path.StartsWithSegments("/api/webhooks/github", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context).ConfigureAwait(false);
             return;
