@@ -10,11 +10,13 @@ namespace Agentweaver.Api.Auth;
 /// Real GitHub device-flow OAuth service. Initiates device authorization at the configured
 /// GitHub base URL, holds the device_code server-side (never returned to clients), polls
 /// for completion, and persists the resulting token via IGitHubTokenStore.
-/// Minimal scopes: repo + read:user + read:org + copilot (read:org required for private org membership checks; copilot for Copilot API access).
+/// Minimal scopes: repo + read:user + copilot. Organization membership is verified via GitHub's
+/// public org-membership endpoint fallback without requesting read:org, which avoids OAuth/SAML
+/// consent friction for enterprise-managed org members. Copilot remains required for Copilot API access.
 /// </summary>
 public sealed class GitHubDeviceFlowAuthService : IGitHubAuthService
 {
-    private const string DefaultScopes = "repo read:user read:org copilot";
+    private const string DefaultScopes = "repo read:user copilot";
 
     private readonly string _baseUrl;
     private readonly string? _clientId;

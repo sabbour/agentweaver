@@ -217,7 +217,7 @@ public sealed class McpOAuthServerTests : IDisposable
                 ["Auth:GitHub:ClientId"] = "test-client-id",
                 ["Auth:GitHub:ClientSecret"] = "test-client-secret",
                 ["Auth:GitHub:CallbackUrl"] = "https://host.example/auth/github/callback",
-                ["Auth:GitHub:Scopes"] = "repo read:user read:org",
+                ["Auth:GitHub:Scopes"] = "repo read:user",
             }).Build(),
             new InMemoryGitHubTokenStore(),
             new SingleClientHttpClientFactory(new RoutingHandler()),
