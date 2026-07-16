@@ -4,11 +4,14 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Sandbox;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -161,6 +164,96 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
         view.TargetChildRunId.Should().BeNull("a broadcast stop targets every active child");
         ctsA.IsCancellationRequested.Should().BeTrue();
         ctsB.IsCancellationRequested.Should().BeTrue();
+    }
+
+    // -----------------------------------------------------------------------
+    // #350 — steering `stop` must reliably tear down the remote AgentHost pod, not just cancel
+    // the local CancellationTokenSource (which has no effect on a pod-per-run sandbox process).
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Stop_WhenPodPerRun_ReleasesTargetedChildsAgentHostPod()
+    {
+        var lifecycle = new TrackingPodLifecycle();
+        var sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            podLifecycle: lifecycle,
+            sandboxRuntime: Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }));
+
+        _streamStore.Create("coord-pod-1", "alice");
+        var cts = new CancellationTokenSource();
+        _streamStore.Create("child-pod-1", "alice");
+        _registry.Register("child-pod-1", null!, cts);
+
+        await sut.SteerAsync("coord-pod-1", "stop", "child-pod-1", "stop now", "alice", default);
+
+        lifecycle.ReleasedRunIds.Should().Contain("child-pod-1",
+            "a steering stop must reliably tear down the remote AgentHost pod, not just cancel the local token");
+    }
+
+    [Fact]
+    public async Task Stop_Broadcast_WhenPodPerRun_ReleasesEveryChildsPod_AndCoordinatorsOwnPod()
+    {
+        var lifecycle = new TrackingPodLifecycle();
+        var sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            runStore: new AlwaysSucceedsRunStore(),
+            podLifecycle: lifecycle,
+            sandboxRuntime: Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }));
+
+        // StopCoordinatorRunAsync (invoked for a broadcast stop) requires a GUID-parseable run id —
+        // RunId.TryParse gates it — so unlike the plain-string ids used elsewhere in this file, the
+        // coordinator id here must be a real GUID for that branch to actually execute.
+        var coordinatorRunId = Guid.NewGuid().ToString();
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedActiveChildAsync(coordinatorRunId, "child-pod-A", SubtaskStatus.Running);
+        await SeedActiveChildAsync(coordinatorRunId, "child-pod-B", SubtaskStatus.Dispatched);
+        _streamStore.Create("child-pod-A", "alice");
+        _streamStore.Create("child-pod-B", "alice");
+        _registry.Register("child-pod-A", null!, new CancellationTokenSource());
+        _registry.Register("child-pod-B", null!, new CancellationTokenSource());
+
+        await sut.SteerAsync(coordinatorRunId, "stop", targetChildRunId: null, "abort all", "alice", default);
+
+        lifecycle.ReleasedRunIds.Should().Contain(["child-pod-A", "child-pod-B", coordinatorRunId],
+            "a broadcast stop must release every active child's pod AND the coordinator's own pod");
+    }
+
+    [Fact]
+    public async Task Stop_WhenInApiMode_DoesNotCallReleaseAgentHostPod()
+    {
+        var lifecycle = new TrackingPodLifecycle();
+        var sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            podLifecycle: lifecycle,
+            sandboxRuntime: Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "in-api" }));
+
+        _streamStore.Create("coord-pod-inapi", "alice");
+        _streamStore.Create("child-pod-inapi", "alice");
+        _registry.Register("child-pod-inapi", null!, new CancellationTokenSource());
+
+        await sut.SteerAsync("coord-pod-inapi", "stop", "child-pod-inapi", "stop now", "alice", default);
+
+        lifecycle.ReleasedRunIds.Should().BeEmpty(
+            "in-api mode has no remote pod to release");
+    }
+
+    [Fact]
+    public async Task Stop_WhenPodLifecycleIsNull_DoesNotThrow()
+    {
+        // No podLifecycle wired (matches production when not running in Kubernetes) — must be a
+        // silent no-op, never an exception that could break the steering directive.
+        var sut = new CoordinatorSteeringService(
+            _streamStore, _registry, _scopeFactory, NullLogger<CoordinatorSteeringService>.Instance,
+            sandboxRuntime: Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }));
+
+        _streamStore.Create("coord-pod-null", "alice");
+        _streamStore.Create("child-pod-null", "alice");
+        _registry.Register("child-pod-null", null!, new CancellationTokenSource());
+
+        var act = async () => await sut.SteerAsync("coord-pod-null", "stop", "child-pod-null", "stop now", "alice", default);
+
+        await act.Should().NotThrowAsync("a null podLifecycle must be a silent no-op");
     }
 
     // -----------------------------------------------------------------------
@@ -359,6 +452,47 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
         }
 
         public ValueTask CompleteAsync(string runId, CancellationToken ct = default) => ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Minimal <see cref="IRunStore"/> fake (a fake, not a mock framework) used only so
+    /// <c>StopCoordinatorRunAsync</c> (gated on <c>_runStore is not null</c>) actually runs during
+    /// #350 pod-teardown tests. Every member beyond <see cref="TrySetTerminalStatusAsync"/> throws —
+    /// none are expected to be called on the broadcast-stop path under test.
+    /// </summary>
+    private sealed class AlwaysSucceedsRunStore : IRunStore
+    {
+        public Task<bool> TrySetTerminalStatusAsync(
+            RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+            => Task.FromResult(true);
+
+        public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) => Task.FromResult<Run?>(null);
+        public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Run>>(Array.Empty<Run>());
+        public Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryRevertCommittingAsync(RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryStartMergingAsync(RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> CompleteMergingAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null) => throw new NotImplementedException();
+        public Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> SetAssembleReadyAsync(RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateToInProgressAsync(RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeleteAsync(RunId runId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateWorktreeAsync(RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task SetSandboxInfoAsync(RunId runId, string? backend, string? claimName, string? podName, string? @namespace, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Run>>(Array.Empty<Run>());
+        public Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, bool includeChildren = false, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     // -----------------------------------------------------------------------

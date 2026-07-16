@@ -241,6 +241,10 @@ public sealed class RunWatchLoopService
                 entry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop" });
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
+            // #350: terminate the remote AgentHost pod, not just the local CancellationTokenSource —
+            // pod deletion is a cluster-wide action so this is safe/idempotent even when the steering
+            // stop's own release already ran on a different API replica.
+            await ReleaseAgentHostPodOnTerminalSafeAsync(runId).ConfigureAwait(false);
             _registry.Abandon(runId);
             _logger.LogInformation("Run {RunId}: durable steering stop observed; local workflow abandoned", runId);
             return;
@@ -877,8 +881,46 @@ public sealed class RunWatchLoopService
         }
         finally
         {
+            // #350: a run reaching this generic failure path (e.g.
+            // watch_stream_completed_without_terminal_event, child_executor_failed) is terminal and
+            // NEVER coming back — StopPortForwardsSafeAsync above only unregisters local bookkeeping
+            // (IPodNameRegistry, port-forward sessions), it does NOT stop the remote AgentHost pod.
+            // Without this the underlying process can keep executing tool calls and emitting
+            // tool.approval_required for a run the system already considers dead.
+            await ReleaseAgentHostPodOnTerminalSafeAsync(runId).ConfigureAwait(false);
             _registry.Abandon(runId);
             _factory.ClearRunExecutorMeta(runId);
+        }
+    }
+
+    /// <summary>
+    /// Releases the AgentHost pod for a run transitioning to a terminal Cancelled/Failed state
+    /// (#350 — cancelled/failed run doesn't reliably tear down its AgentHost/sandbox process).
+    /// Unlike <see cref="ReleasePodOnSuspendSafeAsync"/> (gated by <c>ReleasePodOnSuspend</c>, used
+    /// only for HITL suspend/resume checkpointing), a terminal transition must ALWAYS tear the pod
+    /// down when running pod-per-run: the run is never resuming, so leaving the pod alive lets a
+    /// detached turn keep executing tool calls / requesting new approvals long after the run record
+    /// is already terminal. Best-effort: logs and swallows exceptions (mirrors the release helpers in
+    /// CoordinatorRunService/CoordinatorDispatchService/CoordinatorAssemblyService) so a release
+    /// failure never blocks run finalization — the periodic AgentHostReaperService remains the
+    /// belt-and-suspenders backstop for anything this misses.
+    /// </summary>
+    private async Task ReleaseAgentHostPodOnTerminalSafeAsync(string runId)
+    {
+        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun)
+            return;
+
+        try
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(runId).ConfigureAwait(false);
+            _logger.LogInformation(
+                "RunWatchLoopService: AgentHost pod released on terminal transition for run {RunId}", runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "RunWatchLoopService: failed to release AgentHost pod on terminal transition for run {RunId} (best-effort)",
+                runId);
         }
     }
 

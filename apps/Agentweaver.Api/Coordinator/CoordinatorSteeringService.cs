@@ -2,9 +2,11 @@ using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
@@ -392,6 +394,8 @@ public sealed class CoordinatorSteeringService
     private readonly AssemblyReviewGate? _reviewGate;
     private readonly IOutcomeSpecReplyClassifier? _replyClassifier;
     private readonly ILogger<CoordinatorSteeringService> _logger;
+    private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly SandboxRuntimeOptions _sandboxRuntime;
 
     /// <summary>
     /// Statuses where the coordinator is still an operator-addressable control loop. In particular,
@@ -412,7 +416,9 @@ public sealed class CoordinatorSteeringService
         IRunStore? runStore = null,
         IRunEventStream? eventStream = null,
         AssemblyReviewGate? reviewGate = null,
-        IOutcomeSpecReplyClassifier? replyClassifier = null)
+        IOutcomeSpecReplyClassifier? replyClassifier = null,
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
     {
         _streamStore = streamStore;
         _registry = registry;
@@ -425,6 +431,40 @@ public sealed class CoordinatorSteeringService
         _replyClassifier = replyClassifier;
         _logger = logger;
         _runWorkflowFactory = runWorkflowFactory;
+        _podLifecycle = podLifecycle;
+        _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
+    }
+
+    /// <summary>
+    /// Releases the AgentHost pod for <paramref name="runId"/> when running pod-per-run (#350 —
+    /// cancelled/failed run doesn't reliably tear down its AgentHost/sandbox process). A steering
+    /// <c>stop</c>/<c>redirect</c> only cancelled a LOCAL <see cref="CancellationTokenSource"/> via
+    /// <see cref="RunWorkflowRegistry.Abandon"/>, which has no effect on the remote AgentHost pod —
+    /// the underlying process could keep executing tool calls and emitting new
+    /// <c>tool.approval_required</c> events long after the child run was marked terminal. Best-effort:
+    /// logs and swallows exceptions (mirrors the same helper in CoordinatorRunService /
+    /// CoordinatorDispatchService / CoordinatorAssemblyService) so a release failure never blocks the
+    /// steering directive. Pod deletion is a cluster-wide K8s action, so calling this from whichever
+    /// replica handled the steer request is sufficient regardless of which replica owns the child's
+    /// local workflow token.
+    /// </summary>
+    private async Task ReleaseAgentHostPodSafeAsync(string runId, CancellationToken ct)
+    {
+        if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "CoordinatorSteeringService: AgentHost pod released for stopped child run {RunId}", runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "CoordinatorSteeringService: failed to release AgentHost pod for run {RunId} (best-effort)",
+                runId);
+        }
     }
 
     /// <summary>
@@ -945,6 +985,13 @@ public sealed class CoordinatorSteeringService
             if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
                 await _runStore.TrySetTerminalStatusAsync(
                     childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None).ConfigureAwait(false);
+
+            // #350: cancelling the local CancellationTokenSource above has NO effect on the remote
+            // AgentHost pod — reliably stop the actual process so a detached turn cannot keep
+            // executing tool calls / emitting new tool.approval_required against a run the system
+            // already considers dead. Pod deletion is a cluster-wide K8s action, so this is safe to
+            // call from whichever replica handled the steer request.
+            await ReleaseAgentHostPodSafeAsync(childRunId, CancellationToken.None).ConfigureAwait(false);
         }
 
         var relayedAt = DateTimeOffset.UtcNow;
@@ -1233,6 +1280,9 @@ public sealed class CoordinatorSteeringService
             return;
         await _runStore.TrySetTerminalStatusAsync(id, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", ct)
             .ConfigureAwait(false);
+        // #350: the coordinator's own AgentHost pod (when pod-per-run) also needs reliable teardown —
+        // mirrors the child-release call in ApplyStopAsync above.
+        await ReleaseAgentHostPodSafeAsync(coordinatorRunId, ct).ConfigureAwait(false);
         _logger.LogInformation("Steering stop: coordinator run {RunId} terminated as stopped", coordinatorRunId);
     }
 
@@ -1288,6 +1338,11 @@ public sealed class CoordinatorSteeringService
 
         // Also abandon the workflow token so the watch loop exits cleanly.
         _registry.Abandon(childRunId);
+
+        // #350: as in ApplyStopAsync, the local token cancel above has no effect on the remote
+        // AgentHost pod — reliably tear it down so a detached turn cannot keep running/emitting
+        // tool.approval_required for a child the coordinator already considers redirected away from.
+        _ = ReleaseAgentHostPodSafeAsync(childRunId, CancellationToken.None);
 
         _logger.LogInformation(
             "Steering redirect (directive {DirectiveId}): force-completed stuck child {ChildRunId} for coordinator {CoordRunId}",

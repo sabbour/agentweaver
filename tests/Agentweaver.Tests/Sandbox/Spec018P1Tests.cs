@@ -469,6 +469,82 @@ public sealed class Spec018PodReleaseTests
     }
 }
 
+// ── 7. Release-on-terminal (#350 — cancelled/failed run must tear down its pod) ──────────────
+
+/// <summary>
+/// #350: RunWatchLoopService.ReleaseAgentHostPodOnTerminalSafeAsync (private) must call
+/// IAgentHostPodLifecycle.ReleaseAgentHostPodAsync whenever a run reaches a terminal
+/// Cancelled/Failed transition and the sandbox is running pod-per-run — regardless of the
+/// ReleasePodOnSuspend flag (that flag only governs the HITL suspend/resume path, not terminal
+/// transitions). Unlike Spec018PodReleaseTests (which targets ReleasePodOnSuspendSafeAsync), this
+/// exercises the sibling method wired into FailRunSafeAsync's finally block and
+/// MonitorDurableSteeringStopAsync. Tests drive the decision seam via reflection on a
+/// fully-DI-resolved service instance.
+/// </summary>
+public sealed class Issue350PodReleaseOnTerminalTests
+{
+    private static readonly MethodInfo? ReleaseOnTerminalMethod =
+        typeof(Agentweaver.Api.Runs.RunWatchLoopService)
+            .GetMethod("ReleaseAgentHostPodOnTerminalSafeAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+
+    [Fact]
+    public void ReleaseOnTerminalMethod_Exists_OnRunWatchLoopService()
+    {
+        // Guard: if this fails the reflection-based tests below are vacuously passing
+        ReleaseOnTerminalMethod.Should().NotBeNull(
+            "ReleaseAgentHostPodOnTerminalSafeAsync must exist as a private method on RunWatchLoopService");
+    }
+
+    [Fact]
+    public async Task ReleaseOnTerminal_WhenPodPerRun_CallsRelease_EvenIfReleasePodOnSuspendIsFalse()
+    {
+        // The key #350 distinction from Spec018PodReleaseTests: a terminal Cancelled/Failed run
+        // must tear its pod down unconditionally — ReleasePodOnSuspend=false must NOT suppress it.
+        var lifecycle = new TrackingPodLifecycle();
+        using var appFactory = new Spec018PodReleaseWebAppFactory(
+            agentMode: "pod-per-run", releasePodOnSuspend: false, podLifecycle: lifecycle);
+
+        var svc = appFactory.Services.GetRequiredService<Agentweaver.Api.Runs.RunWatchLoopService>();
+        await InvokeReleaseOnTerminal(svc, "run-terminal-release-001");
+
+        lifecycle.ReleasedRunIds.Should().Contain("run-terminal-release-001",
+            "a cancelled/failed run must reliably tear down its AgentHost pod regardless of ReleasePodOnSuspend");
+    }
+
+    [Fact]
+    public async Task ReleaseOnTerminal_WhenModeIsInApi_DoesNotCallRelease()
+    {
+        var lifecycle = new TrackingPodLifecycle();
+        using var appFactory = new Spec018PodReleaseWebAppFactory(
+            agentMode: "in-api", releasePodOnSuspend: true, podLifecycle: lifecycle);
+
+        var svc = appFactory.Services.GetRequiredService<Agentweaver.Api.Runs.RunWatchLoopService>();
+        await InvokeReleaseOnTerminal(svc, "run-terminal-in-api-002");
+
+        lifecycle.ReleasedRunIds.Should().BeEmpty(
+            "in-api mode has no remote pod to release");
+    }
+
+    [Fact]
+    public async Task ReleaseOnTerminal_WhenLifecycleIsNull_DoesNotThrow()
+    {
+        using var appFactory = new Spec018PodReleaseWebAppFactory(
+            agentMode: "pod-per-run", releasePodOnSuspend: true, podLifecycle: null);
+
+        var svc = appFactory.Services.GetRequiredService<Agentweaver.Api.Runs.RunWatchLoopService>();
+
+        var act = async () => await InvokeReleaseOnTerminal(svc, "run-terminal-no-lifecycle-003");
+        await act.Should().NotThrowAsync(
+            "null podLifecycle must be a silent no-op, not an exception that could block run finalization");
+    }
+
+    private static async Task InvokeReleaseOnTerminal(Agentweaver.Api.Runs.RunWatchLoopService svc, string runId)
+    {
+        var task = (Task)ReleaseOnTerminalMethod!.Invoke(svc, [runId])!;
+        await task;
+    }
+}
+
 /// <summary>
 /// WebApplicationFactory variant that injects a configurable <see cref="TrackingPodLifecycle"/>
 /// and overrides the <c>Sandbox:AgentExecutionMode</c> / <c>Sandbox:ReleasePodOnSuspend</c>
