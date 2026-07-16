@@ -232,6 +232,7 @@ builder.Services.AddHttpClient("github-authz")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 
 // MCP OAuth 2.1 Authorization Server (Option C / Seraph design). T1-T3:

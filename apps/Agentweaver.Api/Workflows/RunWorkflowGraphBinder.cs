@@ -431,6 +431,38 @@ internal static class RunWorkflowGraphBinder
                 return true;
             }
 
+            // Producer agent turn -> deterministic "open pull request" action (no LLM call; a plain
+            // pass-through of AgentTurnOutput once the PR is opened via the GitHub REST API).
+            case (NodeKind.Agent, NodeKind.OpenPullRequest, null):
+                g.AddEdge<AgentTurnOutput>(
+                    s.ResolveAgentNode(fromNode),
+                    s.ResolveOpenPullRequestNode(toNode),
+                    IsSuccessfulAgentTurn);
+                return true;
+
+            // AI peer-review verdict APPROVED / PASS (e.g. build/test gate) -> open the pull request.
+            case (NodeKind.PeerReview, NodeKind.OpenPullRequest, "approved"):
+            case (NodeKind.PeerReview, NodeKind.OpenPullRequest, "pass"):
+            {
+                var adapter = s.ReviewToAgentOutputAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, s.ResolveOpenPullRequestNode(toNode));
+                return true;
+            }
+
+            // Open-pull-request action -> direct completion (record the run outcome, PR number/url
+            // included in the scribe's step-event trail).
+            case (NodeKind.OpenPullRequest, NodeKind.Scribe, null):
+            {
+                var path = s.OpenPullRequestScribePath(edge);
+                g.AddEdge<AgentTurnOutput>(s.ResolveOpenPullRequestNode(fromNode), path.Input, IsSuccessfulAgentTurn)
+                 .AddEdge(path.Input, path.Scribe)
+                 .AddEdge(path.Scribe, path.Output);
+                ctx.ScribeOutputs.Add(path.Output);
+                return true;
+            }
+
             // Producer agent turn -> human review gate directly (no RAI stage in between).
             case (NodeKind.Agent, NodeKind.HumanReview, null):
             {
@@ -736,6 +768,9 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.Agent, NodeKind.Terminal, null) => true,
             (NodeKind.Agent, NodeKind.HumanReview, null) => true,
             (NodeKind.Agent, NodeKind.Rubberduck, null) => true,
+            (NodeKind.Agent, NodeKind.OpenPullRequest, null) => true,
+            (NodeKind.PeerReview, NodeKind.OpenPullRequest, "approved" or "pass") => true,
+            (NodeKind.OpenPullRequest, NodeKind.Scribe, null) => true,
             (NodeKind.Rai, NodeKind.Merge, "review") => true,
             (NodeKind.Rai, NodeKind.Agent, "review") => true,
             (NodeKind.Rai, NodeKind.PeerReview, "review") => true,

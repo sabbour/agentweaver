@@ -141,11 +141,40 @@ Agentweaver's workflow schema models these conceptual node types:
 - **build_test** — the platform-owned Build & Test gate. It runs the canonical build/test/preview instruction, emits `approved`, `request-changes`, or `declined`, and should sit after any RAI safety gate and before human review for software workflows. In `Sandbox:AgentExecutionMode=pod-per-run`, assembly Build & Test first launches a dedicated AgentHost pod for the coordinator run and configures it with the detached integration worktree as its working directory, so the gate and any `start_preview` server run from the same assembled tree.
 - **check** — a routing gate with declared branches. Known gate kinds include `rai`, `human-review`, and `rubberduck`.
 - **merge** — an action that applies produced changes.
+- **open_pull_request** — a platform-owned, deterministic action (issue #49) that opens a GitHub pull request on the project's connected repository. It makes exactly one GitHub REST API call — never an LLM turn — so it can safely sit after `build_test`/`peer_review` approval or directly after an agent turn, before (or instead of) `merge`. Configurable node fields: `title`, `body` (both support the placeholders `{run_id}`, `{worktree_branch}`, `{originating_branch}`, `{outcome_summary}`; default templates are used when omitted), `base` (defaults to the project's default branch, then `main`), `head` (defaults to the run's produced worktree branch), and `draft` (defaults to `false`). On success it emits a `completed` step event carrying the PR number/url; on any failure (no head branch/commits, no connected repository, no/invalid access token, GitHub API error) it emits a `failed` step event with a reason and never throws or crashes the run — the produced `AgentTurnOutput` passes through unchanged either way, so a downstream `scribe` step always records the run's real outcome.
 - **scribe** — a recording step that captures the outcome.
 - **terminal** — an explicit sink such as done, declined, or safety failed.
 - **fan_out**, **fan_in**, **serial**, **coordinator_composed** — schema-level extension points for richer topologies.
 
-Runtime binding supports prompt, peer-review, `build_test`, check gates with known gate kinds, merge, scribe, terminal sinks, and a set of sequential / review / direct-completion topologies. Extension node types remain explicit schema concepts; until executors bind them, the runtime fails closed.
+Runtime binding supports prompt, peer-review, `build_test`, `open_pull_request`, check gates with known gate kinds, merge, scribe, terminal sinks, and a set of sequential / review / direct-completion topologies. Extension node types remain explicit schema concepts; until executors bind them, the runtime fails closed.
+
+An `open_pull_request` node binds from a producing `prompt` node directly, or from a `peer_review`/`build_test` gate's `approved`/`pass` verdict (mirroring the existing gate → merge transition), and forwards into `scribe` exactly like an agent turn does:
+
+```yaml
+nodes:
+  - id: implement
+    type: prompt
+    agent: worker
+    prompt: "Implement the requested change."
+  - id: build-test
+    type: build_test
+  - id: open-pr
+    type: open_pull_request
+    title: "Agentweaver: {outcome_summary}"
+    body: "Automated changes from run `{run_id}` on `{worktree_branch}`."
+    base: main
+  - id: record
+    type: scribe
+edges:
+  - from: implement
+    to: build-test
+  - from: build-test
+    to: open-pr
+    when: approved
+  - from: open-pr
+    to: record
+```
+
 
 ### Software assembly gate order
 

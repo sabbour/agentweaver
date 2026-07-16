@@ -45,6 +45,9 @@ internal sealed class NodeExecutorRegistry : INodeExecutorFactory
                     ? bindings.Wiring.ResolvePeerReviewNode(node)
                     : bindings.Wiring.ResolveAgentNode(node);
 
+            case NodeKind.OpenPullRequest:
+                return bindings.Wiring.ResolveOpenPullRequestNode(node);
+
             case NodeKind.Rai:
                 return bindings.PolicyGateBindings.TryGetValue(node.Id, out var rai) ? rai : bindings.RaiBinding;
 

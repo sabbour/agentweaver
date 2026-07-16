@@ -30,6 +30,12 @@ public static class WorkflowDefinitionYamlSerializer
             Line(sb, "    target", node.Target);
             List(sb, "    steps", node.Steps);
             List(sb, "    branches", node.Branches);
+            BlockOrLine(sb, "    title", node.PrTitle);
+            BlockOrLine(sb, "    body", node.PrBody);
+            Line(sb, "    base", node.PrBase);
+            Line(sb, "    head", node.PrHead);
+            if (node.PrDraft.HasValue)
+                sb.AppendLine($"    draft: {(node.PrDraft.Value ? "true" : "false")}");
             sb.AppendLine();
         }
 
@@ -102,6 +108,7 @@ public static class WorkflowDefinitionYamlSerializer
         WorkflowNodeType.Prompt => "prompt",
         WorkflowNodeType.PeerReview => "peer_review",
         WorkflowNodeType.BuildTest => "build_test",
+        WorkflowNodeType.OpenPullRequest => "open_pull_request",
         WorkflowNodeType.Check => "check",
         WorkflowNodeType.FanOut => "fan_out",
         WorkflowNodeType.FanIn => "fan_in",

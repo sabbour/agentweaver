@@ -46,6 +46,12 @@ internal enum NodeKind
     /// <summary>A peer-review-style node that emits a verdict (<see cref="WorkflowNodeType.PeerReview"/> / BuildTest).</summary>
     PeerReview,
 
+    /// <summary>
+    /// A platform-owned, non-agent action that opens a GitHub pull request
+    /// (<see cref="WorkflowNodeType.OpenPullRequest"/>). Deterministic — no LLM call, no verdict.
+    /// </summary>
+    OpenPullRequest,
+
     /// <summary>A coordinator-composed stage (<see cref="WorkflowNodeType.CoordinatorComposed"/>).</summary>
     CoordinatorComposed,
 }
@@ -68,6 +74,7 @@ internal static class NodeClassifier
         WorkflowNodeType.Serial              => NodeKind.Serial,
         WorkflowNodeType.PeerReview          => NodeKind.PeerReview,
         WorkflowNodeType.BuildTest           => NodeKind.PeerReview,
+        WorkflowNodeType.OpenPullRequest     => NodeKind.OpenPullRequest,
         WorkflowNodeType.CoordinatorComposed => NodeKind.CoordinatorComposed,
         WorkflowNodeType.Check               => ClassifyGate(node),
         _                                    => NodeKind.Check,

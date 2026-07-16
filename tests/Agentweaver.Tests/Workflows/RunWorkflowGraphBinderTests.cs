@@ -265,6 +265,7 @@ internal sealed class FakeWiring(ExecutorBinding agent) : IRunWorkflowWiringSupp
 {
     public ExecutorBinding ResolveAgentNode(WorkflowNode node) => agent;
     public ExecutorBinding ResolvePeerReviewNode(WorkflowNode node) => throw new NotSupportedException();
+    public ExecutorBinding ResolveOpenPullRequestNode(WorkflowNode node) => throw new NotSupportedException();
     public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding ReviewToAgentForwardAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding ReviewToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
@@ -278,5 +279,6 @@ internal sealed class FakeWiring(ExecutorBinding agent) : IRunWorkflowWiringSupp
     public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ScribeSubPath AgentScribePath(WorkflowEdge edge) => throw new NotSupportedException();
+    public ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge) => throw new NotSupportedException();
     public ScribeSubPath ReviewScribePath(WorkflowEdge edge) => throw new NotSupportedException();
 }
