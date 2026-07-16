@@ -19,13 +19,6 @@ internal sealed record DecomposeResponse(
     [property: JsonPropertyName("was_capped")] bool WasCapped,
     [property: JsonPropertyName("total_found")] int TotalFound);
 
-public sealed record PromotedStoryToolInput(
-    [property: JsonPropertyName("key")] string Key,
-    [property: JsonPropertyName("title")] string Title,
-    [property: JsonPropertyName("description")] string Description,
-    [property: JsonPropertyName("promotion_reason")] string PromotionReason,
-    [property: JsonPropertyName("depends_on_keys")] IReadOnlyList<string> DependsOnKeys);
-
 [McpServerToolType]
 public sealed class BacklogTools(AgentweaverApiClient api)
 {
@@ -148,24 +141,6 @@ public sealed class BacklogTools(AgentweaverApiClient api)
             var flag = include_terminal_history ?? false;
             var result = await api.GetAsync<JsonElement>(
                 $"/api/projects/{Uri.EscapeDataString(project_id)}/board?include_terminal_history={flag}", ct);
-            return JsonSerializer.Serialize(result, JsonOpts);
-        }
-        catch (McpApiException) { throw; }
-        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
-    }
-
-    [McpServerTool(Name = "backlog_promote_stories"), Description("Atomically promote PRD stories into standalone backlog tasks with dependency edges.")]
-    public async Task<string> BacklogPromoteStoriesAsync(
-        [Description("Project ID")] string project_id,
-        [Description("Parent PRD coordinator run ID")] string parent_prd_run_id,
-        [Description("Stories to promote as one atomic batch")] IReadOnlyList<PromotedStoryToolInput> stories,
-        CancellationToken ct = default)
-    {
-        try
-        {
-            var body = new { parent_prd_run_id, stories };
-            var result = await api.PostAsync<JsonElement>(
-                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/promotions", body, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }

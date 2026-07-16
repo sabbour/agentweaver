@@ -45,6 +45,7 @@ public sealed record CoordinatorOutcomeSpecDecision(
     bool Confirmed,
     bool Revise = false,
     string? ConfirmedBy = null,
+    bool AllowTaskPromotion = false,
     string? ReviseFeedback = null);
 
 /// <summary>Terminal workflow output for a coordinator run.</summary>

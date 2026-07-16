@@ -52,6 +52,26 @@ public sealed class PrdStoryPromotionPartitionTests
     }
 
     [Fact]
+    public async Task PartitionStoriesAsync_SkipsPromotionEntirely_WhenOptInIsDisabled()
+    {
+        var classifier = new TestStoryIndependenceClassifier(_ =>
+            new StoryIndependenceClassificationResult(true, "Would promote if asked."));
+        var executor = CreateExecutor(classifier);
+        var input = new CoordinatorDraftInput("run-1", "proj-1", "Create storefront", "alice", "repo", null);
+        var spec = CreateSpec("run-1", "proj-1", "Create storefront", "Frontend and backend", allowTaskPromotion: false);
+        var drafts = new[]
+        {
+            new CoordinatorOrchestratorExecutor.SubtaskDraft("storefront", "Create storefront [run]", "Build storefront", "dev", "medium", "execution", "worktree", []),
+        };
+
+        var result = await executor.PartitionStoriesAsync(input, spec, drafts, CancellationToken.None);
+
+        result.PromotedIndices.Should().BeEmpty();
+        result.InlineIndices.Should().Equal(0);
+        classifier.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task PartitionStoriesAsync_ExplicitInlineOverride_WinsWithoutClassifierCall()
     {
         var classifier = new TestStoryIndependenceClassifier(_ =>
@@ -85,7 +105,7 @@ public sealed class PrdStoryPromotionPartitionTests
             null);
     }
 
-    private static OutcomeSpec CreateSpec(string runId, string projectId, string goal, string scope) => new()
+    private static OutcomeSpec CreateSpec(string runId, string projectId, string goal, string scope, bool allowTaskPromotion = true) => new()
     {
         ProjectId = projectId,
         CoordinatorRunId = runId,
@@ -94,6 +114,7 @@ public sealed class PrdStoryPromotionPartitionTests
         Scope = scope,
         Assumptions = "None",
         Status = "confirmed",
+        AllowTaskPromotion = allowTaskPromotion,
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow,
     };

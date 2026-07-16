@@ -324,7 +324,7 @@ public sealed class CoordinatorRunService
                     var spec = await GetOutcomeSpecAsync(runId, _appStopping).ConfigureAwait(false);
                     if (spec?.Status == "awaiting_confirmation")
                     {
-                        var outcome = await ConfirmOutcomeSpecAsync(runId, confirmedBy, _appStopping).ConfigureAwait(false);
+                        var outcome = await ConfirmOutcomeSpecAsync(runId, confirmedBy, allowTaskPromotion: false, _appStopping).ConfigureAwait(false);
                         if (outcome == CoordinatorGateOutcome.Accepted)
                             return;
                     }
@@ -355,10 +355,18 @@ public sealed class CoordinatorRunService
     /// finalize and terminate (Phase 1). Returns <see cref="CoordinatorGateOutcome"/> so the HTTP
     /// layer can map to 202 / 409 without holding any orchestration state.
     /// </summary>
-    public Task<CoordinatorGateOutcome> ConfirmOutcomeSpecAsync(string runId, string confirmedBy, CancellationToken ct) =>
+    public Task<CoordinatorGateOutcome> ConfirmOutcomeSpecAsync(
+        string runId,
+        string confirmedBy,
+        bool allowTaskPromotion,
+        CancellationToken ct) =>
         SubmitDecisionAsync(
             runId,
-            new CoordinatorOutcomeSpecDecision(Confirmed: true, Revise: false, ConfirmedBy: confirmedBy),
+            new CoordinatorOutcomeSpecDecision(
+                Confirmed: true,
+                Revise: false,
+                ConfirmedBy: confirmedBy,
+                AllowTaskPromotion: allowTaskPromotion),
             ct);
 
     /// <summary>

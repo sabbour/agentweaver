@@ -95,58 +95,6 @@ public static class BacklogEndpoints
             return task is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(task, ct));
         });
 
-        app.MapPost("/api/projects/{projectId}/backlog/promotions", async (
-            HttpContext httpContext,
-            string projectId,
-            PromoteBacklogStoriesRequest request,
-            IProjectStore projectStore,
-            IBacklogPromotionService promotionService,
-            BacklogTaskReadModelFactory readModelFactory,
-            CancellationToken ct) =>
-        {
-            if (!ProjectId.TryParse(projectId, out var pid))
-                return Results.BadRequest(new { error = "Invalid project id." });
-            if (!RunId.TryParse(request.ParentPrdRunId, out var parentPrdRunId))
-                return Results.BadRequest(new { error = "invalid_promotion_graph" });
-
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
-            if (auth.Error is not null) return auth.Error;
-
-            try
-            {
-                var stories = (request.Stories ?? [])
-                    .Select(s => new PromotedStoryInput(
-                        s.Key?.Trim() ?? string.Empty,
-                        s.Title?.Trim() ?? string.Empty,
-                        s.Description?.Trim() ?? string.Empty,
-                        s.PromotionReason?.Trim() ?? string.Empty,
-                        (s.DependsOnKeys ?? []).Select(k => k?.Trim() ?? string.Empty).ToList()))
-                    .ToList();
-                var result = await promotionService.PromoteAsync(
-                    pid,
-                    parentPrdRunId,
-                    ApiKeyAuthMiddleware.GetCaller(httpContext).User,
-                    stories,
-                    ct);
-                var taskDtos = new List<BacklogTaskDto>(result.Tasks.Count);
-                foreach (var task in result.Tasks)
-                    taskDtos.Add(await readModelFactory.BuildTaskDtoAsync(task, ct));
-                return Results.Ok(new BacklogPromotionResponse { Tasks = taskDtos, CreatedCount = result.CreatedCount });
-            }
-            catch (InvalidPromotionGraphException)
-            {
-                return Results.BadRequest(new { error = "invalid_promotion_graph" });
-            }
-            catch (PromotionKeyConflictException)
-            {
-                return Results.Conflict(new { error = "promotion_key_conflict" });
-            }
-            catch (KeyNotFoundException)
-            {
-                return Results.NotFound();
-            }
-        });
-
         // PATCH /api/projects/{projectId}/backlog/tasks/{taskId} — edit (FR-005)
         app.MapPatch("/api/projects/{projectId}/backlog/tasks/{taskId}", async (
             HttpContext httpContext,

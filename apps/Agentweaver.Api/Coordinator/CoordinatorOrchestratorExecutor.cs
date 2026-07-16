@@ -1447,6 +1447,8 @@ public sealed class CoordinatorOrchestratorExecutor
     {
         if (drafts.Count == 0)
             return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal));
+        if (!spec.AllowTaskPromotion)
+            return new PromotionPartitionResult([], Enumerable.Range(0, drafts.Count).ToList(), new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal));
 
         var adjacency = new List<HashSet<int>>(Enumerable.Range(0, drafts.Count).Select(_ => new HashSet<int>()));
         for (var i = 0; i < drafts.Count; i++)

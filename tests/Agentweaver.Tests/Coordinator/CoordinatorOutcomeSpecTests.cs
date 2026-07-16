@@ -236,6 +236,23 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         (await pendingStore.GetAsync(runId)).Should().BeNull("confirm must atomically consume the pending gate");
     }
 
+    [Fact]
+    public async Task Confirm_RequestCanOptIntoTaskPromotion_BeforeFinalizingSpec()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Confirm stores promotion opt-in");
+        await WaitForGateAsync(runId);
+
+        var confirmResp = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/outcome-spec/confirm",
+            new ConfirmOutcomeSpecRequest { AllowTaskPromotion = true });
+        confirmResp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull();
+        spec!.AllowTaskPromotion.Should().BeTrue();
+    }
+
     // =========================================================================
     // Autopilot: define-outcome runs auto-confirm the spec unattended, with no manual
     // confirm POST, and record the submitting user as ConfirmedBy (#228). Off-by-default
@@ -331,7 +348,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
 
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
-            runId, CoordinatorWebApplicationFactory.OwnerUser, CancellationToken.None);
+            runId, CoordinatorWebApplicationFactory.OwnerUser, allowTaskPromotion: false, CancellationToken.None);
 
         outcome.Should().Be(CoordinatorGateOutcome.NoPendingGate,
             "an active run whose gate has been consumed must report NoPendingGate, not RunNotActive");
@@ -372,7 +389,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
         var sw = Stopwatch.StartNew();
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
-            runId, CoordinatorWebApplicationFactory.OwnerUser, CancellationToken.None);
+            runId, CoordinatorWebApplicationFactory.OwnerUser, allowTaskPromotion: false, CancellationToken.None);
         sw.Stop();
 
         outcome.Should().Be(CoordinatorGateOutcome.Accepted,
@@ -414,7 +431,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
         var sw = Stopwatch.StartNew();
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
-            runId, CoordinatorWebApplicationFactory.OwnerUser, CancellationToken.None);
+            runId, CoordinatorWebApplicationFactory.OwnerUser, allowTaskPromotion: false, CancellationToken.None);
         sw.Stop();
 
         outcome.Should().Be(CoordinatorGateOutcome.NoPendingGate,
@@ -432,7 +449,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
 
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
-            RunId.New().ToString(), CoordinatorWebApplicationFactory.OwnerUser, CancellationToken.None);
+            RunId.New().ToString(), CoordinatorWebApplicationFactory.OwnerUser, allowTaskPromotion: false, CancellationToken.None);
 
         outcome.Should().Be(CoordinatorGateOutcome.RunNotActive,
             "a run that was never registered has no live workflow and must be RunNotActive");

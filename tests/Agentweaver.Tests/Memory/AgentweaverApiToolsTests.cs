@@ -331,39 +331,14 @@ public sealed class AgentweaverApiToolsTests
     }
 
     [Fact]
-    public void CoordinatorBuild_IncludesPromotionAndTaskInspectionTools()
+    public void CoordinatorBuild_IncludesTaskInspectionTool()
     {
         var http = new HttpClient(new FakeHttpHandler(HttpStatusCode.OK, "{}"))
             { BaseAddress = new Uri("http://localhost/") };
 
         var tools = AgentweaverApiTools.Build(ProjectId, "Coordinator", "http://localhost", null, http);
 
-        tools.Select(t => t.Name).Should().Contain(["backlog_promote_stories", "backlog_get_task"]);
-    }
-
-    [Fact]
-    public async Task BacklogPromoteStories_OnInvalidJson_ReturnsFriendlyErrorWithoutThrowing()
-    {
-        var handler = new FakeHttpHandler(HttpStatusCode.OK, "{}");
-        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
-        var tool = AgentweaverApiTools.Build(ProjectId, "Coordinator", "http://localhost", null, http)
-            .Single(t => t.Name == "backlog_promote_stories");
-
-        var act = async () => await InvokeAsync(tool, new()
-        {
-            ["project_id"] = ProjectId,
-            ["parent_prd_run_id"] = "run-123",
-            ["stories_json"] = "{not-json",
-        });
-
-        await act.Should().NotThrowAsync();
-        var result = await InvokeAsync(tool, new()
-        {
-            ["project_id"] = ProjectId,
-            ["parent_prd_run_id"] = "run-123",
-            ["stories_json"] = "{not-json",
-        });
-        result.Should().Contain("backlog_promote_stories failed: invalid stories_json");
+        tools.Select(t => t.Name).Should().Contain("backlog_get_task");
     }
 }
 

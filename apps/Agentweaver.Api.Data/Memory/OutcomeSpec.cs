@@ -14,6 +14,7 @@ public sealed class OutcomeSpec
     public string? ClarifyingQuestions { get; set; }
     public required string Status { get; set; }      // drafting | awaiting_confirmation | confirmed | declined
     public string? ConfirmedBy { get; set; }
+    public bool AllowTaskPromotion { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

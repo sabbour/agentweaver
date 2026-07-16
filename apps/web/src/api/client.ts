@@ -643,8 +643,8 @@ export class AgentweaverApiClient {
     return this.request<OutcomeSpec>('GET', `/runs/${encodeURIComponent(runId)}/outcome-spec`);
   }
 
-  confirmOutcomeSpec(runId: string): Promise<OutcomeSpec | null> {
-    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, {});
+  confirmOutcomeSpec(runId: string, allowTaskPromotion = false): Promise<OutcomeSpec | null> {
+    return this.request<OutcomeSpec | null>('POST', `/runs/${encodeURIComponent(runId)}/outcome-spec/confirm`, { allowTaskPromotion });
   }
 
   reviseOutcomeSpec(runId: string, feedback: string): Promise<OutcomeSpec | null> {
@@ -777,19 +777,6 @@ export class AgentweaverApiClient {
 
   getBacklogTask(projectId: string, taskId: string): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('GET', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
-  }
-
-  promoteBacklogStories(projectId: string, body: {
-    parent_prd_run_id: string;
-    stories: Array<{
-      key: string;
-      title: string;
-      description: string;
-      promotion_reason: string;
-      depends_on_keys: string[];
-    }>;
-  }): Promise<{ tasks: BacklogTaskDto[]; created_count: number }> {
-    return this.request<{ tasks: BacklogTaskDto[]; created_count: number }>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/promotions`, body);
   }
 
   editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {

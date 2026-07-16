@@ -587,6 +587,7 @@ export interface OutcomeSpec {
   clarifyingQuestions?: string[];
   status: OutcomeSpecStatus;
   confirmedBy?: string;
+  allowTaskPromotion?: boolean;
 }
 
 export type StartOrchestrationMode = 'define_outcome' | 'direct';

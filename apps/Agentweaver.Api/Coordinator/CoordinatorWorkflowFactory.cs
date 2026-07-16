@@ -269,6 +269,7 @@ public sealed class CoordinatorWorkflowFactory
                 ClarifyingQuestions = null,
                 Status = status,
                 ConfirmedBy = input.SubmittingUser,
+                AllowTaskPromotion = false,
                 CreatedAt = now,
                 UpdatedAt = now,
             };
@@ -283,6 +284,7 @@ public sealed class CoordinatorWorkflowFactory
             spec.ClarifyingQuestions = null;
             spec.Status = status;
             spec.ConfirmedBy = input.SubmittingUser;
+            spec.AllowTaskPromotion = false;
             spec.UpdatedAt = now;
         }
 
@@ -481,6 +483,7 @@ public sealed class CoordinatorWorkflowFactory
             spec.ClarifyingQuestions = draft.ClarifyingQuestions;
             spec.Status = status;
             spec.ConfirmedBy = null;
+            spec.AllowTaskPromotion = false;
             spec.UpdatedAt = now;
         }
 
@@ -504,6 +507,7 @@ public sealed class CoordinatorWorkflowFactory
         {
             spec.Status = status;
             spec.ConfirmedBy = decision.Confirmed ? decision.ConfirmedBy : null;
+            spec.AllowTaskPromotion = decision.Confirmed && decision.AllowTaskPromotion;
             spec.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
@@ -517,6 +521,7 @@ public sealed class CoordinatorWorkflowFactory
             {
                 specId,
                 confirmedBy = decision.ConfirmedBy,
+                allowTaskPromotion = decision.AllowTaskPromotion,
             });
         }
 

@@ -46,7 +46,6 @@ public sealed class CoordinatorMetaToolsRegistrationTests : IDisposable
             "project_list_runs",
             "backlog_capture_task",
             "backlog_get_board",
-            "backlog_promote_stories",
             "backlog_get_task",
             "run_status",
             "run_show_artifacts",

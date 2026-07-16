@@ -1109,6 +1109,12 @@ public sealed record ReviseOutcomeSpecRequest
     [JsonPropertyName("feedback")] public string? Feedback { get; init; }
 }
 
+/// <summary>Request body for POST /api/runs/{id}/outcome-spec/confirm.</summary>
+public sealed record ConfirmOutcomeSpecRequest
+{
+    [JsonPropertyName("allowTaskPromotion")] public bool AllowTaskPromotion { get; init; }
+}
+
 /// <summary>
 /// Response body for GET /api/runs/{id}/outcome-spec. Field names mirror the web client's
 /// <c>OutcomeSpec</c> interface. Server state is rendered as-is (Principle III).
@@ -1129,6 +1135,9 @@ public sealed record OutcomeSpecResponse
     [JsonPropertyName("confirmedBy")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ConfirmedBy { get; init; }
+
+    [JsonPropertyName("allowTaskPromotion")]
+    public bool AllowTaskPromotion { get; init; }
 }
 
 // -----------------------------------------------------------------------
@@ -1291,27 +1300,6 @@ public sealed record MoveBacklogTaskRequest
 public sealed record ReorderBacklogTaskRequest
 {
     [JsonPropertyName("target_index")] public int TargetIndex { get; init; }
-}
-
-public sealed record PromoteBacklogStoriesRequest
-{
-    [JsonPropertyName("parent_prd_run_id")] public string? ParentPrdRunId { get; init; }
-    [JsonPropertyName("stories")] public IReadOnlyList<PromotedStoryRequest>? Stories { get; init; }
-}
-
-public sealed record PromotedStoryRequest
-{
-    [JsonPropertyName("key")] public string? Key { get; init; }
-    [JsonPropertyName("title")] public string? Title { get; init; }
-    [JsonPropertyName("description")] public string? Description { get; init; }
-    [JsonPropertyName("promotion_reason")] public string? PromotionReason { get; init; }
-    [JsonPropertyName("depends_on_keys")] public IReadOnlyList<string>? DependsOnKeys { get; init; }
-}
-
-public sealed record BacklogPromotionResponse
-{
-    [JsonPropertyName("tasks")] public required IReadOnlyList<BacklogTaskDto> Tasks { get; init; }
-    [JsonPropertyName("created_count")] public required int CreatedCount { get; init; }
 }
 
 public sealed record BlockingDependencyDto

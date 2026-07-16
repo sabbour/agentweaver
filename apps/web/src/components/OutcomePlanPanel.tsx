@@ -2,6 +2,7 @@ import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -260,6 +261,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
   const [decomposeLoading, setDecomposeLoading] = useState(false);
   const [decomposeError, setDecomposeError] = useState<string | null>(null);
   const [decomposeSuccess, setDecomposeSuccess] = useState(false);
+  const [allowTaskPromotion, setAllowTaskPromotion] = useState(false);
 
   // Tracks whether the most recent getOutcomeSpec call returned 404 (spec not yet created).
   // While true and the coordinator run is still live, we poll until the draft is available.
@@ -382,7 +384,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
     try {
       for (let attempt = 1; ; attempt++) {
         try {
-          const updated = await apiClient.confirmOutcomeSpec(runId);
+          const updated = await apiClient.confirmOutcomeSpec(runId, allowTaskPromotion);
           if (updated) setSpecFromApi(updated);
           else await fetchSpec();
           // Reconnect the SSE stream so post-confirmation events (outcome_spec.confirmed,
@@ -446,6 +448,10 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
       .join('\n\n');
     return [qa, extraFeedback.trim()].filter((s) => s.length > 0).join('\n\n');
   }, [clarifying, answers, extraFeedback]);
+
+  useEffect(() => {
+    setAllowTaskPromotion(spec?.allowTaskPromotion ?? false);
+  }, [spec?.allowTaskPromotion, spec?.status]);
 
   // Clear the revising spinner when the spec content changes — this fires when the coordinator
   // finishes re-drafting, even when the status stays `awaiting_confirmation` throughout
@@ -626,24 +632,37 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
       )}
 
       {awaiting && (
-        <div role="group" className={styles.actionRow}>
-          <Button
-            appearance="primary"
-            icon={<CheckmarkCircleRegular />}
-            disabled={acting || revising || runInterrupted}
-            onClick={() => void handleConfirm()}
+        <>
+          <Field
+            label="Independent task promotion"
+            hint="Optional: allow the coordinator to split genuinely separate deliverables into standalone backlog tasks. Leave off to keep all work inline in this run."
           >
-            {acting ? 'Confirming plan...' : 'Confirm plan'}
-          </Button>
-          <Button
-            appearance="secondary"
-            icon={<EditRegular />}
-            disabled={acting || revising || runInterrupted}
-            onClick={openRevise}
-          >
-            Clarify plan
-          </Button>
-        </div>
+            <Checkbox
+              checked={allowTaskPromotion}
+              disabled={acting || revising || runInterrupted}
+              label="Allow standalone backlog tasks for independent deliverables"
+              onChange={(_, data) => setAllowTaskPromotion(Boolean(data.checked))}
+            />
+          </Field>
+          <div role="group" className={styles.actionRow}>
+            <Button
+              appearance="primary"
+              icon={<CheckmarkCircleRegular />}
+              disabled={acting || revising || runInterrupted}
+              onClick={() => void handleConfirm()}
+            >
+              {acting ? 'Confirming plan...' : 'Confirm plan'}
+            </Button>
+            <Button
+              appearance="secondary"
+              icon={<EditRegular />}
+              disabled={acting || revising || runInterrupted}
+              onClick={openRevise}
+            >
+              Clarify plan
+            </Button>
+          </div>
+        </>
       )}
 
       {status === 'confirmed' && projectId && !dispatched && (
