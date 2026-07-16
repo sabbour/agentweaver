@@ -33,7 +33,6 @@ public static class AgentRuntimeServiceCollectionExtensions
         services.AddSingleton<IQuestionGate, InMemoryQuestionGate>();
         services.AddSingleton<IRunOptionsStore, InMemoryRunOptionsStore>();
         services.AddSingleton<Workflow.IWorkflowAgentFactory, Workflow.WorkflowAgentFactory>();
-        services.AddSingleton<IConsoleFacadeAgent, CopilotConsoleFacadeAgent>();
         return services;
     }
 }

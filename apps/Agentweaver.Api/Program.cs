@@ -16,7 +16,6 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
-using Agentweaver.Api.ConsoleFacade;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Git;
@@ -174,15 +173,10 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClas
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
-builder.Services.AddSingleton<ConsoleConversationStore>();
-builder.Services.AddSingleton<IConsoleFacadeAgent, CopilotConsoleFacadeAgent>();
-builder.Services.AddSingleton<IConsoleTurnService, ConsoleTurnService>();
-
 // Operator assistant (#346): MCP-driven chat modeled as a lightweight "operator run". The MCP tool
 // provider connects to the AgentweaverMCP /mcp endpoint per caller (bearer passed through per call);
 // the assistant agent is the in-API Copilot loop seeded with agentweaver.agent.md; AssistantRunService
-// persists the conversation as a run and streams turns onto the existing run event stream. Additive:
-// the legacy console facade path above is untouched.
+// persists the conversation as a run and streams turns onto the existing run event stream.
 builder.Services.AddSingleton<IAgentweaverMcpToolProvider>(sp =>
 {
     var cfg = sp.GetRequiredService<IConfiguration>();
@@ -969,7 +963,6 @@ else
     app.MapSkillEndpoints();
     app.MapBacklogEndpoints();
     app.MapBacklogDecomposeEndpoints();
-    app.MapConsoleEndpoints();
     app.MapAssistantEndpoints();
     app.MapCoordinatorEndpoints();
     app.MapCastingEndpoints();
