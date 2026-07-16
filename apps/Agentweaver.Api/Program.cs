@@ -49,6 +49,14 @@ Agentweaver.Api.Security.TestingBypassGuard.EnsureNotEnabledInProduction(
 Agentweaver.Api.Security.OAuthConfigGuard.EnsureProductionIssuerAudiencePinned(
     builder.Environment, builder.Configuration);
 
+// Assistant-chat-termination root-cause fix: pairs with k8s/api-deployment.yaml's
+// terminationGracePeriodSeconds: 120 and preStop hook. Without this, the Generic Host's
+// default 30s ShutdownTimeout cancels RequestAborted (and thus in-flight operator assistant
+// turns, which can legitimately run 60-100+s across multiple MCP tool calls) well before the
+// pod's SIGKILL deadline during rolling deploys. 100s leaves margin under the 120s grace period
+// for actual process teardown after the timeout elapses.
+builder.Host.ConfigureHostOptions(o => o.ShutdownTimeout = TimeSpan.FromSeconds(100));
+
 var appRole = AppRole.Resolve(builder.Configuration);
 var isWorker = appRole == AppRole.Worker;
 
