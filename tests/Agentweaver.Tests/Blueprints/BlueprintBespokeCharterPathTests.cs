@@ -77,6 +77,41 @@ public sealed class BlueprintBespokeCharterPathTests : IDisposable
     }
 
     [Fact]
+    public void ExistingDirectoryCharter_UsesMissingFileDiagnostic()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "charters", "reviewer.md"));
+
+        BlueprintService.ResolvePathWithinProject(_root, Path.Combine("charters", "reviewer.md")).Kind
+            .Should().Be(CharterPathResolutionKind.MissingOrdinary);
+
+        var errors = BlueprintService.ValidateBespokeCharterReferences(
+            BlueprintWithCharter("file:charters/reviewer.md"), _root);
+
+        errors.Should().ContainSingle()
+            .Which.Should().Be("bespoke role 'bespoke' references missing charter file 'charters/reviewer.md'.");
+    }
+
+    [Fact]
+    public void PosixInProjectDirectorySymlinkFinalTarget_UsesMissingFileDiagnostic()
+    {
+        if (!IsPosix)
+            return;
+
+        var targetDirectory = Path.Combine(_root, "charters-target");
+        Directory.CreateDirectory(targetDirectory);
+        File.CreateSymbolicLink(Path.Combine(_root, "reviewer.md"), targetDirectory);
+
+        BlueprintService.ResolvePathWithinProject(_root, "reviewer.md").Kind
+            .Should().Be(CharterPathResolutionKind.MissingOrdinary);
+
+        var errors = BlueprintService.ValidateBespokeCharterReferences(
+            BlueprintWithCharter("file:reviewer.md"), _root);
+
+        errors.Should().ContainSingle()
+            .Which.Should().Be("bespoke role 'bespoke' references missing charter file 'reviewer.md'.");
+    }
+
+    [Fact]
     public void PosixBrokenFileSymlink_IsInvalidUnsafe()
     {
         if (!IsPosix)

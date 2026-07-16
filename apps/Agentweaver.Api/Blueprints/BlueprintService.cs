@@ -491,6 +491,17 @@ public sealed class BlueprintService
                 if (index < segments.Length - 1)
                     continue;
 
+                switch (GetExistingPathStatus(realCurrent, out var resolvedAttributes))
+                {
+                    case ExistingPathStatus.MissingOrdinary:
+                        return new CharterPathResolution(CharterPathResolutionKind.MissingOrdinary);
+                    case ExistingPathStatus.InvalidUnsafe:
+                        return InvalidPath();
+                }
+
+                if (resolvedAttributes.HasFlag(FileAttributes.Directory))
+                    return new CharterPathResolution(CharterPathResolutionKind.MissingOrdinary);
+
                 return new CharterPathResolution(CharterPathResolutionKind.ExistingSafe, realCurrent);
             }
 
