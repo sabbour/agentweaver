@@ -206,6 +206,67 @@ function Invoke-RetagImage {
   return $true
 }
 
+# Waits for a set of background image build/retag jobs (as scheduled by
+# Invoke-ScheduleImage in 20-build-push-images.ps1) to finish, mirroring
+# bash's `wait -n` + terminate_remaining_jobs(): report whichever job
+# finishes FIRST, and if it failed, stop every other still-running job
+# before reporting overall failure to the caller.
+#
+# IMPORTANT (#347-adjacent regression, see #351): job success/failure MUST be
+# decided from the job's own $Job.State property ('Completed' vs 'Failed'),
+# never from the content of its output/error streams. `az acr build` and other
+# native commands routinely emit benign progress/warning text on stderr for a
+# build that ultimately succeeds; PowerShell surfaces that text via
+# Receive-Job's error stream/output even though the job's State is still
+# 'Completed'. Treating any stderr-shaped text as failure caused sibling jobs
+# to be aborted early and skipped provenance stamping for images that had, in
+# fact, built successfully.
+#
+# Each entry in $Jobs is a [PSCustomObject]@{ Job = <job>; Name = <string> }.
+# Returns $true if any job failed, $false if every job completed successfully.
+function Wait-ForImageJobs {
+  param([Parameter(Mandatory)][object[]]$Jobs)
+
+  $failed = $false
+  $pending = [System.Collections.ArrayList]::new()
+  foreach ($entry in $Jobs) { [void]$pending.Add($entry) }
+
+  while ($pending.Count -gt 0) {
+    $pendingJobs = $pending | ForEach-Object { $_.Job }
+    $completedJob = Wait-Job -Job $pendingJobs -Any
+    $entry = $pending | Where-Object { $_.Job.Id -eq $completedJob.Id } | Select-Object -First 1
+
+    $jobErr = $null
+    Receive-Job -Job $entry.Job -ErrorAction SilentlyContinue -ErrorVariable jobErr | Out-Null
+
+    if ($entry.Job.State -eq "Failed") {
+      $failureDetail = $null
+      if ($entry.Job.ChildJobs.Count -gt 0 -and $entry.Job.ChildJobs[0].JobStateInfo.Reason) {
+        $failureDetail = $entry.Job.ChildJobs[0].JobStateInfo.Reason.ToString()
+      } elseif ($jobErr) {
+        $failureDetail = ($jobErr | Out-String).Trim()
+      }
+      if (-not $failureDetail) { $failureDetail = "job failed" }
+      Write-Host "  [FAIL] $($entry.Name): $failureDetail" -ForegroundColor Red
+      $failed = $true
+      # Stop any jobs still running, mirroring bash's terminate_remaining_jobs().
+      foreach ($other in $pending) {
+        if ($other.Job.Id -ne $entry.Job.Id -and $other.Job.State -eq "Running") {
+          Write-Host "  [STOP] $($other.Name)"
+          Stop-Job -Job $other.Job -ErrorAction SilentlyContinue
+        }
+      }
+      break
+    } else {
+      Write-Host "  [OK] $($entry.Name)"
+    }
+
+    $pending.Remove($entry)
+  }
+
+  return $failed
+}
+
 function Invoke-BuildImage {
   param([string]$Image, [string]$Tag, [string]$Dockerfile, [string]$Commit)
   $isDryRun = ($env:DRY_RUN -eq "true")
