@@ -1,5 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
+import { BlueprintSkillBindings } from '../components/BlueprintPicker';
 import { ProjectListProvider } from '../hooks/useProjectList';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -62,6 +63,10 @@ const BP_BACKEND: Blueprint = {
   workflows: ['coordinator', 'release'],
   review_policy: 'auto',
   sandbox_profile: 'standard',
+  skill_bindings: [
+    { role_id: 'backend-engineer', skills: ['api-data-safety'] },
+    { role_id: 'lead-architect', skills: ['architecture-decisions', 'system-design'] },
+  ],
 };
 
 const BP_DOCS: Blueprint = {
@@ -222,7 +227,6 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     const totalPages = Math.ceil(manyProjects.length / 12);
     for (let i = 1; i < totalPages; i += 1) {
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-      // eslint-disable-next-line no-await-in-loop
       await waitFor(() => expect(vi.mocked(apiClient.listProjects).mock.calls.some(([o]) => o?.page === i + 1)).toBe(true));
     }
 
@@ -236,9 +240,16 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     // The roster now lives in a focus/hover popover, not inline. Focusing the
     // row reveals it (this is the keyboard-accessible path screen readers use).
     fireEvent.focus(screen.getByRole('radio', { name: 'Backend Squad' }));
-    await waitFor(() => expect(screen.getByText('backend-engineer')).toBeDefined());
+    await waitFor(() => expect(screen.getAllByText('backend-engineer').length).toBeGreaterThan(0));
     // A blueprint bundles one or more workflows; the roster meta lists them all.
     expect(screen.getByText('Workflows: coordinator, release')).toBeDefined();
+    expect(screen.getByText('Role-to-skill defaults')).toBeDefined();
+    expect(screen.getByText('api-data-safety')).toBeDefined();
+  });
+
+  it('preserves blueprints without role-to-skill bindings', async () => {
+    render(<Wrapper><BlueprintSkillBindings bindings={BP_DOCS.skill_bindings} /></Wrapper>);
+    expect(screen.queryByText('Role-to-skill defaults')).toBeNull();
   });
 
   it('unwraps the blueprint list response wrapper', async () => {

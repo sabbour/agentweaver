@@ -109,6 +109,10 @@ const useStyles = makeStyles({
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXXS },
   roleRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   roleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  bindingSection: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
+  bindingRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  bindingRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 },
+  bindingRole: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
   roleDot: { width: '14px', height: '14px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorPalettePurpleBackground2, color: tokens.colorPalettePurpleForeground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', flexShrink: 0 },
   previewCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM },
   metaRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
@@ -288,8 +292,29 @@ export function BlueprintPreviewCard({ blueprint, generated, reveal }: { bluepri
       </div>
       {blueprint.description && <Text className={styles.cardDescription}>{blueprint.description}</Text>}
       <BlueprintRosterChips roster={blueprint.roster} />
+      <BlueprintSkillBindings bindings={blueprint.skill_bindings} />
       <BlueprintMeta blueprint={blueprint} />
     </Card>
+  );
+}
+
+export function BlueprintSkillBindings({ bindings }: { bindings?: Blueprint['skill_bindings'] }) {
+  const styles = useStyles();
+  if (!bindings?.length) return null;
+
+  return (
+    <section className={styles.bindingSection} aria-label="Role-to-skill defaults">
+      <Text size={200} weight="semibold">Role-to-skill defaults</Text>
+      <div className={styles.bindingRows} role="list">
+        {bindings.map((binding) => (
+          <div className={styles.bindingRow} role="listitem" key={binding.role_id}>
+            <span className={styles.bindingRole}>{binding.role_id}</span>
+            <span aria-hidden="true">→</span>
+            {binding.skills.map((skill) => <Badge key={skill} appearance="tint" size="small">{skill}</Badge>)}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -305,6 +330,7 @@ function TemplateRosterList({ blueprint }: { blueprint: Blueprint }) {
           </div>
         ))}
       </div>
+      <BlueprintSkillBindings bindings={blueprint.skill_bindings} />
       <BlueprintMeta blueprint={blueprint} />
     </div>
   );

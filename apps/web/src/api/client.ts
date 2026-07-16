@@ -592,6 +592,25 @@ export class AgentweaverApiClient {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}/assignments/${encodeURIComponent(agentName)}`);
   }
 
+  previewBlueprintSkillDefaults(projectId: string): Promise<import('./types').BlueprintSkillDefaultsPreviewResponse> {
+    return this.request<import('./types').BlueprintSkillDefaultsPreviewResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/skills/defaults/preview`,
+      {},
+    );
+  }
+
+  applyBlueprintSkillDefaults(
+    projectId: string,
+    digest: string,
+  ): Promise<import('./types').ApplyBlueprintSkillDefaultsResponse> {
+    return this.request<import('./types').ApplyBlueprintSkillDefaultsResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/skills/defaults/apply`,
+      { digest },
+    );
+  }
+
   // Sync
   getSyncStatus(projectId: string): Promise<SyncStatusDto> {
     return this.request<SyncStatusDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/sync`);

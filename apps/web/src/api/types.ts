@@ -209,6 +209,12 @@ export interface Blueprint {
     status: 'exportable' | 'unavailable';
     codes: string[];
   };
+  skill_bindings?: BlueprintSkillBindingDto[];
+}
+
+export interface BlueprintSkillBindingDto {
+  role_id: string;
+  skills: string[];
 }
 
 export interface ListBlueprintsResponse {
@@ -1572,4 +1578,66 @@ export interface SkillAssignmentDto {
   skill_id: string;
   skill_name: string;
   agent_name: string;
+}
+
+// Blueprint default skills are deliberately previewed before they alter an
+// existing project's catalog or assignments. `digest` is an optimistic
+// concurrency token and must be returned unchanged by the apply request.
+export type BlueprintSkillDefaultAction = 'create' | 'reactivate' | 'assign' | 'block';
+
+export interface BlueprintSkillDefaultsIdentityDto {
+  id: string;
+  version: string;
+}
+
+export interface BlueprintSkillAgentResolutionDto {
+  role_id: string;
+  agent_name: string | null;
+  agent_status: string | null;
+  confirmed: boolean;
+  reason?: string | null;
+}
+
+export interface BlueprintSkillDefaultsProvenanceDto {
+  source: string;
+  detail?: string | null;
+  source_location?: string | null;
+}
+
+export interface BlueprintSkillDefaultActionDto {
+  role_id: string;
+  skill_name: string;
+  action: BlueprintSkillDefaultAction;
+  agent_name?: string | null;
+  reason?: string | null;
+  provenance?: BlueprintSkillDefaultsProvenanceDto | null;
+}
+
+export interface BlueprintSkillDefaultsBlockerDto {
+  code: string;
+  message: string;
+  role_id?: string | null;
+  skill_name?: string | null;
+}
+
+// POST /api/projects/{id}/skills/defaults/preview
+export interface BlueprintSkillDefaultsPreviewResponse {
+  digest: string;
+  blueprint: BlueprintSkillDefaultsIdentityDto;
+  agent_resolutions: BlueprintSkillAgentResolutionDto[];
+  skill_actions: BlueprintSkillDefaultActionDto[];
+  blockers: BlueprintSkillDefaultsBlockerDto[];
+  provenance: BlueprintSkillDefaultsProvenanceDto[];
+}
+
+// POST /api/projects/{id}/skills/defaults/apply
+export interface ApplyBlueprintSkillDefaultsRequest {
+  digest: string;
+}
+
+export interface ApplyBlueprintSkillDefaultsResponse {
+  digest: string;
+  applied: boolean;
+  actions: BlueprintSkillDefaultActionDto[];
+  blockers: BlueprintSkillDefaultsBlockerDto[];
 }

@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SkillsPage } from '../pages/SkillsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -11,7 +12,13 @@ import {
   it,
   vi,
 } from 'vitest';
-import type { SkillAcquisitionResponse, SkillDto, TeamDto, TeamMemberDto } from '../api/types';
+import type {
+  BlueprintSkillDefaultsPreviewResponse,
+  SkillAcquisitionResponse,
+  SkillDto,
+  TeamDto,
+  TeamMemberDto,
+} from '../api/types';
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -25,6 +32,8 @@ vi.mock('../api/apiClient', () => ({
     uploadSkills: vi.fn(),
     assignSkill: vi.fn(),
     unassignSkill: vi.fn(),
+    previewBlueprintSkillDefaults: vi.fn(),
+    applyBlueprintSkillDefaults: vi.fn(),
   },
 }));
 
@@ -76,6 +85,29 @@ function makeMember(name: string, roleTitle = 'Engineer'): TeamMemberDto {
 
 function makeTeam(members: TeamMemberDto[]): TeamDto {
   return { project_name: 'p', universe: 'u', members, layout: 'canonical', migration_available: false };
+}
+
+function makeDefaultsPreview(overrides: Partial<BlueprintSkillDefaultsPreviewResponse> = {}): BlueprintSkillDefaultsPreviewResponse {
+  return {
+    digest: 'preview-digest-1',
+    blueprint: { id: 'blueprint-software-development', version: '2026.07.16' },
+    agent_resolutions: [{
+      role_id: 'frontend-engineer',
+      agent_name: 'Trinity',
+      agent_status: 'active',
+      confirmed: true,
+    }],
+    skill_actions: [{
+      role_id: 'frontend-engineer',
+      skill_name: 'ui-accessibility',
+      action: 'create',
+      agent_name: 'Trinity',
+      provenance: { source: 'built-in-catalog', source_location: 'skills/ui-accessibility/SKILL.md' },
+    }],
+    blockers: [],
+    provenance: [{ source: 'blueprint-catalog', detail: 'Blueprint binding', source_location: 'blueprints/software-development.json' }],
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -152,5 +184,96 @@ describe('SkillsPage — assignments', () => {
     await waitFor(() => expect(screen.getByText('Smith — Lead PM')).toBeTruthy());
     // 'Ghost' has no matching team member, so it renders as just the name.
     expect(screen.getByText('Ghost')).toBeTruthy();
+  });
+});
+
+describe('SkillsPage — blueprint defaults', () => {
+  it('previews resolved active agents, proposed actions, blockers, and provenance accessibly', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(makeDefaultsPreview({
+      agent_resolutions: [
+        { role_id: 'frontend-engineer', agent_name: 'Trinity', agent_status: 'active', confirmed: true },
+        { role_id: 'qa-engineer', agent_name: 'Smith', agent_status: 'inactive', confirmed: true },
+      ],
+      skill_actions: [
+        { role_id: 'frontend-engineer', skill_name: 'ui-accessibility', action: 'create', agent_name: 'Trinity', provenance: { source: 'built-in-catalog' } },
+        { role_id: 'qa-engineer', skill_name: 'test-strategy-reproduction', action: 'reactivate', agent_name: 'Smith' },
+        { role_id: 'frontend-engineer', skill_name: 'ui-accessibility', action: 'assign', agent_name: 'Trinity' },
+        { role_id: 'frontend-engineer', skill_name: 'manual-skill', action: 'block', reason: 'Manual skill collision' },
+      ],
+      blockers: [{ code: 'manual-collision', message: 'A manually managed skill conflicts with this default.', role_id: 'frontend-engineer', skill_name: 'manual-skill' }],
+    }));
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+    expect(screen.getByText('active confirmed')).toBeTruthy();
+    expect(screen.getByText('inactive')).toBeTruthy();
+    expect(screen.getByText('create')).toBeTruthy();
+    expect(screen.getByText('reactivate')).toBeTruthy();
+    expect(screen.getByText('assign')).toBeTruthy();
+    expect(screen.getByText('block')).toBeTruthy();
+    expect(screen.getByText('A manually managed skill conflicts with this default.')).toBeTruthy();
+    expect(screen.getByText(/blueprint-catalog — Blueprint binding/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Apply defaults' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('clears stale state on close, requires a new preview, then applies exactly the new digest', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    const initial = makeDefaultsPreview({ digest: 'old-digest', blueprint: { id: 'blueprint-software-development', version: 'v1' } });
+    const refreshed = makeDefaultsPreview({ digest: 'new-digest', blueprint: { id: 'blueprint-software-development', version: 'v2' } });
+    vi.mocked(apiClient.previewBlueprintSkillDefaults)
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(refreshed);
+    vi.mocked(apiClient.applyBlueprintSkillDefaults)
+      .mockRejectedValueOnce(new ApiError(409, 'preview digest is stale'))
+      .mockResolvedValueOnce({ digest: 'new-digest', applied: true, actions: refreshed.skill_actions, blockers: [] });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    await waitFor(() => expect(screen.getByText('Version v1')).toBeTruthy());
+    const firstApply = await waitFor(() => {
+      const button = screen.getByRole('button', { name: 'Apply defaults' }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+      return button;
+    });
+    fireEvent.click(firstApply);
+
+    await waitFor(() => expect(screen.getByText(/This preview is stale/)).toBeTruthy());
+    expect((screen.getByRole('button', { name: 'Apply defaults' }) as HTMLButtonElement).disabled).toBe(true);
+    const close = await waitFor(() => {
+      const button = screen.getByRole('button', { name: 'Close' }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+      return button;
+    });
+    fireEvent.click(close);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview blueprint defaults' }));
+    await waitFor(() => expect(screen.getByText('Version v2')).toBeTruthy());
+    const secondApply = await waitFor(() => {
+      const button = screen.getByRole('button', { name: 'Apply defaults' }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+      return button;
+    });
+    fireEvent.click(secondApply);
+
+    await waitFor(() => expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenLastCalledWith('proj-001', 'new-digest'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByText('Blueprint defaults applied: 1 action.')).toBeTruthy();
+    expect(apiClient.previewBlueprintSkillDefaults).toHaveBeenCalledTimes(2);
+    expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders preview API errors without presenting a successful default application', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockRejectedValue(new ApiError(500, 'preview unavailable'));
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+
+    await waitFor(() => expect(screen.getByText('API error 500: preview unavailable')).toBeTruthy());
+    expect(screen.queryByText(/Blueprint defaults applied/)).toBeNull();
   });
 });
