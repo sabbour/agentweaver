@@ -301,45 +301,10 @@ Invoke-ScheduleImage -Image "agentweaver-agent-host" -TargetTag $env:AGENTHOST_I
 
 Write-Host ""
 Write-Host "Waiting for image jobs to finish..."
-# Mirrors bash's `wait -n` + terminate_remaining_jobs(): wait for whichever job
-# finishes FIRST (not necessarily the first one launched), report it, and if it
-# failed, stop every other still-running job before failing the whole script.
-$failed = $false
-$pending = [System.Collections.ArrayList]::new()
-foreach ($entry in $Jobs) { [void]$pending.Add($entry) }
-
-while ($pending.Count -gt 0) {
-  $pendingJobs = $pending | ForEach-Object { $_.Job }
-  $completedJob = Wait-Job -Job $pendingJobs -Any
-  $entry = $pending | Where-Object { $_.Job.Id -eq $completedJob.Id } | Select-Object -First 1
-
-  $jobErr = $null
-  Receive-Job -Job $entry.Job -ErrorAction SilentlyContinue -ErrorVariable jobErr | Out-Null
-
-  if ($entry.Job.State -eq "Failed") {
-    $failureDetail = $null
-    if ($entry.Job.ChildJobs.Count -gt 0 -and $entry.Job.ChildJobs[0].JobStateInfo.Reason) {
-      $failureDetail = $entry.Job.ChildJobs[0].JobStateInfo.Reason.ToString()
-    } elseif ($jobErr) {
-      $failureDetail = ($jobErr | Out-String).Trim()
-    }
-    if (-not $failureDetail) { $failureDetail = "job failed" }
-    Write-Host "  [FAIL] $($entry.Name): $failureDetail" -ForegroundColor Red
-    $failed = $true
-    # Stop any jobs still running, mirroring bash's terminate_remaining_jobs().
-    foreach ($other in $pending) {
-      if ($other.Job.Id -ne $entry.Job.Id -and $other.Job.State -eq "Running") {
-        Write-Host "  [STOP] $($other.Name)"
-        Stop-Job -Job $other.Job -ErrorAction SilentlyContinue
-      }
-    }
-    break
-  } else {
-    Write-Host "  [OK] $($entry.Name)"
-  }
-
-  $pending.Remove($entry)
-}
+# Wait-ForImageJobs is defined in _image-functions.ps1 (dot-sourced above) so
+# the exact same job-success/failure decision logic is unit-testable in
+# isolation (see scripts/aks/tests/20-build-push-images.Tests.ps1).
+$failed = Wait-ForImageJobs -Jobs $Jobs
 
 foreach ($entry in $Jobs) { Remove-Job -Job $entry.Job -Force -ErrorAction SilentlyContinue }
 
