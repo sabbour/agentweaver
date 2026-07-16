@@ -30,26 +30,30 @@ public sealed class EfOwnerBlueprintPackageLibrary(
         }
 
         var created = DateTimeOffset.UtcNow;
-        if (!await db.BlueprintPackageLibrary.AnyAsync(x => x.OwnerId == owner && x.PackageId == package.PackageId, ct).ConfigureAwait(false))
-            db.BlueprintPackageLibrary.Add(new BlueprintPackageLibraryRecord { OwnerId = owner, PackageId = package.PackageId, CreatedAt = created });
-        db.BlueprintPackageVersions.Add(new BlueprintPackageVersionRecord
-        {
-            OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version,
-            ContentDigest = package.ContentDigest, PayloadSetDigest = package.PayloadSetDigest,
-            RawManifestSha256 = package.RawManifestSha256, ContainerSha256 = package.ContainerSha256,
-            RawManifest = package.RawManifest.ToArray(), CreatedAt = created,
-        });
-        db.BlueprintPackagePayloads.AddRange(package.Payloads.Select(x => new BlueprintPackagePayloadRecord
-        {
-            OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version, Path = x.Path, Bytes = x.Bytes.ToArray(),
-        }));
-        db.BlueprintPackageAcquisitions.AddRange(package.Acquisitions.Select((x, index) => new BlueprintPackageAcquisitionRecord
-        {
-            OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version, Ordinal = index,
-            Source = x.Source, Producer = x.Producer, Repository = x.Repository, Revision = x.Revision, AcquiredAt = x.AcquiredAt,
-        }));
         try
         {
+            if (!await db.BlueprintPackageLibrary.AnyAsync(x => x.OwnerId == owner && x.PackageId == package.PackageId, ct).ConfigureAwait(false))
+            {
+                db.BlueprintPackageLibrary.Add(new BlueprintPackageLibraryRecord { OwnerId = owner, PackageId = package.PackageId, CreatedAt = created });
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            db.BlueprintPackageVersions.Add(new BlueprintPackageVersionRecord
+            {
+                OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version,
+                ContentDigest = package.ContentDigest, PayloadSetDigest = package.PayloadSetDigest,
+                RawManifestSha256 = package.RawManifestSha256, ContainerSha256 = package.ContainerSha256,
+                RawManifest = package.RawManifest.ToArray(), CreatedAt = created,
+            });
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            db.BlueprintPackagePayloads.AddRange(package.Payloads.Select(x => new BlueprintPackagePayloadRecord
+            {
+                OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version, Path = x.Path, Bytes = x.Bytes.ToArray(),
+            }));
+            db.BlueprintPackageAcquisitions.AddRange(package.Acquisitions.Select((x, index) => new BlueprintPackageAcquisitionRecord
+            {
+                OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version, Ordinal = index,
+                Source = x.Source, Producer = x.Producer, Repository = x.Repository, Revision = x.Revision, AcquiredAt = x.AcquiredAt,
+            }));
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return new(BlueprintPackagePersistDisposition.Created, ToVersion(package, version, created));
