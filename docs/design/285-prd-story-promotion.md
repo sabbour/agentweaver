@@ -6,13 +6,16 @@
 
 ## Summary
 
-Agentweaver will keep small stories as subtasks in the current coordinator run and promote large
-stories to independent backlog tasks. The promotion rule is deterministic after decomposition:
+Agentweaver will keep non-independent stories as subtasks in the current coordinator run and
+promote genuinely separate deliverables to independent backlog tasks. The promotion rule is a
+model judgment after decomposition:
 
-1. the decomposition agent estimates how many worker subtasks a story would need;
-2. a story is a promotion candidate when `estimated_subtasks >= 3`;
-3. an explicit `[run]` or `[inline]` marker overrides the estimate; and
-4. every story in the same weakly connected dependency component receives the same execution unit.
+1. the decomposition agent proposes stories plus dependency edges and optional `[run]` /
+   `[inline]` overrides;
+2. the server groups stories into weakly connected dependency components;
+3. each component receives one tool-less Copilot classification deciding whether it is a genuinely
+   independent deliverable from the rest of the initiative; and
+4. explicit `[run]` / `[inline]` overrides still win over the classification.
 
 Promoted stories are created in **Backlog**, not Ready. A human can commit any or all of them to
 Ready. A Ready story with unmet dependencies remains visibly Ready but is not claimable. It becomes
@@ -42,7 +45,7 @@ value, not persisted state.
 
 ## Goals
 
-1. Give one decomposition a deterministic inline-versus-independent-run decision.
+1. Give one decomposition a fail-closed inline-versus-independent-run decision.
 2. Preserve the originating PRD run and the reason for each promotion.
 3. Persist hard dependency edges between promoted backlog tasks.
 4. Prevent pickup of a Ready task until all hard dependencies are merged.
@@ -57,22 +60,19 @@ Extend the JSON element parsed into `SubtaskDraft` with:
 
 ```csharp
 string StoryKey                 // required, unique kebab-case key within this decomposition
-int EstimatedSubtasks           // required integer, 1..20
 string? PromotionOverride       // null | "run" | "inline"
 ```
 
 The decomposition prompt must:
 
-- define `estimated_subtasks` as the number of independently assignable worker subtasks that the
-  story's own coordinator would likely create;
 - preserve a case-insensitive `[run]` or `[inline]` token found in a story heading/title as
   `promotion_override`, then remove the token from the resulting title;
 - require a stable semantic `story_key`; and
 - forbid both override tokens on one story.
 
 Parsing rejects values outside the contract and falls back to the existing deterministic
-decomposition. The deterministic fallback uses `EstimatedSubtasks = 1` and
-`PromotionOverride = "inline"` so an unavailable model does not unexpectedly fan out runs.
+decomposition. The deterministic fallback uses `PromotionOverride = "inline"` so an unavailable
+model does not unexpectedly fan out runs.
 
 ### Exact decision algorithm
 
@@ -86,10 +86,12 @@ else if component contains a "run" override:
     promote the component
 else if component contains an "inline" override:
     keep the component inline
-else if any story in the component has EstimatedSubtasks >= 3:
-    promote the component
 else:
-    keep the component inline
+    classify the whole component with a tool-less Copilot turn
+    if classification succeeds and says the component is an independent deliverable:
+        promote the component
+    else:
+        keep the component inline
 ```
 
 The component rule prevents unsupported mixed edges:
@@ -98,13 +100,21 @@ The component rule prevents unsupported mixed edges:
 - dependencies among promoted stories become `BacklogTaskDependency` rows; and
 - there can be no dependency edge from an inline story to a promoted story or vice versa.
 
-The threshold is intentionally three. One- and two-worker stories do not justify another
-outcome-spec, work plan, branch, review, and merge lifecycle. A story estimated to need three or
-more workers is itself orchestration-sized.
+The classification is semantic, not size-based. The model must judge whether the component is a
+coherent, separately shippable deliverable — for example, "storefront" plus "frontend/backend"
+layers remains one inline deliverable, while "storefront" plus "pipeline service" may be promoted as
+two separate deliverables within the larger initiative.
+
+Follow the existing fail-closed classifier pattern used elsewhere in the coordinator:
+`OutcomeSpecReplyClassifier` / `CopilotOutcomeSpecReplyClassifier` run one empty-tools Copilot
+completion, require structured JSON output, and default to the safe non-advancing decision when the
+model fails or the response is unparseable. Promotion classification should mirror that pattern and
+default to inline on any failure.
 
 The server, not the model, generates the persisted reason. Use `Explicit [run] override.`,
-`Estimated {N} worker subtasks (threshold: 3).`, or, for another node pulled across the boundary by
-component closure, `Promoted with dependency component rooted at {StoryKey}.`
+`LLM judged this dependency component to be an independent deliverable.`, or, for another node
+pulled across the boundary by component closure, `Promoted with dependency component rooted at
+{StoryKey}.`
 
 ### Initial state and parent-run behavior
 
@@ -155,7 +165,7 @@ public RunId? ParentPrdRunId { get; init; }
 /// Stable story key within ParentPrdRunId; used for idempotent promotion retries.
 public string? PromotionKey { get; init; }
 
-/// Human-readable explanation of the threshold/override decision, max 500 characters.
+/// Human-readable explanation of the override/classification decision, max 500 characters.
 public string? PromotionReason { get; init; }
 ```
 
@@ -355,7 +365,7 @@ Request:
       "key": "define-storage-contract",
       "title": "Define the storage contract",
       "description": "Exact scope passed to the story coordinator.",
-      "promotion_reason": "estimated_subtasks=3 meets threshold",
+      "promotion_reason": "llm_judged_independent_deliverable",
       "depends_on_keys": []
     },
     {
@@ -429,9 +439,10 @@ There is no new Blocked column and no new `BacklogTaskState`.
 
 In `CoordinatorOrchestratorExecutor.OrchestrateAsync`:
 
-1. extend the decomposition prompt/parser with the three promotion fields;
+1. extend the decomposition prompt/parser with `story_key` and `promotion_override`;
 2. run existing cycle breaking before partitioning;
-3. apply the exact threshold and component-closure algorithm;
+3. apply the exact override + component-closure algorithm, classifying only components that have no
+   explicit override;
 4. convert promoted drafts to `PromotedStoryInput` values. Their description must include the
    draft scope and declared output paths so the future story coordinator has complete context;
 5. call `IBacklogPromotionService.PromoteAsync` once for the promoted partition;
@@ -447,7 +458,7 @@ no dependency logic changes. `WorkflowSelector` continues to select only the par
 each promoted task selects its own workflow when pickup creates its coordinator run.
 
 `BacklogDecomposeEndpoints` remains the manual flat-import feature in v1. It does not apply the
-promotion threshold or create dependency edges. This avoids silently changing confirmed file-import
+promotion classifier or create dependency edges. This avoids silently changing confirmed file-import
 behavior; it may adopt the shared batch contract in a later issue.
 
 ## MCP and native coordinator tools
@@ -507,7 +518,9 @@ MCP tool names and signatures remain valid.
 ## Failure behavior
 
 - Promotion validation or persistence failure fails the parent orchestration before inline dispatch;
-  it must not silently inline stories that crossed the threshold.
+  it must not silently rewrite an explicit `[run]` override.
+- If the independence classifier is unavailable, times out, or returns unparseable JSON, the server
+  must fail closed to inline for that component.
 - A failed/declined prerequisite leaves dependents Ready-but-blocked. There is no automatic cascade
   failure or cancellation.
 - Deleting a prerequisite referenced by another task returns `409 task_is_dependency`. Archiving it
@@ -530,10 +543,11 @@ MCP tool names and signatures remain valid.
 
 ## Acceptance criteria
 
-1. A draft estimated at two subtasks remains inline; one estimated at three is promoted.
-2. `[run]` promotes a size-one story and `[inline]` keeps a size-five story inline.
-3. Absent an `[inline]` component override, if one node in a dependency component crosses the
-   threshold, every node in that component is promoted.
+1. A component that is only multiple technical layers of one feature remains inline even if it is
+   large or complex.
+2. A component judged to be its own separately shippable deliverable is promoted.
+3. `[run]` promotes a component the classifier would otherwise inline, and `[inline]` keeps a
+   classifier-positive component inline.
 4. Promotion creates one Backlog task per promoted story, with parent run, key, reason, and exact
    dependency edges; repeating the same batch creates nothing.
 5. A Ready task with an unclaimed, in-progress, failed, declined, or AwaitingReview prerequisite is
