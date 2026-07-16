@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/blueprint-package-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "package", "definitions"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62})$" },
+        "version": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "definitions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "path", "size", "sha256"],
+        "properties": {
+          "kind": { "enum": ["blueprint", "role", "workflow", "skill"] },
+          "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62})$" },
+          "path": { "type": "string", "maxLength": 240 },
+          "size": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum_agentweaver_version"],
+      "properties": {
+        "minimum_agentweaver_version": { "type": "string", "maxLength": 512 },
+        "maximum_agentweaver_version": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": { "enum": ["catalog", "generated", "imported"] },
+        "producer": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$" },
+        "repository": { "type": "string", "pattern": "^https://[^\\s]{1,2040}$" },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "container_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
