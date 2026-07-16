@@ -2,6 +2,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
@@ -24,6 +25,7 @@ public sealed class RunOrchestrator
     private readonly RunWatchLoopService _watchLoop;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
+    private readonly IRunAgentHostContextResolver? _runAgentHostContextResolver;
     private readonly ILogger<RunOrchestrator> _logger;
 
     /// <summary>
@@ -107,6 +109,31 @@ public sealed class RunOrchestrator
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
         ILogger<RunOrchestrator> logger)
+        : this(
+            runStore,
+            streamStore,
+            worktreeManager,
+            workflowFactory,
+            registry,
+            watchLoop,
+            scopeFactory,
+            configuration,
+            logger,
+            runAgentHostContextResolver: null)
+    {
+    }
+
+    public RunOrchestrator(
+        IRunStore runStore,
+        RunStreamStore streamStore,
+        WorktreeManager worktreeManager,
+        RunWorkflowFactory workflowFactory,
+        RunWorkflowRegistry registry,
+        RunWatchLoopService watchLoop,
+        IServiceScopeFactory scopeFactory,
+        IConfiguration configuration,
+        ILogger<RunOrchestrator> logger,
+        IRunAgentHostContextResolver? runAgentHostContextResolver)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -116,6 +143,7 @@ public sealed class RunOrchestrator
         _watchLoop = watchLoop;
         _scopeFactory = scopeFactory;
         _configuration = configuration;
+        _runAgentHostContextResolver = runAgentHostContextResolver;
         _logger = logger;
     }
 
@@ -817,9 +845,21 @@ public sealed class RunOrchestrator
 
         try
         {
+            var executionWorkspaceMode = ExecutionWorkspaceMode.Shared;
+            if (_runAgentHostContextResolver is not null)
+            {
+                var launchContext = await _runAgentHostContextResolver.ResolveAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+                executionWorkspaceMode = launchContext.WorkspaceMode;
+            }
+
             using var scope = _scopeFactory.CreateScope();
             var composer = scope.ServiceProvider.GetRequiredService<Skills.SkillPromptComposer>();
-            var block = await composer.ComposeAsync(run.ProjectId.Value, run.AgentName, run.WorktreePath, ct);
+            var block = await composer.ComposeAsync(
+                run.ProjectId.Value,
+                run.AgentName,
+                run.WorktreePath,
+                ct,
+                executionWorkspaceMode);
             if (string.IsNullOrEmpty(block))
                 return systemPromptContext;
             return string.IsNullOrEmpty(systemPromptContext)

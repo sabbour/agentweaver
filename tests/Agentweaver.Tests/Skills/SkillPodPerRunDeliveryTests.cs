@@ -135,12 +135,7 @@ public sealed class SkillPodPerRunDeliveryTests : IDisposable
         return stdout.Trim();
     }
 
-    [Fact(Skip =
-        "Known gap (#336 follow-up): SkillPromptComposer.ComposeAsync only inlines when the API-local " +
-        "worktree directory itself is missing; it does not know the executing agent is a LocalWritable " +
-        "pod-per-run child whose pod-local workspace (git fetch+checkout of a commit SHA) never sees the " +
-        "materialized .agentweaver/skills/ dir. Un-skip once RunOrchestrator/SkillPromptComposer are made " +
-        "workspace-mode aware (e.g. force inline for LocalWritable/LocalReadOnly runs).")]
+    [Fact]
     public async Task ImplementationTurn_PodLocalWorkspace_SkillContentMustReachExecutingAgent()
     {
         var store = new SqliteSkillStore(_db);
@@ -167,7 +162,12 @@ public sealed class SkillPodPerRunDeliveryTests : IDisposable
         // 1) API-side composition: exactly what RunOrchestrator.AppendAssignedSkillsAsync does for a
         //    coordinator-dispatched implementation child (run.WorktreePath == the API-local worktree).
         var composer = new SkillPromptComposer(store, NullLogger<SkillPromptComposer>.Instance);
-        var block = await composer.ComposeAsync(project, "Rogers", _apiWorktreePath, CancellationToken.None);
+        var block = await composer.ComposeAsync(
+            project,
+            "Rogers",
+            _apiWorktreePath,
+            CancellationToken.None,
+            ExecutionWorkspaceMode.LocalWritable);
         block.Should().NotBeNullOrEmpty();
 
         // 2) Pod-side workspace preparation: exactly what the AgentHost pod does for an

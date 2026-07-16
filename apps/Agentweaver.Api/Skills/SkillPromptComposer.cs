@@ -40,9 +40,14 @@ public sealed class SkillPromptComposer
     /// <summary>
     /// Materializes the agent's assigned active skills into <paramref name="worktreePath"/> and returns
     /// the metadata block to append to the system prompt, or null when the agent has no active skills.
+    /// Materialization is only allowed when the executing agent is confirmed to share this filesystem.
     /// </summary>
     public async Task<string?> ComposeAsync(
-        ProjectId projectId, string agentName, string worktreePath, CancellationToken ct)
+        ProjectId projectId,
+        string agentName,
+        string worktreePath,
+        CancellationToken ct,
+        ExecutionWorkspaceMode executionWorkspaceMode = ExecutionWorkspaceMode.Shared)
     {
         IReadOnlyList<Skill> skills;
         try
@@ -55,13 +60,16 @@ public sealed class SkillPromptComposer
             return null;
         }
 
-        var haveWorktree = !string.IsNullOrEmpty(worktreePath) && Directory.Exists(worktreePath);
+        var haveSharedExecutionWorktree =
+            executionWorkspaceMode == ExecutionWorkspaceMode.Shared
+            && !string.IsNullOrEmpty(worktreePath)
+            && Directory.Exists(worktreePath);
 
         // Staging dir name is keyed by skill id (not just the slug) so two names that slugify the same
         // ("PR Review" vs "pr-review") never collide and overwrite each other.
         var wanted = skills.Select(s => (Skill: s, Dir: StagingDirName(s))).ToList();
 
-        if (haveWorktree)
+        if (haveSharedExecutionWorktree)
         {
             TryEnsureGitExclude(worktreePath);
             // Reconcile: remove any previously-materialized skill dir that is no longer active+assigned
@@ -80,7 +88,7 @@ public sealed class SkillPromptComposer
         // to a file that was never materialized was the #336 defect — the agent saw a dangling
         // `.agentweaver/skills/.../SKILL.md` reference with no file behind it.
         var composed = new List<SkillComposition>();
-        if (haveWorktree)
+        if (haveSharedExecutionWorktree)
         {
             foreach (var (skill, dir) in wanted)
             {
@@ -101,13 +109,15 @@ public sealed class SkillPromptComposer
         }
         else
         {
-            // No writable worktree on this host (e.g. pod-per-run / warm-pool execution, where the
-            // agent runs on a different filesystem than the one composing the prompt). A SKILL.md
-            // pointer would be a dangling reference the agent cannot read, so inline the full
-            // instructions to guarantee delivery.
+            // Either no writable worktree exists on this host, or the run executes in a pod-local
+            // workspace that does not share this filesystem. In either case a SKILL.md pointer would
+            // be dangling from the executing agent's point of view, so inline the full instructions.
             _logger.LogInformation(
-                "No materialization target for {Count} assigned skill(s) of agent '{Agent}' (worktree '{Worktree}' unavailable); inlining full instructions into the system prompt.",
-                wanted.Count, agentName, string.IsNullOrEmpty(worktreePath) ? "(none)" : worktreePath);
+                "No shared materialization target for {Count} assigned skill(s) of agent '{Agent}' (workspaceMode={WorkspaceMode}, worktree='{Worktree}'); inlining full instructions into the system prompt.",
+                wanted.Count,
+                agentName,
+                executionWorkspaceMode,
+                string.IsNullOrEmpty(worktreePath) ? "(none)" : worktreePath);
             foreach (var (skill, dir) in wanted)
                 composed.Add(new SkillComposition(skill, dir, Materialized: false));
         }
