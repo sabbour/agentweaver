@@ -613,65 +613,6 @@ export interface RaiVerdictEventPayload {
   rationale?: string;
 }
 
-// Browser Console facade contract. Natural language requests are posted to the
-// backend Agentweaver facade agent; the browser supplies only binding context and
-// renders the server-authored response/status.
-export interface AgentweaverConsoleRequest {
-  message: string;
-  text?: string | null;
-  context?: {
-    scope?: 'global' | 'project' | 'run' | string;
-    project_id?: string | null;
-    run_id?: string | null;
-    route?: string | null;
-  } | null;
-  project_id?: string | null;
-  run_id?: string | null;
-  route?: string | null;
-  conversation_id?: string | null;
-  confirmation_token?: string | null;
-}
-
-export interface AgentweaverConsoleToolCall {
-  name: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | string;
-  summary?: string | null;
-}
-
-export interface AgentweaverConsoleResponse {
-  conversation_id?: string;
-  role?: 'assistant' | string;
-  message: string;
-  status?: 'completed' | 'needs_clarification' | 'needs_confirmation' | 'blocked' | string;
-  kind?: 'answer' | 'clarification' | 'gate_required' | 'error' | string;
-  project_id?: string | null;
-  run_id?: string | null;
-  action?: string | null;
-  tool_calls?: AgentweaverConsoleToolCall[];
-  tools?: Array<{ label: string; status: string; detail?: string | null }>;
-  links?: Array<{ label: string; to?: string; href?: string }>;
-  gate?: { kind: string; title?: string; description?: string; project_id?: string | null; run_id?: string | null };
-  message_chunks?: Array<{ text: string }>;
-  events?: Array<{ type: string; text?: string; tool?: string; status?: string }>;
-  action_summaries?: Array<{
-    action: string;
-    status: string;
-    target_type?: string;
-    target_id?: string;
-    label?: string;
-    detail?: string;
-  }>;
-  clarifications?: Array<{ id: string; prompt: string; required: boolean; options?: string[] }>;
-  errors?: Array<{ code: string; message: string }>;
-  actionable_state?: {
-    project_id?: string;
-    run_id?: string;
-    route?: string;
-    pending_gate?: string;
-    suggested_commands?: string[];
-  };
-}
-
 export interface ReviseOutcomeSpecRequest {
   feedback: string;
 }

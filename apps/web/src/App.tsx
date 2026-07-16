@@ -2,7 +2,6 @@ import { apiClient } from './api/apiClient';
 import { FluentProvider, Spinner, makeStyles, tokens } from '@fluentui/react-components';
 import { agentweaverLightTheme } from './theme';
 import { AppShell } from './components/shell/AppShell';
-import { ConsoleRouteRedirect } from './components/shell/ConsoleRouteRedirect';
 import {
   bindSessionLogin,
   captureSessionAuthFromUrl,
@@ -36,7 +35,7 @@ import { WorkspacePage } from './pages/WorkspacePage';
 import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { AssistantRoute } from './routes/AssistantRoute';
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 const useAppLoadingStyles = makeStyles({
   screen: {
@@ -56,7 +55,9 @@ function Shell() {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/projects" element={<ProjectGalleryPage />} />
-        <Route path="/console" element={<ConsoleRouteRedirect />} />
+        {/* Legacy operator-dock bookmark (#346) — the dock is retired; route old links
+            straight through the assistant flag gate (falls back to /overview if disabled). */}
+        <Route path="/console" element={<Navigate to="/assistant" replace />} />
         {/* #346 MCP-driven operator assistant — feature-flagged (?assistant=1), additive rollout. */}
         <Route path="/assistant" element={<AssistantRoute />} />
         <Route path="/observability" element={<ObservabilityRedirectPage />} />

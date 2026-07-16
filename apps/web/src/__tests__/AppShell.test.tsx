@@ -2,7 +2,6 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AppShell } from '../components/shell/AppShell';
 import { projectIdFromPath } from '../components/shell/projectIdFromPath';
-import { ConsoleRouteRedirect } from '../components/shell/ConsoleRouteRedirect';
 import { resolveActiveKey } from '../components/shell/navConfig';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -68,7 +67,6 @@ function renderShellAt(path: string) {
           <Routes>
             <Route path="/" element={<div>Gallery</div>} />
             <Route path="/overview" element={<div>Overview content</div>} />
-            <Route path="/console" element={<ConsoleRouteRedirect />} />
             <Route path="/projects/:projectId" element={<div>Board content <Link to="/projects/proj-1/team">Go team</Link></div>} />
             <Route path="/projects/:projectId/team" element={<div>Team content <Link to="/projects/proj-1">Go board</Link></div>} />
           </Routes>
@@ -215,17 +213,9 @@ describe('AppShell navigation', () => {
     expect(screen.queryByText('Work')).toBeNull();
   });
 
-  // The three "opens/keeps/closes the singleton console from the top bar" tests that
-  // used to live here exercised the LeftNav "Operator dock" trigger button, which was
-  // removed in favor of the Sessions page under Projects (#4/#5) — the underlying
-  // console panel plumbing (ConsolePanelContext / BrowserConsole) is untouched and is
-  // still exercised below via the /console redirect route.
-
-  it('redirects the obsolete /console route into the shell console panel', async () => {
-    renderShellAt('/console');
-
-    expect(await screen.findByRole('dialog', { name: 'Agentweaver Copilot dock' })).toBeDefined();
-    expect(await screen.findByText('Overview content')).toBeDefined();
-    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
-  });
+  // The legacy "Operator dock" (LeftNav trigger -> BrowserConsole sidebar, backed by
+  // ConsolePanelContext + the /console/turn facade) was removed in #346. The Sessions
+  // page under Projects (#4/#5) and the /assistant route are now the sole entry points
+  // to the MCP-driven assistant; the old /console bookmark now redirects straight to
+  // /assistant (see App.tsx), so there is no shell-level panel left to exercise here.
 });

@@ -1,5 +1,10 @@
 # Browser console — Reference
 
+> ⚠️ **Frontend removed (#346).** The web UI no longer calls these endpoints — the
+> Sessions/Assistant page is the sole assistant entry point now. This backend contract
+> is kept for reference in case any other caller is found later; it is not linked from
+> the app anymore.
+
 Terse reference for the conversational browser-console facade. For implementation details see the [deep dive](../deep-dive/browser-console.md); for operator flow see the [experience guide](../experience/browser-console.md).
 
 ## Routes

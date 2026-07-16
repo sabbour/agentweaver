@@ -1,5 +1,11 @@
 # Browser console — Deep Dive
 
+> ⚠️ **Removed from the UI (#346).** The frontend half of this design (`BrowserConsole.tsx`,
+> `ConsolePanelContext`, the LeftNav/top-bar trigger) has been deleted; the Sessions/Assistant
+> page is now the sole assistant entry point. The backend facade (`ConsoleTurnService`,
+> `CopilotConsoleFacadeAgent`) still exists with no other caller, kept only until a follow-up
+> pass confirms it can be deleted outright. This document describes the pre-#346 design.
+
 The browser console is a singleton operator facade for the web app. The browser owns the terminal-style shell, route context, and shortcut commands; the API owns natural-language routing, safe tool execution, and gate surfacing. For the route and DTO contract see the [reference](../reference/browser-console.md); for the user flow see the [experience guide](../experience/browser-console.md).
 
 ## Flow

@@ -4,6 +4,14 @@ title: Browser console
 
 # Browser console
 
+> ⚠️ **Removed from the UI (#346).** The "Operator dock" (LeftNav/top-bar trigger →
+> `BrowserConsole` sidebar) described below has been deleted from the web app. The
+> MCP-driven Sessions/Assistant page (`SessionsPage.tsx` / `AssistantRunPage.tsx`,
+> reachable via the Sessions nav item or `/assistant`) is now the sole chat entry
+> point. The backend `/api/console/turn` facade endpoint still exists (no other
+> caller was found), but nothing in the web app calls it anymore. The content below
+> is kept for historical/API reference only.
+
 The browser console is a singleton app-level operator dock. It combines a terminal-styled web shell with a backend conversational facade that can answer status questions, inspect Agentweaver state with safe read-only tools, and return explicit gates instead of bypassing review or destructive controls. For the API contract see the [reference](../reference/browser-console.md); for internals see the [deep dive](../deep-dive/browser-console.md).
 
 ## When it is available
