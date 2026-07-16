@@ -8,7 +8,7 @@
 # to. This script re-checks that decision independently and *after* the fact:
 # for each of the 4 workloads it finds the prov-<sha> tag pointing at the
 # exact digest that is CURRENTLY RUNNING in live pods (per api/frontend/mcp
-# Deployments and the agent-host warm pool), then verifies that commit has no
+# Deployments and running agent-host pods), then verifies that commit has no
 # diff in the paths that feed that image, versus the target commit being
 # verified (HEAD by default, or VERIFY_GIT_REF).
 #
@@ -78,19 +78,12 @@ function Get-DesiredDeploymentReplicas {
   return $result
 }
 
-# Returns the desired warm replica count for the AgentHost pool.
-function Get-DesiredAgentHostReplicas {
-  $result = (kubectl get sandboxwarmpool agentweaver-agent-host --namespace $env:NAMESPACE --output jsonpath='{.spec.replicas}' 2>$null)
-  if ($LASTEXITCODE -ne 0) { return "" }
-  return $result
-}
-
 function Get-PodStatusLinesForSelector {
   param([string]$Selector)
   $result = (kubectl get pods `
     --namespace $env:NAMESPACE `
     --selector $Selector `
-    --output jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.containerStatuses[0].ready}{"\t"}{.status.containerStatuses[0].image}{"\t"}{.status.containerStatuses[0].imageID}{"\n"}{end}' 2>$null)
+    --output jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.containerStatuses[0].ready}{"\t"}{.status.containerStatuses[0].image}{"\t"}{.status.containerStatuses[0].imageID}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}' 2>$null)
   if ($LASTEXITCODE -ne 0) { return @() }
   return @($result -split "`n" | Where-Object { $_ })
 }
@@ -133,17 +126,22 @@ function Resolve-ProvenanceCommit {
 }
 
 function Get-LiveDigestStateForSelector {
-  param([string]$Label, [string]$Selector, [string]$ExpectedReplicas)
+  param([string]$Label, [string]$Selector, [string]$ExpectedReplicas, [bool]$AllowEphemeralPods)
 
-  $state = [PSCustomObject]@{ Digest = $null; Tag = $null; PodCount = 0; Ok = $false }
+  $state = [PSCustomObject]@{ Digest = $null; Tag = $null; PodCount = 0; Ok = $false; Skipped = $false }
 
-  if (-not $ExpectedReplicas) {
+  if (-not $AllowEphemeralPods -and -not $ExpectedReplicas) {
     Write-Fail "${Label}: could not determine desired replica count for selector '$Selector'"
     return $state
   }
 
   $lines = Get-PodStatusLinesForSelector -Selector $Selector
   if ($lines.Count -eq 0) {
+    if ($AllowEphemeralPods) {
+      $state.Skipped = $true
+      $state.Ok = $true
+      return $state
+    }
     Write-Fail "${Label}: no pods found for selector '$Selector'"
     return $state
   }
@@ -160,12 +158,18 @@ function Get-LiveDigestStateForSelector {
     $ready = if ($parts.Count -gt 2) { $parts[2] } else { "" }
     $imageRef = if ($parts.Count -gt 3) { $parts[3] } else { "" }
     $imageId = if ($parts.Count -gt 4) { $parts[4] } else { "" }
-    $podCount++
+    $deletionTimestamp = if ($parts.Count -gt 5) { $parts[5] } else { "" }
 
-    if ($phase -ne "Running") {
+    if ($deletionTimestamp -or $phase -ne "Running") {
+      if ($AllowEphemeralPods) {
+        $podState = if ($deletionTimestamp) { "Terminating" } else { $phase }
+        Write-Info "${Label}: ignoring pod $podName in state='$podState'"
+        continue
+      }
       Write-Fail "${Label}: pod $podName is phase='$phase' (expected Running); refusing provenance check while replicas are unavailable"
       return $state
     }
+    $podCount++
     if ($ready -ne "true") {
       Write-Fail "${Label}: pod $podName is not Ready; refusing provenance check while replicas are unavailable"
       return $state
@@ -191,10 +195,15 @@ function Get-LiveDigestStateForSelector {
   }
 
   if ($podCount -eq 0) {
+    if ($AllowEphemeralPods) {
+      $state.Skipped = $true
+      $state.Ok = $true
+      return $state
+    }
     Write-Fail "${Label}: no pods found for selector '$Selector'"
     return $state
   }
-  if ($ExpectedReplicas -and $podCount -ne [int]$ExpectedReplicas) {
+  if (-not $AllowEphemeralPods -and $podCount -ne [int]$ExpectedReplicas) {
     Write-Fail "${Label}: expected $ExpectedReplicas pod(s) for selector '$Selector', found $podCount; refusing provenance check while replicas are unavailable"
     return $state
   }
@@ -212,11 +221,16 @@ function Invoke-VerifyImage {
     [string]$Image,
     [string]$PodSelector,
     [string]$ExpectedReplicas,
+    [bool]$AllowEphemeralPods,
     [string[]]$Paths
   )
 
-  $liveState = Get-LiveDigestStateForSelector -Label $Label -Selector $PodSelector -ExpectedReplicas $ExpectedReplicas
+  $liveState = Get-LiveDigestStateForSelector -Label $Label -Selector $PodSelector -ExpectedReplicas $ExpectedReplicas -AllowEphemeralPods $AllowEphemeralPods
   if (-not $liveState.Ok) { return }
+  if ($liveState.Skipped) {
+    Write-Ok "${Label}: no Running pods found for selector '$PodSelector'; no ephemeral pod image to verify"
+    return
+  }
   if (-not $liveState.Digest) {
     Write-Fail "${Label}: could not determine live digest from running pods"
     return
@@ -270,10 +284,10 @@ function Invoke-VerifyImage {
   Write-Fail "${Label}: none of the $($provTags.Count) prov tag(s) for live digest $($liveState.Digest.Substring(0,19)) resolve in local git history (shallow clone or rewritten history?): $($resolvedUnresolvable -join ', ')"
 }
 
-Invoke-VerifyImage -Label "api"        -Image "agentweaver-api"        -PodSelector "app=agentweaver-api"      -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-api")      -Paths ($CommonDotnetPaths + @("apps/Agentweaver.Api"))
-Invoke-VerifyImage -Label "frontend"   -Image "agentweaver-frontend"   -PodSelector "app=agentweaver-frontend" -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-frontend") -Paths @("apps/web", "apps/Agentweaver.Web")
-Invoke-VerifyImage -Label "mcp"        -Image "agentweaver-mcp"        -PodSelector "app=agentweaver-mcp"      -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-mcp")      -Paths ($CommonDotnetPaths + @("apps/Agentweaver.Mcp"))
-Invoke-VerifyImage -Label "agent-host" -Image "agentweaver-agent-host" -PodSelector "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host" -ExpectedReplicas (Get-DesiredAgentHostReplicas) -Paths ($CommonDotnetPaths + @("apps/Agentweaver.AgentHost"))
+Invoke-VerifyImage -Label "api"        -Image "agentweaver-api"        -PodSelector "app=agentweaver-api"      -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-api")      -AllowEphemeralPods $false -Paths ($CommonDotnetPaths + @("apps/Agentweaver.Api"))
+Invoke-VerifyImage -Label "frontend"   -Image "agentweaver-frontend"   -PodSelector "app=agentweaver-frontend" -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-frontend") -AllowEphemeralPods $false -Paths @("apps/web", "apps/Agentweaver.Web")
+Invoke-VerifyImage -Label "mcp"        -Image "agentweaver-mcp"        -PodSelector "app=agentweaver-mcp"      -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-mcp")      -AllowEphemeralPods $false -Paths ($CommonDotnetPaths + @("apps/Agentweaver.Mcp"))
+Invoke-VerifyImage -Label "agent-host" -Image "agentweaver-agent-host" -PodSelector "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host" -ExpectedReplicas "" -AllowEphemeralPods $true -Paths ($CommonDotnetPaths + @("apps/Agentweaver.AgentHost"))
 
 Write-Host ""
 Write-Host "==================================================="

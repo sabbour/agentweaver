@@ -9,7 +9,7 @@
 # to. This script re-checks that decision independently and *after* the fact:
 # for each of the 4 workloads it finds the prov-<sha> tag pointing at the
 # exact digest that is CURRENTLY RUNNING in live pods (per api/frontend/mcp
-# Deployments and the agent-host warm pool), then verifies that commit has no
+# Deployments and running agent-host pods), then verifies that commit has no
 # diff in the paths that feed that image, versus the target commit being
 # verified (HEAD by default, or VERIFY_GIT_REF).
 #
@@ -75,19 +75,12 @@ desired_deployment_replicas() {
     --output jsonpath='{.spec.replicas}' 2>/dev/null || true
 }
 
-# Returns the desired warm replica count for the AgentHost pool.
-desired_agenthost_replicas() {
-  kubectl get sandboxwarmpool agentweaver-agent-host \
-    --namespace "${NAMESPACE}" \
-    --output jsonpath='{.spec.replicas}' 2>/dev/null || true
-}
-
 pod_status_lines_for_selector() {
   local selector="$1"
   kubectl get pods \
     --namespace "${NAMESPACE}" \
     --selector "${selector}" \
-    --output jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.containerStatuses[0].ready}{"\t"}{.status.containerStatuses[0].image}{"\t"}{.status.containerStatuses[0].imageID}{"\n"}{end}' 2>/dev/null || true
+    --output jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.containerStatuses[0].ready}{"\t"}{.status.containerStatuses[0].image}{"\t"}{.status.containerStatuses[0].imageID}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}' 2>/dev/null || true
 }
 
 image_tag_from_ref() {
@@ -106,40 +99,54 @@ image_digest_from_id() {
 LIVE_DIGEST_STATE_DIGEST=""
 LIVE_DIGEST_STATE_TAG=""
 LIVE_DIGEST_STATE_POD_COUNT=""
+LIVE_DIGEST_STATE_SKIPPED=""
 
 live_digest_state_for_selector() {
   local label="$1"
   local selector="$2"
   local expected_replicas="$3"
+  local allow_ephemeral_pods="$4"
   local lines=""
-  local pod_name phase ready image_ref image_id pod_digest pod_tag
+  local pod_name phase ready image_ref image_id deletion_timestamp pod_digest pod_tag
   local digest=""
   local tag=""
   local pod_count=0
+  local pod_state=""
 
   LIVE_DIGEST_STATE_DIGEST=""
   LIVE_DIGEST_STATE_TAG=""
   LIVE_DIGEST_STATE_POD_COUNT=""
+  LIVE_DIGEST_STATE_SKIPPED=""
 
-  if [[ -z "${expected_replicas}" ]]; then
+  if [[ "${allow_ephemeral_pods}" != "true" && -z "${expected_replicas}" ]]; then
     fail "${label}: could not determine desired replica count for selector '${selector}'"
     return 1
   fi
 
   lines="$(pod_status_lines_for_selector "${selector}")"
   if [[ -z "${lines}" ]]; then
+    if [[ "${allow_ephemeral_pods}" == "true" ]]; then
+      LIVE_DIGEST_STATE_SKIPPED="true"
+      return 0
+    fi
     fail "${label}: no pods found for selector '${selector}'"
     return 1
   fi
 
-  while IFS=$'\t' read -r pod_name phase ready image_ref image_id; do
+  while IFS=$'\t' read -r pod_name phase ready image_ref image_id deletion_timestamp; do
     [[ -z "${pod_name}" ]] && continue
-    (( pod_count++ )) || true
 
-    if [[ "${phase}" != "Running" ]]; then
+    if [[ -n "${deletion_timestamp}" || "${phase}" != "Running" ]]; then
+      if [[ "${allow_ephemeral_pods}" == "true" ]]; then
+        pod_state="${phase}"
+        [[ -n "${deletion_timestamp}" ]] && pod_state="Terminating"
+        info "${label}: ignoring pod ${pod_name} in state='${pod_state}'"
+        continue
+      fi
       fail "${label}: pod ${pod_name} is phase='${phase}' (expected Running); refusing provenance check while replicas are unavailable"
       return 1
     fi
+    (( pod_count++ )) || true
     if [[ "${ready}" != "true" ]]; then
       fail "${label}: pod ${pod_name} is not Ready; refusing provenance check while replicas are unavailable"
       return 1
@@ -165,10 +172,14 @@ live_digest_state_for_selector() {
   done <<< "${lines}"
 
   if [[ "${pod_count}" -eq 0 ]]; then
+    if [[ "${allow_ephemeral_pods}" == "true" ]]; then
+      LIVE_DIGEST_STATE_SKIPPED="true"
+      return 0
+    fi
     fail "${label}: no pods found for selector '${selector}'"
     return 1
   fi
-  if [[ -n "${expected_replicas}" && "${pod_count}" -ne "${expected_replicas}" ]]; then
+  if [[ "${allow_ephemeral_pods}" != "true" && "${pod_count}" -ne "${expected_replicas}" ]]; then
     fail "${label}: expected ${expected_replicas} pod(s) for selector '${selector}', found ${pod_count}; refusing provenance check while replicas are unavailable"
     return 1
   fi
@@ -208,7 +219,8 @@ verify_image() {
   local image="$2"
   local pod_selector="$3"
   local expected_replicas="$4"
-  shift 4
+  local allow_ephemeral_pods="$5"
+  shift 5
   local paths=("$@")
   local live_digest=""
   local live_tag=""
@@ -216,7 +228,11 @@ verify_image() {
   local resolved_commit=""
   local -a prov_tags=()
 
-  live_digest_state_for_selector "${label}" "${pod_selector}" "${expected_replicas}" || return
+  live_digest_state_for_selector "${label}" "${pod_selector}" "${expected_replicas}" "${allow_ephemeral_pods}" || return
+  if [[ "${LIVE_DIGEST_STATE_SKIPPED}" == "true" ]]; then
+    ok "${label}: no Running pods found for selector '${pod_selector}'; no ephemeral pod image to verify"
+    return
+  fi
   live_digest="${LIVE_DIGEST_STATE_DIGEST}"
   live_tag="${LIVE_DIGEST_STATE_TAG}"
   live_pod_count="${LIVE_DIGEST_STATE_POD_COUNT}"
@@ -270,10 +286,10 @@ verify_image() {
   fail "${label}: none of the ${#prov_tags[@]} prov tag(s) for live digest ${live_digest:0:19} resolve in local git history (shallow clone or rewritten history?): ${resolved_unresolvable[*]}"
 }
 
-verify_image "api"         "agentweaver-api"        "app=agentweaver-api"                                     "$(desired_deployment_replicas agentweaver-api)"        "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.Api"
-verify_image "frontend"    "agentweaver-frontend"   "app=agentweaver-frontend"                                "$(desired_deployment_replicas agentweaver-frontend)"   "apps/web" "apps/Agentweaver.Web"
-verify_image "mcp"         "agentweaver-mcp"        "app=agentweaver-mcp"                                     "$(desired_deployment_replicas agentweaver-mcp)"        "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.Mcp"
-verify_image "agent-host"  "agentweaver-agent-host" "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host" "$(desired_agenthost_replicas)"                  "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.AgentHost"
+verify_image "api"         "agentweaver-api"        "app=agentweaver-api"                                     "$(desired_deployment_replicas agentweaver-api)"        "false" "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.Api"
+verify_image "frontend"    "agentweaver-frontend"   "app=agentweaver-frontend"                                "$(desired_deployment_replicas agentweaver-frontend)"   "false" "apps/web" "apps/Agentweaver.Web"
+verify_image "mcp"         "agentweaver-mcp"        "app=agentweaver-mcp"                                     "$(desired_deployment_replicas agentweaver-mcp)"        "false" "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.Mcp"
+verify_image "agent-host"  "agentweaver-agent-host" "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host" ""                                               "true"  "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.AgentHost"
 
 echo ""
 echo "==================================================="
