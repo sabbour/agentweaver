@@ -25,6 +25,14 @@ The exact schema is exposed by `BlueprintPackageSchema.Json`.
 alternate extensions, or unlisted files. Every inventory entry must have one payload, and every
 payload must have exactly one inventory entry.
 
+The distributed schema uses the declared
+`x-agentweaver-canonical-definition-path` assertion from the
+`https://agentweaver.dev/vocab/blueprint-package-v1` vocabulary to require that `path` equals the
+path in the table for that entry's `kind` and `id`. Generic Draft 2020-12 validators can validate
+the standard structural keywords but do not evaluate this cross-property assertion. Tools must run
+`BlueprintPackageSchema.ValidateCustomKeywords` (or `BlueprintPackageValidator.Validate`, which
+does so) after their standard schema validation.
+
 ```json
 {
   "schema_version": "1",
@@ -64,8 +72,17 @@ JSON blueprint or role payloads is limited to 4,096 characters (including sign, 
 exponent) before exact canonicalization. This fail-closed bound prevents oversized exponents from
 amplifying canonicalization work while preserving exact decimal semantics within the limit. The
 optional provenance object is bounded to
-the `catalog`, `generated`, or `imported` source, a bounded producer token, an HTTPS repository,
-a lower-case hexadecimal revision, and an RFC 3339 timestamp.
+the `catalog`, `generated`, or `imported` source, a bounded producer token, an absolute HTTPS
+repository URI with RFC 3986 percent escapes, a lower-case hexadecimal revision, and a timestamp.
+Repository URIs reject credentials, whitespace, controls, malformed percent escapes, and ports
+outside 0 through 65535. The timestamp profile is RFC 3339 calendar date and time with seconds
+`00` through `59`, an optional fractional second, and either `Z` or a numeric offset from
+`-14:00` through `+14:00`; `14:00` is the only permitted offset at hour 14. Leap seconds are not
+supported.
+
+Before hashing, decoding, parsing, or canonicalizing any payload, validation preflights the
+definition count, every declared and raw payload size, and the aggregate raw payload bytes. A
+payload set over 16 MiB fails without inspecting its payload contents.
 
 ## Digests and byte preservation
 

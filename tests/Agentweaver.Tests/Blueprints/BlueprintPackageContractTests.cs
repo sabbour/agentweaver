@@ -153,6 +153,26 @@ public sealed class BlueprintPackageContractTests
         result.Errors.Should().NotContain(error => error.Contains("JSON payload is invalid", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Validate_RejectsAggregatePayloadLimitBeforeHashOrPayloadParsing()
+    {
+        var payload = new byte[BlueprintPackageLimits.MaximumPayloadBytes];
+        var manifest = $$"""
+            {"schema_version":"1","package":{"id":"engineering","version":"1.0.0"},"definitions":[{"kind":"blueprint","id":"engineering","path":"definitions/blueprints/engineering.json","size":{{payload.Length}},"sha256":"{{new string('0', 64)}}" }]}
+            """;
+        var payloads = new List<KeyValuePair<string, byte[]>>
+        {
+            new("definitions/blueprints/engineering.json", payload),
+        };
+        payloads.AddRange(Enumerable.Range(0, 16).Select(index =>
+            new KeyValuePair<string, byte[]>($"definitions/unlisted-{index}.bin", new byte[BlueprintPackageLimits.MaximumPayloadBytes])));
+
+        var result = BlueprintPackageValidator.Validate(new BlueprintPackageSource(Encoding.UTF8.GetBytes(manifest), payloads));
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Equal("payload set exceeds the total byte limit.");
+    }
+
     [Theory]
     [InlineData("1")]
     [InlineData("1e")]
@@ -217,6 +237,9 @@ public sealed class BlueprintPackageContractTests
     [InlineData("01.0.0", false)]
     [InlineData("1.0.0-01", false)]
     [InlineData("1.0", false)]
+    [InlineData("1.0.0\n", false)]
+    [InlineData("1.0.0\r", false)]
+    [InlineData("1.0.0\u0000", false)]
     public void SchemaAndRuntime_SemVerGrammarHaveParity(string version, bool expected)
     {
         var schemaPattern = GetSchemaPattern("package", "version");
@@ -237,6 +260,9 @@ public sealed class BlueprintPackageContractTests
     [InlineData("skill", "definitions/skills/engineering.md", true)]
     [InlineData("blueprint", "definitions/blueprints/engineering.yaml", false)]
     [InlineData("workflow", "definitions/roles/engineering.json", false)]
+    [InlineData("blueprint", "definitions/blueprints/engineering.json\n", false)]
+    [InlineData("blueprint", "definitions/blueprints/engineering.json\r", false)]
+    [InlineData("blueprint", "definitions/blueprints/engineering.json\u0000", false)]
     public void SchemaAndRuntime_KindDependentPathGrammarHaveParity(string kind, string path, bool expected)
     {
         var schemaPattern = GetDefinitionPathPattern(kind);
@@ -249,6 +275,17 @@ public sealed class BlueprintPackageContractTests
     [InlineData("https://github.com/example/blueprints", "2026-07-16T10:54:27Z", true)]
     [InlineData("http://github.com/example/blueprints", "2026-07-16T10:54:27Z", false)]
     [InlineData("https://github.com/example/blueprints", "2026-07-16", false)]
+    [InlineData("https://github.com/example/%ZZ", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://user:password@github.com/example", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github.com/example\n", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github.com/example\r", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github.com/example\u0000", "2026-07-16T10:54:27Z", false)]
+    [InlineData("https://github.com/example", "2026-07-16T10:54:27Z\n", false)]
+    [InlineData("https://github.com/example", "2026-07-16T10:54:27Z\r", false)]
+    [InlineData("https://github.com/example", "2026-07-16T10:54:27Z\u0000", false)]
+    [InlineData("https://github.com/example", "2026-07-16T10:54:27+14:00", true)]
+    [InlineData("https://github.com/example", "2026-07-16T10:54:27+14:01", false)]
+    [InlineData("https://github.com/example", "2026-07-16T10:54:60Z", false)]
     public void SchemaAndRuntime_ProvenanceGrammarHaveParity(string repository, string createdAt, bool expected)
     {
         using var schema = JsonDocument.Parse(BlueprintPackageSchema.Json);
@@ -263,6 +300,40 @@ public sealed class BlueprintPackageContractTests
             "definitions/blueprints/engineering.json",
             repository: repository,
             createdAt: createdAt)).IsValid.Should().Be(expected);
+    }
+
+    [Fact]
+    public void SchemaCustomPathAssertion_EnforcesKindAndIdEqualityThroughProjectValidator()
+    {
+        const string path = "definitions/blueprints/other.json";
+        using var manifest = JsonDocument.Parse("""
+            {"schema_version":"1","package":{"id":"engineering","version":"1.0.0"},"definitions":[{"kind":"blueprint","id":"engineering","path":"definitions/blueprints/other.json","size":2,"sha256":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}]}
+            """);
+        var schemaErrors = new List<string>();
+
+        new Regex(GetDefinitionPathPattern("blueprint")).IsMatch(path).Should().BeTrue("standard schema patterns cannot compare sibling values");
+        BlueprintPackageSchema.ValidateCustomKeywords(manifest.RootElement, schemaErrors);
+        schemaErrors.Should().Equal("definition.path is not a canonical definitions-only path.");
+        BlueprintPackageValidator.Validate(CreateDefinitionSource("blueprint", "engineering", path))
+            .Errors.Should().Contain("definition.path is not a canonical definitions-only path.");
+    }
+
+    [Theory]
+    [InlineData("engineering\n")]
+    [InlineData("engineering\r")]
+    [InlineData("engineering\u0000")]
+    public void SchemaAndRuntime_RejectIdentifiersWithTrailingInput(string id)
+    {
+        var schemaPattern = GetSchemaPattern("package", "id");
+        var payload = Encoding.UTF8.GetBytes("{}");
+        var manifest = $$"""
+            {"schema_version":"1","package":{"id":{{JsonSerializer.Serialize(id)}},"version":"1.0.0"},"definitions":[{"kind":"blueprint","id":"engineering","path":"definitions/blueprints/engineering.json","size":2,"sha256":"{{BlueprintPackageHash.Sha256(payload)}}" }]}
+            """;
+
+        new Regex(schemaPattern).IsMatch(id).Should().BeFalse();
+        BlueprintPackageValidator.Validate(new BlueprintPackageSource(
+            Encoding.UTF8.GetBytes(manifest),
+            [new KeyValuePair<string, byte[]>("definitions/blueprints/engineering.json", payload)])).IsValid.Should().BeFalse();
     }
 
     [Theory]
@@ -314,6 +385,10 @@ public sealed class BlueprintPackageContractTests
             .Should().BeFalse();
         schema.RootElement.GetProperty("x-agentweaver-canonical-number-token-max-length").GetInt32()
             .Should().Be(BlueprintPackageLimits.MaximumCanonicalNumberTokenLength);
+        schema.RootElement.GetProperty("x-agentweaver-vocabulary").GetProperty("id").GetString()
+            .Should().Be(BlueprintPackageSchema.VocabularyId);
+        schema.RootElement.GetProperty("properties").GetProperty("definitions").GetProperty("items")
+            .GetProperty(BlueprintPackageSchema.CanonicalDefinitionPathKeyword).GetBoolean().Should().BeTrue();
     }
 
     [Fact]

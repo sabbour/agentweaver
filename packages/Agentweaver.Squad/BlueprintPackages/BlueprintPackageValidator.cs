@@ -11,13 +11,16 @@ namespace Agentweaver.Squad.BlueprintPackages;
 /// <summary>Strict, side-effect-free validator for Blueprint package v1.</summary>
 public static class BlueprintPackageValidator
 {
-    private static readonly Regex IdPattern = new("^[a-z0-9](?:[a-z0-9-]{0,63})$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-    private static readonly Regex HashPattern = new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-    private static readonly Regex ProducerPattern = new("^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-    private static readonly Regex RevisionPattern = new("^[0-9a-f]{7,64}$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-    private static readonly Regex RepositoryPattern = new("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:/[^\\s]*)?$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex IdPattern = new(@"\A[a-z0-9](?:[a-z0-9-]{0,63})\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex HashPattern = new(@"\A[0-9a-f]{64}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex ProducerPattern = new(@"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex RevisionPattern = new(@"\A[0-9a-f]{7,64}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex RepositoryPattern = new(
+        @"\Ahttps://(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:[/?#](?:[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=]|%[0-9A-Fa-f]{2})*)?\z",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
     private static readonly Regex Rfc3339Pattern = new(
-        "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$",
+        @"\A[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]+)?(?:Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))\z",
         RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
     private static readonly byte[] PayloadSetPrefix = "blueprint-package-payload-set-v1\0"u8.ToArray();
@@ -53,6 +56,10 @@ public static class BlueprintPackageValidator
                 return BlueprintPackageValidationResult.Failure(errors);
             }
             if (manifest is null) return BlueprintPackageValidationResult.Failure(errors);
+            BlueprintPackageSchema.ValidateCustomKeywords(document.RootElement, errors);
+            var errorsBeforePayloadPreflight = errors.Count;
+            PreflightPayloads(source, manifest, errors);
+            if (errors.Count > errorsBeforePayloadPreflight) return BlueprintPackageValidationResult.Failure(errors);
 
             ValidateInventory(source, manifest, errors);
             if (errors.Count > 0) return BlueprintPackageValidationResult.Failure(errors);
@@ -159,11 +166,10 @@ public static class BlueprintPackageValidator
             var size = RequiredInteger(entry, "size", "definition", errors);
             if (!TryKind(kindText, out var kind)) errors.Add("definition.kind must be blueprint, role, workflow, or skill.");
             if (id is not null && !IdPattern.IsMatch(id)) errors.Add("definition.id has an invalid grammar.");
-            if (path is not null && !IsCanonicalPath(kind, id, path)) errors.Add("definition.path is not a canonical definitions-only path.");
             if (path is not null && !paths.Add(path)) errors.Add("definition.path occurs more than once.");
             if (kindText is not null && id is not null && !identities.Add($"{kindText}\0{id}")) errors.Add("definition kind/id occurs more than once.");
             if (hash is not null && !HashPattern.IsMatch(hash)) errors.Add("definition.sha256 must be lower-case SHA-256.");
-            if (size is < 0 or > BlueprintPackageLimits.MaximumPayloadBytes) errors.Add("definition.size exceeds the payload limit.");
+            if (size < 0) errors.Add("definition.size must be non-negative.");
             if (kindText is not null && id is not null && path is not null && hash is not null && size >= 0 && TryKind(kindText, out kind))
                 result.Add(new BlueprintPackageDefinition(kind, id, path, size, hash));
         }
@@ -203,14 +209,14 @@ public static class BlueprintPackageValidator
         var createdText = OptionalString(element, "created_at", "provenance", errors);
         if (source is not ("catalog" or "generated" or "imported")) errors.Add("provenance.source is invalid.");
         if (producer is not null && !ProducerPattern.IsMatch(producer)) errors.Add("provenance.producer has an invalid grammar.");
-        if (repository is not null && (repository.Length > 2048 || !RepositoryPattern.IsMatch(repository)))
-            errors.Add("provenance.repository must be a bounded https URL.");
+        if (repository is not null && !IsRepositoryUri(repository))
+            errors.Add("provenance.repository must be a strict absolute HTTPS URI.");
         if (revision is not null && !RevisionPattern.IsMatch(revision)) errors.Add("provenance.revision must be a lower-case hexadecimal revision.");
         DateTimeOffset? created = null;
         if (createdText is not null)
         {
             if (!Rfc3339Pattern.IsMatch(createdText) || !DateTimeOffset.TryParse(createdText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
-                errors.Add("provenance.created_at must be RFC 3339 date-time.");
+                errors.Add("provenance.created_at must use the package RFC 3339 timestamp profile.");
             else
                 created = parsed;
         }
@@ -224,7 +230,6 @@ public static class BlueprintPackageValidator
         if (source.ContainerSha256 is not null && manifest.ContainerSha256 is not null && source.ContainerSha256 != manifest.ContainerSha256)
             errors.Add("provided container SHA-256 conflicts with manifest container_sha256.");
 
-        var total = 0L;
         foreach (var definition in manifest.Definitions)
         {
             if (!source.Payloads.TryGetValue(definition.Path, out var bytes))
@@ -232,20 +237,42 @@ public static class BlueprintPackageValidator
                 errors.Add($"inventory payload is missing: {definition.Path}");
                 continue;
             }
-            total += bytes.Length;
-            if (bytes.Length > BlueprintPackageLimits.MaximumPayloadBytes)
-            {
-                errors.Add($"payload exceeds the byte limit: {definition.Path}");
-                continue;
-            }
             if (bytes.Length != definition.Size) errors.Add($"inventory size does not match: {definition.Path}");
             if (BlueprintPackageHash.Sha256(bytes.AsSpan()) != definition.Sha256) errors.Add($"inventory SHA-256 does not match: {definition.Path}");
             ValidatePayload(definition, bytes, errors);
         }
-        if (total > BlueprintPackageLimits.MaximumTotalPayloadBytes) errors.Add("payload set exceeds the total byte limit.");
         foreach (var path in source.Payloads.Keys)
             if (!manifest.Definitions.Any(definition => definition.Path == path))
                 errors.Add($"payload is not listed in the inventory: {path}");
+    }
+
+    private static void PreflightPayloads(BlueprintPackageSource source, BlueprintPackageManifest manifest, List<string> errors)
+    {
+        if (manifest.Definitions.Any(definition => definition.Size > BlueprintPackageLimits.MaximumPayloadBytes))
+            errors.Add("definition.size exceeds the payload limit.");
+
+        var total = 0L;
+        foreach (var (path, bytes) in source.Payloads)
+        {
+            if (bytes.Length > BlueprintPackageLimits.MaximumPayloadBytes)
+                errors.Add($"payload exceeds the byte limit: {path}");
+            if (total > BlueprintPackageLimits.MaximumTotalPayloadBytes - bytes.Length)
+            {
+                errors.Add("payload set exceeds the total byte limit.");
+                break;
+            }
+            total += bytes.Length;
+        }
+    }
+
+    private static bool IsRepositoryUri(string repository)
+    {
+        if (repository.Length > 2048 || !RepositoryPattern.IsMatch(repository)) return false;
+        return Uri.TryCreate(repository, UriKind.Absolute, out var uri)
+            && uri.Scheme == Uri.UriSchemeHttps
+            && !string.IsNullOrEmpty(uri.Host)
+            && string.IsNullOrEmpty(uri.UserInfo)
+            && uri.Port is >= -1 and <= 65535;
     }
 
     private static void ValidatePayload(BlueprintPackageDefinition definition, ImmutableArray<byte> bytes, List<string> errors)
@@ -280,21 +307,6 @@ public static class BlueprintPackageValidator
         }
         var text = new UTF8Encoding(false, true).GetString(bytes.AsSpan()).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         return text.EndsWith('\n') ? text : $"{text}\n";
-    }
-
-    private static bool IsCanonicalPath(BlueprintPackageDefinitionKind kind, string? id, string path)
-    {
-        if (id is null || path.Length > BlueprintPackageLimits.MaximumPathLength || path.Contains('\\') || path.Contains("..", StringComparison.Ordinal))
-            return false;
-        var (directory, extension) = kind switch
-        {
-            BlueprintPackageDefinitionKind.Blueprint => ("blueprints", ".json"),
-            BlueprintPackageDefinitionKind.Role => ("roles", ".json"),
-            BlueprintPackageDefinitionKind.Workflow => ("workflows", ".yaml"),
-            BlueprintPackageDefinitionKind.Skill => ("skills", ".md"),
-            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
-        };
-        return path == $"definitions/{directory}/{id}{extension}";
     }
 
     private static bool TryKind(string? text, out BlueprintPackageDefinitionKind kind) => text switch
