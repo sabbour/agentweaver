@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   MessageBar,
   MessageBarBody,
+  Spinner,
   Text,
   makeStyles,
   tokens,
@@ -65,6 +66,31 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
+  },
+  // Optimistic (not-yet-server-confirmed) user message — same visual weight as a real
+  // user turn but dimmed with a pending indicator, so sending feels instant instead of
+  // waiting several seconds for the server round trip before anything appears (#item-1).
+  pendingMessage: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: tokens.spacingVerticalXXS,
+    alignSelf: 'flex-end',
+    opacity: 0.7,
+  },
+  pendingMessageRow: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  pendingMessageText: {
+    whiteSpace: 'pre-wrap',
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground1,
+  },
+  pendingMessageStatus: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
   },
   approvalHeading: {
     fontWeight: tokens.fontWeightSemibold,
@@ -254,6 +280,12 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Optimistically-rendered user message, shown immediately on send and cleared once the
+  // server-confirmed copy shows up in the event stream (#item-1) — see the render + effect
+  // below.
+  const [pendingMessage, setPendingMessage] = useState<{ id: string; text: string } | null>(null);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const scrolledForRunRef = useRef<string | null>(null);
 
   const { events, status: streamStatus } = useSeededRunStream(runId, undefined);
 
@@ -289,11 +321,37 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     [events],
   );
 
+  // Clear the optimistic pending message once its server-confirmed counterpart appears in
+  // the parsed timeline (a "user" role message with the same text) — the real message then
+  // renders through the normal RunTimeline path instead (#item-1).
+  useEffect(() => {
+    if (!pendingMessage) return;
+    const confirmed = timelineModel.steps.some((step) => step.messages.some(
+      (msg) => msg.role === 'user' && msg.text.trim() === pendingMessage.text.trim(),
+    ));
+    if (confirmed) setPendingMessage(null);
+  }, [pendingMessage, timelineModel]);
+
+  // Auto-scroll to the latest message once a resumed run's history has loaded (#item-9) —
+  // without this, reopening `?runId=...` left the viewport scrolled to the top of a long
+  // transcript instead of showing the most recent activity.
+  useEffect(() => {
+    if (!runId || events.length === 0) return;
+    if (scrolledForRunRef.current === runId) return;
+    scrolledForRunRef.current = runId;
+    const node = transcriptRef.current;
+    if (!node) return;
+    requestAnimationFrame(() => {
+      node.scrollTo({ top: node.scrollHeight });
+    });
+  }, [runId, events.length]);
+
   const handleSubmit = useCallback(async () => {
     const message = input.trim();
     if (!message || busy) return;
     setBusy(true);
     setError(null);
+    setPendingMessage({ id: `pending-${Date.now()}`, text: message });
     const isNewRun = !runId;
     try {
       if (isNewRun) {
@@ -307,6 +365,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       }
       setInput('');
     } catch (err) {
+      setPendingMessage(null);
       if (
         isNewRun &&
         err instanceof ApiError &&
@@ -344,7 +403,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         </Text>
       </div>
 
-      <div className={styles.transcript} data-testid="assistant-transcript">
+      <div className={styles.transcript} data-testid="assistant-transcript" ref={transcriptRef}>
         {!runId && (
           <Text className={styles.emptyState} data-testid="assistant-empty-state">
             Start a conversation below. Your first message opens an operator run and the reply
@@ -353,11 +412,20 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         )}
         {runId && (
           <RunTimeline
-            embedded
+            flat
             steps={timelineModel.steps}
             running={timelineModel.running}
             emptyHint="Messages, tool calls, and activity will appear here as the assistant responds."
           />
+        )}
+        {pendingMessage && (
+          <div className={styles.pendingMessage} data-testid="assistant-pending-message">
+            <div className={styles.pendingMessageRow}>
+              <Spinner size="extra-tiny" aria-label="Sending" />
+              <span className={styles.pendingMessageText}>{pendingMessage.text}</span>
+            </div>
+            <span className={styles.pendingMessageStatus}>Sending…</span>
+          </div>
         )}
         {idleTimedOut && (
           <Text className={styles.idleTimeoutNotice} data-testid="assistant-idle-timeout">

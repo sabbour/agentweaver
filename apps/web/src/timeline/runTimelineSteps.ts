@@ -54,6 +54,9 @@ export interface RunTimelineTool {
   resultMeta?: string;
   /** Full (capped) result content, kept for expandable rows. */
   resultContent?: string;
+  /** Pretty-printed (capped) JSON of the raw arguments sent with the tool call, for the
+   *  expandable row detail (#item-3). Omitted when the call had no arguments. */
+  argumentsJson?: string;
   /** Unified diff text for edit rows — powers the expandable diff card. May be capped (see truncated). */
   diff?: string;
   /** True when the stored `diff` was capped by the line/char budget (see DIFF_MAX_*). */
@@ -560,6 +563,19 @@ export function buildRunTimeline(
           titleSecondary: secondary,
           status: 'running',
         };
+        // Capture the raw call arguments (pretty-printed, capped) so an expanded row can
+        // show exactly what was sent, regardless of category (#item-3).
+        if (args && Object.keys(args).length > 0) {
+          try {
+            const serialized = JSON.stringify(args, null, 2);
+            tool.argumentsJson = serialized.length > EXPAND_CONTENT_MAX
+              ? `${serialized.slice(0, EXPAND_CONTENT_MAX)}\u2026`
+              : serialized;
+            tool.expandable = true;
+          } catch {
+            // Non-serializable arguments (rare) — leave argumentsJson unset.
+          }
+        }
         // Edits often carry the change in their arguments (old_str/new_str) — surface the
         // diff + delta immediately, before the result arrives.
         if (category === 'edit') {
