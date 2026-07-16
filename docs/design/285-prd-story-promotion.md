@@ -54,6 +54,35 @@ value, not persisted state.
 
 ## Promotion contract
 
+### User opt-in
+
+Promotion is OFF by default. The human must explicitly opt in at the outcome-spec confirmation gate
+before the coordinator is allowed to split any decomposition into independent backlog tasks/runs.
+
+Add a boolean on the outcome-spec confirmation state/DTO/entity, e.g. `AllowTaskPromotion`, with
+these semantics:
+
+- `false` (default): confirmation proceeds through the existing inline-only path. The coordinator
+  does not invoke the independence classifier, does not apply `[run]` overrides, and does not
+  create promoted backlog tasks.
+- `true`: the promotion logic in this document becomes eligible. Dependency components may then be
+  promoted according to overrides and the classifier.
+
+This keeps the current coordinator experience backward-compatible and makes fan-out into standalone
+runs an explicit product decision by the human reviewer, not a silent post-confirm side effect.
+
+### Scope boundary
+
+This feature is scoped STRICTLY to the outcome-spec confirmation → coordinator decomposition flow:
+
+- the only entry point is `CoordinatorRunService.ConfirmOutcomeSpecAsync` leading to
+  `CoordinatorOrchestratorExecutor.OrchestrateAsync`;
+- it must NOT run for `BacklogDecomposeEndpoints` / `BacklogDecomposeService`; and
+- it must NOT be exposed as a separate manual promotion/import path.
+
+The flat markdown-to-backlog import flow remains a distinct feature that does not preserve
+dependencies and does not participate in PRD story promotion.
+
 ### Decomposition schema
 
 Extend the JSON element parsed into `SubtaskDraft` with:
@@ -82,6 +111,8 @@ connected component in this order:
 ```text
 if component contains both "run" and "inline" overrides:
     fail with conflicting_promotion_overrides
+else if AllowTaskPromotion == false:
+    keep the component inline
 else if component contains a "run" override:
     promote the component
 else if component contains an "inline" override:
@@ -115,6 +146,8 @@ The server, not the model, generates the persisted reason. Use `Explicit [run] o
 `LLM judged this dependency component to be an independent deliverable.`, or, for another node
 pulled across the boundary by component closure, `Promoted with dependency component rooted at
 {StoryKey}.`
+
+When `AllowTaskPromotion` is false there is no promotion reason because no promotion occurs.
 
 ### Initial state and parent-run behavior
 
@@ -227,6 +260,15 @@ CREATE INDEX idx_backlog_task_dependencies_prerequisite
 
 The service validates that both ends belong to `project_id`; the duplicated project id keeps every
 query project-scoped. Apply equivalent EF mappings and a PostgreSQL migration.
+
+Add a non-null boolean to the persisted `OutcomeSpec` state:
+
+```sql
+allow_task_promotion INTEGER NOT NULL DEFAULT 0
+```
+
+The flag is only meaningful once the spec is confirmed, but it is stored on the spec record so the
+confirmed state, API response, and replayed UI all agree on what the human chose.
 
 ### Store/service signatures
 
@@ -441,14 +483,15 @@ In `CoordinatorOrchestratorExecutor.OrchestrateAsync`:
 
 1. extend the decomposition prompt/parser with `story_key` and `promotion_override`;
 2. run existing cycle breaking before partitioning;
-3. apply the exact override + component-closure algorithm, classifying only components that have no
-   explicit override;
-4. convert promoted drafts to `PromotedStoryInput` values. Their description must include the
+3. if `AllowTaskPromotion` is false, keep every story inline and skip the classifier entirely;
+4. otherwise apply the exact override + component-closure algorithm, classifying only components
+   that have no explicit override;
+5. convert promoted drafts to `PromotedStoryInput` values. Their description must include the
    draft scope and declared output paths so the future story coordinator has complete context;
-5. call `IBacklogPromotionService.PromoteAsync` once for the promoted partition;
-6. assign roster/model and call `PersistPlanAsync` only for the inline partition;
-7. translate `depends_on` indices separately into backlog edges or `SubtaskDependency` edges; and
-8. emit `coordinator.stories_promoted` with parent run id, task ids, keys, and reasons, then emit the
+6. call `IBacklogPromotionService.PromoteAsync` once for the promoted partition;
+7. assign roster/model and call `PersistPlanAsync` only for the inline partition;
+8. translate `depends_on` indices separately into backlog edges or `SubtaskDependency` edges; and
+9. emit `coordinator.stories_promoted` with parent run id, task ids, keys, and reasons, then emit the
    existing work-plan event for inline work.
 
 `CoordinatorWorkflowFactory` consumes `CoordinatorOrchestrationResult`. `CoordinatorRunService`
@@ -458,42 +501,28 @@ no dependency logic changes. `WorkflowSelector` continues to select only the par
 each promoted task selects its own workflow when pickup creates its coordinator run.
 
 `BacklogDecomposeEndpoints` remains the manual flat-import feature in v1. It does not apply the
-promotion classifier or create dependency edges. This avoids silently changing confirmed file-import
-behavior; it may adopt the shared batch contract in a later issue.
+promotion classifier, does not honor `[run]` / `[inline]` story promotion semantics, and does not
+create dependency edges. This avoids silently changing confirmed file-import behavior; it may adopt
+its own richer orchestration contract in a later issue, but it is intentionally out of scope here.
 
 ## MCP and native coordinator tools
 
-Add two external tools to `BacklogTools`:
+Add one external query tool to `BacklogTools`:
 
 ```csharp
-public sealed record PromotedStoryToolInput(
-    string Key,
-    string Title,
-    string Description,
-    string PromotionReason,
-    IReadOnlyList<string> DependsOnKeys);
-
-Task<string> BacklogPromoteStoriesAsync(
-    string project_id,
-    string parent_prd_run_id,
-    IReadOnlyList<PromotedStoryToolInput> stories,
-    CancellationToken ct = default);
-
 Task<string> BacklogGetTaskAsync(
     string project_id,
     string task_id,
     CancellationToken ct = default);
 ```
 
-They call the promotion POST and task GET endpoints respectively. `backlog_get_board` automatically
-receives the enriched card fields and is the bulk "what is blocked?" query.
+It calls the task GET endpoint. `backlog_get_board` automatically receives the enriched card fields
+and is the bulk "what is blocked?" query.
 
-For #284 compatibility, register matching `backlog_promote_stories` and `backlog_get_task`
-functions in `AgentweaverApiTools.ToolNames`/`Build` for the Coordinator's native loopback surface.
-The atomic batch tool supersedes asking the model to call `backlog_capture_task` N times: individual
-calls cannot safely resolve forward references or commit a DAG atomically. Both the direct
-coordinator path and MCP/native adapters must invoke the same API/service contract; they must not
-implement separate promotion rules.
+For #284 compatibility, register matching `backlog_get_task` in
+`AgentweaverApiTools.ToolNames`/`Build` for the Coordinator's native loopback surface. Promotion
+creation itself is NOT exposed as a general-purpose tool because it is scoped to the confirmed
+outcome-spec orchestration path only.
 
 ## Migration and backward compatibility
 
@@ -511,6 +540,8 @@ Existing tasks receive null promotion fields and have no dependency rows. Theref
 - `is_blocked` is false;
 - Ready tasks remain claimable under the new `NOT EXISTS` predicate; and
 - existing task state, ordering, claim, archive, and run linkage are unchanged.
+- existing outcome specs read `allowTaskPromotion = false` after migration unless a future confirm
+  explicitly opts in.
 
 Existing API request bodies remain valid because all new capture/read fields are additive. Existing
 MCP tool names and signatures remain valid.
@@ -543,21 +574,24 @@ MCP tool names and signatures remain valid.
 
 ## Acceptance criteria
 
-1. A component that is only multiple technical layers of one feature remains inline even if it is
+1. With `AllowTaskPromotion = false`, every story remains inline and the classifier is never called.
+2. A component that is only multiple technical layers of one feature remains inline even if it is
    large or complex.
-2. A component judged to be its own separately shippable deliverable is promoted.
-3. `[run]` promotes a component the classifier would otherwise inline, and `[inline]` keeps a
+3. A component judged to be its own separately shippable deliverable is promoted when
+   `AllowTaskPromotion = true`.
+4. `[run]` promotes a component the classifier would otherwise inline, and `[inline]` keeps a
    classifier-positive component inline.
-4. Promotion creates one Backlog task per promoted story, with parent run, key, reason, and exact
+5. Promotion creates one Backlog task per promoted story, with parent run, key, reason, and exact
    dependency edges; repeating the same batch creates nothing.
-5. A Ready task with an unclaimed, in-progress, failed, declined, or AwaitingReview prerequisite is
+6. A Ready task with an unclaimed, in-progress, failed, declined, or AwaitingReview prerequisite is
    excluded from list, metric, and atomic claim paths.
-6. After the prerequisite run becomes Merged, no unblock write is needed: the dependent reads as
+7. After the prerequisite run becomes Merged, no unblock write is needed: the dependent reads as
    `is_blocked=false`, `is_ready_to_start=true`, and is picked up by the next heartbeat.
-7. Board, task GET, `backlog_get_board`, and `backlog_get_task` expose the same blocker set.
-8. A mixed decomposition dispatches only inline subtasks; promoted stories are not child runs of the
+8. Board, task GET, `backlog_get_board`, and `backlog_get_task` expose the same blocker set.
+9. A mixed decomposition dispatches only inline subtasks; promoted stories are not child runs of the
    parent coordinator.
-9. An all-promoted decomposition completes the parent as `Completed/delegated_to_backlog` without
+10. An all-promoted decomposition completes the parent as `Completed/delegated_to_backlog` without
    dispatching or entering collective assembly.
-10. Legacy Ready tasks with no dependency rows are still claimed exactly as before on SQLite and
+11. `BacklogDecomposeEndpoints` does not create promoted tasks or dependency edges.
+12. Legacy Ready tasks with no dependency rows are still claimed exactly as before on SQLite and
     PostgreSQL.
