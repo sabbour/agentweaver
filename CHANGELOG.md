@@ -5,6 +5,11 @@ All notable changes to Agentweaver are documented in this file, generated from t
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, `test`); merge commits and routine `chore(squad)` state-sync commits are omitted for readability. Regenerate with `python scripts/gen-changelog.py` if the history needs to be rebuilt.
 
 
+## [v0.9.70] - 2026-07-16
+
+### Fixed
+- chore(release): rebuild `agentweaver-frontend` image, which had gone stale in staging — the `merge-docs-landing-main` branch (docs landing page redesign, `LandingWorkflowDemo.tsx`) was merged into `main` after the v0.9.69 images were already built/deployed, so the running frontend image no longer matched watched source paths at `HEAD`. No application code changes in this release beyond the image rebuild; v0.9.69's assistant hotfix is unaffected and confirmed still deployed
+
 ## [v0.9.69] - 2026-07-16
 
 ### Fixed
