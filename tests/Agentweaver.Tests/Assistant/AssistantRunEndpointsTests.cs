@@ -219,6 +219,96 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
+    public async Task SendMessage_AfterIdleClosure_RehydratesAndRestoresHistory()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        factory.Agent.ReplyText = "First reply.";
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var firstTurn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "remember the number 42" });
+        firstTurn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Force the same idle-sweep eviction the 30-minute timer would perform in production: this
+        // drops the in-memory OperatorRunState AND flips the persisted run to Completed, exactly
+        // like a real idle timeout would.
+        var runService = (AssistantRunService)factory.Services.GetRequiredService<IAssistantRunService>();
+        runService.SweepIdleRuns(DateTimeOffset.UtcNow.AddHours(1));
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var closedRun = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
+        closedRun!.Status.Should().Be(RunStatus.Completed, "the idle sweep must have closed the run before rehydration");
+
+        // A follow-up message must still succeed (durable rehydration), not 404.
+        factory.Agent.ReplyText = "Second reply.";
+        var secondTurn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "what number did I say?" });
+        secondTurn.StatusCode.Should().Be(HttpStatusCode.OK, "a cache-miss must rehydrate from durable storage instead of 404ing");
+        (await secondTurn.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("message").GetString()
+            .Should().Be("Second reply.");
+
+        // The run must be flipped back to InProgress since it just received a new message.
+        var reopenedRun = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
+        reopenedRun!.Status.Should().Be(RunStatus.InProgress, "receiving a new message on a closed run must reopen it");
+
+        // Both the pre-eviction and post-rehydration turns must be present in the durable event log,
+        // proving history was actually restored (not started fresh).
+        var events = await GetEventsAsync(client, runId);
+        var userMessages = events
+            .Where(e => e.Type == EventTypes.AgentMessage && e.Payload.GetProperty("role").GetString() == "user")
+            .Select(e => e.Payload.GetProperty("content").GetString())
+            .ToList();
+        userMessages.Should().Contain("remember the number 42");
+        userMessages.Should().Contain("what number did I say?");
+    }
+
+    [Fact]
+    public async Task SendMessage_ToRunOwnedByAnotherUser_ReturnsForbidden_NotSilentSuccess()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var client = AuthedClient(factory);
+
+        // Seed a durable operator run owned by a DIFFERENT user (never touched via this service, so
+        // it is guaranteed to be a cache-miss and must go through the rehydration path's ownership
+        // check).
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var otherUsersRunId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = otherUsersRunId,
+            RepositoryPath = string.Empty,
+            OriginatingBranch = string.Empty,
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "someone else's conversation",
+            SubmittingUser = "someone-else",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = AssistantRunService.OperatorAgentName,
+        }, CancellationToken.None);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/assistant/runs/{otherUsersRunId}/messages", new { message = "hi" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden,
+            "rehydration must never let a caller resume a run they don't own");
+    }
+
+    [Fact]
+    public async Task SendMessage_ToNonexistentRun_Returns404()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var client = AuthedClient(factory);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/assistant/runs/{RunId.New()}/messages", new { message = "hi" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "a genuinely nonexistent run must still 404, not attempt rehydration");
+    }
+
+    [Fact]
     public async Task StartRun_EnforcesPerUserConcurrencyBound()
     {
         await using var factory = new AssistantWebApplicationFactory { MaxConcurrentRunsPerUser = 1 };

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Infrastructure;
@@ -271,8 +272,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         CancellationToken ct)
     {
         if (!_runs.TryGetValue(runId, out var state))
-            throw new AssistantRunHttpException(StatusCodes.Status404NotFound, "run_not_found",
-                "No active operator run with that id. It may have been closed after an idle timeout.");
+            state = await RehydrateRunAsync(caller, runId, ct).ConfigureAwait(false);
 
         if (!caller.Owns(state.User))
             throw new AssistantRunHttpException(StatusCodes.Status403Forbidden, "forbidden",
@@ -343,6 +343,104 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Rebuilds an <see cref="OperatorRunState"/> from durable storage when a run is missing from the
+    /// in-memory <see cref="_runs"/> cache — the entry may have been evicted by the idle sweeper, lost
+    /// to a pod restart, or simply live on the OTHER replica (no session affinity). Preserves the
+    /// existing 404/403 semantics for a genuinely-missing run, a non-operator run, or a run the caller
+    /// doesn't own; only a legitimate cache-miss-but-durable-hit is rehydrated.
+    /// </summary>
+    private async Task<OperatorRunState> RehydrateRunAsync(CallerContext caller, string runId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(runId, out var parsedRunId))
+            throw new AssistantRunHttpException(StatusCodes.Status404NotFound, "run_not_found",
+                "No active operator run with that id. It may have been closed after an idle timeout.");
+
+        var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+        if (run is null || !string.Equals(run.AgentName, OperatorAgentName, StringComparison.Ordinal))
+            throw new AssistantRunHttpException(StatusCodes.Status404NotFound, "run_not_found",
+                "No active operator run with that id. It may have been closed after an idle timeout.");
+
+        if (!caller.Owns(run.SubmittingUser))
+            throw new AssistantRunHttpException(StatusCodes.Status403Forbidden, "forbidden",
+                "You do not own this operator run.");
+
+        var history = await BuildHistoryFromPersistedEventsAsync(runId, ct).ConfigureAwait(false);
+        var now = DateTimeOffset.UtcNow;
+
+        // If the run was closed by the idle sweeper (or otherwise left Completed) but the caller is
+        // sending a new message right now, flip it back to InProgress so the Sessions list reflects
+        // reality. Mirrors CloseIdleRunAsync's InProgress -> Completed transition in the other
+        // direction; clears EndedAt since the conversation is active again.
+        if (run.Status == RunStatus.Completed)
+            await _runStore.UpdateStatusAsync(parsedRunId, RunStatus.InProgress, endedAt: null, ct).ConfigureAwait(false);
+
+        // Concurrency accounting: rehydration does NOT count against MaxConcurrentRunsPerUser. The
+        // limit exists to bound how many conversations a user can have OPEN AT ONCE (enforced in
+        // StartRunAsync when a brand-new run is created); it is not meant to make an existing
+        // conversation permanently unresumable just because the user has since started other
+        // conversations that now occupy their quota. Applying the same check here would let a run
+        // rehydrating from a cache-miss be blocked by its own resumption, and (unlike StartRunAsync)
+        // there is no "start a different one instead" escape hatch — the caller is asking for THIS
+        // conversation specifically. We still use the same _startLock used by StartRunAsync so a
+        // concurrent StartRunAsync's active-count snapshot and this insert cannot race each other.
+        lock (_startLock)
+        {
+            // Another turn/rehydration may have already inserted this run while we were doing the
+            // (async) durable reads above — if so, reuse that instance rather than clobbering its
+            // live state (in-flight Turn semaphore, freshly-appended history) with a stale rebuild.
+            if (_runs.TryGetValue(runId, out var existing))
+                return existing;
+
+            var rebuilt = new OperatorRunState(
+                run.SubmittingUser,
+                run.ProjectId?.ToString(),
+                run.ModelId,
+                now,
+                seedHistory: history);
+            _runs[runId] = rebuilt;
+
+            _logger.LogInformation(
+                "Rehydrated operator run {RunId} from durable storage ({HistoryCount} history messages restored).",
+                runId, history.Count);
+
+            return rebuilt;
+        }
+    }
+
+    /// <summary>Rebuilds the bounded <see cref="ConsoleFacadeHistoryMessage"/> history the assistant
+    /// replays each turn from persisted <see cref="EventTypes.AgentMessage"/> events, taking at most
+    /// the most recent <see cref="MaxHistoryMessages"/> in chronological order (events are already
+    /// persisted/read in ascending sequence order).</summary>
+    private async Task<IReadOnlyList<ConsoleFacadeHistoryMessage>> BuildHistoryFromPersistedEventsAsync(
+        string runId, CancellationToken ct)
+    {
+        var events = await _eventStream.GetPersistedEventsAsync(runId, fromSequence: 0, ct).ConfigureAwait(false);
+
+        var messages = new List<ConsoleFacadeHistoryMessage>();
+        foreach (var evt in events)
+        {
+            if (evt.Type != EventTypes.AgentMessage)
+                continue;
+            if (evt.Payload is not JsonElement payload)
+                continue;
+            if (!payload.TryGetProperty("role", out var roleProp) || !payload.TryGetProperty("content", out var contentProp))
+                continue;
+
+            var role = roleProp.GetString();
+            var content = contentProp.GetString();
+            if (string.IsNullOrEmpty(role) || content is null)
+                continue;
+
+            messages.Add(new ConsoleFacadeHistoryMessage(role, content));
+        }
+
+        if (messages.Count > MaxHistoryMessages)
+            messages.RemoveRange(0, messages.Count - MaxHistoryMessages);
+
+        return messages;
+    }
+
     /// <summary>Closes runs that have been idle beyond the configured timeout. Exposed for tests so
     /// the sweep can be driven deterministically without waiting on the timer.</summary>
     internal void SweepIdleRuns(DateTimeOffset now)
@@ -394,9 +492,17 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
     /// <summary>Per-conversation in-memory state: owner, context, activity timestamp, bounded history,
     /// and a per-run gate that serializes turns.</summary>
-    private sealed class OperatorRunState(string user, string? projectId, string? modelId, DateTimeOffset startedAt)
+    private sealed class OperatorRunState(
+        string user,
+        string? projectId,
+        string? modelId,
+        DateTimeOffset startedAt,
+        IReadOnlyList<ConsoleFacadeHistoryMessage>? seedHistory = null)
     {
-        private readonly List<ConsoleFacadeHistoryMessage> _history = [];
+        // Rehydration (durable cache-miss recovery) seeds this with history rebuilt from persisted
+        // AgentMessage events; a normal fresh start leaves it empty.
+        private readonly List<ConsoleFacadeHistoryMessage> _history =
+            seedHistory is { Count: > 0 } ? new List<ConsoleFacadeHistoryMessage>(seedHistory) : [];
         private readonly Lock _lock = new();
 
         public string User { get; } = user;
