@@ -1,9 +1,6 @@
 import './shell.css';
-import { BrowserConsole } from '../../console/BrowserConsole';
 import { ProjectListProvider } from '../../hooks/useProjectList';
-import { SlidePanel } from '../SlidePanel';
 import { StartOrchestrationFab } from '../StartOrchestrationFab';
-import { ConsolePanelProvider } from './ConsolePanelContext';
 import { LeftNav } from './LeftNav';
 import { NotificationsProvider } from '../../notifications/NotificationsProvider';
 import { resolveActiveKey } from './navConfig';
@@ -23,7 +20,6 @@ export interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
-  const [consoleOpen, setConsoleOpen] = useState(false);
 
   // The project id actually present in the route (undefined on global pages).
   const routeProjectId = useMemo(
@@ -54,13 +50,6 @@ export function AppShell({ children }: AppShellProps) {
     setLastActiveState(undefined);
   }, []);
 
-  const openConsole = useCallback(() => setConsoleOpen(true), []);
-  const closeConsole = useCallback(() => setConsoleOpen(false), []);
-  const consoleContext = useMemo(
-    () => ({ open: consoleOpen, openConsole, closeConsole }),
-    [consoleOpen, openConsole, closeConsole],
-  );
-
   // Effective project for the switcher display + project-scoped nav targets:
   // the route's project when present, otherwise the persisted fallback.
   const effectiveProjectId = routeProjectId ?? lastActiveProjectId;
@@ -76,51 +65,31 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <ProjectListProvider>
       <NotificationsProvider>
-        <ConsolePanelProvider value={consoleContext}>
-          <>
-            <div className="aw-app-shell">
-              <LeftNav
-                projectId={effectiveProjectId}
-                activeKey={activeKey}
-                pathname={location.pathname}
-                isFallbackProject={isFallbackProject}
-                onFallbackProjectMissing={clearFallbackProject}
-              />
-              <div className="aw-shell-canvas">
-                {/* key remounts the content area when the active project changes,
-                    clearing stale page state the same way the old bodyKey did. */}
-                <main
-                  key={routeProjectId ?? '__global__'}
-                  className="aw-shell-content"
-                  aria-label="Main content"
-                >
-                  <div className="aw-floating-actions">
-                    <StartOrchestrationFab currentProjectId={effectiveProjectId} />
-                  </div>
-                  <div className="aw-shell-scroll">
-                    {children}
-                  </div>
-                </main>
-              </div>
-            </div>
-            {/* Console panel — NOT migrated this slice; SlidePanel + BrowserConsole
-                stay untouched and mount outside the shell grid so they overlay the
-                full viewport correctly. */}
-            <SlidePanel
-              id="app-console-panel"
-              open={consoleOpen}
-              ariaLabel="Agentweaver Copilot dock"
-              onClose={closeConsole}
-              title="Operator dock"
-              width="min(920px, calc(100vw - 24px))"
-              keepMounted
-              flushBody
-              variant="copilotDock"
+        <div className="aw-app-shell">
+          <LeftNav
+            projectId={effectiveProjectId}
+            activeKey={activeKey}
+            pathname={location.pathname}
+            isFallbackProject={isFallbackProject}
+            onFallbackProjectMissing={clearFallbackProject}
+          />
+          <div className="aw-shell-canvas">
+            {/* key remounts the content area when the active project changes,
+                clearing stale page state the same way the old bodyKey did. */}
+            <main
+              key={routeProjectId ?? '__global__'}
+              className="aw-shell-content"
+              aria-label="Main content"
             >
-              <BrowserConsole />
-            </SlidePanel>
-          </>
-        </ConsolePanelProvider>
+              <div className="aw-floating-actions">
+                <StartOrchestrationFab currentProjectId={effectiveProjectId} />
+              </div>
+              <div className="aw-shell-scroll">
+                {children}
+              </div>
+            </main>
+          </div>
+        </div>
       </NotificationsProvider>
     </ProjectListProvider>
   );

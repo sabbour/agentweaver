@@ -544,8 +544,7 @@
   color: var(--colorNeutralForeground1);
 }
 
-.azf-portal-topnav[data-variant='brand'] .azf-portal-topnav__copilot,
-.azf-portal-topnav[data-variant='brand'] .azf-portal-topnav__end .fui-Button[data-testid='open-console-panel'] {
+.azf-portal-topnav[data-variant='brand'] .azf-portal-topnav__copilot {
   border: 1px solid var(--azf-surface-border);
   background: var(--colorNeutralBackground1);
   color: var(--colorNeutralForeground1);
@@ -553,8 +552,7 @@
   box-shadow: none;
 }
 
-.azf-portal-topnav[data-variant='brand'] .azf-portal-topnav__copilot:hover,
-.azf-portal-topnav[data-variant='brand'] .azf-portal-topnav__end .fui-Button[data-testid='open-console-panel']:hover {
+.azf-portal-topnav[data-variant='brand'] .azf-portal-topnav__copilot:hover {
   background: var(--colorNeutralBackground1Hover);
   color: var(--colorNeutralForeground1);
 }

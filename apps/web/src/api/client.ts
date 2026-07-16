@@ -1,8 +1,6 @@
 import { getSessionToken } from '../config';
 import type {
   AddMemberRequest,
-  AgentweaverConsoleRequest,
-  AgentweaverConsoleResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
   AssemblyReviewDecision,
@@ -601,12 +599,6 @@ export class AgentweaverApiClient {
 
   commitSync(projectId: string, req: SyncCommitRequest): Promise<SyncCommitResponseDto> {
     return this.request<SyncCommitResponseDto>('POST', `/projects/${encodeURIComponent(projectId)}/team/sync`, req);
-  }
-
-  // Singleton browser console facade. The backend owns NL → tool inference; the
-  // browser only supplies context and renders the typed response.
-  sendConsoleMessage(req: AgentweaverConsoleRequest): Promise<AgentweaverConsoleResponse> {
-    return this.request<AgentweaverConsoleResponse>('POST', '/console/turn', req);
   }
 
   // Orchestration (Feature 008 — Squad Coordinator Agent)

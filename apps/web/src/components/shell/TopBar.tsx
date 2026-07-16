@@ -1,16 +1,12 @@
 import {
   Badge,
-  Button,
   makeStyles,
   Text,
   tokens,
-  Tooltip,
 } from '@fluentui/react-components';
-import { Chat20Regular } from '@fluentui/react-icons';
 import { useAppVersion } from '../../hooks/useAppVersion';
 import { GitHubSignIn } from '../GitHubSignIn';
 import { StartOrchestrationFab } from '../StartOrchestrationFab';
-import { useConsolePanel } from './ConsolePanelContext';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
 // Top bar. Carries the project switcher, the API-reachability status dot,
@@ -74,7 +70,6 @@ export function TopBar({
 }: TopBarProps) {
   const styles = useStyles();
   const version = useAppVersion();
-  const { open: consoleOpen, openConsole } = useConsolePanel();
   const pageHasStartTaskAction = /^\/projects\/[^/]+(?:\/board)?\/?$/.test(pathname);
   return (
     <header className={styles.topBar} aria-label="Application toolbar">
@@ -95,19 +90,6 @@ export function TopBar({
       </div>
       <div className={styles.end}>
         {!pageHasStartTaskAction && <StartOrchestrationFab currentProjectId={projectId} />}
-        <Tooltip content="Open agent console" relationship="label">
-          <Button
-            appearance="subtle"
-            icon={<Chat20Regular />}
-            aria-label="Open agent console"
-            aria-expanded={consoleOpen}
-            aria-controls="app-console-panel"
-            data-testid="open-console-panel"
-            onClick={openConsole}
-          >
-            Agent console
-          </Button>
-        </Tooltip>
         <StatusDot />
         <GitHubSignIn />
       </div>
