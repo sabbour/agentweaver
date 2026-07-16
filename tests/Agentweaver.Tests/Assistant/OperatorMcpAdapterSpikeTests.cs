@@ -4,6 +4,8 @@ using System.Net;
 using System.Text.Json;
 using FluentAssertions;
 using Agentweaver.AgentRuntime;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -121,6 +123,66 @@ public sealed class OperatorMcpAdapterSpikeTests : IAsyncLifetime
         config.Tools!.Should().HaveCount(2, "the MCP tool set must flow into SessionConfig.Tools unchanged");
         config.EnableConfigDiscovery.Should().BeFalse();
         config.Tools!.Select(t => t.Name).Should().Contain("spike_echo");
+    }
+
+    [Fact]
+    public async Task OperatorSessionConfig_RestrictsToolSurfaceToMcpToolsOnly_NoSdkBuiltins()
+    {
+        // SECURITY regression (#346): the operator assistant runs in-process in the API pod with no
+        // OS-level sandbox, so the SDK's built-in native tools (bash/shell, view/read, write,
+        // str_replace_editor, grep, web_fetch, …) must be removed from its tool surface. The config
+        // must (a) allowlist ONLY the MCP tool names via AvailableTools — "only these tools will be
+        // available when specified" — and (b) install a deny-by-default permission handler so any
+        // native shell/file/URL request that reaches the permission layer is rejected.
+        var provider = new AgentweaverMcpToolProvider(new AgentweaverMcpConnectionOptions { Endpoint = _mcpEndpoint });
+        await using var session = await provider.ConnectAsync("caller-token-sandbox", CancellationToken.None);
+
+        var mcpToolNames = session.Tools.Select(t => t.Name).ToArray();
+
+        var config = OperatorAssistantAgent.BuildSessionConfig(
+            conversationId: "conv-sandbox",
+            systemPrompt: OperatorAssistantAgent.BuildSystemPromptForTests("# Agentweaver Driver", session.Tools.Count),
+            tools: session.AsToolDeclarations(),
+            modelId: "claude-sonnet-4.6");
+
+        config.AvailableTools.Should().NotBeNull("the session must whitelist a tool surface, not inherit SDK built-ins");
+        config.AvailableTools.Should().BeEquivalentTo(mcpToolNames,
+            "AvailableTools must contain exactly the MCP tool names so every SDK built-in (bash/view/write/…) is excluded");
+        config.AvailableTools.Should().NotContain(new[] { "bash", "shell", "view", "read", "write", "str_replace_editor", "grep", "web_fetch" },
+            "no SDK built-in native tool name may appear in the operator assistant tool surface");
+        config.OnPermissionRequest.Should().NotBeNull("a deny-by-default backstop must reject native tool requests");
+
+        // Exercise the backstop directly: native shell/read/write requests are rejected.
+        var shellDecision = await config.OnPermissionRequest!(new PermissionRequestShell
+        {
+            Kind = "shell",
+            CanOfferSessionApproval = false,
+            Commands = [],
+            FullCommandText = "bash -lc 'id'",
+            HasWriteFileRedirection = false,
+            Intention = "run a command",
+            PossiblePaths = [],
+            PossibleUrls = [],
+        }, null!);
+        shellDecision.Should().BeOfType<PermissionDecisionReject>("native shell execution must be denied");
+
+        var readDecision = await config.OnPermissionRequest!(new PermissionRequestRead
+        {
+            Kind = "read",
+            Intention = "read a file",
+            Path = "/etc/passwd",
+        }, null!);
+        readDecision.Should().BeOfType<PermissionDecisionReject>("native file read must be denied");
+
+        var writeDecision = await config.OnPermissionRequest!(new PermissionRequestWrite
+        {
+            Kind = "write",
+            CanOfferSessionApproval = false,
+            Diff = "+ pwned",
+            FileName = "/tmp/pwned",
+            Intention = "write a file",
+        }, null!);
+        writeDecision.Should().BeOfType<PermissionDecisionReject>("native file write must be denied");
     }
 
     [Fact]

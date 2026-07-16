@@ -326,12 +326,53 @@ public sealed class OperatorAssistantAgent(
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
             Model = modelId,
             Tools = tools.ToList(),
+            // SECURITY (assistant sandbox, #346): the operator assistant runs IN-PROCESS in the API
+            // pod with NO OS-level sandbox (unlike sandboxed agent runs, which are contained by the
+            // linux-bwrap boundary AND a deny-by-default OnPermissionRequest gate — see
+            // GitHubCopilotAgentRunner/CopilotAIAgent). The Copilot SDK ships built-in native tools
+            // (bash/shell, view/read, write, str_replace_editor, grep, web_fetch, …) that are present
+            // by DEFAULT and, with no permission handler, would auto-run — giving arbitrary host
+            // shell/filesystem access from the chat surface. Constrain the session to ONLY the MCP
+            // tool declarations via the SDK allowlist ("only these tools will be available when
+            // specified"), so every SDK built-in is removed from the model's tool surface. Any file
+            // system / shell / code-execution work must be redirected to an orchestrator/sandboxed
+            // run through the MCP run tools (coordinator_start / run_submit / run_task).
+            AvailableTools = tools.Select(t => t.Name).ToList(),
+            // Defense in depth: even if a native built-in somehow reached the permission layer, fail
+            // closed — reject every native shell/read/write/URL request. MCP/custom tool requests are
+            // approved (their consequential subset is already human-gated by ApprovalGatingAIFunction
+            // and the MCP server governs execution).
+            OnPermissionRequest = RejectNativeToolPermissionHandler,
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
                 Content = systemPrompt,
             },
         };
+
+    /// <summary>
+    /// Deny-by-default backstop for the operator assistant's in-API session: rejects every SDK
+    /// built-in native tool request (shell/read/write/URL) so the assistant can never touch the host
+    /// file system or shell directly, and approves MCP/custom tool requests (which are separately
+    /// gated by <see cref="ApprovalGatingAIFunction"/> and enforced by the MCP server). This is a
+    /// backstop to <see cref="SessionConfig.AvailableTools"/>, which already removes the built-ins
+    /// from the model's tool surface.
+    /// </summary>
+    private static Task<PermissionDecision> RejectNativeToolPermissionHandler(
+        PermissionRequest request, PermissionInvocation invocation)
+    {
+        if (request is PermissionRequestShell
+                or PermissionRequestRead
+                or PermissionRequestWrite
+                or PermissionRequestUrl)
+        {
+            return Task.FromResult<PermissionDecision>(PermissionDecision.Reject(
+                "Native shell/file tools are disabled for the operator assistant. Use the Agentweaver " +
+                "MCP tools; run any file/shell/code work through an orchestrator run (e.g. coordinator_start)."));
+        }
+
+        return Task.FromResult<PermissionDecision>(PermissionDecision.ApproveOnce());
+    }
 
     internal static string BuildSystemPromptForTests(
         string agentDefinition,
@@ -377,6 +418,10 @@ Current operator context:
 
 Operating rules:
 - Prefer discovery tools to resolve unknown project or run IDs before acting; never invent IDs.
+- You have NO direct file system, shell, or code-execution capability of your own — only the
+  AgentweaverMCP tools above. Any request that needs files edited, commands run, code changed, or work
+  executed must be carried out by starting/steering an orchestrator run (e.g. coordinator_start /
+  run_submit / run_task), never by attempting to run it yourself.
 - Destructive or gated actions (start budget-consuming work, delete/archive, stop/cancel, confirm an
   outcome, approve/reject review, merge) are surfaced through per-tool approval prompts. Call the
   tool when asked; the platform enforces the human-approval gate — do not claim an action succeeded
