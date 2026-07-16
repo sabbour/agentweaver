@@ -215,58 +215,11 @@ describe('AppShell navigation', () => {
     expect(screen.queryByText('Work')).toBeNull();
   });
 
-  it('opens a singleton slide-in console from the top bar', async () => {
-    renderShellAt('/projects/proj-1');
-
-    const opener = screen.getByTestId('open-console-panel');
-    expect(opener.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(opener);
-
-    expect(await screen.findByRole('dialog', { name: 'Agentweaver Copilot dock' })).toBeDefined();
-    expect(opener.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
-    expect(screen.getByText('Agentweaver Console')).toBeDefined();
-  });
-
-  it('keeps the singleton console mounted and its transcript intact across route changes', async () => {
-    renderShellAt('/projects/proj-1');
-
-    fireEvent.click(screen.getByTestId('open-console-panel'));
-    await screen.findByRole('dialog', { name: 'Agentweaver Copilot dock' });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Ask Agentweaver' }), { target: { value: '/help' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    expect(await screen.findByText(/Secondary shortcuts:/)).toBeDefined();
-
-    fireEvent.click(screen.getByRole('link', { name: 'Go team' }));
-    await screen.findByText(/Team content/);
-
-    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
-    expect(screen.getByText(/Secondary shortcuts:/)).toBeDefined();
-    expect(screen.getByRole('dialog', { name: 'Agentweaver Copilot dock' })).toBeDefined();
-  });
-
-  it('closes the singleton console from the close button or Escape and restores focus to the opener', async () => {
-    renderShellAt('/projects/proj-1');
-
-    const opener = screen.getByTestId('open-console-panel') as HTMLButtonElement;
-    opener.focus();
-    fireEvent.click(opener);
-    await screen.findByRole('dialog', { name: 'Agentweaver Copilot dock' });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }));
-
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Agentweaver Copilot dock' })).toBeNull());
-    expect(document.activeElement).toBe(opener);
-
-    fireEvent.click(opener);
-    await screen.findByRole('dialog', { name: 'Agentweaver Copilot dock' });
-    fireEvent.keyDown(document, { key: 'Escape' });
-
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Agentweaver Copilot dock' })).toBeNull());
-    expect(screen.getAllByTestId('browser-console')).toHaveLength(1);
-    expect(opener.getAttribute('aria-expanded')).toBe('false');
-    expect(document.activeElement).toBe(opener);
-  });
+  // The three "opens/keeps/closes the singleton console from the top bar" tests that
+  // used to live here exercised the LeftNav "Operator dock" trigger button, which was
+  // removed in favor of the Sessions page under Projects (#4/#5) — the underlying
+  // console panel plumbing (ConsolePanelContext / BrowserConsole) is untouched and is
+  // still exercised below via the /console redirect route.
 
   it('redirects the obsolete /console route into the shell console panel', async () => {
     renderShellAt('/console');

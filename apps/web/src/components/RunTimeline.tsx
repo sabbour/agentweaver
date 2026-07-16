@@ -363,7 +363,56 @@ function ToolResultState({ status }: { status: RunTimelineTool['status'] }) {
       {status === 'running' && <Spinner size="extra-tiny" aria-label="Running" />}
       {status === 'complete' && <CheckmarkRegular aria-label="Done" />}
       {status === 'error' && <DismissCircleFilled aria-label="Failed" />}
+      {/* Defensive fallback (#item-7): any status other than the three known terminal/
+          in-progress values should still read as "in progress", not a static dead icon. */}
+      {status !== 'running' && status !== 'complete' && status !== 'error' && (
+        <Spinner size="extra-tiny" aria-label="Running" />
+      )}
     </span>
+  );
+}
+
+/** Character cap for the inline "Arguments"/"Result"/"Error" text blocks before a
+ *  "Show more" toggle takes over — keeps huge payloads from making the row unusably tall
+ *  by default while still letting the full (already-capped-server-side) text be read. */
+const INLINE_TRUNCATE_CHARS = 800;
+
+/** Collapsible text block used for the Arguments/Result/Error sections of an expanded
+ *  tool row (#item-3). Long content stays collapsed to a short preview until "Show more"
+ *  is clicked, so huge tool payloads don't dominate the transcript. */
+function TruncatedTextBlock({ text, testId }: { text: string; testId?: string }) {
+  const styles = useStyles();
+  const [showAll, setShowAll] = useState(false);
+  const isLong = text.length > INLINE_TRUNCATE_CHARS;
+  const shown = !isLong || showAll ? text : `${text.slice(0, INLINE_TRUNCATE_CHARS)}\u2026`;
+  return (
+    <>
+      <pre className={styles.outputScroll} data-testid={testId}>{shown}</pre>
+      {isLong && (
+        <Button
+          appearance="transparent"
+          size="small"
+          onClick={() => setShowAll((v) => !v)}
+          data-testid={testId ? `${testId}-toggle` : undefined}
+        >
+          {showAll ? 'Show less' : 'Show more'}
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** Arguments section shared by both branches of ToolDiffCard below — the raw call
+ *  arguments should be visible whether the row expands into a diff, a plain output card,
+ *  or (deriveEditDiff/tool.resultContent both empty) neither (#item-3). */
+function ToolArgumentsSection({ tool }: { tool: RunTimelineTool }) {
+  const styles = useStyles();
+  if (!tool.argumentsJson) return null;
+  return (
+    <div>
+      <div className={styles.diffHeader}><span>Arguments</span></div>
+      <TruncatedTextBlock text={tool.argumentsJson} testId="timeline-tool-arguments" />
+    </div>
   );
 }
 
@@ -372,13 +421,25 @@ function ToolResultState({ status }: { status: RunTimelineTool['status'] }) {
 function ToolDiffCard({ tool }: { tool: RunTimelineTool }) {
   const styles = useStyles();
   if (!tool.diff) {
-    if (!tool.resultContent) return null;
+    if (!tool.resultContent && !tool.argumentsJson && !tool.errorMessage) return null;
     return (
       <div className={styles.diffCard} data-testid="timeline-tool-output">
         <div className={styles.diffHeader}>
           <span>{tool.title}</span>
         </div>
-        <pre className={styles.outputScroll}>{tool.resultContent}</pre>
+        <ToolArgumentsSection tool={tool} />
+        {tool.resultContent && (
+          <div>
+            <div className={styles.diffHeader}><span>Result</span></div>
+            <TruncatedTextBlock text={tool.resultContent} testId="timeline-tool-result" />
+          </div>
+        )}
+        {tool.errorMessage && (
+          <div>
+            <div className={styles.diffHeader}><span>Error</span></div>
+            <TruncatedTextBlock text={tool.errorMessage} testId="timeline-tool-error-detail" />
+          </div>
+        )}
       </div>
     );
   }
@@ -398,6 +459,7 @@ function ToolDiffCard({ tool }: { tool: RunTimelineTool }) {
           {removed > 0 && <span className={styles.diffRemoved}>{`-${removed}`}</span>}
         </span>
       </div>
+      <ToolArgumentsSection tool={tool} />
       <div className={styles.diffScroll}>
         {lines.map((raw, i) => {
           const isHeader = raw.startsWith('+++') || raw.startsWith('---') || raw.startsWith('diff ') || raw.startsWith('index ');
@@ -437,7 +499,9 @@ function ToolDiffCard({ tool }: { tool: RunTimelineTool }) {
 function ToolRow({ tool }: { tool: RunTimelineTool }) {
   const styles = useStyles();
   const [expanded, setExpanded] = useState(false);
-  const canExpand = Boolean(tool.expandable && (tool.diff || tool.resultContent));
+  const canExpand = Boolean(
+    tool.expandable && (tool.diff || tool.resultContent || tool.argumentsJson || tool.errorMessage),
+  );
 
   const rowInner = (
     <>
@@ -608,9 +672,24 @@ export interface RunTimelineProps {
    * the "Messages" word lives once in the tab, not repeated here.
    */
   embedded?: boolean;
+  /**
+   * Skip the ChainOfThought/step accordion entirely and render every step's children
+   * (messages + inline "Used N tools" tool-group disclosures) as a flat, concatenated
+   * list — no outer "N step(s)" header, no per-step status icon, no accordion toggle.
+   *
+   * Steps make sense for genuinely multi-phase/multi-turn coordinator-style runs where
+   * "what phase is this activity part of" is meaningful information. For a turn-by-turn
+   * chat surface (the Assistant page) every user/assistant exchange was still being
+   * wrapped in a single meaningless step (e.g. "1 step ⌃" containing one "Step 1 ·
+   * Working" row) that doesn't map to anything the user can reason about — so the
+   * Assistant page renders `flat` instead (see AssistantRunPage.tsx).
+   */
+  flat?: boolean;
 }
 
-export function RunTimeline({ steps, running, emptyHint, embedded = false }: RunTimelineProps) {
+export function RunTimeline({
+  steps, running, emptyHint, embedded = false, flat = false,
+}: RunTimelineProps) {
   const styles = useStyles();
   const stepLabel = `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`;
   const [, setRelativeTimeTick] = useState(0);
@@ -641,6 +720,12 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
             title="No steps yet"
             description={emptyHint ?? 'Reported intents, tool calls, and messages will appear here as the run progresses.'}
           />
+        ) : flat ? (
+          // No ChainOfThought/accordion wrapper — just each step's messages and inline
+          // "Used N tools" disclosures, concatenated in order. See the `flat` prop doc above.
+          <div className={styles.content} data-testid="run-timeline-flat">
+            {steps.map((step) => <StepBody key={step.id} step={step} />)}
+          </div>
         ) : (
           <ChainOfThought
             // The library's own `cardHeader` slot defaults to a hard-coded "Activity" label

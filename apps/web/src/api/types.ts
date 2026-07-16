@@ -853,6 +853,19 @@ export interface SendAssistantMessageResponse {
   tools_invoked?: string[];
 }
 
+// GET /api/assistant/runs?limit=50 (#346 follow-up — Tank's caller-scoped list endpoint).
+// Newest-first; `title` is the first user message truncated to 80 chars by the backend.
+export interface AssistantRunSummary {
+  run_id: string;
+  status: string;
+  title?: string;
+  created_at: string;
+}
+
+export interface ListAssistantRunsResponse {
+  runs: AssistantRunSummary[];
+}
+
 // coordinator.steering event payload — steering directive state surfaced on a node.
 export interface SteeringDirective {
   directiveId: string;

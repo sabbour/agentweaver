@@ -27,6 +27,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
+import { SessionsPage } from './pages/SessionsPage';
 import { SignInPage } from './pages/SignInPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { TeamPage } from './pages/TeamPage';
@@ -67,6 +68,9 @@ function Shell() {
         <Route path="/projects/:projectId/board" element={<ProjectPage />} />
         <Route path="/projects/:projectId/flow" element={<FlowPage />} />
         <Route path="/projects/:projectId/orchestrations" element={<OrchestrationsPage />} />
+        {/* #4/#5 Sessions — assistant conversation list, gated by the same ?assistant=1
+            flag as /assistant (see routes/AssistantRoute.tsx / SessionsPage.tsx). */}
+        <Route path="/projects/:projectId/sessions" element={<SessionsPage />} />
         <Route path="/projects/:projectId/workspace" element={<WorkspacePage />} />
         <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
         <Route path="/projects/:projectId/team" element={<TeamPage />} />
