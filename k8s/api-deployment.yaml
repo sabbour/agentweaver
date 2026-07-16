@@ -29,6 +29,12 @@ spec:
       annotations:
         secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
     spec:
+      # Assistant-chat-termination fix: operator assistant turns can legitimately run
+      # 60-100+s across multiple MCP tool calls. The default 30s terminationGracePeriodSeconds
+      # was cutting these off mid-turn (OperationCanceledException from RequestAborted) on every
+      # rolling deploy — this repo ships multiple releases/day. 120s pairs with Program.cs's
+      # ShutdownTimeout=100s, leaving ~20s margin for actual process exit after graceful drain.
+      terminationGracePeriodSeconds: 120
       serviceAccountName: agentweaver-api
       securityContext:
         runAsNonRoot: true
@@ -267,6 +273,15 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
+          # Assistant-chat-termination fix: delay SIGTERM to the process by 5s so the
+          # Service/Endpoints controller has time to deregister this pod from load balancing
+          # BEFORE it starts refusing new connections. Prevents new requests being routed to
+          # a pod that's already shutting down, while in-flight requests (e.g. long operator
+          # assistant turns) keep draining for the rest of terminationGracePeriodSeconds.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
