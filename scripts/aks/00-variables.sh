@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # 00-variables.sh -- Shared environment variables for all Agentweaver AKS scripts.
+# Keep in sync with 00-variables.ps1 (PowerShell equivalent, dot-sourced with
+# `. .\00-variables.ps1` from Git Bash-free PowerShell workflows).
 
 # -- Azure resource parameters ------------------------------------------------
 RESOURCE_GROUP="${RESOURCE_GROUP:-agentweaver-rg}"
@@ -11,7 +13,24 @@ LOCATION="${LOCATION:-westus2}"
 KEYVAULT_NAME="${KEYVAULT_NAME:-agentweaver-kv}"
 AGENTHOST_KEYVAULT_URI="${AGENTHOST_KEYVAULT_URI:-https://${KEYVAULT_NAME}.vault.azure.net/}"
 TENANT_ID="${TENANT_ID:-}"
+# Resolve the current Azure AD tenant live from the logged-in az context if not
+# already set. This used to be done ad-hoc by hand before each deploy; automating
+# it here means 30-deploy.sh always has a correct TENANT_ID for the workload
+# identity federation annotations without anyone remembering to export it first.
+if [[ -z "${TENANT_ID}" ]] && command -v az >/dev/null 2>&1; then
+  TENANT_ID="$(az account show --query tenantId --output tsv 2>/dev/null || true)"
+fi
 IDENTITY_CLIENT_ID="${IDENTITY_CLIENT_ID:-}"
+# Resolve the workload identity's client ID live from the resource group if not
+# already set. NOTE: the real identity name is 'agentweaver-api-identity' (not
+# 'agentweaver-identity' -- that was a naming mismatch discovered during manual
+# deploys; keep this name in sync with the actual `az identity` resource).
+if [[ -z "${IDENTITY_CLIENT_ID}" ]] && command -v az >/dev/null 2>&1; then
+  IDENTITY_CLIENT_ID="$(az identity list \
+    --resource-group "${RESOURCE_GROUP}" \
+    --query "[?name=='agentweaver-api-identity'].clientId | [0]" \
+    --output tsv 2>/dev/null || true)"
+fi
 APPINSIGHTS_WORKSPACE_ID="${APPINSIGHTS_WORKSPACE_ID:-}"
 if [[ -z "${APPINSIGHTS_WORKSPACE_ID}" ]] && command -v az >/dev/null 2>&1; then
   APPINSIGHTS_WORKSPACE_ID="$(az monitor log-analytics workspace show \
