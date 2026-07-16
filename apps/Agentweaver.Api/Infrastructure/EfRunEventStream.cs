@@ -138,6 +138,15 @@ public sealed class EfRunEventStream : IRunEventStream
     /// On unique constraint violation (race between concurrent appends) retries up to
     /// <see cref="MaxSequenceRetries"/> times.
     /// </summary>
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default)
+    {
+        var events = new List<RunEvent>();
+        await foreach (var evt in LoadFromSequenceAsync(runId, fromSequence, ct).ConfigureAwait(false))
+            events.Add(evt);
+        return events;
+    }
+
     private async Task<int> WriteThroughAsync(string runId, RunEvent evt, CancellationToken ct)
     {
         var payloadJson = JsonSerializer.Serialize(evt.Payload);

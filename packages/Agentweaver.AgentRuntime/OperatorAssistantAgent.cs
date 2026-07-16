@@ -326,8 +326,23 @@ public sealed class OperatorAssistantAgent(
             EnableConfigDiscovery = false,
             Streaming = true,
             SessionId = $"agentweaver-operator-{conversationId}",
-            EnableSessionStore = false,
-            InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
+            // #1814 note: EnableSessionStore=false/InfiniteSessions.Enabled=false were copy-pasted
+            // here from CopilotAIAgent/GitHubCopilotAgentRunner, citing github/copilot-sdk#1814. That
+            // issue (labeled "documentation", not a bug) is specifically about ONE-SHOT/ephemeral
+            // workloads — many short-lived sandbox pods (restartPolicy: Never) churning a local
+            // SQLite session file, which can pile up/contend across a high volume of throwaway
+            // processes. CopilotAIAgent/GitHubCopilotAgentRunner genuinely fit that shape and must
+            // keep the disable. OperatorAssistantAgent does not: it runs in-process inside the
+            // long-lived API pod across many turns of the same conversation, so the SDK's session
+            // store is safe (and useful) here — enabling it lets the SDK persist/compact its own
+            // session state across turns instead of only ever seeing a throwaway session. NOTE this
+            // is a same-pod-only optimization: the SQLite store is local-file-backed with no shared
+            // storage across our 2 replicas and no confirmed session affinity, so it will NOT survive
+            // a cross-pod route or pod restart — durable rehydration in AssistantRunService (from the
+            // persisted RunEvents log) remains the mechanism that guarantees correctness across those
+            // cases; this is additive, not a replacement.
+            EnableSessionStore = true,
+            InfiniteSessions = new InfiniteSessionConfig { Enabled = true },
             Model = modelId,
             Tools = tools.ToList(),
             // SECURITY (assistant sandbox, #346): the operator assistant runs IN-PROCESS in the API
