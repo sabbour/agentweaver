@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Spinner,
@@ -7,19 +7,16 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { AddRegular } from '@fluentui/react-icons';
-import { Navigate, useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import type { AssistantRunSummary } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState } from '../components/ui';
-import { resolveAssistantFlag } from '../utils/assistantFlag';
 
-// Sessions — a simple list of the current user's assistant conversations (#4/#5,
-// replaces the old "Operator dock" nav entry). Data comes from Tank's caller-scoped
-// GET /api/assistant/runs (see .squad/decisions/inbox/tank-assistant-approval-sink.md).
-// Mirrors the existing OrchestrationsPage list pattern, kept intentionally plain per
-// the brief (a list/table is fine — no pagination or filtering needed yet).
+// Sessions — a simple global list of the current user's assistant conversations.
+// Data comes from Tank's caller-scoped GET /api/assistant/runs, so the page now
+// intentionally spans all projects rather than being tied to /projects/:projectId.
 
 const useStyles = makeStyles({
   root: {
@@ -90,13 +87,16 @@ export function SessionsPage() {
   const styles = useStyles();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  // Sessions is still behind the same `?assistant=1` flag as the Assistant page itself
-  // (see routes/AssistantRoute.tsx / utils/assistantFlag.ts) — don't fully expose it
-  // to all users until that page has proven out.
-  const assistantEnabled = resolveAssistantFlag(searchParams.get('assistant'));
+  const projectId = searchParams.get('project') ?? undefined;
   const [runs, setRuns] = useState<AssistantRunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const assistantBasePath = useMemo(() => {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project', projectId);
+    const query = params.toString();
+    return query ? `/assistant?${query}` : '/assistant';
+  }, [projectId]);
 
   const load = () => {
     setLoading(true);
@@ -110,24 +110,25 @@ export function SessionsPage() {
   };
 
   useEffect(() => {
-    if (!assistantEnabled) return;
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assistantEnabled]);
+    const timeoutId = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, []);
 
-  if (!assistantEnabled) return <Navigate to="/" replace />;
-
-  // Reuses the same `?assistant=1&runId=...` shape AssistantRunPage/AssistantRoute
-  // already read (see routes/AssistantRoute.tsx), so opening a session resumes that
-  // conversation and starting fresh drops runId entirely.
-  const openRun = (runId: string) => navigate(`/assistant?assistant=1&runId=${encodeURIComponent(runId)}`);
-  const startNew = () => navigate('/assistant?assistant=1');
+  const openRun = (runId: string) => {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project', projectId);
+    params.set('runId', runId);
+    navigate(`/assistant?${params.toString()}`);
+  };
+  const startNew = () => navigate(assistantBasePath);
 
   return (
     <div className={styles.root} data-testid="sessions-page">
       <PageHeader
         title="Sessions"
-        subtitle="Your assistant conversations. Resume one, or start a new one."
+        subtitle="Your assistant conversations across Agentweaver. Resume one, or start a new one."
         actions={(
           <Button
             appearance="primary"

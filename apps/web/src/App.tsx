@@ -35,7 +35,7 @@ import { WorkspacePage } from './pages/WorkspacePage';
 import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { AssistantRoute } from './routes/AssistantRoute';
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
 
 const useAppLoadingStyles = makeStyles({
   screen: {
@@ -55,10 +55,11 @@ function Shell() {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/projects" element={<ProjectGalleryPage />} />
+        <Route path="/sessions" element={<SessionsPage />} />
         {/* Legacy operator-dock bookmark (#346) — the dock is retired; route old links
-            straight through the assistant flag gate (falls back to /overview if disabled). */}
+            straight through the assistant page. */}
         <Route path="/console" element={<Navigate to="/assistant" replace />} />
-        {/* #346 MCP-driven operator assistant — feature-flagged (?assistant=1), additive rollout. */}
+        {/* #346 MCP-driven operator assistant. Optional ?project=<id> seeds project-aware tools. */}
         <Route path="/assistant" element={<AssistantRoute />} />
         <Route path="/observability" element={<ObservabilityRedirectPage />} />
         <Route path="/observability/traces" element={<ObservabilityRedirectPage suffix="/traces" />} />
@@ -69,9 +70,7 @@ function Shell() {
         <Route path="/projects/:projectId/board" element={<ProjectPage />} />
         <Route path="/projects/:projectId/flow" element={<FlowPage />} />
         <Route path="/projects/:projectId/orchestrations" element={<OrchestrationsPage />} />
-        {/* #4/#5 Sessions — assistant conversation list, gated by the same ?assistant=1
-            flag as /assistant (see routes/AssistantRoute.tsx / SessionsPage.tsx). */}
-        <Route path="/projects/:projectId/sessions" element={<SessionsPage />} />
+        <Route path="/projects/:projectId/sessions" element={<LegacyProjectSessionsRedirect />} />
         <Route path="/projects/:projectId/workspace" element={<WorkspacePage />} />
         <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
         <Route path="/projects/:projectId/team" element={<TeamPage />} />
@@ -90,6 +89,12 @@ function Shell() {
       </Routes>
     </AppShell>
   );
+}
+
+function LegacyProjectSessionsRedirect() {
+  const { projectId } = useParams<{ projectId: string }>();
+  const search = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
+  return <Navigate to={`/sessions${search}`} replace />;
 }
 
 function AuthGate() {

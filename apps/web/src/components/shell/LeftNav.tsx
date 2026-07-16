@@ -1,5 +1,8 @@
 import { Badge, Button, Tooltip } from '@fluentui/react-components';
 import {
+  AddRegular,
+  ChevronDownRegular,
+  ChevronRightRegular,
   PanelLeftContract24Regular,
   PanelLeftExpand24Regular,
 } from '@fluentui/react-icons';
@@ -9,9 +12,8 @@ import { GitHubSignIn } from '../GitHubSignIn';
 import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
-import { isAssistantFlagEnabled } from '../../utils/assistantFlag';
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
 // Persistent left navigation. Native FluentUI rebuild — no copilot-fluent-system
 // kit imports. Copilot-style single rail: chrome (brand + collapse), a header
@@ -22,6 +24,7 @@ import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
 const NAV_WIDTH = '260px';
 const NAV_WIDTH_COLLAPSED = '64px';
 const COLLAPSE_KEY = 'aw.nav.collapsed';
+const SESSIONS_EXPANDED_KEY = 'aw.nav.sessions.expanded';
 
 export interface LeftNavProps {
   projectId: string | undefined;
@@ -39,10 +42,7 @@ function sectionLabel(heading: string): string {
 
 export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onFallbackProjectMissing }: LeftNavProps) {
   const version = useAppVersion();
-  // Recomputed on every render (not cached in state) so a flag flip elsewhere (e.g.
-  // visiting /assistant?assistant=1) is picked up the next time this persistent rail
-  // re-renders, without needing a dedicated storage-event listener.
-  const assistantEnabled = isAssistantFlagEnabled();
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(COLLAPSE_KEY) === '1';
@@ -50,8 +50,17 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
       return false;
     }
   });
+  const [sessionsExpanded, setSessionsExpanded] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SESSIONS_EXPANDED_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  });
 
-  const { primarySections, bottomSections } = useMemo(() => ({
+  const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
+    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions'),
+    globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions'),
     primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom),
     bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom),
   }), []);
@@ -66,6 +75,23 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
       }
       return next;
     });
+  };
+
+  const toggleSessionsExpanded = () => {
+    setSessionsExpanded((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SESSIONS_EXPANDED_KEY, next ? '1' : '0');
+      } catch {
+        /* localStorage unavailable — fall back to in-memory state only */
+      }
+      return next;
+    });
+  };
+
+  const startNewSession = () => {
+    const search = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
+    navigate(`/assistant${search}`);
   };
 
   // Keep --app-nav-width in sync so fixed-position panels can offset correctly.
@@ -122,10 +148,22 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
     return <Fragment key={item.key}>{linkEl}</Fragment>;
   }
 
+  function renderGlobalChildItem(item: GlobalNavItemDef, label: string) {
+    const selected = activeKey === item.key;
+    return (
+      <Link
+        to={item.path}
+        aria-label={label}
+        aria-current={selected ? 'page' : undefined}
+        className={`aw-nav-item aw-nav-item--child${selected ? ' aw-nav-item--selected' : ''}`}
+      >
+        <span className="aw-nav-item__label">{label}</span>
+      </Link>
+    );
+  }
+
   function renderSection(section: NavSectionDef, pId: string) {
     const label = sectionLabel(section.heading);
-    const visibleItems = section.items.filter((item) => !item.assistantFlagged || assistantEnabled);
-    if (visibleItems.length === 0) return null;
     return (
       <div
         key={section.heading}
@@ -134,7 +172,7 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         className={`aw-nav-section${section.anchorBottom ? ' aw-nav-section--bottom' : ''}`}
         style={{ gap: '2px' }}
       >
-        {visibleItems.map((item) => renderProjectItem(item, pId))}
+        {section.items.map((item) => renderProjectItem(item, pId))}
       </div>
     );
   }
@@ -165,9 +203,8 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         </div>
       </div>
 
-      {/* Header slot: project switcher (hidden when collapsed). The old "Operator
-          dock" trigger that lived here was removed in favor of the Sessions page
-          under Projects (#4/#5) — see navConfig.tsx's `sessions` item + SessionsPage. */}
+      {/* Header slot: project switcher (hidden when collapsed). Assistant entry
+          points now live in the global Sessions hub / /assistant route. */}
       {!collapsed && (
         <div className="aw-rail-header">
           <ProjectSwitcher
@@ -187,14 +224,62 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         tabIndex={0}
       >
         {/* Global destinations (Overview, Projects) — no section heading */}
-        <div
-          role="group"
-          aria-label="Global"
-          className="aw-nav-section"
-          style={{ gap: '2px' }}
-        >
-          {GLOBAL_NAV_ITEMS.map(renderGlobalItem)}
+        <div role="group" aria-label="Global" className="aw-nav-section" style={{ gap: '2px' }}>
+          {globalPrimaryItems.map(renderGlobalItem)}
         </div>
+
+        {globalSessionsItem && (
+          <>
+            <hr aria-hidden="true" className="aw-nav-divider" />
+            {collapsed ? (
+              <div role="group" aria-label="Sessions" className="aw-nav-section" style={{ gap: '2px' }}>
+                {renderGlobalItem(globalSessionsItem)}
+                <Tooltip content="New session" relationship="label" positioning="after">
+                  <Button
+                    appearance="subtle"
+                    icon={<AddRegular />}
+                    aria-label="New session"
+                    onClick={startNewSession}
+                    className="aw-nav-action-button"
+                  />
+                </Tooltip>
+              </div>
+            ) : (
+              <div role="group" aria-label="Sessions" className="aw-nav-section aw-nav-section--disclosure">
+                <div className={`aw-nav-disclosure${activeKey === globalSessionsItem.key ? ' aw-nav-disclosure--selected' : ''}`}>
+                  <button
+                    type="button"
+                    className="aw-nav-disclosure__toggle"
+                    aria-expanded={sessionsExpanded}
+                    aria-controls="aw-nav-sessions-panel"
+                    onClick={toggleSessionsExpanded}
+                  >
+                    <span className="aw-nav-disclosure__chevron" aria-hidden="true">
+                      {sessionsExpanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
+                    </span>
+                    <span className="aw-nav-item__icon" aria-hidden="true">{globalSessionsItem.icon}</span>
+                    <span className="aw-nav-item__label">{globalSessionsItem.label}</span>
+                  </button>
+                  <Tooltip content="New session" relationship="label" positioning="after">
+                    <Button
+                      appearance="subtle"
+                      size="small"
+                      icon={<AddRegular />}
+                      aria-label="New session"
+                      onClick={startNewSession}
+                      className="aw-nav-action-button"
+                    />
+                  </Tooltip>
+                </div>
+                {sessionsExpanded && (
+                  <div id="aw-nav-sessions-panel" className="aw-nav-subitems">
+                    {renderGlobalChildItem(globalSessionsItem, 'All sessions')}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
 
         {/* Project-scoped primary sections, each preceded by a thin divider */}
         {projectId && primarySections.map((section) => (
