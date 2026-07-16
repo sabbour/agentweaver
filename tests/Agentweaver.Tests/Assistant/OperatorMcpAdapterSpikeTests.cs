@@ -186,6 +186,52 @@ public sealed class OperatorMcpAdapterSpikeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task OperatorPermissionHandler_ApprovesMcpAndCustomToolCalls_SoTheyReachTheApprovalGate()
+    {
+        // REGRESSION (assistant approval still broken, 2026-07-15): live, the assistant narrated a
+        // bare "permission denied" for EVERY action — it could not even resolve a project id (a
+        // read-only tool) and no approval card ever appeared. Root cause: MCP tools carry no
+        // skip_permission flag, so each tool call raises an SDK permission request; the in-API
+        // headless session had no OnPermissionRequest handler, so the SDK resolved every request as
+        // DENIED before the call reached ApprovalGatingAIFunction. The handler MUST APPROVE MCP /
+        // custom tool requests so the call proceeds to the tool (where only the consequential subset
+        // is human-gated by ApprovalGatingAIFunction). This pins that approve-path: the exact
+        // scenario Ahmed hit — "add a backlog task" -> backlog_capture_task — must be approved here,
+        // not denied.
+        var provider = new AgentweaverMcpToolProvider(new AgentweaverMcpConnectionOptions { Endpoint = _mcpEndpoint });
+        await using var session = await provider.ConnectAsync("caller-token-approve", CancellationToken.None);
+
+        var config = OperatorAssistantAgent.BuildSessionConfig(
+            conversationId: "conv-approve",
+            systemPrompt: OperatorAssistantAgent.BuildSystemPromptForTests("# Agentweaver Driver", session.Tools.Count),
+            tools: session.AsToolDeclarations(),
+            modelId: "claude-sonnet-4.6");
+
+        config.OnPermissionRequest.Should().NotBeNull();
+
+        var mcpDecision = await config.OnPermissionRequest!(new PermissionRequestMcp
+        {
+            Kind = "mcp",
+            ReadOnly = false,
+            ServerName = "agentweaver",
+            ToolName = "backlog_capture_task",
+            ToolTitle = "Capture a new task into the project backlog.",
+        }, null!);
+        mcpDecision.Should().BeOfType<PermissionDecisionApproveOnce>(
+            "MCP tool calls must be approved at the SDK permission layer so they reach the tool/approval gate " +
+            "instead of being denied with a bare 'permission denied'");
+
+        var customDecision = await config.OnPermissionRequest!(new PermissionRequestCustomTool
+        {
+            Kind = "customTool",
+            ToolName = "project_list",
+            ToolDescription = "List the caller's projects.",
+        }, null!);
+        customDecision.Should().BeOfType<PermissionDecisionApproveOnce>(
+            "custom/MCP-adapted tool calls (including read-only discovery like project resolution) must be approved, not denied");
+    }
+
+    [Fact]
     public async Task Connect_RejectsMissingCallerToken()
     {
         var provider = new AgentweaverMcpToolProvider(new AgentweaverMcpConnectionOptions { Endpoint = _mcpEndpoint });
