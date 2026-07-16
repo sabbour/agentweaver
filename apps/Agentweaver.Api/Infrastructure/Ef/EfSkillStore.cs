@@ -220,7 +220,7 @@ public sealed class EfSkillStore : ISkillStore
         }
     }
 
-    private static bool IsSerializationFailure(Exception exception)
+    internal static bool IsSerializationFailure(Exception exception)
     {
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {

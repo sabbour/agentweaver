@@ -1,11 +1,14 @@
 using FluentAssertions;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Agentweaver.Squad.Model;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Agentweaver.Tests.Skills;
 
@@ -480,5 +483,21 @@ public sealed class SkillCatalogTests : IDisposable
 
         preview.CanApply.Should().BeTrue();
         preview.Assignments.Should().ContainSingle(a => a.Action == "blocked" && a.AgentName == "Tank");
+    }
+
+    [Fact]
+    public void EfDefaultsApply_ClassifiesOnlyNestedSerializationFailureAsStale()
+    {
+        var serialization = new DbUpdateException(
+            "outer",
+            new InvalidOperationException(
+                "middle",
+                new PostgresException("serialization", "ERROR", "ERROR", "40001")));
+        var unique = new DbUpdateException(
+            "outer",
+            new PostgresException("duplicate", "ERROR", "ERROR", "23505"));
+
+        EfSkillStore.IsSerializationFailure(serialization).Should().BeTrue();
+        EfSkillStore.IsSerializationFailure(unique).Should().BeFalse();
     }
 }

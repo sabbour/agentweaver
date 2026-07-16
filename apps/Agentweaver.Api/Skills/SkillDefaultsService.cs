@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
@@ -311,16 +312,20 @@ public sealed class SkillDefaultsService
         builder.Append(value?.Length ?? -1).Append(':').Append(value).Append('\0');
 }
 
-public sealed record SkillDefaultAssignment(string RoleId, string AgentName, string SkillName, string Action);
+public sealed record SkillDefaultAssignment(
+    [property: JsonPropertyName("role_id")] string RoleId,
+    [property: JsonPropertyName("agent_name")] string AgentName,
+    [property: JsonPropertyName("skill_name")] string SkillName,
+    [property: JsonPropertyName("action")] string Action);
 
 public sealed record SkillDefaultsPreview
 {
-    public required string BlueprintId { get; init; }
-    public required string BlueprintVersion { get; init; }
-    public required string Digest { get; init; }
-    public required bool CanApply { get; init; }
-    public IReadOnlyList<string> Errors { get; init; } = [];
-    public IReadOnlyList<SkillDefaultAssignment> Assignments { get; init; } = [];
+    [JsonPropertyName("blueprint_id")] public required string BlueprintId { get; init; }
+    [JsonPropertyName("blueprint_version")] public required string BlueprintVersion { get; init; }
+    [JsonPropertyName("digest")] public required string Digest { get; init; }
+    [JsonPropertyName("can_apply")] public required bool CanApply { get; init; }
+    [JsonPropertyName("errors")] public IReadOnlyList<string> Errors { get; init; } = [];
+    [JsonPropertyName("assignments")] public IReadOnlyList<SkillDefaultAssignment> Assignments { get; init; } = [];
     internal SkillDefaultsStorePlan? StorePlan { get; init; }
 
     public static SkillDefaultsPreview Invalid(string error) => new()
@@ -335,9 +340,9 @@ public sealed record SkillDefaultsPreview
 
 public sealed record SkillDefaultsApplyResult
 {
-    public required string Outcome { get; init; }
-    public IReadOnlyList<string> Errors { get; init; } = [];
-    public SkillDefaultsPreview? Preview { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("errors")] public IReadOnlyList<string> Errors { get; init; } = [];
+    [JsonPropertyName("preview")] public SkillDefaultsPreview? Preview { get; init; }
 
     public static SkillDefaultsApplyResult Applied(SkillDefaultsPreview preview) => new() { Outcome = "applied", Preview = preview };
     public static SkillDefaultsApplyResult Stale() => new() { Outcome = "stale", Errors = ["The preview is stale. Preview again before applying."] };

@@ -191,7 +191,7 @@ public sealed class SkillTools(AgentweaverApiClient api)
             "skill_defaults_preview",
             token => api.PostAsync<object>(
                 $"api/projects/{Uri.EscapeDataString(project_id)}/skill-defaults/preview",
-                new { blueprintId = blueprint_id }, token),
+                new { blueprint_id }, token),
             ct);
     }
 
@@ -206,7 +206,7 @@ public sealed class SkillTools(AgentweaverApiClient api)
             "skill_defaults_apply",
             token => api.PostAsync<object>(
                 $"api/projects/{Uri.EscapeDataString(project_id)}/skill-defaults/apply",
-                new { blueprintId = blueprint_id, digest }, token),
+                new { blueprint_id, digest }, token),
             ct);
     }
 

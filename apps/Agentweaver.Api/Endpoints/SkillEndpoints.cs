@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json.Serialization;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.Api.Blueprints;
@@ -366,6 +367,9 @@ public static class SkillEndpoints
     public sealed record ImportRequest(string? RepoUrl, IReadOnlyList<string>? Locations);
     public sealed record CreateSkillRequest(string? Name, string? DisplayName, string? Description, string? Instructions);
     public sealed record GenerateSkillRequest(string? Description, string? Prompt);
-    public sealed record SkillDefaultsPreviewRequest(string? BlueprintId);
-    public sealed record SkillDefaultsApplyRequest(string? BlueprintId, string? Digest);
+    public sealed record SkillDefaultsPreviewRequest(
+        [property: JsonPropertyName("blueprint_id")] string? BlueprintId);
+    public sealed record SkillDefaultsApplyRequest(
+        [property: JsonPropertyName("blueprint_id")] string? BlueprintId,
+        [property: JsonPropertyName("digest")] string? Digest);
 }
