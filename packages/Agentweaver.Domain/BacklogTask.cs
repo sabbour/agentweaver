@@ -40,4 +40,22 @@ public sealed record BacklogTask
     /// Null for tasks captured manually or via other methods.
     /// </summary>
     public string? SourceFilePath { get; init; }
+
+    /// <summary>
+    /// Top-level Coordinator run whose confirmed PRD/outcome-spec produced this promoted story.
+    /// Null for manually captured and legacy backlog tasks.
+    /// </summary>
+    public RunId? ParentPrdRunId { get; init; }
+
+    /// <summary>
+    /// Stable story key within <see cref="ParentPrdRunId"/> used for idempotent promotion retries.
+    /// Null for manually captured and legacy backlog tasks.
+    /// </summary>
+    public string? PromotionKey { get; init; }
+
+    /// <summary>
+    /// Human-readable explanation of why the story was promoted to a standalone run.
+    /// Null for manually captured and legacy backlog tasks.
+    /// </summary>
+    public string? PromotionReason { get; init; }
 }

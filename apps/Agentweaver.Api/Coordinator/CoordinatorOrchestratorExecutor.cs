@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Backlog;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -59,6 +60,7 @@ public sealed class CoordinatorOrchestratorExecutor
     private static readonly Regex PlanningResearchImperative = new(
         @"^\s*(?:research|investigate|analyze)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex PromotionOverrideToken = new(@"\[(run|inline)\]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex DeterministicDeclaredOutput = new(
         @"\b(?:write|create|produce|author|draft|revise|update|modify|output(?:\s+is)?|deliverable(?:\s+is)?)\s+(?:an?\s+|the\s+)?(?<path>(?:[\w.-]+/)*[\w.-]+\.[A-Za-z0-9]+)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -107,7 +109,7 @@ public sealed class CoordinatorOrchestratorExecutor
     /// exists for the run it returns without re-planning. Best-effort decomposition (model turn with
     /// a deterministic fallback) — it always produces a valid, persisted plan.
     /// </summary>
-    public async Task OrchestrateAsync(CoordinatorDraftInput input, CancellationToken ct)
+    public async Task<CoordinatorOrchestrationResult> OrchestrateAsync(CoordinatorDraftInput input, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -118,7 +120,7 @@ public sealed class CoordinatorOrchestratorExecutor
         if (spec is null)
         {
             _logger.LogWarning("Coordinator orchestrate: no outcome spec for run {RunId}; skipping", input.RunId);
-            return;
+            return new CoordinatorOrchestrationResult(0, 0, []);
         }
 
         // Idempotency: never re-plan a run that already has a work plan (mirrors the draft upsert).
@@ -128,7 +130,16 @@ public sealed class CoordinatorOrchestratorExecutor
         if (existing is not null)
         {
             _logger.LogInformation("Coordinator orchestrate: work plan already exists for run {RunId}; skipping", input.RunId);
-            return;
+            var promoted = await db.BacklogTasks.AsNoTracking()
+                .Where(t => t.ProjectId == input.ProjectId && t.ParentPrdRunId == input.RunId)
+                .OrderBy(t => t.TaskId)
+                .Select(t => BacklogTaskId.Parse(t.TaskId))
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+            var inlineCount = await db.Subtasks.AsNoTracking()
+                .CountAsync(s => s.WorkPlanId == existing.Id, ct)
+                .ConfigureAwait(false);
+            return new CoordinatorOrchestrationResult(existing.Id, inlineCount, promoted);
         }
 
         // Feature 015 US5: pick the best-fit functional workflow for THIS task from the project's
@@ -158,16 +169,46 @@ public sealed class CoordinatorOrchestratorExecutor
         var (drafts2, cycleNote) = BreakCycles(drafts);
         drafts = drafts2;
 
+        var partition = PartitionStories(drafts);
+        var promotionService = scope.ServiceProvider.GetRequiredService<IBacklogPromotionService>();
+        var promotedTaskIds = new List<BacklogTaskId>();
+        if (partition.PromotedIndices.Count > 0 && RunId.TryParse(input.RunId, out var parentPrdRunId))
+        {
+            var promotedInputs = partition.PromotedIndices
+                .Select(index => new PromotedStoryInput(
+                    drafts[index].StoryKey,
+                    drafts[index].Title,
+                    BuildPromotedStoryDescription(drafts[index]),
+                    partition.PromotionReasons[index],
+                    drafts[index].DependsOn
+                        .Select(dep => drafts[dep - 1])
+                        .Where(dep => partition.PromotedKeys.Contains(dep.StoryKey))
+                        .Select(dep => dep.StoryKey)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList()))
+                .ToList();
+            var promotionResult = await promotionService.PromoteAsync(
+                ProjectId.Parse(input.ProjectId),
+                parentPrdRunId,
+                input.SubmittingUser,
+                promotedInputs,
+                ct).ConfigureAwait(false);
+            promotedTaskIds.AddRange(promotionResult.Tasks.Select(t => t.Id));
+            EmitPromotedStoriesEvent(input.RunId, promotionResult.Tasks);
+        }
+
+        var inlineDrafts = partition.InlineIndices.Select(index => drafts[index]).ToList();
+
         var roster = ResolveRoster(input.RepositoryPath);
         if (roster.Count == 0)
         {
             await FailNoTeamAsync(input.RunId, ct).ConfigureAwait(false);
-            return;
+            return new CoordinatorOrchestrationResult(0, 0, promotedTaskIds);
         }
 
         // Select a real roster agent + Copilot model for each subtask.
-        var assigned = new List<AssignedSubtask>(drafts.Count);
-        foreach (var d in drafts)
+        var assigned = new List<AssignedSubtask>(inlineDrafts.Count);
+        foreach (var d in inlineDrafts)
         {
             var member = SelectRosterMember(roster, d)!;
             var roleDefaultModel = member.DefaultModel
@@ -179,10 +220,19 @@ public sealed class CoordinatorOrchestratorExecutor
         }
 
         var (workPlanId, persisted) = await PersistPlanAsync(
-            db, input, spec, assigned, cycleNote, selectedWorkflow?.Id, ct)
+            db,
+            input,
+            spec,
+            assigned,
+            cycleNote,
+            selectedWorkflow?.Id,
+            inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned,
+            ct)
             .ConfigureAwait(false);
 
-        EmitWorkPlanEvent(input.RunId, workPlanId, selectedWorkflow?.Id, persisted);
+        var workPlanStatus = inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned;
+        EmitWorkPlanEvent(input.RunId, workPlanId, selectedWorkflow?.Id, workPlanStatus, persisted);
+        return new CoordinatorOrchestrationResult(workPlanId, inlineDrafts.Count, promotedTaskIds);
     }
 
     // -----------------------------------------------------------------------
@@ -477,10 +527,16 @@ public sealed class CoordinatorOrchestratorExecutor
                 <<<END_SPEC>>>
 
                 Respond with ONLY a single JSON array (no prose, no code fences). Each element:
+                - "story_key": string. Required stable kebab-case key unique within this decomposition.
                 - "title": string. A short imperative subtask title.
                 - "scope": string. The exact context/files the subagent should read AND the specific
                   work it must perform. Paths in this prose are descriptive and are NOT used to infer
                   outputs.
+                - "estimated_subtasks": integer 1..20. The number of independently assignable worker
+                  subtasks this story's own coordinator would likely create.
+                - "promotion_override": null | "run" | "inline". If the title contains a
+                  case-insensitive [run] or [inline] token, copy that override here and REMOVE the
+                  token from the title. Never emit both overrides for one story.
                 - {{DeclaredOutputPathsGuidance}} Every subtask that produces a file MUST list it
                   here. Two parallel subtasks MUST NOT declare the same output path. For "planning"
                   subtasks, place prose/Markdown deliverables under "docs/planning/" and declare the
@@ -613,13 +669,27 @@ public sealed class CoordinatorOrchestratorExecutor
                 string? Read(string name) =>
                     el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
+                var storyKey = Read("story_key");
                 var title = Read("title");
                 var scope = Read("scope");
-                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(scope))
+                if (string.IsNullOrWhiteSpace(storyKey) || string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(scope))
                 {
                     _logger.LogWarning(
-                        "Coordinator decomposition skipped item {Index} for run {RunId}: missing required title/scope fields",
+                        "Coordinator decomposition skipped item {Index} for run {RunId}: missing required story_key/title/scope fields",
                         originalIndex, runId);
+                    continue;
+                }
+
+                var estimatedSubtasks = 1;
+                if (el.TryGetProperty("estimated_subtasks", out var estimatedElement)
+                    && estimatedElement.ValueKind == JsonValueKind.Number
+                    && estimatedElement.TryGetInt32(out var estimatedValue))
+                    estimatedSubtasks = estimatedValue;
+                if (estimatedSubtasks is < 1 or > 20)
+                {
+                    _logger.LogWarning(
+                        "Coordinator decomposition skipped item {Index} for run {RunId}: estimated_subtasks {EstimatedSubtasks} is outside 1..20",
+                        originalIndex, runId, estimatedSubtasks);
                     continue;
                 }
 
@@ -645,8 +715,18 @@ public sealed class CoordinatorOrchestratorExecutor
                     }
                 }
 
+                var overrideParse = ParsePromotionOverride(title!.Trim(), Read("promotion_override"));
+                if (!overrideParse.IsValid)
+                {
+                    _logger.LogWarning(
+                        "Coordinator decomposition skipped item {Index} for run {RunId}: conflicting promotion override markers",
+                        originalIndex, runId);
+                    continue;
+                }
+
                 valid.Add((originalIndex, new SubtaskDraft(
-                    title!.Trim(),
+                    storyKey!.Trim(),
+                    overrideParse.CleanTitle,
                     scope!.Trim(),
                     NormalizeRole(Read("role")),
                     NormalizeComplexity(Read("complexity")),
@@ -654,7 +734,9 @@ public sealed class CoordinatorOrchestratorExecutor
                     NormalizeIsolation(Read("isolation")),
                     dependsOn,
                     NormalizeCharter(Read("charter")),
-                    declaredOutputPaths)));
+                    declaredOutputPaths,
+                    estimatedSubtasks,
+                    overrideParse.Override)));
             }
 
             if (valid.Count == 0) return false;
@@ -713,6 +795,7 @@ public sealed class CoordinatorOrchestratorExecutor
         return
         [
             new SubtaskDraft(
+                StoryKey: "implement-confirmed-outcome",
                 Title: "Implement the confirmed outcome",
                 Scope: scope,
                 Role: "core-implementer",
@@ -720,7 +803,9 @@ public sealed class CoordinatorOrchestratorExecutor
                 Phase: phase,
                 Isolation: "worktree",
                 DependsOn: [],
-                DeclaredOutputPaths: declaredOutputPaths)
+                DeclaredOutputPaths: declaredOutputPaths,
+                EstimatedSubtasks: 1,
+                PromotionOverride: "inline")
         ];
     }
 
@@ -1368,6 +1453,170 @@ public sealed class CoordinatorOrchestratorExecutor
         return (rebuilt, note);
     }
 
+    internal static PromotionPartitionResult PartitionStories(IReadOnlyList<SubtaskDraft> drafts)
+    {
+        if (drafts.Count == 0)
+            return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal));
+
+        var adjacency = new List<HashSet<int>>(Enumerable.Range(0, drafts.Count).Select(_ => new HashSet<int>()));
+        for (var i = 0; i < drafts.Count; i++)
+        {
+            foreach (var dependency in drafts[i].DependsOn)
+            {
+                var j = dependency - 1;
+                if (j < 0 || j >= drafts.Count || j == i)
+                    continue;
+                adjacency[i].Add(j);
+                adjacency[j].Add(i);
+            }
+        }
+
+        var promoted = new List<int>();
+        var inline = new List<int>();
+        var reasons = new Dictionary<int, string>();
+        var promotedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new bool[drafts.Count];
+
+        for (var start = 0; start < drafts.Count; start++)
+        {
+            if (visited[start])
+                continue;
+
+            var queue = new Queue<int>();
+            var component = new List<int>();
+            queue.Enqueue(start);
+            visited[start] = true;
+            while (queue.Count > 0)
+            {
+                var index = queue.Dequeue();
+                component.Add(index);
+                foreach (var next in adjacency[index].OrderBy(x => x))
+                {
+                    if (visited[next])
+                        continue;
+                    visited[next] = true;
+                    queue.Enqueue(next);
+                }
+            }
+
+            var runOverride = component.Where(i => string.Equals(drafts[i].PromotionOverride, "run", StringComparison.OrdinalIgnoreCase)).ToList();
+            var inlineOverride = component.Where(i => string.Equals(drafts[i].PromotionOverride, "inline", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (runOverride.Count > 0 && inlineOverride.Count > 0)
+                throw new InvalidOperationException("conflicting_promotion_overrides");
+
+            var promote = false;
+            var rootIndex = component.OrderBy(i => i).First();
+            string rootReason;
+            if (runOverride.Count > 0)
+            {
+                promote = true;
+                rootIndex = runOverride.OrderBy(i => i).First();
+                rootReason = "Explicit [run] override.";
+            }
+            else if (inlineOverride.Count > 0)
+            {
+                rootReason = "Explicit [inline] override.";
+            }
+            else
+            {
+                var threshold = component
+                    .Where(i => drafts[i].EstimatedSubtasks >= 3)
+                    .OrderByDescending(i => drafts[i].EstimatedSubtasks)
+                    .ThenBy(i => i)
+                    .FirstOrDefault(-1);
+                if (threshold >= 0)
+                {
+                    promote = true;
+                    rootIndex = threshold;
+                    rootReason = $"Estimated {drafts[threshold].EstimatedSubtasks} worker subtasks (threshold: 3).";
+                }
+                else
+                {
+                    rootReason = "Estimated below promotion threshold.";
+                }
+            }
+
+            foreach (var index in component.OrderBy(i => i))
+            {
+                if (promote)
+                {
+                    promoted.Add(index);
+                    promotedKeys.Add(drafts[index].StoryKey);
+                    reasons[index] = index == rootIndex
+                        ? rootReason
+                        : $"Promoted with dependency component rooted at {drafts[rootIndex].StoryKey}.";
+                }
+                else
+                {
+                    inline.Add(index);
+                }
+            }
+        }
+
+        return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys);
+    }
+
+    internal static PromotionOverrideParseResult ParsePromotionOverride(string title, string? declaredOverride)
+    {
+        var matches = PromotionOverrideToken.Matches(title);
+        var tokenValues = matches
+            .Select(m => m.Groups[1].Value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (tokenValues.Count > 1)
+            return new PromotionOverrideParseResult(null, title, false);
+
+        var tokenOverride = tokenValues.SingleOrDefault();
+        var normalizedDeclared = NormalizePromotionOverride(declaredOverride);
+        if (tokenOverride is not null && normalizedDeclared is not null
+            && !string.Equals(tokenOverride, normalizedDeclared, StringComparison.Ordinal))
+            return new PromotionOverrideParseResult(null, title, false);
+
+        var cleanTitle = PromotionOverrideToken.Replace(title, string.Empty).Trim();
+        cleanTitle = Regex.Replace(cleanTitle, @"\s{2,}", " ").Trim();
+        return new PromotionOverrideParseResult(
+            tokenOverride ?? normalizedDeclared,
+            string.IsNullOrWhiteSpace(cleanTitle) ? title.Trim() : cleanTitle,
+            true);
+    }
+
+    private static string? NormalizePromotionOverride(string? value) =>
+        (value?.Trim().ToLowerInvariant()) switch
+        {
+            "run" => "run",
+            "inline" => "inline",
+            null or "" => null,
+            _ => null,
+        };
+
+    private static string BuildPromotedStoryDescription(SubtaskDraft draft)
+    {
+        var builder = new StringBuilder()
+            .AppendLine(draft.Scope.Trim());
+        if (draft.DeclaredOutputPaths?.Count > 0)
+        {
+            builder.AppendLine()
+                .AppendLine("Declared output paths:")
+                .AppendLine(string.Join(Environment.NewLine, draft.DeclaredOutputPaths.Select(path => $"- {path}")));
+        }
+        return builder.ToString().Trim();
+    }
+
+    private void EmitPromotedStoriesEvent(string runId, IReadOnlyList<BacklogTask> tasks)
+    {
+        var entry = _streamStore.Get(runId);
+        entry?.RecordNext(EventTypes.CoordinatorStoriesPromoted, new
+        {
+            parentRunId = runId,
+            tasks = tasks.Select(task => new
+            {
+                taskId = task.Id.ToString(),
+                key = task.PromotionKey,
+                reason = task.PromotionReason,
+            }).ToList(),
+        });
+    }
+
     private async Task<(int WorkPlanId, List<PersistedSubtask> Subtasks)> PersistPlanAsync(
         MemoryDbContext db,
         CoordinatorDraftInput input,
@@ -1375,6 +1624,7 @@ public sealed class CoordinatorOrchestratorExecutor
         List<AssignedSubtask> assigned,
         string? cycleNote,
         string? workflowId,
+        string workPlanStatus,
         CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
@@ -1391,7 +1641,7 @@ public sealed class CoordinatorOrchestratorExecutor
             ProjectId = input.ProjectId,
             CoordinatorRunId = input.RunId,
             WorkflowId = workflowId,
-            Status = "planned",
+            Status = workPlanStatus,
             IsolationSummary = isolationSummary,
             CreatedAt = now,
             UpdatedAt = now,
@@ -1465,13 +1715,13 @@ public sealed class CoordinatorOrchestratorExecutor
         return (workPlan.Id, persisted);
     }
 
-    private void EmitWorkPlanEvent(string runId, int workPlanId, string? workflowId, List<PersistedSubtask> subtasks)
+    private void EmitWorkPlanEvent(string runId, int workPlanId, string? workflowId, string status, List<PersistedSubtask> subtasks)
     {
         var entry = _streamStore.Get(runId);
         entry?.RecordNext(EventTypes.CoordinatorWorkPlan, new
         {
             workPlanId,
-            status = "planned",
+            status,
             workflowId,
             subtasks = subtasks.Select(s => new
             {
@@ -1538,7 +1788,16 @@ public sealed class CoordinatorOrchestratorExecutor
     // Internal records
     // -----------------------------------------------------------------------
 
-    private sealed record SubtaskDraft(
+    public sealed record CoordinatorOrchestrationResult(
+        int WorkPlanId,
+        int InlineSubtaskCount,
+        IReadOnlyList<BacklogTaskId> PromotedTaskIds)
+    {
+        public bool IsDelegated => InlineSubtaskCount == 0 && PromotedTaskIds.Count > 0;
+    }
+
+    internal sealed record SubtaskDraft(
+        string StoryKey,
         string Title,
         string Scope,
         string Role,
@@ -1547,7 +1806,9 @@ public sealed class CoordinatorOrchestratorExecutor
         string Isolation,
         IReadOnlyList<int> DependsOn,
         string? Charter = null,
-        IReadOnlyList<string>? DeclaredOutputPaths = null);
+        IReadOnlyList<string>? DeclaredOutputPaths = null,
+        int EstimatedSubtasks = 1,
+        string? PromotionOverride = null);
 
     private sealed record AssignedSubtask(SubtaskDraft Draft, string AgentName, string SelectedModelId);
 
@@ -1567,4 +1828,12 @@ public sealed class CoordinatorOrchestratorExecutor
         string DefaultModel,
         IReadOnlyList<string> Capabilities,
         IReadOnlyList<string> Responsibilities);
+
+    internal sealed record PromotionPartitionResult(
+        IReadOnlyList<int> PromotedIndices,
+        IReadOnlyList<int> InlineIndices,
+        IReadOnlyDictionary<int, string> PromotionReasons,
+        IReadOnlySet<string> PromotedKeys);
+
+    internal sealed record PromotionOverrideParseResult(string? Override, string CleanTitle, bool IsValid);
 }

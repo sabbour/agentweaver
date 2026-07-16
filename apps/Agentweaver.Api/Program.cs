@@ -799,6 +799,10 @@ builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowGenerator, Agen
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>();
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.IBacklogDecomposeService>(
     sp => sp.GetRequiredService<Agentweaver.Api.Backlog.BacklogDecomposeService>());
+builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogPromotionService>();
+builder.Services.AddSingleton<Agentweaver.Api.Backlog.IBacklogPromotionService>(
+    sp => sp.GetRequiredService<Agentweaver.Api.Backlog.BacklogPromotionService>());
+builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogTaskReadModelFactory>();
 
 // Azure Monitor OpenTelemetry (Application Insights) — enabled only when connection string is set.
 if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))

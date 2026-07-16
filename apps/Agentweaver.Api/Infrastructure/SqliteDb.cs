@@ -161,6 +161,32 @@ public sealed class SqliteDb
         // relative path from which a task was imported; used for idempotency by (project_id,
         // source_file_path, title). NULL for tasks captured manually or through other methods.
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN source_file_path TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN parent_prd_run_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN promotion_key TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN promotion_reason TEXT;", ct);
+        await TryAlterAsync(connection,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
+                ON backlog_tasks (parent_prd_run_id, promotion_key)
+                WHERE parent_prd_run_id IS NOT NULL AND promotion_key IS NOT NULL;
+            """, ct);
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS backlog_task_dependencies (
+                project_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                depends_on_task_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, depends_on_task_id),
+                FOREIGN KEY (task_id) REFERENCES backlog_tasks (task_id) ON DELETE CASCADE,
+                FOREIGN KEY (depends_on_task_id) REFERENCES backlog_tasks (task_id) ON DELETE RESTRICT,
+                CHECK (task_id <> depends_on_task_id)
+            );
+            """, ct);
+        await TryAlterAsync(connection,
+            "CREATE INDEX IF NOT EXISTS idx_backlog_task_dependencies_project_task ON backlog_task_dependencies (project_id, task_id);", ct);
+        await TryAlterAsync(connection,
+            "CREATE INDEX IF NOT EXISTS idx_backlog_task_dependencies_prerequisite ON backlog_task_dependencies (depends_on_task_id);", ct);
 
         // Per-project skill catalog + skill→agent assignments (issues #51/#56). Skills are
         // standards-compatible SKILL.md modules acquired via repo import, file upload, or
@@ -410,6 +436,10 @@ public sealed class SqliteDb
             claimed_at    TEXT,
             run_id        TEXT,                      -- non-null iff state = 'claimed'
             archived_at   TEXT,
+            source_file_path TEXT,
+            parent_prd_run_id TEXT,
+            promotion_key TEXT,
+            promotion_reason TEXT,
             FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
         );
 
@@ -426,6 +456,27 @@ public sealed class SqliteDb
         -- One-task-to-at-most-one-run invariant at the storage layer.
         CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_run
             ON backlog_tasks (run_id) WHERE run_id IS NOT NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
+            ON backlog_tasks (parent_prd_run_id, promotion_key)
+            WHERE parent_prd_run_id IS NOT NULL AND promotion_key IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS backlog_task_dependencies (
+            project_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            depends_on_task_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (task_id, depends_on_task_id),
+            FOREIGN KEY (task_id) REFERENCES backlog_tasks (task_id) ON DELETE CASCADE,
+            FOREIGN KEY (depends_on_task_id) REFERENCES backlog_tasks (task_id) ON DELETE RESTRICT,
+            CHECK (task_id <> depends_on_task_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_backlog_task_dependencies_project_task
+            ON backlog_task_dependencies (project_id, task_id);
+
+        CREATE INDEX IF NOT EXISTS idx_backlog_task_dependencies_prerequisite
+            ON backlog_task_dependencies (depends_on_task_id);
 
         """;
 }

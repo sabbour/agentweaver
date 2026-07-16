@@ -30,6 +30,8 @@ internal static class AgentweaverApiTools
         "project_list_runs",
         "backlog_capture_task",
         "backlog_get_board",
+        "backlog_promote_stories",
+        "backlog_get_task",
         "run_status",
         "run_show_artifacts",
         "coordinator_work_plan_get",
@@ -317,6 +319,45 @@ internal static class AgentweaverApiTools
             },
             "backlog_get_board",
             "MCP-equivalent Agentweaver backlog_get_board scoped to the current project. Returns the board as JSON.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Project ID. Must be the current coordinator project.")] string project_id,
+                [Description("Parent PRD coordinator run ID")] string parent_prd_run_id,
+                [Description("Stories to promote as one atomic batch. Each object must include key, title, description, promotion_reason, and depends_on_keys.")] string stories_json,
+                CancellationToken ct = default) =>
+            {
+                EnsureCurrentProject(projectId, project_id);
+                object? stories;
+                try { stories = JsonSerializer.Deserialize<object>(stories_json); }
+                catch (Exception ex) { return $"backlog_promote_stories failed: invalid stories_json — {ex.Message}"; }
+                var response = await http.PostAsJsonAsync(
+                    $"api/projects/{projectId}/backlog/promotions",
+                    new { parent_prd_run_id, stories },
+                    ct).ConfigureAwait(false);
+                var body = string.Empty;
+                try { body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
+                return response.IsSuccessStatusCode
+                    ? body
+                    : $"backlog_promote_stories failed: HTTP {(int)response.StatusCode} — {body}";
+            },
+            "backlog_promote_stories",
+            "MCP-equivalent Agentweaver backlog_promote_stories scoped to the current project. Atomically creates promoted backlog tasks and dependency edges.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Project ID. Must be the current coordinator project.")] string project_id,
+                [Description("Backlog task ID to inspect")] string task_id,
+                CancellationToken ct = default) =>
+            {
+                EnsureCurrentProject(projectId, project_id);
+                return await GetJsonAsync(
+                    http,
+                    $"api/projects/{projectId}/backlog/tasks/{Uri.EscapeDataString(task_id)}",
+                    ct).ConfigureAwait(false);
+            },
+            "backlog_get_task",
+            "MCP-equivalent Agentweaver backlog_get_task scoped to the current project. Returns one enriched backlog task as JSON.");
 
         yield return AIFunctionFactory.Create(
             async (
