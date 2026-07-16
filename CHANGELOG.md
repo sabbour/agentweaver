@@ -5,6 +5,21 @@ All notable changes to Agentweaver are documented in this file, generated from t
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, `test`); merge commits and routine `chore(squad)` state-sync commits are omitted for readability. Regenerate with `python scripts/gen-changelog.py` if the history needs to be rebuilt.
 
 
+## [v0.9.66] - 2026-07-16
+
+### Added
+- feat(web): promote Sessions to a global top-level nav item with its own collapsible section and a New Session button, no longer scoped to a project or gated behind a feature flag; adds the `/sessions` route (#346 follow-up)
+- feat(workflows): wire a real GitHub webhook receiver (`POST /api/webhooks/github`, HMAC-SHA256 signature verified) as the first live external event source for the scheduled/event workflow triggers feature (#53 follow-up)
+- test(aks): add Pester regression coverage for the two release-script bugs found during the v0.9.65 ship — job-state misdetection in image builds and provenance verifier pod-selector scope (#351)
+
+### Fixed
+- fix(api-harness): don't crash schema validation on null `adapterVersion`/`personaCoreVersion` for structural (non-persona) seam scenarios
+
+### Changed
+- chore: retire the dead legacy Console/Operator-dock backend (`ConsoleEndpoints`, `ConsoleTurnService`, `CopilotConsoleFacadeAgent`) — zero live callers remained after #346
+- chore(release): bump version to v0.9.66
+
+
 ## [v0.9.65] - 2026-07-16
 
 ### Fixed
