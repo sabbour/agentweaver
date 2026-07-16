@@ -2,6 +2,7 @@ import DefaultTheme from 'vitepress/theme'
 import { onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vitepress'
 import './custom.css'
+import WorkflowProof from './components/WorkflowProof.vue'
 
 const BOUND_ATTR = 'data-lightbox-bound'
 
@@ -60,6 +61,9 @@ function bindLightbox() {
 
 export default {
   extends: DefaultTheme,
+  enhanceApp({ app }) {
+    app.component('WorkflowProof', WorkflowProof)
+  },
   setup() {
     if (import.meta.env.SSR || typeof window === 'undefined') return
 

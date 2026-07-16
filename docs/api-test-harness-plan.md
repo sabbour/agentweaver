@@ -714,8 +714,8 @@ are folded below. **These guardrails are hard prerequisites — implementation
 **The gap — and what it is NOT.** "Runs against staging" is today only **prose convention**,
 not an enforced boundary. The one existing guard, `checkInsecureAllowed()` in
 `run-persona.mjs:56-74`, only fires when `--insecure` is **also** passed — it blocks disabling
-TLS verification against prod, but does **nothing** to stop a valid `--base-url`/`--target
-<prod-host>` with a valid cert and a valid token. The blast-radius risk this finding controls is
+TLS verification against prod, but does **nothing** to stop a valid `--base-url <prod-host>` or
+`--target <prod-host>` value with a valid cert and a valid token. The blast-radius risk this finding controls is
 **which Agentweaver deployment the harness process points at** — an operator typo, a bad
 `AGENTWEAVER_BASE_URL`/`--target` default, or a compromised CI variable could aim a whole harness
 run (and its judge's approve/deny decisions) at a **production** Agentweaver deployment, causing
