@@ -129,12 +129,18 @@ export function normalizeBlueprintList(payload: unknown): Blueprint[] {
 export class ApiError extends Error {
   readonly status: number;
   readonly body: string;
+  readonly payload: unknown;
 
   constructor(status: number, body: string) {
     super(`API error ${status}: ${body}`);
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+    try {
+      this.payload = JSON.parse(body) as unknown;
+    } catch {
+      this.payload = null;
+    }
   }
 }
 

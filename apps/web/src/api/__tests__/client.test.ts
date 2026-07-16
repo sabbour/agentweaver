@@ -36,6 +36,21 @@ describe('AgentweaverApiClient keepalive', () => {
     await expect(promise).rejects.toBeInstanceOf(ApiError);
     await expect(promise).rejects.toMatchObject({ status: 404, body: '{"error":"missing"}' });
   });
+
+  it('preserves structured non-2xx response bodies for typed feature error handling', () => {
+    const payload = {
+      blueprint_id: 'blueprint-software-development',
+      blueprint_version: 'version-1',
+      digest: 'preview-1',
+      can_apply: false,
+      errors: ['A confirmed team is required.'],
+      assignments: [],
+    };
+
+    const error = new ApiError(422, JSON.stringify(payload));
+
+    expect(error.payload).toEqual(payload);
+  });
 });
 
 // #208 point 5 regression coverage: an AbortSignal passed to a metrics-fetching client method must
