@@ -67,6 +67,7 @@ function renderShellAt(path: string) {
           <Routes>
             <Route path="/" element={<div>Gallery</div>} />
             <Route path="/overview" element={<div>Overview content</div>} />
+            <Route path="/sessions" element={<div>Sessions content</div>} />
             <Route path="/projects/:projectId" element={<div>Board content <Link to="/projects/proj-1/team">Go team</Link></div>} />
             <Route path="/projects/:projectId/team" element={<div>Team content <Link to="/projects/proj-1">Go board</Link></div>} />
           </Routes>
@@ -113,6 +114,8 @@ describe('AppShell navigation', () => {
     // Global destinations are always present (above the project sections).
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
+    expect(screen.getByRole('group', { name: 'Sessions' })).toBeDefined();
+    expect(screen.getByText('All sessions')).toBeDefined();
     expect(screen.getByRole('link', { name: 'Agents' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hover');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('tabindex')).toBe('0');
@@ -130,6 +133,7 @@ describe('AppShell navigation', () => {
     renderShellAt('/');
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
+    expect(screen.getByRole('group', { name: 'Sessions' })).toBeDefined();
     expect(screen.queryByText('Work')).toBeNull();
     expect(screen.queryByText('System')).toBeNull();
   });
@@ -153,6 +157,7 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/', undefined)).toBe('overview');
     expect(resolveActiveKey('/overview', undefined)).toBe('overview');
     expect(resolveActiveKey('/projects', undefined)).toBe('projects');
+    expect(resolveActiveKey('/sessions', undefined)).toBe('sessions');
   });
 
   it('extracts the project id from project-scoped paths', () => {
