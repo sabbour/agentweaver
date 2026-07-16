@@ -5,6 +5,26 @@ All notable changes to Agentweaver are documented in this file, generated from t
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, `test`); merge commits and routine `chore(squad)` state-sync commits are omitted for readability. Regenerate with `python scripts/gen-changelog.py` if the history needs to be rebuilt.
 
 
+## [v0.9.65] - 2026-07-16
+
+### Fixed
+- Fix #350: tear down AgentHost pods on every cancel/fail transition, including watch-loop failures, steering stop, and cancel/delete endpoints
+- Fix #348: reconcile dirty/stale-index checked-out branches after worktree merges instead of surfacing false staged deletions or silently corrupting state
+- Fix #342: make provenance verification tolerate variable live pod counts and exclude Pending/Terminating pods
+- fix(release): port `release.sh` to `release.ps1` and delegate image builds to `20-build-push-images.ps1` for correct provenance stamping (#340)
+- fix(auth): remove the unnecessary `read:org` OAuth scope from GitHub login flows and rely on the existing public-members org fallback
+- Fix #336: force inline assigned skill instructions for coordinator-dispatched pod-per-run implementation children instead of dangling materialize pointers
+- chore(web): remove the legacy Operator dock and redirect its orphaned route to `/assistant` (#346)
+
+### Added
+- feat(workflows): add the `open_pull_request` workflow node with templated title/body support and draft PR creation (#49)
+- feat(workflows): add `daily`/`weekly`/`monthly` schedule triggers, named events, a scheduler service, and a manual event-fire endpoint (#53)
+- feat(prd): add opt-in PRD story promotion to independent backlog tasks with tracked `BacklogTaskDependency` edges (#285)
+
+### Changed
+- chore(release): bump version to v0.9.65
+
+
 ## [v0.9.60] - 2026-07-15
 
 ### Fixed
