@@ -559,6 +559,26 @@ public sealed class SqliteRunStore : IRunStore
         return results;
     }
 
+    public async Task<IReadOnlyList<Run>> GetRunsBySubmittingUserAsync(
+        string submittingUser, string? agentName, int limit, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        var agentFilter = agentName is null ? string.Empty : " AND agent_name = $agentName";
+        command.CommandText = SelectSql +
+            " WHERE submitting_user = $user AND archived_at IS NULL" + agentFilter +
+            " ORDER BY started_at DESC LIMIT $limit;";
+        command.Parameters.AddWithValue("$user", submittingUser);
+        if (agentName is not null)
+            command.Parameters.AddWithValue("$agentName", agentName);
+        command.Parameters.AddWithValue("$limit", limit);
+        var results = new List<Run>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            results.Add(Map(reader));
+        return results;
+    }
+
     /// <summary>
     /// Atomically inserts a new run row with status Pending only when the
     /// referenced project is still Active. Returns true if the row was inserted

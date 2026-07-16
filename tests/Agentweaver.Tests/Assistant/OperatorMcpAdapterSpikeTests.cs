@@ -4,6 +4,8 @@ using System.Net;
 using System.Text.Json;
 using FluentAssertions;
 using Agentweaver.AgentRuntime;
+using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -121,6 +123,112 @@ public sealed class OperatorMcpAdapterSpikeTests : IAsyncLifetime
         config.Tools!.Should().HaveCount(2, "the MCP tool set must flow into SessionConfig.Tools unchanged");
         config.EnableConfigDiscovery.Should().BeFalse();
         config.Tools!.Select(t => t.Name).Should().Contain("spike_echo");
+    }
+
+    [Fact]
+    public async Task OperatorSessionConfig_RestrictsToolSurfaceToMcpToolsOnly_NoSdkBuiltins()
+    {
+        // SECURITY regression (#346): the operator assistant runs in-process in the API pod with no
+        // OS-level sandbox, so the SDK's built-in native tools (bash/shell, view/read, write,
+        // str_replace_editor, grep, web_fetch, …) must be removed from its tool surface. The config
+        // must (a) allowlist ONLY the MCP tool names via AvailableTools — "only these tools will be
+        // available when specified" — and (b) install a deny-by-default permission handler so any
+        // native shell/file/URL request that reaches the permission layer is rejected.
+        var provider = new AgentweaverMcpToolProvider(new AgentweaverMcpConnectionOptions { Endpoint = _mcpEndpoint });
+        await using var session = await provider.ConnectAsync("caller-token-sandbox", CancellationToken.None);
+
+        var mcpToolNames = session.Tools.Select(t => t.Name).ToArray();
+
+        var config = OperatorAssistantAgent.BuildSessionConfig(
+            conversationId: "conv-sandbox",
+            systemPrompt: OperatorAssistantAgent.BuildSystemPromptForTests("# Agentweaver Driver", session.Tools.Count),
+            tools: session.AsToolDeclarations(),
+            modelId: "claude-sonnet-4.6");
+
+        config.AvailableTools.Should().NotBeNull("the session must whitelist a tool surface, not inherit SDK built-ins");
+        config.AvailableTools.Should().BeEquivalentTo(mcpToolNames,
+            "AvailableTools must contain exactly the MCP tool names so every SDK built-in (bash/view/write/…) is excluded");
+        config.AvailableTools.Should().NotContain(new[] { "bash", "shell", "view", "read", "write", "str_replace_editor", "grep", "web_fetch" },
+            "no SDK built-in native tool name may appear in the operator assistant tool surface");
+        config.OnPermissionRequest.Should().NotBeNull("a deny-by-default backstop must reject native tool requests");
+
+        // Exercise the backstop directly: native shell/read/write requests are rejected.
+        var shellDecision = await config.OnPermissionRequest!(new PermissionRequestShell
+        {
+            Kind = "shell",
+            CanOfferSessionApproval = false,
+            Commands = [],
+            FullCommandText = "bash -lc 'id'",
+            HasWriteFileRedirection = false,
+            Intention = "run a command",
+            PossiblePaths = [],
+            PossibleUrls = [],
+        }, null!);
+        shellDecision.Should().BeOfType<PermissionDecisionReject>("native shell execution must be denied");
+
+        var readDecision = await config.OnPermissionRequest!(new PermissionRequestRead
+        {
+            Kind = "read",
+            Intention = "read a file",
+            Path = "/etc/passwd",
+        }, null!);
+        readDecision.Should().BeOfType<PermissionDecisionReject>("native file read must be denied");
+
+        var writeDecision = await config.OnPermissionRequest!(new PermissionRequestWrite
+        {
+            Kind = "write",
+            CanOfferSessionApproval = false,
+            Diff = "+ pwned",
+            FileName = "/tmp/pwned",
+            Intention = "write a file",
+        }, null!);
+        writeDecision.Should().BeOfType<PermissionDecisionReject>("native file write must be denied");
+    }
+
+    [Fact]
+    public async Task OperatorPermissionHandler_ApprovesMcpAndCustomToolCalls_SoTheyReachTheApprovalGate()
+    {
+        // REGRESSION (assistant approval still broken, 2026-07-15): live, the assistant narrated a
+        // bare "permission denied" for EVERY action — it could not even resolve a project id (a
+        // read-only tool) and no approval card ever appeared. Root cause: MCP tools carry no
+        // skip_permission flag, so each tool call raises an SDK permission request; the in-API
+        // headless session had no OnPermissionRequest handler, so the SDK resolved every request as
+        // DENIED before the call reached ApprovalGatingAIFunction. The handler MUST APPROVE MCP /
+        // custom tool requests so the call proceeds to the tool (where only the consequential subset
+        // is human-gated by ApprovalGatingAIFunction). This pins that approve-path: the exact
+        // scenario Ahmed hit — "add a backlog task" -> backlog_capture_task — must be approved here,
+        // not denied.
+        var provider = new AgentweaverMcpToolProvider(new AgentweaverMcpConnectionOptions { Endpoint = _mcpEndpoint });
+        await using var session = await provider.ConnectAsync("caller-token-approve", CancellationToken.None);
+
+        var config = OperatorAssistantAgent.BuildSessionConfig(
+            conversationId: "conv-approve",
+            systemPrompt: OperatorAssistantAgent.BuildSystemPromptForTests("# Agentweaver Driver", session.Tools.Count),
+            tools: session.AsToolDeclarations(),
+            modelId: "claude-sonnet-4.6");
+
+        config.OnPermissionRequest.Should().NotBeNull();
+
+        var mcpDecision = await config.OnPermissionRequest!(new PermissionRequestMcp
+        {
+            Kind = "mcp",
+            ReadOnly = false,
+            ServerName = "agentweaver",
+            ToolName = "backlog_capture_task",
+            ToolTitle = "Capture a new task into the project backlog.",
+        }, null!);
+        mcpDecision.Should().BeOfType<PermissionDecisionApproveOnce>(
+            "MCP tool calls must be approved at the SDK permission layer so they reach the tool/approval gate " +
+            "instead of being denied with a bare 'permission denied'");
+
+        var customDecision = await config.OnPermissionRequest!(new PermissionRequestCustomTool
+        {
+            Kind = "customTool",
+            ToolName = "project_list",
+            ToolDescription = "List the caller's projects.",
+        }, null!);
+        customDecision.Should().BeOfType<PermissionDecisionApproveOnce>(
+            "custom/MCP-adapted tool calls (including read-only discovery like project resolution) must be approved, not denied");
     }
 
     [Fact]

@@ -358,6 +358,18 @@ public sealed class EfRunStore : IRunStore
         return recs.Select(FromRecord).ToList();
     }
 
+    public async Task<IReadOnlyList<Run>> GetRunsBySubmittingUserAsync(
+        string submittingUser, string? agentName, int limit, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var q = db.Runs.AsNoTracking()
+            .Where(r => r.SubmittingUser == submittingUser && r.ArchivedAt == null);
+        if (agentName is not null)
+            q = q.Where(r => r.AgentName == agentName);
+        var recs = await q.OrderByDescending(r => r.StartedAt).Take(limit).ToListAsync(ct);
+        return recs.Select(FromRecord).ToList();
+    }
+
     /// <summary>
     /// Inserts a Pending run only when the referenced project is still Active.
     /// EF equivalent of the SQLite INSERT ... WHERE EXISTS pattern.

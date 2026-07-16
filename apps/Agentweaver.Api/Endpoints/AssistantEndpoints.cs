@@ -72,6 +72,37 @@ public static class AssistantEndpoints
             }
         });
 
+        // GET /api/assistant/runs — list the caller's own operator conversations, newest-first. Scoped
+        // to the authenticated caller (never leaks other users' runs). Optional ?limit= caps the count.
+        app.MapGet("/api/assistant/runs", async (
+            HttpContext httpContext,
+            IAssistantRunService assistant,
+            ILogger<Program> logger,
+            CancellationToken ct,
+            int? limit) =>
+        {
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            try
+            {
+                var runs = await assistant.ListRunsAsync(caller, limit ?? 50, ct).ConfigureAwait(false);
+                return Results.Json(new AssistantRunListResponse
+                {
+                    Runs = runs.Select(r => new AssistantRunSummaryDto
+                    {
+                        RunId = r.RunId,
+                        Status = r.Status.ToApiString(),
+                        Title = r.Title,
+                        CreatedAt = r.CreatedAt.ToString("O"),
+                    }).ToList(),
+                });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to list operator assistant runs.");
+                return Results.Problem("Failed to list operator assistant runs.", statusCode: StatusCodes.Status500InternalServerError);
+            }
+        });
+
         // POST /api/assistant/runs/{id}/messages — send the next user turn into a running conversation.
         app.MapPost("/api/assistant/runs/{id}/messages", async (
             HttpContext httpContext,

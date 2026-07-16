@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
   MessageBar,
@@ -7,7 +7,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage, parseApiBody } from '../api/errors';
@@ -243,15 +243,30 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const styles = useStyles();
   const params = useParams<{ projectId?: string }>();
   const effectiveProjectId = projectId ?? params.projectId;
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // The operator run id is created lazily on the first composer submit; until then the
-  // stream stays disabled ('') and the page shows the empty invitation state.
-  const [runId, setRunId] = useState<string>('');
+  // stream stays disabled ('') and the page shows the empty invitation state. If the page
+  // loads with `?runId=...` already in the URL (a refresh, a bookmark, or the browser back
+  // button), resume that run instead of losing it — the conversation otherwise had no way
+  // to survive navigating away (#346 follow-up).
+  const [runId, setRunId] = useState<string>(() => searchParams.get('runId') ?? '');
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { events, status: streamStatus } = useSeededRunStream(runId, undefined);
+
+  // Keep the URL in sync with the active run id so a refresh or shared link resumes the
+  // same conversation instead of dropping back to the empty invitation state.
+  useEffect(() => {
+    const current = searchParams.get('runId') ?? '';
+    if (current === runId) return;
+    const next = new URLSearchParams(searchParams);
+    if (runId) next.set('runId', runId); else next.delete('runId');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId]);
 
   const timelineModel = useMemo(
     () => buildRunTimeline(events, { stripSerializedWorkPlan: false }),

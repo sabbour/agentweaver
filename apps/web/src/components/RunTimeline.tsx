@@ -643,6 +643,12 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
           />
         ) : (
           <ChainOfThought
+            // The library's own `cardHeader` slot defaults to a hard-coded "Activity" label
+            // rendered ABOVE the accordion, entirely separate from our `headerText` toggle
+            // below it — the two together read as two competing, unexplained headers
+            // ("1 step" then "Activity" on the next line). We fold that word into our own
+            // single headerText line instead and suppress the library's duplicate.
+            cardHeader={null}
             headerText={
               embedded ? (
                 <span className={styles.cotHeaderSub}>{stepLabel}</span>
@@ -663,7 +669,7 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
               onToggle: (_event, data) => setOpenItems(data.openItems as string[]),
             }}
           >
-            {steps.map((step) => (
+            {steps.map((step, index) => (
               <ChainOfThoughtItem
                 key={step.id}
                 value={step.id}
@@ -675,7 +681,18 @@ export function RunTimeline({ steps, running, emptyHint, embedded = false }: Run
                     </span>
                   ),
                 }}
-                headerText={{ className: styles.stepHeaderText, children: <Body>{step.intent}</Body> }}
+                // Prefix with the step's ordinal so a lone status word like "Working" or
+                // "Complete" reads as "Step 1 · Working" instead of floating with no context
+                // between the section header above and the transcript below.
+                headerText={{
+                  className: styles.stepHeaderText,
+                  children: (
+                    <Body>
+                      <span className={styles.cotHeaderSub}>{`Step ${index + 1} \u00b7 `}</span>
+                      {step.intent}
+                    </Body>
+                  ),
+                }}
               >
                 <StepBody step={step} />
               </ChainOfThoughtItem>

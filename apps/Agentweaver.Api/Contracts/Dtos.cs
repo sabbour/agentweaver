@@ -1072,6 +1072,22 @@ public sealed record AssistantMessageResponse
     [JsonPropertyName("tools_invoked")] public IReadOnlyList<string>? ToolsInvoked { get; init; }
 }
 
+/// <summary>A single operator conversation in the GET /api/assistant/runs list.</summary>
+public sealed record AssistantRunSummaryDto
+{
+    [JsonPropertyName("run_id")] public required string RunId { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    /// <summary>Short single-line title derived from the conversation's opening message.</summary>
+    [JsonPropertyName("title")] public required string Title { get; init; }
+    [JsonPropertyName("created_at")] public required string CreatedAt { get; init; }
+}
+
+/// <summary>Response body for GET /api/assistant/runs (the caller's own conversations, newest-first).</summary>
+public sealed record AssistantRunListResponse
+{
+    [JsonPropertyName("runs")] public required IReadOnlyList<AssistantRunSummaryDto> Runs { get; init; }
+}
+
 public sealed record ConsoleError
 {
     [JsonPropertyName("code")] public required string Code { get; init; }

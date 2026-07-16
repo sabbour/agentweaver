@@ -230,6 +230,39 @@ A resolved tool gate emits `tool.approval_resolved`
 
 ---
 
+## Operator assistant chat
+
+A Copilot-SDK-backed chat that runs the Agentweaver operator agent wired to the
+real MCP tools. Each conversation is an ordinary run, so its turns and approval
+gates surface on `GET /api/runs/{id}/events` and resolve through the generic
+tool-approval endpoints above. All endpoints are scoped to the authenticated
+caller (unauthenticated requests get `401`).
+
+- `POST /api/assistant/runs` — start a conversation. Body `{ "message": "..." }`.
+  Response `{ "run_id", "message", "status", "tools_invoked" }`.
+- `POST /api/assistant/runs/{id}/messages` — send the next user turn. Body
+  `{ "message": "..." }`. The request **blocks** for the whole turn, including
+  any approval wait (see below), and returns `{ "run_id", "message", "status",
+  "tools_invoked" }`.
+- `GET /api/assistant/runs?limit=50` — list the caller's own conversations,
+  newest-first. Response `{ "runs": [ { "run_id", "status", "title",
+  "created_at" } ] }`. Only the caller's runs are returned.
+
+**Tool approval for assistant turns.** When the operator agent tries to invoke a
+consequential MCP tool (e.g. `coordinator_start`, `run_submit`, `project_delete`
+— see `OperatorToolApprovalPolicy`), the turn suspends and emits a
+`tool.approval_required` event (`{ requestId, displayId, toolName, arguments,
+message }`) on the run stream, followed by periodic `tool.approval_pending`
+heartbeats while it waits. The operator resolves it with the **same** generic
+`POST /api/runs/{id}/tool-approvals` / `tool-denials` endpoints. On approval the
+tool runs; on denial the model receives a clear "denied by operator" result and
+the conversation continues. A `tool.approval_resolved`
+(`{ requestId, runId, approved }`) event is emitted on the run's own stream so
+the pending card clears on reload. Read/discovery tools are not gated and run
+immediately. Approvals expire after 5 minutes (treated as a denial).
+
+---
+
 ## Spec-to-Backlog (Feature 014)
 
 ### GET /api/projects/{id}/workspace/files
