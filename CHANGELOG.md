@@ -5,6 +5,15 @@ All notable changes to Agentweaver are documented in this file, generated from t
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, `test`); merge commits and routine `chore(squad)` state-sync commits are omitted for readability. Regenerate with `python scripts/gen-changelog.py` if the history needs to be rebuilt.
 
 
+## [v0.9.68] - 2026-07-16
+
+### Fixed
+- fix(assistant): operator assistant conversations can now be resumed after an idle-timeout closure, a pod restart, or a follow-up landing on the other API replica — `AssistantRunService.RunTurnAsync` rehydrates the in-memory run state from durable `RunEvents` on a cache-miss (with ownership/agent-type checks preserved) instead of permanently 404ing, and flips a `Completed` run back to `InProgress` when resumed
+- fix(assistant): re-enable the Copilot SDK's native session store (`EnableSessionStore`, `InfiniteSessions`) for `OperatorAssistantAgent` only — the prior disable was copy-pasted from the one-shot sandboxed agents citing `copilot-sdk#1814`, which is documented as a one-shot/ephemeral-container issue and doesn't apply to the long-lived in-process assistant; sandboxed one-shot agents keep the disable
+
+### Added
+- feat(web): add a delete action to each row on the Sessions page, with a confirm dialog, using the existing generic run-delete endpoint
+
 ## [v0.9.67] - 2026-07-16
 
 ### Fixed
