@@ -46,6 +46,22 @@ import { adaptApiEvidence } from '../harness-judge/adapters/api.mjs';
 import { judgeEvidence } from '../harness-judge/core.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// generated-artifacts-seam (and any other kind: 'generation-seam' scenario) is a
+// deterministic STRUCTURAL check with no persona behind it at all — loadPersona()
+// genuinely returns null because there is no persona brief for it. The shared
+// judge evidence schema (scripts/harness-judge/verdict-schema.mjs
+// REQUIRED_JOIN_KEY_FIELDS) still requires adapterVersion/personaCoreVersion to be
+// non-empty strings for every surface, so a real persona scenario's evidence can be
+// join-keyed to the persona-brief version that produced it. For this fixed,
+// non-persona scenario there is no such version to report, so we fall back to the
+// same 'unknown' sentinel already used for this exact case in
+// scripts/mcp-harness/run-persona.mjs (adapterVersion/personaCoreVersion) and
+// scripts/ui-harness/agent-driver-ui/tools.mjs (targetRevision) — it satisfies the
+// shared schema without fabricating a fake version number or weakening validation
+// for scenarios that do have a real persona.
+const NO_PERSONA_VERSION_SENTINEL = 'unknown';
+
 function parseArgs(argv) {
   const out = { insecure: false, keep: false, allowInsecureProd: false, rung: 'scoping' };
   for (let i = 0; i < argv.length; i++) {
@@ -214,6 +230,10 @@ async function main() {
       coreVersion: sharedPersona?.version ?? null,
       adapterVersion: sharedPersona?.adapter?.version ?? null,
     },
+    // NOTE: the informational `persona.*Version` fields above stay `null` when
+    // there is no persona (this is a structural check) — only the join-key
+    // metadata below needs the non-empty NO_PERSONA_VERSION_SENTINEL, since that's
+    // what the shared judge schema validates.
     scenario: {
       id: scenario.id,
       title: scenario.title,
@@ -267,8 +287,12 @@ async function main() {
     batchId: args.batchId ?? `api-${stamp}`,
     scenarioId: args.scenario,
     inputSeed: args.seed ?? args.scenario,
-    adapterVersion: sharedPersona?.adapter?.version ?? null,
-    personaCoreVersion: sharedPersona?.version ?? null,
+    // See NO_PERSONA_VERSION_SENTINEL above: this file only ever drives
+    // kind: 'generation-seam' structural scenarios, so sharedPersona is legitimately
+    // null here — the sentinel keeps these join-key fields non-empty strings
+    // (required by REQUIRED_JOIN_KEY_FIELDS) without inventing a fake version.
+    adapterVersion: sharedPersona?.adapter?.version ?? NO_PERSONA_VERSION_SENTINEL,
+    personaCoreVersion: sharedPersona?.version ?? NO_PERSONA_VERSION_SENTINEL,
     targetRevision: args.targetRevision ?? baseUrl,
     runId: result.evidence.runId ?? `harness-${stamp}`,
     timestamp: finding.generatedAt,
