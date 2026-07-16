@@ -920,116 +920,6 @@ public sealed record StartOrchestrationResponse
 }
 
 // -----------------------------------------------------------------------
-// Browser Console facade — singleton smart-TUI turn contract.
-// The endpoint accepts either "text" (backend-native) or "message" (web-client
-// compatibility) and returns renderable state, never hidden browser-side tool
-// routing. Gated/destructive work is surfaced as gate_required/clarification.
-// -----------------------------------------------------------------------
-
-public sealed record ConsoleTurnRequest
-{
-    [JsonPropertyName("text")] public string? Text { get; init; }
-    [JsonPropertyName("message")] public string? Message { get; init; }
-    [JsonPropertyName("context")] public ConsoleTurnContext? Context { get; init; }
-    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
-    [JsonPropertyName("run_id")] public string? RunId { get; init; }
-    [JsonPropertyName("route")] public string? Route { get; init; }
-    [JsonPropertyName("conversation_id")] public string? ConversationId { get; init; }
-    [JsonPropertyName("confirmation_token")] public string? ConfirmationToken { get; init; }
-}
-
-public sealed record ConsoleTurnContext
-{
-    [JsonPropertyName("scope")] public string? Scope { get; init; }
-    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
-    [JsonPropertyName("run_id")] public string? RunId { get; init; }
-    [JsonPropertyName("route")] public string? Route { get; init; }
-}
-
-public sealed record ConsoleTurnResponse
-{
-    [JsonPropertyName("conversation_id")] public string? ConversationId { get; init; }
-    [JsonPropertyName("role")] public string Role { get; init; } = "assistant";
-    [JsonPropertyName("status")] public string? Status { get; init; }
-    [JsonPropertyName("kind")] public required string Kind { get; init; }
-    [JsonPropertyName("message")] public required string Message { get; init; }
-    [JsonPropertyName("action")] public string? Action { get; init; }
-    [JsonPropertyName("tools")] public IReadOnlyList<ConsoleToolSummary>? Tools { get; init; }
-    [JsonPropertyName("tool_calls")] public IReadOnlyList<ConsoleToolCall>? ToolCalls { get; init; }
-    [JsonPropertyName("links")] public IReadOnlyList<ConsoleLink>? Links { get; init; }
-    [JsonPropertyName("gate")] public ConsoleGate? Gate { get; init; }
-    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
-    [JsonPropertyName("run_id")] public string? RunId { get; init; }
-    [JsonPropertyName("message_chunks")] public IReadOnlyList<ConsoleMessageChunk>? MessageChunks { get; init; }
-    [JsonPropertyName("events")] public IReadOnlyList<ConsoleTurnEvent>? Events { get; init; }
-    [JsonPropertyName("action_summaries")] public IReadOnlyList<ConsoleActionSummary>? ActionSummaries { get; init; }
-    [JsonPropertyName("clarifications")] public IReadOnlyList<ConsoleClarification>? Clarifications { get; init; }
-    [JsonPropertyName("errors")] public IReadOnlyList<ConsoleError>? Errors { get; init; }
-    [JsonPropertyName("actionable_state")] public ConsoleActionableState? ActionableState { get; init; }
-}
-
-public sealed record ConsoleLink
-{
-    [JsonPropertyName("label")] public required string Label { get; init; }
-    [JsonPropertyName("to")] public string? To { get; init; }
-    [JsonPropertyName("href")] public string? Href { get; init; }
-}
-
-public sealed record ConsoleToolSummary
-{
-    [JsonPropertyName("label")] public required string Label { get; init; }
-    [JsonPropertyName("status")] public required string Status { get; init; }
-    [JsonPropertyName("detail")] public string? Detail { get; init; }
-}
-
-public sealed record ConsoleToolCall
-{
-    [JsonPropertyName("name")] public required string Name { get; init; }
-    [JsonPropertyName("status")] public required string Status { get; init; }
-    [JsonPropertyName("summary")] public string? Summary { get; init; }
-}
-
-public sealed record ConsoleGate
-{
-    [JsonPropertyName("kind")] public required string Kind { get; init; }
-    [JsonPropertyName("title")] public string? Title { get; init; }
-    [JsonPropertyName("description")] public string? Description { get; init; }
-    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
-    [JsonPropertyName("run_id")] public string? RunId { get; init; }
-}
-
-public sealed record ConsoleMessageChunk
-{
-    [JsonPropertyName("text")] public required string Text { get; init; }
-}
-
-public sealed record ConsoleTurnEvent
-{
-    [JsonPropertyName("type")] public required string Type { get; init; }
-    [JsonPropertyName("text")] public string? Text { get; init; }
-    [JsonPropertyName("tool")] public string? Tool { get; init; }
-    [JsonPropertyName("status")] public string? Status { get; init; }
-}
-
-public sealed record ConsoleActionSummary
-{
-    [JsonPropertyName("action")] public required string Action { get; init; }
-    [JsonPropertyName("status")] public required string Status { get; init; }
-    [JsonPropertyName("target_type")] public string? TargetType { get; init; }
-    [JsonPropertyName("target_id")] public string? TargetId { get; init; }
-    [JsonPropertyName("label")] public string? Label { get; init; }
-    [JsonPropertyName("detail")] public string? Detail { get; init; }
-}
-
-public sealed record ConsoleClarification
-{
-    [JsonPropertyName("id")] public required string Id { get; init; }
-    [JsonPropertyName("prompt")] public required string Prompt { get; init; }
-    [JsonPropertyName("required")] public bool Required { get; init; } = true;
-    [JsonPropertyName("options")] public IReadOnlyList<string>? Options { get; init; }
-}
-
-// -----------------------------------------------------------------------
 // Operator assistant (#346) — MCP-driven operator chat modeled as a lightweight
 // "operator run" in the run store. The conversation streams over the existing
 // GET /api/runs/{id}/stream and /events endpoints (AgentName == "Operator").
@@ -1086,21 +976,6 @@ public sealed record AssistantRunSummaryDto
 public sealed record AssistantRunListResponse
 {
     [JsonPropertyName("runs")] public required IReadOnlyList<AssistantRunSummaryDto> Runs { get; init; }
-}
-
-public sealed record ConsoleError
-{
-    [JsonPropertyName("code")] public required string Code { get; init; }
-    [JsonPropertyName("message")] public required string Message { get; init; }
-}
-
-public sealed record ConsoleActionableState
-{
-    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
-    [JsonPropertyName("run_id")] public string? RunId { get; init; }
-    [JsonPropertyName("route")] public string? Route { get; init; }
-    [JsonPropertyName("pending_gate")] public string? PendingGate { get; init; }
-    [JsonPropertyName("suggested_commands")] public IReadOnlyList<string>? SuggestedCommands { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{id}/outcome-spec/revise.</summary>

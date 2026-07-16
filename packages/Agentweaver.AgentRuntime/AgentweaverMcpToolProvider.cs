@@ -25,7 +25,7 @@ public sealed record AgentweaverMcpConnectionOptions
 /// its tools as Microsoft.Extensions.AI <see cref="AIFunction"/>s so they can be dropped straight
 /// into <c>SessionConfig.Tools</c> (which is a list of <see cref="AIFunctionDeclaration"/>).
 ///
-/// This replaces the 15 hand-wrapped read-only tools in <see cref="CopilotConsoleFacadeAgent"/> with
+/// This replaces the 15 hand-wrapped read-only tools that used to live in the legacy Console facade agent with
 /// the single source of truth (all ~91 MCP tools). The caller's GitHub bearer token is passed through
 /// on every request: it is set as the <c>Authorization</c> header on the streamable-HTTP transport, so
 /// each JSON-RPC <c>tools/call</c> (a distinct HTTP POST in stateless streamable-HTTP mode) carries the

@@ -12,6 +12,10 @@ using Agentweaver.Domain;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>A single prior turn in an operator/console conversation history, replayed as chat
+/// context for the next turn.</summary>
+public sealed record ConsoleFacadeHistoryMessage(string Role, string Text);
+
 public sealed record OperatorAssistantRequest(
     string ConversationId,
     string Message,
@@ -66,7 +70,7 @@ public interface IOperatorAssistantAgent
 
 /// <summary>
 /// Spike prototype of the operator assistant (Morpheus design, #346). It is the same in-API MAF
-/// GitHub Copilot chat loop as <see cref="CopilotConsoleFacadeAgent"/> but with two changes:
+/// GitHub Copilot chat loop as the retired legacy Console facade agent but with two changes:
 ///   1. Its tool set is sourced from the REAL AgentweaverMCP server via
 ///      <see cref="IAgentweaverMcpToolProvider"/> (all ~91 tools) instead of 15 hand-wrapped
 ///      read-only tools — one source of truth, no drift.
