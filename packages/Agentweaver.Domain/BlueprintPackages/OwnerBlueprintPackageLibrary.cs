@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Agentweaver.Domain.BlueprintPackages;
@@ -20,6 +22,55 @@ public sealed record BlueprintPackageAcquisition(
 
 /// <summary>Raw bytes of one validated package payload.</summary>
 public sealed record BlueprintPackagePayload(string Path, byte[] Bytes);
+
+/// <summary>Canonical payload-set hashing shared by package validation and owner-library persistence.</summary>
+public static class BlueprintPackagePayloadSetDigest
+{
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly byte[] Prefix = "blueprint-package-payload-set-v1\0"u8.ToArray();
+
+    /// <summary>Hashes exact payload bytes under ordinal-sorted canonical paths using the package v1 framing.</summary>
+    public static string Calculate(IEnumerable<BlueprintPackagePayload> payloads)
+    {
+        ArgumentNullException.ThrowIfNull(payloads);
+        var canonicalPayloads = payloads.ToArray();
+        foreach (var payload in canonicalPayloads)
+        {
+            ArgumentNullException.ThrowIfNull(payload);
+            ArgumentNullException.ThrowIfNull(payload.Path);
+            ArgumentNullException.ThrowIfNull(payload.Bytes);
+        }
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(Prefix);
+        foreach (var payload in canonicalPayloads.OrderBy(x => x.Path, StringComparer.Ordinal))
+        {
+            AppendLengthPrefixed(hash, EncodePathUtf8(payload.Path));
+            AppendLengthPrefixed(hash, payload.Bytes);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static void AppendLengthPrefixed(IncrementalHash hash, ReadOnlySpan<byte> value)
+    {
+        Span<byte> length = stackalloc byte[sizeof(ulong)];
+        BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)value.Length);
+        hash.AppendData(length);
+        hash.AppendData(value);
+    }
+
+    private static byte[] EncodePathUtf8(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        try
+        {
+            return StrictUtf8.GetBytes(path);
+        }
+        catch (EncoderFallbackException exception)
+        {
+            throw new ArgumentException("Payload paths must be valid Unicode.", nameof(path), exception);
+        }
+    }
+}
 
 /// <summary>
 /// Validated package material supplied by an acquisition boundary. Owner identity is deliberately
@@ -121,6 +172,10 @@ public static class BlueprintPackageLibraryLimits
             if (total > MaximumStoredPayloadSetBytes)
                 throw new ArgumentOutOfRangeException(nameof(package.Payloads), "Payload set exceeds the storage limit.");
         }
+        if (!CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(package.PayloadSetDigest),
+                Convert.FromHexString(BlueprintPackagePayloadSetDigest.Calculate(package.Payloads))))
+            throw new ArgumentException("Payload set digest does not match the supplied bytes.", nameof(package.PayloadSetDigest));
         foreach (var acquisition in package.Acquisitions)
         {
             if (acquisition is null) throw new ArgumentException("Acquisition records cannot be null.", nameof(package.Acquisitions));

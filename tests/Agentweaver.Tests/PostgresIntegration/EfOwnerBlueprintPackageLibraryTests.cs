@@ -24,6 +24,32 @@ public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task Persist_ConcurrentDifferentVersionsForNewPackage_CreatesBothCompleteAggregates()
+    {
+        var id = "concurrent-" + Guid.NewGuid().ToString("N");
+        var first = Package(id, version: "1.0.0", payload: [1, 2, 3]);
+        var second = Package(id, version: "2.0.0", payload: [4, 5, 6]);
+        var one = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-concurrent"));
+        var two = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-concurrent"));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writes = new[]
+        {
+            AfterRelease(release.Task, () => one.PersistAsync(first)),
+            AfterRelease(release.Task, () => two.PersistAsync(second)),
+        };
+
+        release.SetResult();
+        var outcomes = await Task.WhenAll(writes);
+
+        outcomes.Select(x => x.Disposition).Should().OnlyContain(x => x == BlueprintPackagePersistDisposition.Created);
+        var entries = await one.ListAsync();
+        entries.Should().ContainSingle();
+        entries.Single().Versions.Should().HaveCount(2);
+        AssertComplete(entries.Single().Versions.Single(x => x.CanonicalVersion == first.CanonicalVersion), first);
+        AssertComplete(entries.Single().Versions.Single(x => x.CanonicalVersion == second.CanonicalVersion), second);
+    }
+
+    [PostgresFact]
     public async Task GetAndDelete_AreAlwaysOwnerScoped()
     {
         var package = Package("private-" + Guid.NewGuid().ToString("N"));
@@ -67,6 +93,46 @@ public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task Persist_RejectsPayloadBytesThatDoNotMatchTheSuppliedDigestBeforeWrite()
+    {
+        var store = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-payload-digest"));
+        var id = "payload-digest-" + Guid.NewGuid().ToString("N");
+        var valid = Package(id, payload: [4, 5, 6]);
+        var altered = valid with { Payloads = [new(valid.Payloads.Single().Path, [4, 5, 7])] };
+
+        var persist = () => store.PersistAsync(altered);
+
+        await persist.Should().ThrowAsync<ArgumentException>();
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    [PostgresFact]
+    public async Task GetAndList_RacingDelete_ReturnOnlyCompleteAggregateOrNotFound()
+    {
+        var store = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-read-delete"));
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var package = Package("read-delete-" + Guid.NewGuid().ToString("N"));
+            await store.PersistAsync(package);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var get = AfterRelease(release.Task, () => store.GetVersionAsync(package.PackageId, package.CanonicalVersion));
+            var list = AfterRelease(release.Task, () => store.ListAsync());
+            var delete = AfterRelease(release.Task, () => store.DeletePackageAsync(package.PackageId));
+
+            release.SetResult();
+            await Task.WhenAll(get, list, delete);
+
+            AssertCompleteOrNotFound(await get, package);
+            var entry = (await list).SingleOrDefault(x => x.PackageId == package.PackageId);
+            if (entry is not null)
+            {
+                entry.Versions.Should().ContainSingle();
+                AssertComplete(entry.Versions.Single(), package);
+            }
+        }
+    }
+
+    [PostgresFact]
     public async Task List_OrdersLargeSemVerWithoutNumericTruncation()
     {
         var store = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-semver"));
@@ -102,8 +168,29 @@ public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
     {
         raw ??= [3, 1, 4];
         payload ??= [1, 5, 9];
-        return new(id, version, raw, [new("definitions/blueprints/x.json", payload)],
-            Digest([2]), Digest(payload), Digest(raw), null, [new("validated")]);
+        var payloads = new[] { new BlueprintPackagePayload("definitions/blueprints/x.json", payload) };
+        return new(id, version, raw, payloads,
+            Digest([2]), BlueprintPackagePayloadSetDigest.Calculate(payloads), Digest(raw), null, [new("validated")]);
+    }
+
+    private static async Task<T> AfterRelease<T>(Task release, Func<Task<T>> operation)
+    {
+        await release;
+        return await operation();
+    }
+
+    private static void AssertCompleteOrNotFound(OwnerBlueprintPackageVersion? saved, BlueprintPackageWrite package)
+    {
+        if (saved is null) return;
+        AssertComplete(saved, package);
+    }
+
+    private static void AssertComplete(OwnerBlueprintPackageVersion saved, BlueprintPackageWrite package)
+    {
+        saved.RawManifest.Should().Equal(package.RawManifest);
+        saved.Payloads.Should().ContainSingle().Which.Bytes.Should().Equal(package.Payloads.Single().Bytes);
+        saved.Acquisitions.Should().ContainSingle().Which.Should().Be(package.Acquisitions.Single());
+        saved.PayloadSetDigest.Should().Be(package.PayloadSetDigest);
     }
 
     private static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

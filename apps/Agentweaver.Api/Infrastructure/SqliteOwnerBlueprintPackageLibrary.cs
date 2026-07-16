@@ -78,14 +78,19 @@ public sealed class SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticat
         var owner = Owner();
         var version = BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Normalize(canonicalVersion);
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
-        return await ReadVersionAsync(connection, null, owner, packageId, version, ct).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var result = await ReadVersionAsync(connection, transaction, owner, packageId, version, ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return result;
     }
 
     public async Task<IReadOnlyList<OwnerBlueprintPackageEntry>> ListAsync(CancellationToken ct = default)
     {
         var owner = Owner();
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT package_id, created_at FROM blueprint_package_library WHERE owner_id = $owner ORDER BY package_id;";
         command.Parameters.AddWithValue("$owner", owner);
         var keys = new List<(string PackageId, DateTimeOffset CreatedAt)>();
@@ -95,7 +100,8 @@ public sealed class SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticat
         await reader.DisposeAsync().ConfigureAwait(false);
         var entries = new List<OwnerBlueprintPackageEntry>();
         foreach (var (packageId, createdAt) in keys)
-            entries.Add(new(packageId, createdAt, await ReadVersionsAsync(connection, owner, packageId, ct).ConfigureAwait(false)));
+            entries.Add(new(packageId, createdAt, await ReadVersionsAsync(connection, transaction, owner, packageId, ct).ConfigureAwait(false)));
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
         return entries;
     }
 
@@ -110,9 +116,10 @@ public sealed class SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticat
         return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
     }
 
-    private async Task<IReadOnlyList<OwnerBlueprintPackageVersion>> ReadVersionsAsync(SqliteConnection connection, string owner, string packageId, CancellationToken ct)
+    private async Task<IReadOnlyList<OwnerBlueprintPackageVersion>> ReadVersionsAsync(SqliteConnection connection, SqliteTransaction transaction, string owner, string packageId, CancellationToken ct)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT canonical_version FROM blueprint_package_versions WHERE owner_id = $owner AND package_id = $package;";
         command.Parameters.AddWithValue("$owner", owner);
         command.Parameters.AddWithValue("$package", packageId);
@@ -121,7 +128,7 @@ public sealed class SqliteOwnerBlueprintPackageLibrary(SqliteDb db, IAuthenticat
         while (await reader.ReadAsync(ct).ConfigureAwait(false)) keys.Add(reader.GetString(0));
         var versions = new List<OwnerBlueprintPackageVersion>();
         foreach (var key in keys)
-            versions.Add((await ReadVersionAsync(connection, null, owner, packageId, key, ct).ConfigureAwait(false))!);
+            versions.Add((await ReadVersionAsync(connection, transaction, owner, packageId, key, ct).ConfigureAwait(false))!);
         return versions.OrderByDescending(x => x.CanonicalVersion, Comparer<string>.Create(BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Compare))
             .ThenByDescending(x => x.CanonicalVersion, StringComparer.Ordinal).ToArray();
     }

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Agentweaver.Domain.BlueprintPackages;
 using Agentweaver.Squad.BlueprintPackages;
 using FluentAssertions;
 
@@ -25,6 +26,18 @@ public sealed class BlueprintPackageContractTests
         result.Package.Digests.SemanticSha256.Should().MatchRegex("^[0-9a-f]{64}$");
         result.Package.Digests.PayloadSetSha256.Should().Be("bbeb4578c069da4b053e50fe4bfa79f4fb52d7c935521201e0c4a314167dfdd3");
         BlueprintPackageValidator.CalculatePayloadSetDigest(source.Payloads).Should().Be(result.Package.Digests.PayloadSetSha256);
+    }
+
+    [Fact]
+    public void CalculatePayloadSetDigest_UsesTheOwnerLibraryCanonicalFraming()
+    {
+        var source = CreateSource(
+            ("definitions/workflows/delivery.yaml", Encoding.UTF8.GetBytes("name: delivery\r\n")),
+            ("definitions/blueprints/engineering.json", Encoding.UTF8.GetBytes("""{"weight":1}""")));
+        var ownerPayloads = source.Payloads.Select(x => new BlueprintPackagePayload(x.Key, x.Value.ToArray()));
+
+        BlueprintPackageValidator.CalculatePayloadSetDigest(source.Payloads)
+            .Should().Be(BlueprintPackagePayloadSetDigest.Calculate(ownerPayloads));
     }
 
     [Fact]

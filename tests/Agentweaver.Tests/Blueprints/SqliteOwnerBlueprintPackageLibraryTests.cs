@@ -94,12 +94,71 @@ public sealed class SqliteOwnerBlueprintPackageLibraryTests
         (await store.ListAsync()).Should().BeEmpty();
     }
 
-    private static BlueprintPackageWrite Package(string version = "1.0.0", byte[]? raw = null, byte[]? payload = null)
+    [Fact]
+    public async Task Persist_RejectsPayloadBytesThatDoNotMatchTheSuppliedDigestBeforeWrite()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        var valid = Package(payload: [4, 5, 6]);
+        var altered = valid with { Payloads = [new(valid.Payloads.Single().Path, [4, 5, 7])] };
+
+        Action validate = () => BlueprintPackageLibraryLimits.Validate(altered);
+        var persist = () => store.PersistAsync(altered);
+
+        validate.Should().Throw<ArgumentException>().WithParameterName(nameof(BlueprintPackageWrite.PayloadSetDigest));
+        await persist.Should().ThrowAsync<ArgumentException>();
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAndList_RacingDelete_ReturnOnlyCompleteAggregateOrNotFound()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var package = Package(packageId: $"race-{attempt}");
+            await store.PersistAsync(package);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var get = AfterRelease(release.Task, () => store.GetVersionAsync(package.PackageId, package.CanonicalVersion));
+            var list = AfterRelease(release.Task, () => store.ListAsync());
+            var delete = AfterRelease(release.Task, () => store.DeletePackageAsync(package.PackageId));
+
+            release.SetResult();
+            await Task.WhenAll(get, list, delete);
+
+            AssertCompleteOrNotFound(await get, package);
+            var entry = (await list).SingleOrDefault(x => x.PackageId == package.PackageId);
+            if (entry is not null)
+            {
+                entry.Versions.Should().ContainSingle();
+                AssertCompleteOrNotFound(entry.Versions.Single(), package);
+            }
+        }
+    }
+
+    private static async Task<T> AfterRelease<T>(Task release, Func<Task<T>> operation)
+    {
+        await release;
+        return await operation();
+    }
+
+    private static void AssertCompleteOrNotFound(OwnerBlueprintPackageVersion? saved, BlueprintPackageWrite package)
+    {
+        if (saved is null) return;
+        saved.RawManifest.Should().Equal(package.RawManifest);
+        saved.Payloads.Should().ContainSingle().Which.Bytes.Should().Equal(package.Payloads.Single().Bytes);
+        saved.Acquisitions.Should().ContainSingle().Which.Should().Be(package.Acquisitions.Single());
+        saved.PayloadSetDigest.Should().Be(package.PayloadSetDigest);
+    }
+
+    private static BlueprintPackageWrite Package(string version = "1.0.0", byte[]? raw = null, byte[]? payload = null, string packageId = "engineering")
     {
         raw ??= [1, 2, 3];
         payload ??= [4, 5, 6];
-        return new("engineering", version, raw, [new("definitions/blueprints/engineering.json", payload)],
-            Digest([9]), Digest(payload), Digest(raw), null, [new("validated")]);
+        var payloads = new[] { new BlueprintPackagePayload("definitions/blueprints/engineering.json", payload) };
+        return new(packageId, version, raw, payloads,
+            Digest([9]), BlueprintPackagePayloadSetDigest.Calculate(payloads), Digest(raw), null, [new("validated")]);
     }
 
     private static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

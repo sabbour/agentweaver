@@ -2,6 +2,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Domain.BlueprintPackages;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using System.Data;
 
 namespace Agentweaver.Api.Infrastructure.Ef;
 
@@ -32,11 +33,9 @@ public sealed class EfOwnerBlueprintPackageLibrary(
         var created = DateTimeOffset.UtcNow;
         try
         {
-            if (!await db.BlueprintPackageLibrary.AnyAsync(x => x.OwnerId == owner && x.PackageId == package.PackageId, ct).ConfigureAwait(false))
-            {
-                db.BlueprintPackageLibrary.Add(new BlueprintPackageLibraryRecord { OwnerId = owner, PackageId = package.PackageId, CreatedAt = created });
-                await db.SaveChangesAsync(ct).ConfigureAwait(false);
-            }
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"INSERT INTO blueprint_package_library (owner_id, package_id, created_at) VALUES ({owner}, {package.PackageId}, {created}) ON CONFLICT (owner_id, package_id) DO NOTHING;",
+                ct).ConfigureAwait(false);
             db.BlueprintPackageVersions.Add(new BlueprintPackageVersionRecord
             {
                 OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version,
@@ -58,7 +57,11 @@ public sealed class EfOwnerBlueprintPackageLibrary(
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return new(BlueprintPackagePersistDisposition.Created, ToVersion(package, version, created));
         }
-        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+            {
+                SqlState: PostgresErrorCodes.UniqueViolation,
+                ConstraintName: "PK_blueprint_package_versions"
+            })
         {
             await transaction.RollbackAsync(ct).ConfigureAwait(false);
             var raced = await GetVersionAsync(package.PackageId, version, ct).ConfigureAwait(false);
@@ -73,13 +76,17 @@ public sealed class EfOwnerBlueprintPackageLibrary(
     public async Task<OwnerBlueprintPackageVersion?> GetVersionAsync(string packageId, string canonicalVersion, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        return await ReadVersionAsync(db, Owner(), packageId, BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Normalize(canonicalVersion), ct).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct).ConfigureAwait(false);
+        var result = await ReadVersionAsync(db, Owner(), packageId, BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Normalize(canonicalVersion), ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return result;
     }
 
     public async Task<IReadOnlyList<OwnerBlueprintPackageEntry>> ListAsync(CancellationToken ct = default)
     {
         var owner = Owner();
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct).ConfigureAwait(false);
         var entries = await db.BlueprintPackageLibrary.AsNoTracking().Where(x => x.OwnerId == owner)
             .OrderBy(x => x.PackageId).ToListAsync(ct).ConfigureAwait(false);
         var result = new List<OwnerBlueprintPackageEntry>();
@@ -94,6 +101,7 @@ public sealed class EfOwnerBlueprintPackageLibrary(
                 .OrderByDescending(x => x.CanonicalVersion, Comparer<string>.Create(BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Compare))
                 .ThenByDescending(x => x.CanonicalVersion, StringComparer.Ordinal).ToArray()));
         }
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
         return result;
     }
 

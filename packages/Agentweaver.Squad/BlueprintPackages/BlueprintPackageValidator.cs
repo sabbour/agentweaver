@@ -1,10 +1,10 @@
-using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Agentweaver.Domain.BlueprintPackages;
 
 namespace Agentweaver.Squad.BlueprintPackages;
 
@@ -16,7 +16,6 @@ public static class BlueprintPackageValidator
     private static readonly Regex ProducerPattern = new(@"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly Regex RevisionPattern = new(@"\A[0-9a-f]{7,64}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
-    private static readonly byte[] PayloadSetPrefix = "blueprint-package-payload-set-v1\0"u8.ToArray();
 
     public static BlueprintPackageValidationResult Validate(BlueprintPackageSource source)
     {
@@ -92,14 +91,8 @@ public static class BlueprintPackageValidator
     public static string CalculatePayloadSetDigest(IReadOnlyDictionary<string, ImmutableArray<byte>> payloads)
     {
         ArgumentNullException.ThrowIfNull(payloads);
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(PayloadSetPrefix);
-        foreach (var payload in payloads.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-        {
-            AppendLengthPrefixed(hash, EncodePathUtf8(payload.Key));
-            AppendLengthPrefixed(hash, payload.Value.AsSpan());
-        }
-        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        return BlueprintPackagePayloadSetDigest.Calculate(payloads.Select(payload =>
+            new BlueprintPackagePayload(payload.Key, payload.Value.ToArray())));
     }
 
     private static BlueprintPackageManifest? ParseManifest(JsonElement root, List<string> errors)
@@ -365,26 +358,6 @@ public static class BlueprintPackageValidator
         }
     }
 
-    private static void AppendLengthPrefixed(IncrementalHash hash, ReadOnlySpan<byte> value)
-    {
-        Span<byte> length = stackalloc byte[sizeof(ulong)];
-        BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)value.Length);
-        hash.AppendData(length);
-        hash.AppendData(value);
-    }
-
-    private static byte[] EncodePathUtf8(string path)
-    {
-        ArgumentNullException.ThrowIfNull(path);
-        try
-        {
-            return StrictUtf8.GetBytes(path);
-        }
-        catch (EncoderFallbackException exception)
-        {
-            throw new ArgumentException("Payload paths must be valid Unicode.", nameof(path), exception);
-        }
-    }
 }
 
 internal static class StrictJson
