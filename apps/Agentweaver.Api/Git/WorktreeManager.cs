@@ -1971,13 +1971,18 @@ public sealed class WorktreeManager
                 return MergeOutcome.Blocked(blockReason);
 
             // For all other cases (dirty working tree, staged changes, untracked collisions),
-            // fall back to the ref-only path. MergeRefOnly never touches the working tree,
-            // so local changes are irrelevant and preserved. The user will need a `git pull`
-            // to sync their working tree after the merge.
+            // do NOT fall back to the ref-only path. When the branch is checked out, a
+            // ref-only merge still advances HEAD's branch ref while leaving the index and
+            // working tree exactly as they were — which desynchronizes them from the new
+            // HEAD. Any file the merge added or changed that the stale index doesn't
+            // already have then appears as a *staged deletion*, even though it is fully
+            // present and correct in the new HEAD commit (see #348). Instead, attempt to
+            // reconcile the working tree onto the merge result; only fail loudly if doing
+            // so would silently discard content that exists nowhere else.
             _logger.LogWarning(
-                "Main working tree has uncommitted changes — using ref-only merge. " +
-                "A `git pull` in the repository is needed to reflect the merged changes locally.");
-            return MergeRefOnly(repo, origin, worktree, mergeBase, originatingBranch);
+                "Main working tree has uncommitted changes — attempting to reconcile it onto the merge result " +
+                "instead of only advancing the branch ref.");
+            return ReconcileDirtyCheckedOutMerge(repo, origin, worktree, mergeBase, originatingBranch);
         }
 
         var prevSha = origin.Tip.Sha;
@@ -2020,11 +2025,194 @@ public sealed class WorktreeManager
     }
 
     /// <summary>
+    /// Reconciles a dirty checked-out working tree onto the merge result instead of
+    /// silently advancing the branch ref underneath a stale index (see #348).
+    ///
+    /// A ref-only merge is only safe when nothing reads the working tree/index relative
+    /// to the branch ref it advances (i.e. the branch is NOT checked out). When it IS
+    /// checked out, moving the ref alone leaves the index/working directory pointed at
+    /// the *old* tree while HEAD now resolves to the *new* one — any path the merge
+    /// added or changed that the stale index lacks then shows up as a staged deletion,
+    /// even though it is fully present and correct in the new HEAD commit.
+    ///
+    /// This computes the same merge result (fast-forward or 3-way) as
+    /// <see cref="MergeCheckedOut"/>, then verifies that every dirty path's current
+    /// effective content (working-directory bytes, or index blob if no working-directory
+    /// copy exists) is byte-identical to what the result tree already contains there.
+    /// If every dirty path checks out, a Hard Reset reconciles the index/working tree
+    /// with zero data loss (this is exactly the scenario that produced the incident: a
+    /// stale/missing index entry for content the merge already produced correctly). If
+    /// any dirty path holds content that diverges from the result tree — real
+    /// uncommitted local edits that exist nowhere else — the merge is refused (Blocked)
+    /// rather than silently discarding that content or corrupting the working directory.
+    /// </summary>
+    private MergeOutcome ReconcileDirtyCheckedOutMerge(
+        Repository repo,
+        Branch origin,
+        Branch worktree,
+        Commit? mergeBase,
+        string originatingBranch)
+    {
+        var prevSha = origin.Tip.Sha;
+
+        Commit resultCommit;
+        bool wasFastForward;
+
+        // Fast-forward: origin hasn't advanced since the run started.
+        if (mergeBase is not null &&
+            string.Equals(mergeBase.Sha, origin.Tip.Sha, StringComparison.Ordinal))
+        {
+            resultCommit = worktree.Tip;
+            wasFastForward = true;
+        }
+        else
+        {
+            // 3-way merge.
+            var mergeTreeResult = repo.ObjectDatabase.MergeCommits(origin.Tip, worktree.Tip, new MergeTreeOptions());
+            if (mergeTreeResult.Status == MergeTreeStatus.Conflicts)
+            {
+                return MergeOutcome.Conflict(
+                    "The originating branch has diverged and the merge has conflicts that require human resolution.",
+                    ExtractConflictingFiles(mergeTreeResult));
+            }
+
+            var signature = WithTimestamp();
+            resultCommit = repo.ObjectDatabase.CreateCommit(
+                signature,
+                signature,
+                $"Merge agentweaver run into {originatingBranch}",
+                mergeTreeResult.Tree,
+                new[] { origin.Tip, worktree.Tip },
+                prettifyMessage: true);
+            wasFastForward = false;
+        }
+
+        var status = repo.RetrieveStatus(new StatusOptions
+        {
+            IncludeUntracked     = true,
+            IncludeIgnored       = false,
+            RecurseUntrackedDirs = true,
+            RecurseIgnoredDirs   = false,
+        });
+
+        if (!IsWorkingTreeReconcilable(repo, status, resultCommit.Tree, out var blockReason))
+        {
+            // Never advance the ref underneath content that would be silently lost —
+            // fail loudly instead of corrupting the checked-out working directory.
+            // The merge commit (if any) created above is left dangling in the object
+            // database and is never referenced by any ref; it is inert and harmless.
+            return MergeOutcome.Blocked(
+                $"the working tree cannot be safely reconciled with the merge result because {blockReason}; " +
+                "commit, stash, or discard the local changes and retry");
+        }
+
+        // Hard Reset moves HEAD's branch ref to resultCommit AND updates working tree + index,
+        // so the checkout can never end up desynchronized from the ref it points to.
+        repo.Reset(ResetMode.Hard, resultCommit);
+        var newHeadSha = repo.Head.Tip.Sha;
+        return MergeOutcome.Merged(newHeadSha, "working-tree-reconciled", prevSha, newHeadSha, wasFastForward);
+    }
+
+    /// <summary>
+    /// Checks whether every dirty path reported in <paramref name="status"/> can be
+    /// safely reconciled (via Hard Reset) onto <paramref name="resultTree"/> without
+    /// discarding any content that does not already exist there. A path is safe when
+    /// its current effective content — the working-directory file if one exists,
+    /// otherwise the index blob, otherwise nothing — is either absent or byte-identical
+    /// to the corresponding blob in the result tree. Untracked files that do not
+    /// collide with a path in the result tree are always safe (Hard Reset never
+    /// touches untracked files the target tree doesn't reference).
+    /// Reasons are enumerated categories — never raw file names, content, or absolute
+    /// paths (S2).
+    /// </summary>
+    private static bool IsWorkingTreeReconcilable(
+        Repository repo,
+        RepositoryStatus status,
+        Tree resultTree,
+        out string blockReason)
+    {
+        blockReason = string.Empty;
+
+        const FileStatus dirtyMask =
+            FileStatus.NewInIndex | FileStatus.ModifiedInIndex | FileStatus.DeletedFromIndex |
+            FileStatus.RenamedInIndex | FileStatus.TypeChangeInIndex |
+            FileStatus.ModifiedInWorkdir | FileStatus.DeletedFromWorkdir | FileStatus.TypeChangeInWorkdir |
+            FileStatus.NewInWorkdir;
+
+        foreach (var entry in status)
+        {
+            if ((entry.State & dirtyMask) == 0) continue;
+
+            var path = entry.FilePath;
+            var currentBytes = ReadCurrentContent(repo, path);
+
+            if (currentBytes is null)
+            {
+                // Nothing currently exists at this path (deleted from both working
+                // directory and index, or an untracked entry libgit2 no longer sees) —
+                // there is nothing unique to lose; the result tree's content (if any)
+                // is simply restored by the reset.
+                continue;
+            }
+
+            var resultEntry = resultTree[path];
+            if (resultEntry?.TargetType == TreeEntryTargetType.Blob &&
+                BlobContentEquals((Blob)resultEntry.Target, currentBytes))
+            {
+                continue; // Identical content — safe; the reset changes nothing here.
+            }
+
+            // The path is either absent from the result tree or its content diverges —
+            // reconciling would silently discard content that exists nowhere else.
+            blockReason = "uncommitted content diverges from the merge result and cannot be safely reconciled";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the current effective content for <paramref name="path"/>: the working-directory
+    /// file bytes if the file exists on disk, otherwise the index blob's bytes, otherwise null
+    /// if neither exists.
+    /// </summary>
+    private static byte[]? ReadCurrentContent(Repository repo, string path)
+    {
+        var fullPath = Path.Combine(repo.Info.WorkingDirectory, path);
+        if (File.Exists(fullPath))
+        {
+            return File.ReadAllBytes(fullPath);
+        }
+
+        var indexEntry = repo.Index[path];
+        if (indexEntry is null) return null;
+
+        var blob = repo.Lookup<Blob>(indexEntry.Id);
+        return blob is null ? null : ReadBlobBytes(blob);
+    }
+
+    private static bool BlobContentEquals(Blob blob, byte[] bytes)
+    {
+        if (blob.Size != bytes.LongLength) return false;
+        return ReadBlobBytes(blob).AsSpan().SequenceEqual(bytes);
+    }
+
+    private static byte[] ReadBlobBytes(Blob blob)
+    {
+        using var stream = blob.GetContentStream();
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>
     /// Merges by updating only the branch ref — no working tree or index is touched.
-    /// Used when the originating branch is NOT checked out (bare repo or HEAD on a different branch),
-    /// OR as a fallback when the branch IS checked out but the working tree has uncommitted changes
-    /// (dirty working tree, staged changes, untracked collisions). In the fallback case the user's
-    /// local changes are left untouched; a <c>git pull</c> is required to sync the working tree.
+    /// Used ONLY when the originating branch is NOT checked out (bare repo, detached
+    /// HEAD, or HEAD on a different branch). In this case nothing reads the working
+    /// tree/index relative to the ref being advanced, so a ref-only update is always
+    /// safe — unlike the checked-out case, where the same trick desynchronizes the
+    /// index/working tree from the ref (see <see cref="ReconcileDirtyCheckedOutMerge"/>
+    /// and #348).
     /// </summary>
     private MergeOutcome MergeRefOnly(
         Repository repo,

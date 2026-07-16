@@ -288,7 +288,7 @@ The trade-off is plain: remote PRs are not the authoritative review surface in A
 
 Before it advances the originating branch, Agentweaver checks the repository state. The merge path verifies that the run branch exists, the originating branch exists, and the run branch tree still equals the approved tree hash. It serializes repository updates so two approvals for the same repository do not race each other.
 
-If the target branch can be fast-forwarded, Agentweaver can advance it directly. If a merge commit is needed, Agentweaver performs a local git merge. If the base workspace has unrelated uncommitted changes, Agentweaver can use a ref-only merge path that advances the branch ref without overwriting local files. In that case, the checked-out files may not visibly change until the user synchronizes the workspace.
+If the target branch can be fast-forwarded, Agentweaver can advance it directly. If a merge commit is needed, Agentweaver performs a local git merge. If the base workspace has uncommitted changes and the originating branch is checked out, Agentweaver reconciles them onto the merge result with a hard reset whenever that is provably lossless (every dirty file's current content already matches what the merge produces); otherwise it blocks the merge rather than risk leaving the checked-out working directory out of sync with the branch ref it just advanced. When the originating branch is NOT checked out, Agentweaver uses a ref-only merge path that advances the branch ref without touching any files — safe in that case because nothing reads the working tree relative to that ref.
 
 ### Merge success
 
