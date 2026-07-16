@@ -6,6 +6,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Projects;
@@ -39,13 +40,13 @@ public sealed class ProjectDeleteConcurrencyTests : IAsyncDisposable
         return path;
     }
 
-    private static ProjectService BuildService(IProjectStore store)
+    private static ProjectService BuildService(IProjectStore store, ISkillStore skillStore)
     {
         return new ProjectService(
             store, TestWorkspaceProviders.CreateLocal(),
             new NoOpGitInitializer(),
             new InMemoryGitHubTokenStore(), new FixedInstallationScopeProvider(),
-            NullLogger<ProjectService>.Instance);
+            NullLogger<ProjectService>.Instance, skillStore);
     }
 
     // =========================================================================
@@ -62,7 +63,7 @@ public sealed class ProjectDeleteConcurrencyTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
         var dir          = NewDir();
 
         var project = await svc.CreateBlankAsync(
@@ -134,7 +135,7 @@ public sealed class ProjectDeleteConcurrencyTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var dir          = NewDir();
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
 
         var project = await svc.CreateBlankAsync(
             "Failure Test", dir, null, null, null, "test-user");

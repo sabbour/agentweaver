@@ -6,6 +6,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Projects;
@@ -43,13 +44,14 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
 
     private static ProjectService BuildService(
         IProjectStore store,
+        ISkillStore skillStore,
         IProjectWorkspaceProvider? workspace = null)
     {
         workspace ??= TestWorkspaceProviders.CreateLocal();
         return new ProjectService(
             store, workspace, new NoOpGitInitializer(),
             new InMemoryGitHubTokenStore(), new FixedInstallationScopeProvider(),
-            NullLogger<ProjectService>.Instance);
+            NullLogger<ProjectService>.Instance, skillStore);
     }
 
     private static async Task<Project> CreateProjectAsync(
@@ -82,7 +84,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -105,7 +107,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var projectStore = new SqliteProjectStore(testDb.Db);
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -128,7 +130,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -154,7 +156,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -175,7 +177,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
 
         var result = await svc.DeleteAsync(ProjectId.New(), runStore, registry);
 
@@ -192,7 +194,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore);
+        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);

@@ -776,6 +776,7 @@ public sealed class BlueprintService
                 blueprint.SandboxProfile)
             {
                 BespokeRoles = blueprint.BespokeRoles,
+                SkillBindings = blueprint.SkillBindings,
             };
             var ids = string.Join(", ", autoRostered);
             warnings.Add($"Blueprint generation auto-rostered {autoRostered.Count} bespoke role(s): {ids}.");
@@ -820,6 +821,7 @@ public sealed class BlueprintService
                     blueprint.SandboxProfile)
                 {
                     BespokeRoles = blueprint.BespokeRoles,
+                    SkillBindings = blueprint.SkillBindings,
                 };
 
                 _logger.LogInformation(
@@ -845,6 +847,7 @@ public sealed class BlueprintService
                     blueprint.SandboxProfile)
                 {
                     BespokeRoles = blueprint.BespokeRoles,
+                    SkillBindings = blueprint.SkillBindings,
                 };
             }
         }

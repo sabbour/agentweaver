@@ -34,6 +34,12 @@ public interface ISkillStore
     Task<IReadOnlyList<Skill>> ListActiveSkillsForAgentAsync(ProjectId projectId, string agentName, CancellationToken ct = default);
 
     /// <summary>
+    /// Transactionally removes every skill and assignment owned by one project. Used by creation
+    /// compensation after defaults have committed; other projects are never affected.
+    /// </summary>
+    Task DeleteProjectSkillStateAsync(ProjectId projectId, CancellationToken ct = default);
+
+    /// <summary>
     /// Atomically materializes a previously previewed built-in-default plan. The store verifies the
     /// complete catalog/assignment state fingerprint inside its write transaction before changing
     /// anything, so a stale preview cannot partially apply.
@@ -45,6 +51,7 @@ public interface ISkillStore
 
 public sealed record SkillDefaultsStorePlan(
     ProjectId ProjectId,
+    long ExpectedTeamRevision,
     string ExpectedStateFingerprint,
     IReadOnlyList<Skill> SkillsToInsert,
     IReadOnlyList<Skill> SkillsToActivate,

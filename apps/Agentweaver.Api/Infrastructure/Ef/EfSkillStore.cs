@@ -149,6 +149,22 @@ public sealed class EfSkillStore : ISkillStore
         return recs.Select(FromRecord).ToList();
     }
 
+    public async Task DeleteProjectSkillStateAsync(ProjectId projectId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var pid = projectId.ToString();
+        await db.SkillAssignments
+            .Where(assignment => assignment.ProjectId == pid)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+        await db.Skills
+            .Where(skill => skill.ProjectId == pid)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task<SkillDefaultsStoreApplyResult> ApplyDefaultsAsync(
         SkillDefaultsStorePlan plan,
         CancellationToken ct = default)
@@ -160,6 +176,23 @@ public sealed class EfSkillStore : ISkillStore
         try
         {
             var pid = plan.ProjectId.ToString();
+            var guardedProject = await db.Projects
+                .Where(project =>
+                    project.ProjectId == pid &&
+                    project.State == "active" &&
+                    project.TeamRevision == plan.ExpectedTeamRevision)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(
+                        project => project.TeamRevision,
+                        project => project.TeamRevision),
+                    ct)
+                .ConfigureAwait(false);
+            if (guardedProject != 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return SkillDefaultsStoreApplyResult.Stale;
+            }
+
             var records = await db.Skills
                 .Where(s => s.ProjectId == pid)
                 .ToListAsync(ct)
@@ -263,6 +296,14 @@ public sealed class EfSkillStore : ISkillStore
     {
         await using var verify = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
         var pid = plan.ProjectId.ToString();
+        var teamRevision = await verify.Projects.AsNoTracking()
+            .Where(project => project.ProjectId == pid)
+            .Select(project => (long?)project.TeamRevision)
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (teamRevision != plan.ExpectedTeamRevision)
+            return true;
+
         var skills = await verify.Skills.AsNoTracking()
             .Where(skill => skill.ProjectId == pid)
             .ToListAsync(ct).ConfigureAwait(false);

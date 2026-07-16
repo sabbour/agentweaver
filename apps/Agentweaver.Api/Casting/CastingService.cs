@@ -72,6 +72,16 @@ public sealed class CastingService
         return (project, project.Owner);
     }
 
+    private async Task<IProjectTeamMutationLease> BeginTeamMutationAsync(
+        Project project,
+        CancellationToken ct)
+    {
+        var lease = await _projectStore
+            .TryBeginTeamMutationAsync(project.Id, project.TeamRevision, ct)
+            .ConfigureAwait(false);
+        return lease ?? throw new TeamMutationConflictException(project.Id.ToString());
+    }
+
     // -----------------------------------------------------------------------
     // Phase 1 — scenario casting
     // -----------------------------------------------------------------------
@@ -862,6 +872,7 @@ public sealed class CastingService
             _ => throw new ArgumentException($"Invalid intent '{intent}'. Must be new, augment, or recast.", nameof(intent))
         };
 
+        await using var teamMutation = await BeginTeamMutationAsync(project, ct).ConfigureAwait(false);
         var reader = new SquadReader(project.WorkingDirectory);
         var writer = new SquadWriter(project.WorkingDirectory);
         var registryBefore = reader.ReadRegistry();
@@ -1113,6 +1124,7 @@ public sealed class CastingService
         writer.AppendHistoryEvent(snapshot);
         writer.RegenerateCanonicalJson();
         await writer.WriteAgentWeaverCoordinatorAsync().ConfigureAwait(false);
+        await teamMutation.CompleteAsync(CancellationToken.None).ConfigureAwait(false);
 
         _proposalStore.Remove(projectId, proposalId);
 
@@ -1324,14 +1336,17 @@ public sealed class CastingService
         string projectId, string memberName, string content, CancellationToken ct)
     {
         var (project, _) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+        await using var teamMutation = await BeginTeamMutationAsync(project, ct).ConfigureAwait(false);
         var writer = new SquadWriter(project.WorkingDirectory);
         writer.WriteCharter(memberName.ToLower(), content);
+        await teamMutation.CompleteAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     public async Task<CastMember> AddMemberAsync(
         string projectId, string roleId, string? customRoleTitle, string? modelId, CancellationToken ct)
     {
         var (project, owner) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+        await using var teamMutation = await BeginTeamMutationAsync(project, ct).ConfigureAwait(false);
 
         var reader = new SquadReader(project.WorkingDirectory);
 
@@ -1409,6 +1424,7 @@ public sealed class CastingService
             CharterPath: charterPath);
         writer.AppendRegistryEvent(registryMember);
         writer.RegenerateCanonicalJson();
+        await teamMutation.CompleteAsync(CancellationToken.None).ConfigureAwait(false);
 
         return newMember;
     }
@@ -1416,6 +1432,7 @@ public sealed class CastingService
     public async Task RetireMemberAsync(string projectId, string memberName, CancellationToken ct)
     {
         var (project, owner) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+        await using var teamMutation = await BeginTeamMutationAsync(project, ct).ConfigureAwait(false);
         var reader = new SquadReader(project.WorkingDirectory);
 
         if (reader.DetectLayout().HasConflict)
@@ -1454,12 +1471,14 @@ public sealed class CastingService
             CharterPath: null);
         writer.AppendRegistryEvent(registryEvent);
         writer.RegenerateCanonicalJson();
+        await teamMutation.CompleteAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     public async Task<CastMember> ReroleMemberAsync(
         string projectId, string memberName, string newRoleId, string? customRoleTitle, CancellationToken ct)
     {
         var (project, owner) = await LoadProjectAsync(projectId, ct).ConfigureAwait(false);
+        await using var teamMutation = await BeginTeamMutationAsync(project, ct).ConfigureAwait(false);
         var reader = new SquadReader(project.WorkingDirectory);
 
         if (reader.DetectLayout().HasConflict)
@@ -1527,6 +1546,7 @@ public sealed class CastingService
             CharterPath: reroledMember.CharterPath);
         writer.AppendRegistryEvent(registryEvent);
         writer.RegenerateCanonicalJson();
+        await teamMutation.CompleteAsync(CancellationToken.None).ConfigureAwait(false);
 
         return reroledMember;
     }
@@ -1604,3 +1624,6 @@ public sealed class RequiresChoiceException(string message)
 
 public sealed class MemberNotFoundException(string name)
     : Exception($"Member '{name}' not found in the team.");
+
+public sealed class TeamMutationConflictException(string projectId)
+    : Exception($"The team for project '{projectId}' changed concurrently. Reload it and retry.");

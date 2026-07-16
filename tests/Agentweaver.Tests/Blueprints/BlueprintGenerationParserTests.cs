@@ -119,6 +119,81 @@ public sealed class BlueprintGenerationParserTests
         result.Blueprint.SkillBindings[0].Skills.Should().Equal("architecture-decisions", "system-design");
     }
 
+    [Fact]
+    public async Task Generate_AutoRosterAndWorkflowFallback_PreserveSkillBindings()
+    {
+        var raw = """
+            {
+              "id": "generated",
+              "name": "Generated",
+              "description": "Generated blueprint.",
+              "roster": ["backend-engineer"],
+              "bespoke_roles": [
+                {
+                  "id": "specialist",
+                  "title": "Specialist",
+                  "charter": "Own the specialist work."
+                }
+              ],
+              "workflows": [],
+              "review_policy": "default",
+              "sandbox_profile": "default",
+              "skill_bindings": [
+                { "role_id": "backend-engineer", "skills": ["api-data-safety"] }
+              ]
+            }
+            """;
+        var generatedYaml = DefaultWorkflowTemplate.Yaml.Replace(
+            "id: default",
+            "id: generated-fallback",
+            StringComparison.Ordinal);
+        var generated = WorkflowDefinitionLoader.Load(generatedYaml, "test");
+        generated.IsValid.Should().BeTrue(generated.Error);
+        var service = GenerationService(
+            raw,
+            new StubWorkflowGenerator(new WorkflowGenerationResult(
+                generated.Definition!,
+                generatedYaml,
+                false)));
+
+        var result = await service.GenerateAsync("test", CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(string.Join("; ", result.Errors));
+        result.Blueprint!.Roster.Should().Contain("specialist");
+        result.Blueprint.Workflows.Should().Equal("generated-fallback");
+        result.Blueprint.SkillBindings.Should().ContainSingle();
+        result.Blueprint.SkillBindings[0].Skills.Should().Equal("api-data-safety");
+    }
+
+    [Fact]
+    public async Task Generate_FailedWorkflowFallback_PreservesSkillBindings()
+    {
+        var raw = """
+            {
+              "id": "generated",
+              "name": "Generated",
+              "description": "Generated blueprint.",
+              "roster": ["backend-engineer"],
+              "workflows": [],
+              "review_policy": "default",
+              "sandbox_profile": "default",
+              "skill_bindings": [
+                { "role_id": "backend-engineer", "skills": ["api-data-safety"] }
+              ]
+            }
+            """;
+        var service = GenerationService(
+            raw,
+            new StubWorkflowGenerator(new WorkflowGenerationException("injected failure")));
+
+        var result = await service.GenerateAsync("test", CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(string.Join("; ", result.Errors));
+        result.Blueprint!.Workflows.Should().Equal("default");
+        result.Blueprint.SkillBindings.Should().ContainSingle();
+        result.Blueprint.SkillBindings[0].Skills.Should().Equal("api-data-safety");
+    }
+
     public static IEnumerable<object[]> PersonaDrivenBlueprints()
     {
         yield return ["ambiguous travel operations", """{"id":"travel-ops","name":"Travel Ops","description":"Coordinates trip research, itinerary writing, and review.","roster":["customer-researcher","docs-writer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];
@@ -154,5 +229,49 @@ public sealed class BlueprintGenerationParserTests
 
         var validation = service.Validate(parsed.Blueprint!);
         validation.Valid.Should().BeTrue($"{persona}: {string.Join("; ", validation.Errors)}");
+    }
+
+    private static BlueprintService GenerationService(
+        string raw,
+        IWorkflowGenerator workflowGenerator)
+    {
+        var catalog = new CatalogReader();
+        return new BlueprintService(
+            catalog,
+            casting: null!,
+            projectStore: null!,
+            sandboxPolicyStore: null!,
+            workflowRegistry: new WorkflowRegistry(catalog),
+            generator: new StubBlueprintGenerator(raw),
+            workflowGenerator,
+            skillDefaults: null!,
+            logger: NullLogger<BlueprintService>.Instance);
+    }
+
+    private sealed class StubBlueprintGenerator(string response) : IBlueprintGenerator
+    {
+        public Task<string> GenerateRawAsync(
+            string description,
+            CancellationToken ct,
+            string? userId = null,
+            string? targetRepository = null,
+            string? modelId = null) =>
+            Task.FromResult(response);
+    }
+
+    private sealed class StubWorkflowGenerator : IWorkflowGenerator
+    {
+        private readonly WorkflowGenerationResult? _result;
+        private readonly Exception? _exception;
+
+        public StubWorkflowGenerator(WorkflowGenerationResult result) => _result = result;
+        public StubWorkflowGenerator(Exception exception) => _exception = exception;
+
+        public Task<WorkflowGenerationResult> GenerateAsync(
+            WorkflowGenerationRequest request,
+            CancellationToken ct = default) =>
+            _exception is null
+                ? Task.FromResult(_result!)
+                : Task.FromException<WorkflowGenerationResult>(_exception);
     }
 }

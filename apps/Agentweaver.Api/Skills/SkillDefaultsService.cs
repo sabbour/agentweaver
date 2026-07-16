@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Globalization;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
@@ -93,6 +94,9 @@ public sealed class SkillDefaultsService
         var activations = new Dictionary<SkillId, Skill>();
         var assignments = new Dictionary<(SkillId SkillId, string Agent), SkillAssignment>();
         var bundled = new Dictionary<string, Skill>(StringComparer.OrdinalIgnoreCase);
+        var materializedByName = new Dictionary<string, Skill>(StringComparer.OrdinalIgnoreCase);
+        var blockedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var invalidNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var now = DateTimeOffset.UtcNow;
 
         foreach (var binding in blueprint.SkillBindings
@@ -106,46 +110,75 @@ public sealed class SkillDefaultsService
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
             {
-                var builtIn = LoadBuiltIn(project.Id, skillName, now, errors);
-                if (builtIn is null)
-                    continue;
-                bundled[skillName] = builtIn;
-
-                var existing = currentSkills.SingleOrDefault(skill =>
-                    string.Equals(skill.Name, skillName, StringComparison.OrdinalIgnoreCase));
-                if (existing is not null && existing.Provenance != SkillProvenance.BuiltIn)
+                var normalizedName = skillName.Trim().ToLowerInvariant();
+                if (blockedNames.Contains(normalizedName))
                 {
-                    planned.Add(new SkillDefaultAssignment(binding.RoleId, member.Name, skillName, "blocked"));
+                    planned.Add(new SkillDefaultAssignment(
+                        binding.RoleId,
+                        member.Name,
+                        normalizedName,
+                        "blocked"));
                     continue;
                 }
+                if (invalidNames.Contains(normalizedName))
+                    continue;
 
-                Skill materialized;
-                if (existing is null)
+                var action = "assign";
+                if (!materializedByName.TryGetValue(normalizedName, out var materialized))
                 {
-                    materialized = builtIn;
-                    inserts[skillName] = materialized;
-                    planned.Add(new SkillDefaultAssignment(binding.RoleId, member.Name, skillName, "create"));
-                }
-                else
-                {
-                    if (!string.Equals(existing.ContentHash, builtIn.ContentHash, StringComparison.Ordinal))
+                    var builtIn = LoadBuiltIn(project.Id, normalizedName, now, errors);
+                    if (builtIn is null)
                     {
-                        errors.Add($"Built-in skill '{skillName}' differs from its bundled content and cannot be replaced.");
+                        invalidNames.Add(normalizedName);
+                        continue;
+                    }
+                    bundled[normalizedName] = builtIn;
+
+                    var existing = currentSkills.SingleOrDefault(skill =>
+                        string.Equals(skill.Name.Trim(), normalizedName, StringComparison.OrdinalIgnoreCase));
+                    if (existing is not null && existing.Provenance != SkillProvenance.BuiltIn)
+                    {
+                        blockedNames.Add(normalizedName);
+                        planned.Add(new SkillDefaultAssignment(
+                            binding.RoleId,
+                            member.Name,
+                            builtIn.Name,
+                            "blocked"));
                         continue;
                     }
 
-                    materialized = existing;
-                    if (existing.Status != SkillStatus.Active)
+                    if (existing is null)
                     {
-                        materialized = existing with { Status = SkillStatus.Active, UpdatedAt = now };
-                        activations[existing.Id] = materialized;
-                        planned.Add(new SkillDefaultAssignment(binding.RoleId, member.Name, skillName, "reactivate"));
+                        materialized = builtIn;
+                        inserts[normalizedName] = materialized;
+                        action = "create";
                     }
                     else
                     {
-                        planned.Add(new SkillDefaultAssignment(binding.RoleId, member.Name, skillName, "assign"));
+                        if (!string.Equals(existing.ContentHash, builtIn.ContentHash, StringComparison.Ordinal))
+                        {
+                            errors.Add($"Built-in skill '{normalizedName}' differs from its bundled content and cannot be replaced.");
+                            invalidNames.Add(normalizedName);
+                            continue;
+                        }
+
+                        materialized = existing;
+                        if (existing.Status != SkillStatus.Active)
+                        {
+                            materialized = existing with { Status = SkillStatus.Active, UpdatedAt = now };
+                            activations[existing.Id] = materialized;
+                            action = "reactivate";
+                        }
                     }
+
+                    materializedByName[normalizedName] = materialized;
                 }
+
+                planned.Add(new SkillDefaultAssignment(
+                    binding.RoleId,
+                    member.Name,
+                    materialized.Name,
+                    action));
 
                 if (!currentAssignments.Any(assignment =>
                         assignment.SkillId == materialized.Id &&
@@ -165,6 +198,7 @@ public sealed class SkillDefaultsService
         var stateFingerprint = SkillCatalogStateFingerprint.Compute(currentSkills, currentAssignments);
         var storePlan = new SkillDefaultsStorePlan(
             project.Id,
+            project.TeamRevision,
             stateFingerprint,
             inserts.Values.OrderBy(skill => skill.Name, StringComparer.Ordinal).ToList(),
             activations.Values.OrderBy(skill => skill.Name, StringComparer.Ordinal).ToList(),
@@ -174,6 +208,7 @@ public sealed class SkillDefaultsService
                 .ToList());
 
         var digest = ComputeDigest(
+            project,
             blueprint,
             confirmedTeam,
             resolved,
@@ -273,6 +308,7 @@ public sealed class SkillDefaultsService
     }
 
     private static string ComputeDigest(
+        Project project,
         Blueprint blueprint,
         Team team,
         IReadOnlyDictionary<string, CastMember> resolved,
@@ -282,26 +318,35 @@ public sealed class SkillDefaultsService
         string stateFingerprint)
     {
         var canonical = new StringBuilder();
-        Append(canonical, BlueprintVersion(blueprint));
+        AppendField(canonical, "digest_schema", "skill-defaults-preview-v2");
+        AppendField(canonical, "project_id", project.Id.ToString());
+        AppendField(canonical, "team_revision", project.TeamRevision.ToString(CultureInfo.InvariantCulture));
+        AppendField(canonical, "blueprint_version", BlueprintVersion(blueprint));
+        Append(canonical, "team_members");
         foreach (var member in team.Members.OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             Append(canonical, member.Name);
             Append(canonical, member.Role.Id);
             Append(canonical, member.Status.ToString());
         }
+        Append(canonical, "resolved_roles");
         foreach (var pair in resolved.OrderBy(value => value.Key, StringComparer.Ordinal))
         {
             Append(canonical, pair.Key);
             Append(canonical, pair.Value.Name);
         }
+        Append(canonical, "bundled_skills");
         foreach (var skill in bundled.OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             Append(canonical, skill.Name);
             Append(canonical, skill.ContentHash);
             Append(canonical, skill.Provenance.ToApiString());
         }
-        Append(canonical, SkillCatalogStateFingerprint.Compute(currentSkills, currentAssignments));
-        Append(canonical, stateFingerprint);
+        AppendField(
+            canonical,
+            "catalog_fingerprint",
+            SkillCatalogStateFingerprint.Compute(currentSkills, currentAssignments));
+        AppendField(canonical, "guarded_state_fingerprint", stateFingerprint);
         return Hash(canonical);
     }
 
@@ -310,6 +355,12 @@ public sealed class SkillDefaultsService
 
     private static void Append(StringBuilder builder, string? value) =>
         builder.Append(value?.Length ?? -1).Append(':').Append(value).Append('\0');
+
+    private static void AppendField(StringBuilder builder, string name, string? value)
+    {
+        Append(builder, name);
+        Append(builder, value);
+    }
 }
 
 public sealed record SkillDefaultAssignment(

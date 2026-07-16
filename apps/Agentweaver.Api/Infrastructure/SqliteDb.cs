@@ -68,6 +68,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN model_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN state TEXT NOT NULL DEFAULT 'active';", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_branch TEXT NOT NULL DEFAULT 'main';", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN team_revision INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_name TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_charter TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN reviewed_by TEXT;", ct);
@@ -452,7 +453,8 @@ public sealed class SqliteDb
             default_model_foundry   TEXT,
             state                   TEXT NOT NULL DEFAULT 'active',
             created_at              TEXT NOT NULL,
-            updated_at              TEXT NOT NULL
+            updated_at              TEXT NOT NULL,
+            team_revision           INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS idx_projects_state ON projects (state);

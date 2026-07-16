@@ -4,6 +4,7 @@ using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
+using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -369,6 +370,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await new SqliteProjectStore(_db).InsertAsync(NewProject(project, _dir));
         var builtIn = NewSkill(project, "system-design") with { Provenance = SkillProvenance.BuiltIn };
         var initialSkills = await store.ListByProjectAsync(project);
         var initialAssignments = await store.ListAssignmentsByProjectAsync(project);
@@ -382,6 +384,7 @@ public sealed class SkillCatalogTests : IDisposable
 
         var result = await store.ApplyDefaultsAsync(new SkillDefaultsStorePlan(
             project,
+            0,
             SkillCatalogStateFingerprint.Compute(initialSkills, initialAssignments),
             [builtIn],
             [],
@@ -398,6 +401,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await new SqliteProjectStore(_db).InsertAsync(NewProject(project, _dir));
         var initialSkills = await store.ListByProjectAsync(project);
         var initialAssignments = await store.ListAssignmentsByProjectAsync(project);
         var planned = NewSkill(project, "threat-modeling") with { Provenance = SkillProvenance.BuiltIn };
@@ -405,6 +409,7 @@ public sealed class SkillCatalogTests : IDisposable
 
         var result = await store.ApplyDefaultsAsync(new SkillDefaultsStorePlan(
             project,
+            0,
             SkillCatalogStateFingerprint.Compute(initialSkills, initialAssignments),
             [planned],
             [],
@@ -420,6 +425,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await new SqliteProjectStore(_db).InsertAsync(NewProject(project, _dir));
         var inactive = NewSkill(project, "api-data-safety", SkillStatus.Missing) with
         {
             Provenance = SkillProvenance.BuiltIn,
@@ -431,6 +437,7 @@ public sealed class SkillCatalogTests : IDisposable
 
         var result = await store.ApplyDefaultsAsync(new SkillDefaultsStorePlan(
             project,
+            0,
             SkillCatalogStateFingerprint.Compute(initialSkills, initialAssignments),
             [],
             [active],
@@ -446,6 +453,94 @@ public sealed class SkillCatalogTests : IDisposable
         (await store.GetAsync(project, inactive.Id))!.Status.Should().Be(SkillStatus.Active);
         (await store.ListActiveSkillsForAgentAsync(project, "Tank"))
             .Should().ContainSingle(s => s.Id == inactive.Id);
+    }
+
+    [Theory]
+    [InlineData(
+        "blueprint-content-authoring",
+        "writing-editing-fact-checking",
+        "writer",
+        "editor")]
+    [InlineData(
+        "blueprint-product-management",
+        "prototype-ux",
+        "prototype-designer",
+        "ux-designer")]
+    public async Task DefaultsApply_SharedSkillUsesOneCatalogIdentityForEveryRole(
+        string blueprintId,
+        string sharedSkillName,
+        string firstRole,
+        string secondRole)
+    {
+        var store = new SqliteSkillStore(_db);
+        var project = NewProject(ProjectId.New(), _dir);
+        await new SqliteProjectStore(_db).InsertAsync(project);
+        var blueprint = new CatalogReader().LoadBlueprint(blueprintId)!;
+        var members = blueprint.Roster
+            .Select((roleId, index) => Member($"Agent-{index}", roleId))
+            .ToList();
+        var team = new Team(project.Name, "test", members);
+        var preview = await new SkillDefaultsService(store, null!)
+            .PreviewAsync(project, blueprint, team);
+
+        preview.CanApply.Should().BeTrue(string.Join("; ", preview.Errors));
+        var result = await store.ApplyDefaultsAsync(preview.StorePlan!);
+
+        result.Should().Be(SkillDefaultsStoreApplyResult.Applied);
+        var skills = await store.ListByProjectAsync(project.Id);
+        var assignments = await store.ListAssignmentsByProjectAsync(project.Id);
+        skills.Should().ContainSingle(skill => skill.Name == sharedSkillName);
+        var sharedSkill = skills.Single(skill => skill.Name == sharedSkillName);
+        var expectedAgents = members
+            .Where(member => member.Role.Id == firstRole || member.Role.Id == secondRole)
+            .Select(member => member.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        assignments
+            .Where(assignment => assignment.SkillId == sharedSkill.Id)
+            .Select(assignment => assignment.AgentName)
+            .Should().BeEquivalentTo(expectedAgents);
+        assignments.Should().OnlyContain(
+            assignment => skills.Any(skill => skill.Id == assignment.SkillId),
+            "a shared binding must never produce an orphan assignment");
+    }
+
+    [Fact]
+    public async Task DefaultsApply_TeamMutationCommittedAfterPreview_IsStaleWithoutPartialWrites()
+    {
+        var skillStore = new SqliteSkillStore(_db);
+        var projectStore = new SqliteProjectStore(_db);
+        var project = NewProject(ProjectId.New(), _dir);
+        await projectStore.InsertAsync(project);
+        var planned = NewSkill(project.Id, "system-design") with
+        {
+            Provenance = SkillProvenance.BuiltIn,
+        };
+        var plan = new SkillDefaultsStorePlan(
+            project.Id,
+            project.TeamRevision,
+            SkillCatalogStateFingerprint.Compute([], []),
+            [planned],
+            [],
+            [new SkillAssignment
+            {
+                ProjectId = project.Id,
+                SkillId = planned.Id,
+                AgentName = "Tank",
+                CreatedAt = DateTimeOffset.UtcNow,
+            }]);
+
+        await using var mutation = await projectStore.TryBeginTeamMutationAsync(
+            project.Id,
+            project.TeamRevision);
+        mutation.Should().NotBeNull();
+        var applyTask = Task.Run(() => skillStore.ApplyDefaultsAsync(plan));
+        await Task.Delay(50);
+        await mutation!.CompleteAsync(CancellationToken.None);
+
+        (await applyTask).Should().Be(SkillDefaultsStoreApplyResult.Stale);
+        (await skillStore.ListByProjectAsync(project.Id)).Should().BeEmpty();
+        (await skillStore.ListAssignmentsByProjectAsync(project.Id)).Should().BeEmpty();
+        (await projectStore.GetAsync(project.Id))!.TeamRevision.Should().Be(1);
     }
 
     [Fact]

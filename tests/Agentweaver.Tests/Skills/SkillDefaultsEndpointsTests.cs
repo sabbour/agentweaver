@@ -96,6 +96,38 @@ public sealed class SkillDefaultsEndpointsTests : IClassFixture<ProjectsWebAppli
                 assignment.GetProperty("action").GetString() == "blocked");
     }
 
+    [Fact]
+    public async Task Apply_CannotReplayIdenticalPreviewAcrossProjects()
+    {
+        using var client = _factory.CreateAuthenticatedClient();
+        var firstProject = await CreateConfirmedSoftwareTeamAsync(client);
+        var secondProject = await CreateConfirmedSoftwareTeamAsync(client);
+        var firstPreviewResponse = await client.PostAsJsonAsync(
+            $"/api/projects/{firstProject}/skill-defaults/preview",
+            new { blueprint_id = "blueprint-software-development" });
+        var secondPreviewResponse = await client.PostAsJsonAsync(
+            $"/api/projects/{secondProject}/skill-defaults/preview",
+            new { blueprint_id = "blueprint-software-development" });
+        firstPreviewResponse.EnsureSuccessStatusCode();
+        secondPreviewResponse.EnsureSuccessStatusCode();
+        var firstPreview = await firstPreviewResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var secondPreview = await secondPreviewResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var firstDigest = firstPreview.GetProperty("digest").GetString();
+        firstDigest.Should().NotBe(secondPreview.GetProperty("digest").GetString());
+
+        var replay = await client.PostAsJsonAsync(
+            $"/api/projects/{secondProject}/skill-defaults/apply",
+            new
+            {
+                blueprint_id = "blueprint-software-development",
+                digest = firstDigest,
+            });
+
+        replay.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await replay.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("outcome").GetString().Should().Be("stale");
+    }
+
     private async Task<string> CreateConfirmedSoftwareTeamAsync(HttpClient client)
     {
         var projectId = await CreateProjectAsync(client);

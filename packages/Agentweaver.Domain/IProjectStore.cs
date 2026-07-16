@@ -60,4 +60,25 @@ public interface IProjectStore
     /// empty means "all catalog workflows allowed" (backward compatible).
     /// </summary>
     Task UpdateAllowedWorkflowIdsAsync(ProjectId id, IReadOnlyList<string>? allowedWorkflowIds, DateTimeOffset updatedAt, CancellationToken ct = default);
+
+    /// <summary>
+    /// Acquires the durable, project-scoped team mutation gate when the persisted revision still
+    /// matches <paramref name="expectedRevision"/>. The returned lease holds a provider transaction
+    /// until completion, serializing filesystem-backed team writers with guarded defaults apply
+    /// across API replicas.
+    /// </summary>
+    Task<IProjectTeamMutationLease?> TryBeginTeamMutationAsync(
+        ProjectId id,
+        long expectedRevision,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Provider-backed team mutation transaction. Completing (or disposing an incomplete lease) advances
+/// the persisted monotonic revision so every preview made before the mutation becomes stale.
+/// </summary>
+public interface IProjectTeamMutationLease : IAsyncDisposable
+{
+    long ExpectedRevision { get; }
+    Task CompleteAsync(CancellationToken ct = default);
 }

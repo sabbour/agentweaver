@@ -189,6 +189,29 @@ public sealed class SqliteSkillStore : ISkillStore
         return results;
     }
 
+    public async Task DeleteProjectSkillStateAsync(ProjectId projectId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
+            .ConfigureAwait(false);
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM skill_assignments WHERE project_id = $projectId;";
+            command.Parameters.AddWithValue("$projectId", projectId.ToString());
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM skills WHERE project_id = $projectId;";
+            command.Parameters.AddWithValue("$projectId", projectId.ToString());
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task<SkillDefaultsStoreApplyResult> ApplyDefaultsAsync(
         SkillDefaultsStorePlan plan,
         CancellationToken ct = default)
@@ -197,6 +220,26 @@ public sealed class SqliteSkillStore : ISkillStore
         await using var transaction = (SqliteTransaction)await connection
             .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
             .ConfigureAwait(false);
+
+        await using (var guard = connection.CreateCommand())
+        {
+            guard.Transaction = transaction;
+            guard.CommandText =
+                """
+                UPDATE projects
+                   SET team_revision = team_revision
+                 WHERE project_id = $projectId
+                   AND state = 'active'
+                   AND team_revision = $expectedTeamRevision;
+                """;
+            guard.Parameters.AddWithValue("$projectId", plan.ProjectId.ToString());
+            guard.Parameters.AddWithValue("$expectedTeamRevision", plan.ExpectedTeamRevision);
+            if (await guard.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return SkillDefaultsStoreApplyResult.Stale;
+            }
+        }
 
         var currentSkills = await ReadSkillsAsync(connection, transaction, plan.ProjectId, ct).ConfigureAwait(false);
         var currentAssignments = await ReadAssignmentsAsync(connection, transaction, plan.ProjectId, ct).ConfigureAwait(false);
