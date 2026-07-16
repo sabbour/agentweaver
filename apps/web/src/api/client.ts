@@ -58,6 +58,7 @@ import type {
   SteerCoordinatorResponse,
   CreateAssistantRunRequest,
   CreateAssistantRunResponse,
+  ListAssistantRunsResponse,
   SendAssistantMessageRequest,
   SendAssistantMessageResponse,
   SubmitRunResponse,
@@ -676,6 +677,13 @@ export class AgentweaverApiClient {
   ): Promise<SendAssistantMessageResponse> {
     return this.request<SendAssistantMessageResponse>(
       'POST', `/assistant/runs/${encodeURIComponent(assistantRunId)}/messages`, req);
+  }
+
+  // GET /api/assistant/runs?limit=50 — the caller's own assistant conversations,
+  // newest-first (Tank's #346 follow-up endpoint). Powers the Sessions page.
+  listAssistantRuns(limit = 50): Promise<ListAssistantRunsResponse> {
+    return this.request<ListAssistantRunsResponse>(
+      'GET', `/assistant/runs?limit=${encodeURIComponent(String(limit))}`);
   }
 
   // Coordinator topology REST seed (Feature 008 Phase 2). The SSE topology snapshot is

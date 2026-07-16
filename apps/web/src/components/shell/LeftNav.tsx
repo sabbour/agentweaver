@@ -1,6 +1,5 @@
 import { Badge, Button, Tooltip } from '@fluentui/react-components';
 import {
-  Chat20Regular,
   PanelLeftContract24Regular,
   PanelLeftExpand24Regular,
 } from '@fluentui/react-icons';
@@ -10,15 +9,15 @@ import { GitHubSignIn } from '../GitHubSignIn';
 import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
-import { useConsolePanel } from './ConsolePanelContext';
+import { isAssistantFlagEnabled } from '../../utils/assistantFlag';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
 // Persistent left navigation. Native FluentUI rebuild — no copilot-fluent-system
 // kit imports. Copilot-style single rail: chrome (brand + collapse), a header
-// slot (project switcher + operator dock trigger), a scrollable nav area, and a
-// bottom persona footer. No top bar. "Start task" floats top-right of the
-// content panel (see AppShell). Visual styling via shell.css + agentweaverLightTheme.
+// slot (project switcher), a scrollable nav area, and a bottom persona footer.
+// No top bar. "Start task" floats top-right of the content panel (see AppShell).
+// Visual styling via shell.css + agentweaverLightTheme.
 
 const NAV_WIDTH = '260px';
 const NAV_WIDTH_COLLAPSED = '64px';
@@ -40,7 +39,10 @@ function sectionLabel(heading: string): string {
 
 export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onFallbackProjectMissing }: LeftNavProps) {
   const version = useAppVersion();
-  const { open: consoleOpen, openConsole } = useConsolePanel();
+  // Recomputed on every render (not cached in state) so a flag flip elsewhere (e.g.
+  // visiting /assistant?assistant=1) is picked up the next time this persistent rail
+  // re-renders, without needing a dedicated storage-event listener.
+  const assistantEnabled = isAssistantFlagEnabled();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(COLLAPSE_KEY) === '1';
@@ -122,6 +124,8 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
 
   function renderSection(section: NavSectionDef, pId: string) {
     const label = sectionLabel(section.heading);
+    const visibleItems = section.items.filter((item) => !item.assistantFlagged || assistantEnabled);
+    if (visibleItems.length === 0) return null;
     return (
       <div
         key={section.heading}
@@ -130,7 +134,7 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         className={`aw-nav-section${section.anchorBottom ? ' aw-nav-section--bottom' : ''}`}
         style={{ gap: '2px' }}
       >
-        {section.items.map((item) => renderProjectItem(item, pId))}
+        {visibleItems.map((item) => renderProjectItem(item, pId))}
       </div>
     );
   }
@@ -161,7 +165,9 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         </div>
       </div>
 
-      {/* Header slot: project switcher + operator dock trigger (hidden when collapsed) */}
+      {/* Header slot: project switcher (hidden when collapsed). The old "Operator
+          dock" trigger that lived here was removed in favor of the Sessions page
+          under Projects (#4/#5) — see navConfig.tsx's `sessions` item + SessionsPage. */}
       {!collapsed && (
         <div className="aw-rail-header">
           <ProjectSwitcher
@@ -170,21 +176,6 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
             isFallbackProject={isFallbackProject}
             onFallbackProjectMissing={onFallbackProjectMissing}
           />
-          <div className="aw-rail-header__actions">
-            <Tooltip content="Open Agentweaver operator dock" relationship="label">
-              <Button
-                appearance="subtle"
-                icon={<Chat20Regular />}
-                aria-label="Open Agentweaver operator dock"
-                aria-expanded={consoleOpen}
-                aria-controls="app-console-panel"
-                data-testid="open-console-panel"
-                onClick={openConsole}
-              >
-                Operator dock
-              </Button>
-            </Tooltip>
-          </div>
         </div>
       )}
 

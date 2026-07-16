@@ -1,7 +1,6 @@
 import { AssistantRunPage } from '../pages/AssistantRunPage';
 import { Navigate, useSearchParams } from 'react-router-dom';
-
-const ASSISTANT_FLAG_KEY = 'agentweaver.assistant.enabled';
+import { resolveAssistantFlag } from '../utils/assistantFlag';
 
 /**
  * Feature-flag gate for the #346 MCP-driven operator assistant page.
@@ -14,27 +13,13 @@ const ASSISTANT_FLAG_KEY = 'agentweaver.assistant.enabled';
  *   - otherwise the persisted localStorage flag decides.
  * When disabled, redirect to the overview so the route is inert until the page is proven
  * end-to-end and the dock is retired in a later pass.
+ *
+ * The Sessions page (SessionsPage.tsx) and its LeftNav entry gate on the same flag via
+ * `resolveAssistantFlag`/`isAssistantFlagEnabled` in utils/assistantFlag.ts.
  */
-function resolveEnabled(queryFlag: string | null): boolean {
-  try {
-    if (queryFlag === '1') {
-      window.localStorage.setItem(ASSISTANT_FLAG_KEY, '1');
-      return true;
-    }
-    if (queryFlag === '0') {
-      window.localStorage.removeItem(ASSISTANT_FLAG_KEY);
-      return false;
-    }
-    return window.localStorage.getItem(ASSISTANT_FLAG_KEY) === '1';
-  } catch {
-    // localStorage may be unavailable (privacy mode); fall back to the query param only.
-    return queryFlag === '1';
-  }
-}
-
 export function AssistantRoute() {
   const [searchParams] = useSearchParams();
-  const enabled = resolveEnabled(searchParams.get('assistant'));
+  const enabled = resolveAssistantFlag(searchParams.get('assistant'));
 
   if (!enabled) return <Navigate to="/" replace />;
   return <AssistantRunPage />;

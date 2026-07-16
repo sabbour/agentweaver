@@ -4,6 +4,7 @@ import {
   BookToolbox24Regular,
   Bot24Regular,
   Brain24Regular,
+  Chat24Regular,
   Code24Regular,
   DataPie24Regular,
   Flow24Regular,
@@ -31,6 +32,10 @@ export interface NavItemDef {
   // Additional first path segments (after the project id) that should mark this
   // item active for supported sub-resource routes.
   matchSegments?: string[];
+  // When true, LeftNav only renders this item while the #346 assistant feature flag
+  // is on (see utils/assistantFlag.ts) — used for the Sessions item during its
+  // gradual rollout, mirroring the /assistant route's own gating.
+  assistantFlagged?: boolean;
 }
 
 export interface GlobalNavItemDef {
@@ -73,6 +78,10 @@ export const NAV_SECTIONS: NavSectionDef[] = [
       { key: 'orchestrations', label: 'Orchestrations', icon: <Flow24Regular />, segment: 'orchestrations' },
       // Workspace — read-only file browser for the project repo + run worktrees.
       { key: 'workspace', label: 'Workspace', icon: <Code24Regular />, segment: 'workspace' },
+      // Sessions — the user's assistant conversations (#4/#5, replaces the old
+      // "Operator dock" nav trigger). Gated behind the same ?assistant=1 flag as the
+      // /assistant route while the assistant feature rolls out.
+      { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, segment: 'sessions', assistantFlagged: true },
     ],
   },
   {
