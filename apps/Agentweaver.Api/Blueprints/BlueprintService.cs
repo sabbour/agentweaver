@@ -458,8 +458,9 @@ public sealed class BlueprintService
 
             var realRoot = RealPath.Resolve(root);
             var current = root;
-            foreach (var segment in segments)
+            for (var index = 0; index < segments.Length; index++)
             {
+                var segment = segments[index];
                 current = Path.Combine(current, segment);
                 if (!TryGetExistingPathAttributes(current, out var attributes))
                 {
@@ -469,14 +470,18 @@ public sealed class BlueprintService
                     return true;
                 }
 
-                if (attributes.HasFlag(FileAttributes.ReparsePoint) || HasLinkTarget(current))
+                if (!TryGetSymbolicLinkStatus(current, out var isSymbolicLink))
+                    return false;
+
+                if ((attributes.HasFlag(FileAttributes.ReparsePoint) || isSymbolicLink) &&
+                    (OperatingSystem.IsWindows() || !isSymbolicLink))
                     return false;
 
                 var realCurrent = RealPath.Resolve(current);
                 if (!IsPathWithin(realRoot, realCurrent))
                     return false;
 
-                if (!string.Equals(current, candidate, PathComparison))
+                if (index < segments.Length - 1)
                     continue;
 
                 fullPath = realCurrent;
@@ -508,14 +513,11 @@ public sealed class BlueprintService
         }
     }
 
-    private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
     private static bool IsPathWithin(string root, string candidate)
     {
         var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var normalizedCandidate = candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, PathComparison);
+        return normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     private static bool TryGetExistingPathAttributes(string path, out FileAttributes attributes)
@@ -549,18 +551,26 @@ public sealed class BlueprintService
 
     private static bool HasLinkTarget(string path)
     {
+        return !TryGetSymbolicLinkStatus(path, out var isSymbolicLink) || isSymbolicLink;
+    }
+
+    private static bool TryGetSymbolicLinkStatus(string path, out bool isSymbolicLink)
+    {
         try
         {
-            return new FileInfo(path).LinkTarget is not null ||
-                   new DirectoryInfo(path).LinkTarget is not null;
+            isSymbolicLink = new FileInfo(path).LinkTarget is not null ||
+                              new DirectoryInfo(path).LinkTarget is not null;
+            return true;
         }
         catch (IOException)
         {
-            return true;
+            isSymbolicLink = false;
+            return false;
         }
         catch (UnauthorizedAccessException)
         {
-            return true;
+            isSymbolicLink = false;
+            return false;
         }
     }
 

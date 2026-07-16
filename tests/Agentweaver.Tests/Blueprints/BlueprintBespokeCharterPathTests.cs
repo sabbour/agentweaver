@@ -32,26 +32,68 @@ public sealed class BlueprintBespokeCharterPathTests : IDisposable
     }
 
     [Fact]
-    public void EscapingFileSymlink_IsRejectedWhenSupported()
+    public void PosixInProjectFileSymlink_IsAccepted()
     {
+        if (!IsPosix)
+            return;
+
+        var target = Path.Combine(_root, "charters", "reviewer.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, "# Reviewer");
+        File.CreateSymbolicLink(Path.Combine(_root, "reviewer.md"), target);
+
+        var valid = BlueprintService.TryResolvePathWithinProject(
+            _root, "reviewer.md", out var resolved, out var exists);
+
+        valid.Should().BeTrue();
+        exists.Should().BeTrue();
+        File.ReadAllText(resolved).Should().Be("# Reviewer");
+    }
+
+    [Fact]
+    public void PosixInProjectDirectorySymlink_IsAccepted()
+    {
+        if (!IsPosix)
+            return;
+
+        var targetDirectory = Path.Combine(_root, "charters-target");
+        Directory.CreateDirectory(targetDirectory);
+        File.WriteAllText(Path.Combine(targetDirectory, "reviewer.md"), "# Reviewer");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "charters"), targetDirectory);
+
+        var valid = BlueprintService.TryResolvePathWithinProject(
+            _root, Path.Combine("charters", "reviewer.md"), out var resolved, out var exists);
+
+        valid.Should().BeTrue();
+        exists.Should().BeTrue();
+        File.ReadAllText(resolved).Should().Be("# Reviewer");
+    }
+
+    [Fact]
+    public void PosixEscapingFileSymlink_IsRejected()
+    {
+        if (!IsPosix)
+            return;
+
         var outsideCharter = Path.Combine(_outside, "outside.md");
         File.WriteAllText(outsideCharter, "# Outside");
         var link = Path.Combine(_root, "charter.md");
-        if (!TryCreateFileLink(link, outsideCharter))
-            return;
+        File.CreateSymbolicLink(link, outsideCharter);
 
         BlueprintService.TryResolvePathWithinProject(_root, "charter.md", out _, out _)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void EscapingDirectorySymlink_IsRejectedWhenSupported()
+    public void PosixEscapingDirectorySymlink_IsRejected()
     {
+        if (!IsPosix)
+            return;
+
         var outsideCharter = Path.Combine(_outside, "outside.md");
         File.WriteAllText(outsideCharter, "# Outside");
         var link = Path.Combine(_root, "charters");
-        if (!TryCreateDirectoryLink(link, _outside))
-            return;
+        Directory.CreateSymbolicLink(link, _outside);
 
         BlueprintService.TryResolvePathWithinProject(
             _root, Path.Combine("charters", "outside.md"), out _, out _)
@@ -68,9 +110,9 @@ public sealed class BlueprintBespokeCharterPathTests : IDisposable
     }
 
     [Fact]
-    public void LinuxBrokenAndLoopingLinks_AreRejected()
+    public void PosixBrokenAndLoopingLinks_AreRejected()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!IsPosix)
             return;
 
         var broken = Path.Combine(_root, "broken.md");
@@ -90,37 +132,5 @@ public sealed class BlueprintBespokeCharterPathTests : IDisposable
         try { Directory.Delete(_outside, recursive: true); } catch { }
     }
 
-    private static bool TryCreateFileLink(string link, string target)
-    {
-        try
-        {
-            File.CreateSymbolicLink(link, target);
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-    }
-
-    private static bool TryCreateDirectoryLink(string link, string target)
-    {
-        try
-        {
-            Directory.CreateSymbolicLink(link, target);
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-    }
+    private static bool IsPosix => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
 }
