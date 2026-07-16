@@ -287,7 +287,12 @@ function Invoke-VerifyImage {
 Invoke-VerifyImage -Label "api"        -Image "agentweaver-api"        -PodSelector "app=agentweaver-api"      -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-api")      -AllowEphemeralPods $false -Paths ($CommonDotnetPaths + @("apps/Agentweaver.Api"))
 Invoke-VerifyImage -Label "frontend"   -Image "agentweaver-frontend"   -PodSelector "app=agentweaver-frontend" -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-frontend") -AllowEphemeralPods $false -Paths @("apps/web", "apps/Agentweaver.Web")
 Invoke-VerifyImage -Label "mcp"        -Image "agentweaver-mcp"        -PodSelector "app=agentweaver-mcp"      -ExpectedReplicas (Get-DesiredDeploymentReplicas "agentweaver-mcp")      -AllowEphemeralPods $false -Paths ($CommonDotnetPaths + @("apps/Agentweaver.Mcp"))
-Invoke-VerifyImage -Label "agent-host" -Image "agentweaver-agent-host" -PodSelector "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host" -ExpectedReplicas "" -AllowEphemeralPods $true -Paths ($CommonDotnetPaths + @("apps/Agentweaver.AgentHost"))
+# AgentHost pods are pod-per-run sandboxes, not a Deployment. Claimed sandboxes
+# from runs that started before a deploy can legitimately outlive the release
+# and keep serving the older image until that run finishes. Provenance for the
+# released AgentHost build should therefore verify the live warm-pool sandboxes
+# sourced from the current SandboxTemplate, not every active claimed run pod.
+Invoke-VerifyImage -Label "agent-host" -Image "agentweaver-agent-host" -PodSelector "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host,agents.x-k8s.io/warm-pool-sandbox" -ExpectedReplicas "" -AllowEphemeralPods $true -Paths ($CommonDotnetPaths + @("apps/Agentweaver.AgentHost"))
 
 Write-Host ""
 Write-Host "==================================================="

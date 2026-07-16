@@ -316,8 +316,15 @@ while ($pending.Count -gt 0) {
   $jobErr = $null
   Receive-Job -Job $entry.Job -ErrorAction SilentlyContinue -ErrorVariable jobErr | Out-Null
 
-  if ($entry.Job.State -eq "Failed" -or $jobErr) {
-    Write-Host "  [FAIL] $($entry.Name): $jobErr" -ForegroundColor Red
+  if ($entry.Job.State -eq "Failed") {
+    $failureDetail = $null
+    if ($entry.Job.ChildJobs.Count -gt 0 -and $entry.Job.ChildJobs[0].JobStateInfo.Reason) {
+      $failureDetail = $entry.Job.ChildJobs[0].JobStateInfo.Reason.ToString()
+    } elseif ($jobErr) {
+      $failureDetail = ($jobErr | Out-String).Trim()
+    }
+    if (-not $failureDetail) { $failureDetail = "job failed" }
+    Write-Host "  [FAIL] $($entry.Name): $failureDetail" -ForegroundColor Red
     $failed = $true
     # Stop any jobs still running, mirroring bash's terminate_remaining_jobs().
     foreach ($other in $pending) {
