@@ -3,6 +3,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using Agentweaver.SandboxFs;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
 
@@ -407,34 +408,83 @@ public sealed class BlueprintService
                 path = value;
 
             if (path is null) continue;
-            if (!TryResolvePathWithinProject(projectRoot, path, out var fullPath))
+            if (!TryResolvePathWithinProject(projectRoot, path, out _, out var fileExists))
             {
                 errors.Add($"bespoke role '{role.Id}' references charter file outside the project root.");
                 continue;
             }
-            if (!File.Exists(fullPath))
+            if (!fileExists)
                 errors.Add($"bespoke role '{role.Id}' references missing charter file '{path}'.");
         }
         return errors;
     }
 
-    private static bool TryResolvePathWithinProject(string projectRoot, string path, out string fullPath)
+    internal static bool TryResolvePathWithinProject(
+        string projectRoot,
+        string path,
+        out string fullPath,
+        out bool fileExists)
     {
         fullPath = string.Empty;
+        fileExists = false;
+        const int maxPathLength = 32_768;
+
+        if (string.IsNullOrWhiteSpace(projectRoot) ||
+            string.IsNullOrWhiteSpace(path) ||
+            projectRoot.Length > maxPathLength ||
+            path.Length > maxPathLength)
+            return false;
+
         try
         {
             var root = Path.GetFullPath(projectRoot);
-            fullPath = Path.GetFullPath(Path.IsPathRooted(path)
+            var candidate = Path.GetFullPath(Path.IsPathRooted(path)
                 ? path
                 : Path.Combine(root, path));
 
-            var relative = Path.GetRelativePath(root, fullPath);
+            var relative = Path.GetRelativePath(root, candidate);
             if (string.IsNullOrWhiteSpace(relative) || relative == "." || Path.IsPathRooted(relative))
                 return false;
 
-            return !relative
-                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.None)
-                .Any(segment => segment == "..");
+            var segments = relative
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.None);
+            if (segments.Any(segment => segment is ".." or ""))
+                return false;
+
+            if (!TryGetExistingPathAttributes(root, out var rootAttributes) ||
+                rootAttributes.HasFlag(FileAttributes.ReparsePoint) ||
+                HasLinkTarget(root))
+                return false;
+
+            var realRoot = RealPath.Resolve(root);
+            var current = root;
+            foreach (var segment in segments)
+            {
+                current = Path.Combine(current, segment);
+                if (!TryGetExistingPathAttributes(current, out var attributes))
+                {
+                    // All ancestors were proven contained. A later component cannot exist after
+                    // this missing one, so report the normal missing-file validation outcome.
+                    fullPath = candidate;
+                    return true;
+                }
+
+                if (attributes.HasFlag(FileAttributes.ReparsePoint) || HasLinkTarget(current))
+                    return false;
+
+                var realCurrent = RealPath.Resolve(current);
+                if (!IsPathWithin(realRoot, realCurrent))
+                    return false;
+
+                if (!string.Equals(current, candidate, PathComparison))
+                    continue;
+
+                fullPath = realCurrent;
+                fileExists = !attributes.HasFlag(FileAttributes.Directory);
+                return true;
+            }
+
+            return false;
         }
         catch (ArgumentException)
         {
@@ -447,6 +497,70 @@ public sealed class BlueprintService
         catch (PathTooLongException)
         {
             return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static bool IsPathWithin(string root, string candidate)
+    {
+        var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedCandidate = candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, PathComparison);
+    }
+
+    private static bool TryGetExistingPathAttributes(string path, out FileAttributes attributes)
+    {
+        try
+        {
+            attributes = File.GetAttributes(path);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            attributes = default;
+            return !HasLinkTarget(path);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            attributes = default;
+            return !HasLinkTarget(path);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            attributes = default;
+            return false;
+        }
+        catch (IOException)
+        {
+            attributes = default;
+            return false;
+        }
+    }
+
+    private static bool HasLinkTarget(string path)
+    {
+        try
+        {
+            return new FileInfo(path).LinkTarget is not null ||
+                   new DirectoryInfo(path).LinkTarget is not null;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
         }
     }
 

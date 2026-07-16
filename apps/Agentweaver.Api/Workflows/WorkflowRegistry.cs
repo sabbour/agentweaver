@@ -124,11 +124,23 @@ public sealed class WorkflowRegistry
         // catalog definition (project customization over library).
         if (_catalog is not null)
         {
-            foreach (var catalogResult in _catalog.Workflows.Where(result =>
-                         result.IsValid &&
-                         result.Definition is not null &&
-                         !string.Equals(result.Definition.Id, BuiltInWorkflows.DefaultWorkflowId, StringComparison.OrdinalIgnoreCase)))
+            foreach (var catalogResult in _catalog.Workflows)
             {
+                // Catalog failures are diagnostics: retain them in the project result set so all
+                // list/sync surfaces report the broken embedded asset, but never let them reserve
+                // an id or participate in lookup/dispatch resolution.
+                if (!catalogResult.IsValid || catalogResult.Definition is null)
+                {
+                    results.Add(catalogResult);
+                    continue;
+                }
+
+                if (string.Equals(
+                        catalogResult.Definition.Id,
+                        BuiltInWorkflows.DefaultWorkflowId,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 reservedIds.Add(catalogResult.Definition!.Id);
                 AddResult(catalogResult, results, idToIndex, _logger);
             }

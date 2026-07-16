@@ -68,7 +68,7 @@ public sealed class CatalogConformanceSnapshotTests
     }
 
     [Fact]
-    public void InvalidCatalogWorkflow_CannotReserveOrShadowProjectWorkflow()
+    public void InvalidCatalogWorkflow_RemainsDiagnosticWithoutReservingOrShadowingProjectWorkflow()
     {
         var root = CreateTestRoot();
         try
@@ -86,8 +86,23 @@ public sealed class CatalogConformanceSnapshotTests
             var registry = new WorkflowRegistry(snapshot);
             var set = registry.GetOrLoad(project);
 
-            set.Results.Should().NotContain(result => result.Source == "shadow_target.yaml",
-                "unavailable catalog workflows must not enter the registry");
+            set.Results.Should().ContainSingle(result =>
+                result.Source == "shadow_target.yaml" &&
+                !result.IsValid &&
+                result.Definition != null &&
+                result.Definition.Id == "shadow-target",
+                "unavailable catalog workflows must remain visible as diagnostics");
+            registry.List(project).Should().ContainSingle(result =>
+                result.Source == "shadow_target.yaml" &&
+                !result.IsValid &&
+                result.Definition != null &&
+                result.Definition.Id == "shadow-target");
+            registry.Sync(project).Results.Should().ContainSingle(result =>
+                result.Source == "shadow_target.yaml" &&
+                !result.IsValid &&
+                result.Definition != null &&
+                result.Definition.Id == "shadow-target",
+                "sync must preserve unavailable catalog diagnostics");
             set.FindById("shadow-target")!.Definition!.Name.Should().Be("shadow-target");
             registry.ResolveDefault(project).Definition!.Id.Should().Be("shadow-target",
                 "the valid project workflow must remain selectable rather than falling back to default");
@@ -96,6 +111,23 @@ public sealed class CatalogConformanceSnapshotTests
         {
             DeleteTestRoot(root);
         }
+    }
+
+    [Fact]
+    public void InvalidCatalogWorkflow_DoesNotInvalidateValidSameIdWorkflow()
+    {
+        var snapshot = new CatalogConformanceSnapshot(DuplicateWorkflowFixtureCatalog());
+
+        var sameId = snapshot.Workflows
+            .Where(result => result.Definition?.Id == "shadow-target")
+            .ToList();
+
+        sameId.Should().HaveCount(2);
+        sameId.Should().ContainSingle(result =>
+            result.Source == "shadow_target_invalid.yaml" && !result.IsValid);
+        sameId.Should().ContainSingle(result =>
+            result.Source == "shadow_target_valid.yaml" && result.IsValid,
+            "only fully valid catalog workflows compete for duplicate-id reservation");
     }
 
     [Theory]
@@ -150,6 +182,9 @@ public sealed class CatalogConformanceSnapshotTests
 
     private static CatalogReader FixtureCatalog() =>
         new(typeof(CatalogConformanceSnapshotTests).Assembly, "Agentweaver.Tests.CatalogFixtures");
+
+    private static CatalogReader DuplicateWorkflowFixtureCatalog() =>
+        new(typeof(CatalogConformanceSnapshotTests).Assembly, "Agentweaver.Tests.CatalogDuplicateFixtures");
 
     private static string CreateTestRoot()
     {

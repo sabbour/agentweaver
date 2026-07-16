@@ -24,9 +24,9 @@ public sealed class CatalogConformanceSnapshot
             .Select(asset => ValidateWorkflow(
                 WorkflowDefinitionLoader.Load(asset.Yaml, asset.Source, isBuiltIn: true))));
 
-        // A duplicate id is ambiguous, so neither copy is considered an exportable catalog asset.
+        // Only runnable workflows compete for an id. Invalid assets remain independently diagnosable.
         var duplicateWorkflowIds = workflows
-            .Where(item => item.Definition is not null)
+            .Where(item => item.IsValid && item.Definition is not null)
             .GroupBy(item => item.Definition!.Id, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
             .Select(group => group.Key)
