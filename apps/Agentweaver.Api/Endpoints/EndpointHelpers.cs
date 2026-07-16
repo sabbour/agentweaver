@@ -14,6 +14,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
@@ -123,6 +124,14 @@ internal static bool IsTerminal(RunStatus status) => TerminalRunStatuses.Contain
 /// leaves the row so the user can still inspect it). Callers MUST verify the run is non-terminal
 /// before invoking (see <see cref="IsTerminal"/>).
 /// </summary>
+/// <param name="podLifecycle">
+/// #350 — cancelling <paramref name="registry"/>'s local <see cref="System.Threading.CancellationTokenSource"/>
+/// has NO effect on a remote AgentHost/sandbox pod (pod-per-run mode): the underlying process can
+/// keep executing tool calls and emitting new tool.approval_required events against a run the system
+/// already considers dead. Null when not running pod-per-run / not in Kubernetes — release is then a
+/// no-op. Optional so existing callers/tests that only exercise in-api mode are unaffected.
+/// </param>
+/// <param name="sandboxRuntime">Resolves whether the deployment is pod-per-run; defaults to in-api (no-op) when omitted.</param>
 internal static async Task CancelRunWorkAsync(
     Run run,
     IRunStore runStore,
@@ -130,7 +139,9 @@ internal static async Task CancelRunWorkAsync(
     RunWorkflowRegistry registry,
     IWorktreeOperations worktreeOps,
     ILogger logger,
-    CancellationToken ct)
+    CancellationToken ct,
+    IAgentHostPodLifecycle? podLifecycle = null,
+    SandboxRuntimeOptions? sandboxRuntime = null)
 {
     var id = run.Id.ToString();
 
@@ -147,6 +158,37 @@ internal static async Task CancelRunWorkAsync(
 
     await runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned", ct);
     streamStore.Complete(id);
+
+    // #350: reliably tear down the remote AgentHost pod itself, not just the local token above.
+    await ReleaseAgentHostPodSafeAsync(id, podLifecycle, sandboxRuntime, logger).ConfigureAwait(false);
+}
+
+/// <summary>
+/// Releases the AgentHost pod for <paramref name="runId"/> when running pod-per-run (#350). Shared
+/// best-effort helper: logs and swallows exceptions so a release failure never blocks the calling
+/// run/cancel/fail transition. Mirrors the identically-named helpers in CoordinatorRunService /
+/// CoordinatorDispatchService / CoordinatorAssemblyService / RunWatchLoopService, adapted to the
+/// static, non-DI-field context of this helper class.
+/// </summary>
+internal static async Task ReleaseAgentHostPodSafeAsync(
+    string runId,
+    IAgentHostPodLifecycle? podLifecycle,
+    SandboxRuntimeOptions? sandboxRuntime,
+    ILogger logger)
+{
+    if (podLifecycle is null || sandboxRuntime is not { IsPodPerRun: true })
+        return;
+
+    try
+    {
+        await podLifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
+        logger.LogInformation("CancelRunWorkAsync: AgentHost pod released for cancelled run {RunId}", runId);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex,
+            "CancelRunWorkAsync: failed to release AgentHost pod for run {RunId} (best-effort)", runId);
+    }
 }
 
 /// <summary>
