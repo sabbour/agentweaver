@@ -2,6 +2,7 @@ import { getSessionToken } from '../config';
 import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
+  ApplyBlueprintSkillDefaultsResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
   AssemblyReviewDecision,
@@ -12,6 +13,7 @@ import type {
   BacklogSettingsDto,
   BacklogTaskDto,
   Blueprint,
+  BlueprintSkillDefaultsPreviewResponse,
   BoardDto,
   CastProposalDto,
   CharterDto,
@@ -137,6 +139,40 @@ function isSkillDetailDto(value: unknown): value is SkillDetailDto {
     && typeof value.content_hash === 'string'
     && typeof value.created_at === 'string'
     && typeof value.updated_at === 'string';
+}
+
+export function isBlueprintSkillDefaultsPreviewResponse(value: unknown): value is BlueprintSkillDefaultsPreviewResponse {
+  return isRecord(value)
+    && typeof value.blueprint_id === 'string'
+    && typeof value.blueprint_version === 'string'
+    && typeof value.digest === 'string'
+    && typeof value.can_apply === 'boolean'
+    && isStringArray(value.errors)
+    && Array.isArray(value.assignments)
+    && value.assignments.every((assignment) =>
+      isRecord(assignment)
+      && typeof assignment.role_id === 'string'
+      && typeof assignment.agent_name === 'string'
+      && typeof assignment.skill_name === 'string'
+      && (assignment.action === 'create'
+        || assignment.action === 'reactivate'
+        || assignment.action === 'assign'
+        || assignment.action === 'blocked'));
+}
+
+export function isApplyBlueprintSkillDefaultsResponse(value: unknown): value is ApplyBlueprintSkillDefaultsResponse {
+  return isRecord(value)
+    && (value.outcome === 'applied' || value.outcome === 'stale' || value.outcome === 'invalid')
+    && isStringArray(value.errors)
+    && Object.hasOwn(value, 'preview')
+    && (value.preview === null || isBlueprintSkillDefaultsPreviewResponse(value.preview));
+}
+
+export function parseApplyBlueprintSkillDefaultsResponse(payload: unknown): ApplyBlueprintSkillDefaultsResponse {
+  if (!isApplyBlueprintSkillDefaultsResponse(payload)) {
+    throw new TypeError('Invalid apply blueprint skill defaults response.');
+  }
+  return payload;
 }
 
 function parseSkillList(payload: unknown): SkillDto[] {
@@ -671,16 +707,17 @@ export class AgentweaverApiClient {
     );
   }
 
-  applyBlueprintSkillDefaults(
+  async applyBlueprintSkillDefaults(
     projectId: string,
     blueprintId: string,
     digest: string,
-  ): Promise<import('./types').ApplyBlueprintSkillDefaultsResponse> {
-    return this.request<import('./types').ApplyBlueprintSkillDefaultsResponse>(
+  ): Promise<ApplyBlueprintSkillDefaultsResponse> {
+    const payload = await this.request<unknown>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/skill-defaults/apply`,
       { blueprint_id: blueprintId, digest },
     );
+    return parseApplyBlueprintSkillDefaultsResponse(payload);
   }
 
   // Sync

@@ -191,7 +191,7 @@ export interface Project {
   created_at: string;
   updated_at: string;
   source_blueprint_id?: string | null;
-  source_blueprint_type?: 'predefined' | 'inline' | null;
+  source_blueprint_type?: 'predefined' | 'inline' | 'custom' | null;
   allowed_workflow_ids?: string[] | null;
 }
 
@@ -1622,5 +1622,5 @@ export interface ApplyBlueprintSkillDefaultsRequest {
 export interface ApplyBlueprintSkillDefaultsResponse {
   outcome: 'applied' | 'stale' | 'invalid';
   errors: string[];
-  preview?: BlueprintSkillDefaultsPreviewResponse | null;
+  preview: BlueprintSkillDefaultsPreviewResponse | null;
 }

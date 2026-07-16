@@ -1,5 +1,9 @@
 ﻿import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+import {
+  ApiError,
+  isApplyBlueprintSkillDefaultsResponse,
+  isBlueprintSkillDefaultsPreviewResponse,
+} from '../api/client';
 import {
   Badge,
   Button,
@@ -48,6 +52,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type {
   BlueprintSkillDefaultsPreviewResponse,
+  Project,
   SkillAcquisitionResponse,
   SkillCandidateDto,
   SkillDetailDto,
@@ -131,37 +136,10 @@ function formatApiError(err: unknown): string {
 
 const FALLBACK_DEFAULTS_BLUEPRINT_ID = 'blueprint-software-development';
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isDefaultsPreview(value: unknown): value is BlueprintSkillDefaultsPreviewResponse {
-  if (!isRecord(value)
-    || typeof value.blueprint_id !== 'string'
-    || typeof value.blueprint_version !== 'string'
-    || typeof value.digest !== 'string'
-    || typeof value.can_apply !== 'boolean'
-    || !Array.isArray(value.errors)
-    || !value.errors.every((error) => typeof error === 'string')
-    || !Array.isArray(value.assignments)) {
-    return false;
-  }
-
-  return value.assignments.every((assignment) =>
-    isRecord(assignment)
-    && typeof assignment.role_id === 'string'
-    && typeof assignment.agent_name === 'string'
-    && typeof assignment.skill_name === 'string'
-    && (assignment.action === 'create'
-      || assignment.action === 'reactivate'
-      || assignment.action === 'assign'
-      || assignment.action === 'blocked'));
-}
-
 function structuredBlockedPreview(err: unknown): BlueprintSkillDefaultsPreviewResponse | null {
   if (err instanceof ApiError
     && err.status === 422
-    && isDefaultsPreview(err.payload)
+    && isBlueprintSkillDefaultsPreviewResponse(err.payload)
     && !err.payload.can_apply) {
     return err.payload;
   }
@@ -188,23 +166,57 @@ function summarizeAcquisition(res: SkillAcquisitionResponse): string {
   return parts.length ? parts.join(', ') : 'No changes.';
 }
 
-function defaultApplyError(err: unknown): { message: string; requiresRepreview: boolean } {
+function defaultApplyError(err: unknown): {
+  message: string;
+  requiresRepreview: boolean;
+  preview: BlueprintSkillDefaultsPreviewResponse | null;
+} {
   if (err instanceof ApiError) {
     if (err.status === 409) {
-      return { message: 'This preview is stale because the project changed. Preview the latest defaults before applying.', requiresRepreview: true };
-    }
-    if (err.status === 422) {
-      const blockedPreview = structuredBlockedPreview(err);
-      const blockers = blockedPreview?.errors;
       return {
-        message: blockers?.length
-          ? `Defaults can no longer be applied: ${blockers.join(' ')}`
+        message: 'This preview is stale because the project changed. Preview the latest defaults before applying.',
+        requiresRepreview: true,
+        preview: null,
+      };
+    }
+    if (err.status === 422 && isApplyBlueprintSkillDefaultsResponse(err.payload)) {
+      const errors = err.payload.errors;
+      return {
+        message: errors.length
+          ? `Defaults can no longer be applied: ${errors.join(' ')}`
           : 'Defaults can no longer be applied. Preview the latest defaults before trying again.',
         requiresRepreview: true,
+        preview: err.payload.preview,
+      };
+    }
+    if (err.status === 422) {
+      return {
+        message: 'Defaults can no longer be applied. Preview the latest defaults before trying again.',
+        requiresRepreview: true,
+        preview: null,
       };
     }
   }
-  return { message: formatApiError(err), requiresRepreview: false };
+  return { message: formatApiError(err), requiresRepreview: false, preview: null };
+}
+
+function defaultsBlueprintId(project: Project): string | null {
+  if (project.source_blueprint_type === 'inline'
+    || project.source_blueprint_type === 'custom'
+    || project.source_blueprint_id === 'inline') {
+    return null;
+  }
+  return project.source_blueprint_id ?? FALLBACK_DEFAULTS_BLUEPRINT_ID;
+}
+
+function defaultsUnsupportedReason(project: Project | null): string | null {
+  if (project?.source_blueprint_type === 'inline' || project?.source_blueprint_id === 'inline') {
+    return 'Blueprint skill defaults are unavailable because this project uses an inline blueprint.';
+  }
+  if (project?.source_blueprint_type === 'custom') {
+    return 'Blueprint skill defaults are unavailable because this project uses a custom blueprint.';
+  }
+  return null;
 }
 
 export function SkillsPage() {
@@ -237,12 +249,16 @@ export function SkillsPage() {
   const [skillInstructions, setSkillInstructions] = useState('');
   const [generatePrompt, setGeneratePrompt] = useState('');
   const [defaultsOpen, setDefaultsOpen] = useState(false);
+  const [defaultsDialogKey, setDefaultsDialogKey] = useState(0);
   const [defaultsPreview, setDefaultsPreview] = useState<BlueprintSkillDefaultsPreviewResponse | null>(null);
   const [defaultsError, setDefaultsError] = useState<string | null>(null);
   const [defaultsRequiresRepreview, setDefaultsRequiresRepreview] = useState(false);
-  const defaultsRequestVersion = useRef(0);
+  const [defaultsProject, setDefaultsProject] = useState<Project | null>(null);
+  const [defaultsProjectResolved, setDefaultsProjectResolved] = useState(false);
+  const defaultsDialogGeneration = useRef(0);
   const defaultsPreviewInFlight = useRef(false);
-  const defaultsApplyRequest = useRef<number | null>(null);
+  const defaultsApplyTransport = useRef<number | null>(null);
+  const defaultsApplyTransportSequence = useRef(0);
   const defaultsTriggerRef = useRef<HTMLButtonElement>(null);
 
   const mdFileInputRef = useRef<HTMLInputElement>(null);
@@ -285,10 +301,10 @@ export function SkillsPage() {
   const onSync = () => void runAcquisition('Sync', () => apiClient.syncSkills(projectId!));
 
   const closeDefaults = useCallback((restoreFocus = true) => {
-    defaultsRequestVersion.current += 1;
+    defaultsDialogGeneration.current += 1;
+    setDefaultsDialogKey((key) => key + 1);
     defaultsPreviewInFlight.current = false;
-    defaultsApplyRequest.current = null;
-    setBusy(null);
+    if (defaultsApplyTransport.current === null) setBusy(null);
     setDefaultsOpen(false);
     setDefaultsPreview(null);
     setDefaultsError(null);
@@ -300,10 +316,27 @@ export function SkillsPage() {
     closeDefaults(false);
   }, [closeDefaults, projectId]);
 
+  useEffect(() => {
+    if (!projectId) return;
+    let current = true;
+    setDefaultsProject(null);
+    setDefaultsProjectResolved(false);
+    void apiClient.getProject(projectId)
+      .then((project) => {
+        if (current) setDefaultsProject(project);
+      })
+      .catch(() => {
+        // A preview refreshes metadata before it calls the defaults endpoint.
+      })
+      .finally(() => {
+        if (current) setDefaultsProjectResolved(true);
+      });
+    return () => { current = false; };
+  }, [projectId]);
+
   const previewDefaults = useCallback(async () => {
-    if (!projectId || busy || defaultsPreviewInFlight.current || defaultsApplyRequest.current !== null) return;
-    const requestVersion = defaultsRequestVersion.current + 1;
-    defaultsRequestVersion.current = requestVersion;
+    if (!projectId || busy || defaultsPreviewInFlight.current || defaultsApplyTransport.current !== null) return;
+    const dialogGeneration = defaultsDialogGeneration.current;
     defaultsPreviewInFlight.current = true;
     setBusy('defaults-preview');
     setDefaultsPreview(null);
@@ -311,12 +344,17 @@ export function SkillsPage() {
     setDefaultsRequiresRepreview(false);
     try {
       const project = await apiClient.getProject(projectId);
-      if (defaultsRequestVersion.current !== requestVersion) return;
-      const blueprintId = project.source_blueprint_id ?? FALLBACK_DEFAULTS_BLUEPRINT_ID;
+      if (defaultsDialogGeneration.current !== dialogGeneration) return;
+      setDefaultsProject(project);
+      const blueprintId = defaultsBlueprintId(project);
+      if (blueprintId === null) {
+        setDefaultsError(defaultsUnsupportedReason(project));
+        return;
+      }
       const preview = await apiClient.previewBlueprintSkillDefaults(projectId, blueprintId);
-      if (defaultsRequestVersion.current === requestVersion) setDefaultsPreview(preview);
+      if (defaultsDialogGeneration.current === dialogGeneration) setDefaultsPreview(preview);
     } catch (err) {
-      if (defaultsRequestVersion.current === requestVersion) {
+      if (defaultsDialogGeneration.current === dialogGeneration) {
         const blockedPreview = structuredBlockedPreview(err);
         if (blockedPreview) {
           setDefaultsPreview(blockedPreview);
@@ -326,7 +364,7 @@ export function SkillsPage() {
         }
       }
     } finally {
-      if (defaultsRequestVersion.current === requestVersion) {
+      if (defaultsDialogGeneration.current === dialogGeneration) {
         defaultsPreviewInFlight.current = false;
         setBusy(null);
       }
@@ -334,16 +372,24 @@ export function SkillsPage() {
   }, [busy, projectId]);
 
   const openDefaults = () => {
-    if (busy || defaultsPreviewInFlight.current || defaultsApplyRequest.current !== null) return;
+    if (!projectId || defaultsUnsupportedReason(defaultsProject)) return;
+    if (defaultsApplyTransport.current !== null) {
+      queueMicrotask(() => {
+        if (defaultsApplyTransport.current !== null) setDefaultsOpen(true);
+      });
+      return;
+    }
+    if (busy || defaultsPreviewInFlight.current) return;
     setDefaultsOpen(true);
     void previewDefaults();
   };
 
   const applyDefaults = async () => {
-    if (!projectId || !defaultsPreview || busy || defaultsRequiresRepreview || defaultsApplyRequest.current !== null) return;
-    const requestVersion = defaultsRequestVersion.current + 1;
-    defaultsRequestVersion.current = requestVersion;
-    defaultsApplyRequest.current = requestVersion;
+    if (!projectId || !defaultsPreview || busy || defaultsRequiresRepreview || defaultsApplyTransport.current !== null) return;
+    const dialogGeneration = defaultsDialogGeneration.current;
+    const transportId = defaultsApplyTransportSequence.current + 1;
+    defaultsApplyTransportSequence.current = transportId;
+    defaultsApplyTransport.current = transportId;
     setBusy('defaults-apply');
     setDefaultsError(null);
     try {
@@ -352,24 +398,29 @@ export function SkillsPage() {
         defaultsPreview.blueprint_id,
         defaultsPreview.digest,
       );
-      if (defaultsRequestVersion.current !== requestVersion || defaultsApplyRequest.current !== requestVersion) return;
+      if (defaultsApplyTransport.current !== transportId) return;
       if (result.outcome !== 'applied') {
-        setDefaultsError(result.errors.join(' ') || 'Defaults were not applied. Preview the latest defaults before trying again.');
-        setDefaultsRequiresRepreview(true);
+        if (defaultsDialogGeneration.current === dialogGeneration) {
+          setDefaultsError(result.errors.join(' ') || 'Defaults were not applied. Preview the latest defaults before trying again.');
+          setDefaultsPreview(result.preview);
+          setDefaultsRequiresRepreview(true);
+        }
         return;
       }
       setNotice('Blueprint defaults applied.');
-      closeDefaults();
       reload();
+      if (defaultsDialogGeneration.current === dialogGeneration) closeDefaults();
     } catch (err) {
-      if (defaultsRequestVersion.current === requestVersion && defaultsApplyRequest.current === requestVersion) {
+      if (defaultsApplyTransport.current === transportId
+        && defaultsDialogGeneration.current === dialogGeneration) {
         const error = defaultApplyError(err);
         setDefaultsError(error.message);
+        setDefaultsPreview(error.preview);
         setDefaultsRequiresRepreview(error.requiresRepreview);
       }
     } finally {
-      if (defaultsRequestVersion.current === requestVersion && defaultsApplyRequest.current === requestVersion) {
-        defaultsApplyRequest.current = null;
+      if (defaultsApplyTransport.current === transportId) {
+        defaultsApplyTransport.current = null;
         setBusy(null);
       }
     }
@@ -534,6 +585,7 @@ export function SkillsPage() {
   const activeSkillCount = skillRows.filter((s) => s.status === 'active').length;
   const assignedSkillCount = skillRows.filter((s) => s.assigned_agents.length > 0).length;
   const repositorySkillCount = skillRows.filter((s) => s.provenance === 'connected-repo-sync' || s.provenance === 'repo-import').length;
+  const defaultsUnavailableReason = defaultsUnsupportedReason(defaultsProject);
 
   const roleByName = new Map(members.map((m) => [m.name, m.role_title]));
   const labelForAgent = (name: string): string => {
@@ -577,10 +629,21 @@ export function SkillsPage() {
         <Button icon={<ArrowSync24Regular />} disabled={isBusy} onClick={onSync}>
           {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
         </Button>
-        <Button ref={defaultsTriggerRef} icon={<Eye24Regular />} disabled={isBusy} onClick={openDefaults}>
+        <Button
+          ref={defaultsTriggerRef}
+          icon={<Eye24Regular />}
+          disabled={(isBusy && busy !== 'defaults-apply') || defaultsUnavailableReason !== null}
+          aria-describedby="blueprint-defaults-availability"
+          onClick={openDefaults}
+        >
           Preview blueprint defaults
         </Button>
       </div>
+      <Text id="blueprint-defaults-availability" className={styles.syncHint}>
+        {!defaultsProjectResolved
+          ? 'Checking whether blueprint skill defaults are available for this project.'
+          : defaultsUnavailableReason ?? 'Preview bundled defaults for a predefined blueprint, or use the supported fallback for projects without source metadata.'}
+      </Text>
       <Text as="p" className={styles.syncHint}>
         Sync scans the project&apos;s already-connected repo working directory (no separate fetch) for <code>&lt;skill-name&gt;/SKILL.md</code>,
         one level deep, at the repo root or in <code>.github/skills</code>, <code>.copilot/skills</code>, <code>.claude/skills</code>, or <code>.agents/skills</code>.
@@ -707,6 +770,7 @@ export function SkillsPage() {
       </OverlayDrawer>
 
       <Dialog
+        key={defaultsDialogKey}
         open={defaultsOpen}
         modalType="modal"
         onOpenChange={(_, data) => {
@@ -719,6 +783,7 @@ export function SkillsPage() {
             <DialogContent className={styles.defaultsSections}>
               <Text id="blueprint-defaults-description">Review the proposed built-in skill changes before they are applied to this existing project.</Text>
               {busy === 'defaults-preview' && <LoadingState rows={3} />}
+              {busy === 'defaults-apply' && <Text>Applying blueprint defaults. This request will continue if you close this dialog.</Text>}
               {defaultsError && <MessageBar intent="error"><MessageBarBody>{defaultsError}</MessageBarBody></MessageBar>}
               {defaultsPreview && (
                 <>

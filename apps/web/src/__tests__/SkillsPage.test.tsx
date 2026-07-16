@@ -14,6 +14,7 @@ import {
   vi,
 } from 'vitest';
 import type {
+  ApplyBlueprintSkillDefaultsResponse,
   BlueprintSkillDefaultsPreviewResponse,
   Project,
   SkillAcquisitionResponse,
@@ -301,6 +302,91 @@ describe('SkillsPage — blueprint defaults', () => {
     expect((screen.getByRole('button', { name: 'Apply defaults' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('renders the exact structured apply 422 response with its nested preview', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    const blockedPreview = makeDefaultsPreview({
+      can_apply: false,
+      errors: ['The confirmed team changed while defaults were being applied.'],
+      assignments: [{
+        role_id: 'frontend-engineer',
+        agent_name: 'Trinity',
+        skill_name: 'ui-accessibility',
+        action: 'blocked',
+      }],
+    });
+    const response: ApplyBlueprintSkillDefaultsResponse = {
+      outcome: 'invalid',
+      errors: ['The defaults request is no longer valid.'],
+      preview: blockedPreview,
+    };
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(makeDefaultsPreview());
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockRejectedValue(
+      new ApiError(422, JSON.stringify(response)),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+
+    await waitFor(() => expect(screen.getByText(/The defaults request is no longer valid/)).toBeTruthy());
+    expect(screen.getByText('Defaults are blocked. Resolve the listed blockers before applying.')).toBeTruthy();
+    expect(screen.getByText('The confirmed team changed while defaults were being applied.')).toBeTruthy();
+    expect(screen.getByText('blocked')).toBeTruthy();
+    expect(screen.getByText(/Source: predefined blueprint/)).toBeTruthy();
+    expect(screen.queryByText(/API error 422:/)).toBeNull();
+  });
+
+  it('disables defaults for inline projects without sending the inline source id', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockResolvedValue(makeProject({
+      source_blueprint_id: 'inline',
+      source_blueprint_type: 'inline',
+    }));
+
+    renderPage();
+
+    const trigger = await screen.findByRole('button', { name: 'Preview blueprint defaults' }) as HTMLButtonElement;
+    await waitFor(() => expect(trigger.disabled).toBe(true));
+    expect(screen.getByText(/unavailable because this project uses an inline blueprint/)).toBeTruthy();
+    expect(apiClient.previewBlueprintSkillDefaults).not.toHaveBeenCalled();
+  });
+
+  it('disables defaults for custom projects with an accessible explanation', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockResolvedValue(makeProject({
+      source_blueprint_id: 'custom-blueprint',
+      source_blueprint_type: 'custom',
+    }));
+
+    renderPage();
+
+    const trigger = await screen.findByRole('button', { name: 'Preview blueprint defaults' }) as HTMLButtonElement;
+    await waitFor(() => expect(trigger.disabled).toBe(true));
+    expect(screen.getByText(/unavailable because this project uses a custom blueprint/)).toBeTruthy();
+    expect(trigger.getAttribute('aria-describedby')).toBe('blueprint-defaults-availability');
+    expect(apiClient.previewBlueprintSkillDefaults).not.toHaveBeenCalled();
+  });
+
+  it('uses the predefined source id for projects created from a predefined blueprint', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockResolvedValue(makeProject({
+      source_blueprint_id: 'blueprint-platform-engineering',
+      source_blueprint_type: 'predefined',
+    }));
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(makeDefaultsPreview({
+      blueprint_id: 'blueprint-platform-engineering',
+    }));
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+
+    await waitFor(() => expect(apiClient.previewBlueprintSkillDefaults).toHaveBeenCalledWith(
+      'proj-001',
+      'blueprint-platform-engineering',
+    ));
+  });
+
   it('requires a new preview after stale state, then applies exactly the new digest', async () => {
     vi.mocked(apiClient.listSkills).mockResolvedValue([]);
     const initial = makeDefaultsPreview({ digest: 'old-digest', blueprint_version: 'v1' });
@@ -383,7 +469,7 @@ describe('SkillsPage — blueprint defaults', () => {
     expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
   });
 
-  it('ignores a dismissed apply failure after a later apply succeeds', async () => {
+  it('keeps a dismissed apply in flight, blocks a second apply, and reconciles a late success', async () => {
     vi.mocked(apiClient.listSkills).mockResolvedValue([]);
     const preview = makeDefaultsPreview();
     const firstApply = deferred<{
@@ -392,9 +478,7 @@ describe('SkillsPage — blueprint defaults', () => {
       preview: BlueprintSkillDefaultsPreviewResponse;
     }>();
     vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(preview);
-    vi.mocked(apiClient.applyBlueprintSkillDefaults)
-      .mockReturnValueOnce(firstApply.promise)
-      .mockResolvedValueOnce({ outcome: 'applied', errors: [], preview });
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockReturnValue(firstApply.promise);
     const user = userEvent.setup();
 
     renderPage();
@@ -411,13 +495,41 @@ describe('SkillsPage — blueprint defaults', () => {
     });
 
     await user.click(trigger);
-    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
-    await waitFor(() => expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy());
+    expect(await screen.findByText(/This request will continue if you close this dialog/)).toBeTruthy();
+    expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledTimes(1);
 
-    firstApply.reject(new ApiError(422, 'late stale failure'));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    firstApply.resolve({ outcome: 'applied', errors: [], preview });
+    await waitFor(() => expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy());
+    await waitFor(() => expect(apiClient.listSkills).toHaveBeenCalledTimes(2));
     expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
-    expect(screen.queryByText(/Defaults can no longer be applied/)).toBeNull();
+    expect(screen.queryByText('Version 2026.07.16')).toBeNull();
+  });
+
+  it('does not let a late dismissed stale response overwrite a reopened dialog', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    const preview = makeDefaultsPreview();
+    const firstApply = deferred<ApplyBlueprintSkillDefaultsResponse>();
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(preview);
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockReturnValue(firstApply.promise);
+    const user = userEvent.setup();
+
+    renderPage();
+    const trigger = await screen.findByRole('button', { name: 'Preview blueprint defaults' });
+    await user.click(trigger);
+    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+    await user.keyboard('{Escape}');
+    await user.click(trigger);
+    await screen.findByText(/This request will continue if you close this dialog/);
+
+    firstApply.reject(new ApiError(422, JSON.stringify({
+      outcome: 'invalid',
+      errors: ['Late stale response.'],
+      preview: makeDefaultsPreview({ can_apply: false, errors: ['Late preview blocker.'] }),
+    })));
+
+    await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText(/Late stale response/)).toBeNull();
+    expect(screen.queryByText(/Late preview blocker/)).toBeNull();
   });
 
   it('ignores a late preview failure after a newer preview has completed', async () => {
