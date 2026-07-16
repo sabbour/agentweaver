@@ -262,4 +262,98 @@ public sealed class SqliteBacklogTaskStoreTests
         (await store.ListReadyForClaimAsync(project.Id, 10)).Select(t => t.Id)
             .Should().Equal(newReadyReusingOrderKey.Id, liveReady.Id);
     }
+
+    [Fact]
+    public async Task ReadyTask_WithUnmergedPrerequisite_IsBlockedUntilDependencyRunMerges()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var runStore = new SqliteRunStore(testDb.Db);
+
+        var prerequisiteRun = MakeCoordinatorRun(project.Id, RunId.New()) with
+        {
+            Status = RunStatus.AwaitingReview,
+            EndedAt = DateTimeOffset.UtcNow,
+        };
+        await runStore.InsertAsync(prerequisiteRun);
+
+        var prerequisiteTask = new BacklogTask
+        {
+            Id = BacklogTaskId.New(),
+            ProjectId = project.Id,
+            Title = "Prerequisite",
+            Description = "must merge first",
+            State = BacklogTaskState.Claimed,
+            OrderKey = "a",
+            CapturedBy = "alice",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CommittedAt = DateTimeOffset.UtcNow,
+            ClaimedAt = DateTimeOffset.UtcNow,
+            RunId = prerequisiteRun.Id,
+        };
+        var dependentTask = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(prerequisiteTask);
+        await store.InsertAsync(dependentTask);
+        await InsertDependencyAsync(testDb.Db, project.Id, dependentTask.Id, prerequisiteTask.Id);
+
+        (await store.ListReadyForClaimAsync(project.Id, 10)).Should().BeEmpty();
+        (await store.CountReadyForPickupAsync()).Should().Be(0);
+
+        var blockedClaim = await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id,
+            dependentTask.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()),
+            DateTimeOffset.UtcNow);
+        blockedClaim.Should().Be(ClaimReserveResult.Lost);
+
+        await runStore.UpdateStatusAsync(prerequisiteRun.Id, RunStatus.Merged, DateTimeOffset.UtcNow);
+
+        (await store.ListReadyForClaimAsync(project.Id, 10)).Select(t => t.Id).Should().Equal(dependentTask.Id);
+        (await store.CountReadyForPickupAsync()).Should().Be(1);
+
+        var readyClaim = await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id,
+            dependentTask.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()),
+            DateTimeOffset.UtcNow);
+        readyClaim.Should().Be(ClaimReserveResult.Won);
+    }
+
+    [Fact]
+    public async Task TryDelete_WhenTaskIsDependencyTarget_ThrowsFriendlyDependencyException()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+
+        var prerequisiteTask = MakeBacklogTask(project.Id, "a");
+        var dependentTask = MakeBacklogTask(project.Id, "b");
+        await store.InsertAsync(prerequisiteTask);
+        await store.InsertAsync(dependentTask);
+        await InsertDependencyAsync(testDb.Db, project.Id, dependentTask.Id, prerequisiteTask.Id);
+
+        var act = async () => await store.TryDeleteAsync(project.Id, prerequisiteTask.Id);
+
+        (await act.Should().ThrowAsync<BacklogTaskDependencyException>())
+            .Which.Message.Should().Be("task_is_dependency");
+    }
+
+    private static async Task InsertDependencyAsync(
+        SqliteDb db,
+        ProjectId projectId,
+        BacklogTaskId taskId,
+        BacklogTaskId dependsOnTaskId)
+    {
+        await using var connection = await db.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO backlog_task_dependencies (project_id, task_id, depends_on_task_id, created_at)
+            VALUES ($projectId, $taskId, $dependsOnTaskId, $createdAt);
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        command.Parameters.AddWithValue("$taskId", taskId.ToString());
+        command.Parameters.AddWithValue("$dependsOnTaskId", dependsOnTaskId.ToString());
+        command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync();
+    }
 }

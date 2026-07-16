@@ -285,6 +285,12 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
         </div>
       </div>
       {card.description && <Text className={styles.description}>{card.description}</Text>}
+      {card.is_blocked && (
+        <div className={styles.metadataRow}>
+          <Badge appearance="tint" color="warning">Blocked</Badge>
+          {card.blocked_reason && <Caption1>{card.blocked_reason}</Caption1>}
+        </div>
+      )}
       <div className={styles.metadataRow}>
         <Text className={styles.meta}>{queueLabel}</Text>
         <Caption1 className={styles.meta}>Captured by {card.captured_by}</Caption1>

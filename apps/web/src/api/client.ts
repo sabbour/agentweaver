@@ -775,6 +775,23 @@ export class AgentweaverApiClient {
     return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks`, body);
   }
 
+  getBacklogTask(projectId: string, taskId: string): Promise<BacklogTaskDto> {
+    return this.request<BacklogTaskDto>('GET', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
+  }
+
+  promoteBacklogStories(projectId: string, body: {
+    parent_prd_run_id: string;
+    stories: Array<{
+      key: string;
+      title: string;
+      description: string;
+      promotion_reason: string;
+      depends_on_keys: string[];
+    }>;
+  }): Promise<{ tasks: BacklogTaskDto[]; created_count: number }> {
+    return this.request<{ tasks: BacklogTaskDto[]; created_count: number }>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/promotions`, body);
+  }
+
   editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`, body);
   }
