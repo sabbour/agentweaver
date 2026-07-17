@@ -59,7 +59,12 @@ function renderPage(projectId = 'proj-001') {
 
 function ProjectNavigation() {
   const navigate = useNavigate();
-  return <button onClick={() => navigate('/projects/proj-002/skills')}>Navigate to project B</button>;
+  return (
+    <>
+      <button onClick={() => navigate('/projects/proj-001/skills')}>Navigate to project A</button>
+      <button onClick={() => navigate('/projects/proj-002/skills')}>Navigate to project B</button>
+    </>
+  );
 }
 
 function renderNavigablePage() {
@@ -681,6 +686,56 @@ describe('SkillsPage — blueprint defaults', () => {
     expect(screen.queryByText('Blueprint defaults applied.')).toBeNull();
     expect(vi.mocked(apiClient.listSkills).mock.calls
       .filter(([id]) => id === 'proj-002').length).toBe(projectBLoadsBeforeAResult);
+  });
+
+  it('clears a project A success notice while navigating to B and back to A', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockImplementation((id) => Promise.resolve(makeProject({ project_id: id })));
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(makeDefaultsPreview());
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockResolvedValue({
+      outcome: 'applied',
+      errors: [],
+      preview: makeDefaultsPreview(),
+    });
+    const user = userEvent.setup();
+
+    renderNavigablePage();
+    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+    await screen.findByText('Blueprint defaults applied.');
+
+    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
+    await waitFor(() => expect(screen.queryByText('Blueprint defaults applied.')).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Navigate to project A' }));
+    await waitFor(() => expect(screen.queryByText('Blueprint defaults applied.')).toBeNull());
+  });
+
+  it('restores project A’s in-flight apply dialog after navigating A to B to A', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockImplementation((id) => Promise.resolve(makeProject({ project_id: id })));
+    const preview = makeDefaultsPreview({ digest: 'project-a-digest' });
+    const projectAApply = deferred<ApplyBlueprintSkillDefaultsResponse>();
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(preview);
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockReturnValue(projectAApply.promise);
+    const user = userEvent.setup();
+
+    renderNavigablePage();
+    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Navigate to project A' }));
+    await screen.findByText(/This request will continue if you close this dialog/);
+    expect(screen.getByText(/preview project-a-digest/)).toBeTruthy();
+    const applying = screen.getByRole('button', { name: /Applying/ }) as HTMLButtonElement;
+    expect(applying.disabled).toBe(true);
+    await user.click(applying);
+    expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledTimes(1);
+
+    projectAApply.resolve({ outcome: 'applied', errors: [], preview });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
   });
 
   it('ignores a late preview failure after a newer preview has completed', async () => {

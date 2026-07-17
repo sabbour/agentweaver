@@ -233,7 +233,7 @@ export function SkillsPage() {
   const [members, setMembers] = useState<TeamMemberDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ projectId: string; message: string } | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -268,6 +268,8 @@ export function SkillsPage() {
   const defaultsTransportSequence = useRef(0);
   const defaultsBusyProject = useRef<string | null>(null);
   const defaultsTriggerRef = useRef<HTMLButtonElement>(null);
+  const defaultsCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreDefaultsFocus = useRef(false);
 
   currentProjectId.current = projectId;
 
@@ -294,12 +296,13 @@ export function SkillsPage() {
 
   const runAcquisition = async (label: string, action: () => Promise<SkillAcquisitionResponse>) => {
     if (!projectId || busy) return;
+    const requestProjectId = projectId;
     setBusy(label);
     setMutationError(null);
     setNotice(null);
     try {
       const res = await action();
-      setNotice(`${label}: ${summarizeAcquisition(res)}`);
+      setNotice({ projectId: requestProjectId, message: `${label}: ${summarizeAcquisition(res)}` });
       reload();
     } catch (err) {
       setMutationError(formatApiError(err));
@@ -326,12 +329,31 @@ export function SkillsPage() {
     setDefaultsPreview(null);
     setDefaultsError(null);
     setDefaultsRequiresRepreview(false);
-    if (restoreFocus) queueMicrotask(() => defaultsTriggerRef.current?.focus());
+    if (restoreFocus) restoreDefaultsFocus.current = true;
   }, []);
 
   useEffect(() => {
+    if (!defaultsOpen && restoreDefaultsFocus.current) {
+      restoreDefaultsFocus.current = false;
+      setTimeout(() => defaultsTriggerRef.current?.focus(), 0);
+    }
+  }, [defaultsOpen]);
+
+  useEffect(() => {
+    if (defaultsOpen && busy === 'defaults-apply') {
+      defaultsCloseButtonRef.current?.focus();
+    }
+  }, [busy, defaultsOpen]);
+
+  useEffect(() => {
     closeDefaults(false);
-    if (defaultsBusyProject.current !== null && defaultsBusyProject.current !== projectId) {
+    setNotice(null);
+    if (projectId && defaultsApplyTransports.current.has(projectId)) {
+      defaultsBusyProject.current = projectId;
+      setDefaultsPreview(defaultsApplyPreviews.current.get(projectId) ?? null);
+      setDefaultsOpen(true);
+      setBusy('defaults-apply');
+    } else if (defaultsBusyProject.current !== null && defaultsBusyProject.current !== projectId) {
       defaultsBusyProject.current = null;
       setBusy((current) => current === 'defaults-preview' || current === 'defaults-apply' ? null : current);
     }
@@ -356,8 +378,10 @@ export function SkillsPage() {
   }, [projectId]);
 
   const previewDefaults = useCallback(async () => {
+    const defaultsBusyForAnotherProject = (busy === 'defaults-preview' || busy === 'defaults-apply')
+      && defaultsBusyProject.current !== projectId;
     if (!projectId
-      || busy
+      || (busy && !defaultsBusyForAnotherProject)
       || defaultsPreviewTransports.current.has(projectId)
       || defaultsApplyTransports.current.has(projectId)) return;
     const dialogGeneration = defaultsDialogGeneration.current;
@@ -420,7 +444,9 @@ export function SkillsPage() {
       });
       return;
     }
-    if (busy || defaultsPreviewTransports.current.has(projectId)) return;
+    const defaultsBusyForAnotherProject = (busy === 'defaults-preview' || busy === 'defaults-apply')
+      && defaultsBusyProject.current !== projectId;
+    if ((busy && !defaultsBusyForAnotherProject) || defaultsPreviewTransports.current.has(projectId)) return;
     setDefaultsOpen(true);
     void previewDefaults();
   };
@@ -458,7 +484,7 @@ export function SkillsPage() {
         return;
       }
       if (currentProjectId.current === requestProjectId) {
-        setNotice('Blueprint defaults applied.');
+        setNotice({ projectId: requestProjectId, message: 'Blueprint defaults applied.' });
         reload();
         closeDefaults();
       }
@@ -501,12 +527,13 @@ export function SkillsPage() {
 
   const onImport = async () => {
     if (!projectId || !sourceUrl.trim()) return;
+    const requestProjectId = projectId;
     setBusy('import');
     setMutationError(null);
     try {
       const locs = candidates ? Array.from(selectedLocations) : undefined;
-      const res = await apiClient.importSkills(projectId, sourceUrl.trim(), locs && locs.length ? locs : undefined);
-      setNotice(`Import: ${summarizeAcquisition(res)}`);
+      const res = await apiClient.importSkills(requestProjectId, sourceUrl.trim(), locs && locs.length ? locs : undefined);
+      setNotice({ projectId: requestProjectId, message: `Import: ${summarizeAcquisition(res)}` });
       setImportOpen(false);
       setSourceUrl('');
       setCandidates(null);
@@ -557,17 +584,18 @@ export function SkillsPage() {
 
   const onCreateSkill = async () => {
     if (!projectId) return;
+    const requestProjectId = projectId;
     setBusy('Create skill');
     setMutationError(null);
     setNotice(null);
     try {
-      const res = await apiClient.createSkill(projectId, {
+      const res = await apiClient.createSkill(requestProjectId, {
         name: skillName.trim(),
         displayName: skillDisplayName.trim() || undefined,
         description: skillDescription.trim(),
         instructions: skillInstructions.trim(),
       });
-      setNotice(`Create skill: ${summarizeAcquisition(res)}`);
+      setNotice({ projectId: requestProjectId, message: `Create skill: ${summarizeAcquisition(res)}` });
       setAddOpen(false);
       setGenerateOpen(false);
       resetSkillForm();
@@ -718,8 +746,8 @@ export function SkillsPage() {
       <div className={styles.tabContent}>
         {loading && <LoadingState rows={3} />}
         {loadError && <ErrorState message={loadError} onRetry={reload} />}
-        {notice && (
-          <MessageBar intent="success"><MessageBarBody>{notice}</MessageBarBody></MessageBar>
+        {notice && notice.projectId === projectId && (
+          <MessageBar intent="success"><MessageBarBody>{notice.message}</MessageBarBody></MessageBar>
         )}
         {mutationError && (
           <MessageBar intent="error"><MessageBarBody>{mutationError}</MessageBarBody></MessageBar>
@@ -886,13 +914,13 @@ export function SkillsPage() {
               )}
             </DialogContent>
             <DialogActions>
-              <Button appearance="secondary" onClick={() => closeDefaults()}>Close</Button>
+              <Button ref={defaultsCloseButtonRef} appearance="secondary" onClick={() => closeDefaults()}>Close</Button>
               {(defaultsRequiresRepreview || (!defaultsPreview && busy !== 'defaults-preview')) && (
                 <Button appearance="secondary" disabled={isBusy} onClick={() => void previewDefaults()}>Preview latest defaults</Button>
               )}
               <Button
                 appearance="primary"
-                disabled={!defaultsPreview || busy === 'defaults-preview' || !defaultsPreview.can_apply || defaultsRequiresRepreview}
+                disabled={!defaultsPreview || busy === 'defaults-preview' || busy === 'defaults-apply' || !defaultsPreview.can_apply || defaultsRequiresRepreview}
                 onClick={() => void applyDefaults()}
               >
                 {busy === 'defaults-apply' ? 'Applying…' : 'Apply defaults'}
