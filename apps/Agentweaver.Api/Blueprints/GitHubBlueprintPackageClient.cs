@@ -130,15 +130,22 @@ public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
         try
         {
             using var client = _httpClientFactory.CreateClient("github");
+            using var timeout = new CancellationTokenSource();
+            timeout.CancelAfter(client.Timeout);
+            using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,
                 $"https://api.github.com/repos/{Uri.EscapeDataString(locator.Owner)}/{Uri.EscapeDataString(locator.Repository)}/{path}");
             request.Headers.UserAgent.Add(new ProductInfoHeaderValue("Agentweaver", "1.0"));
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            await EnsureSuccessAsync(response, ct).ConfigureAwait(false);
-            var result = await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct).ConfigureAwait(false);
+            using var response = await client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                requestCancellation.Token).ConfigureAwait(false);
+            await EnsureSuccessAsync(response, requestCancellation.Token).ConfigureAwait(false);
+            var result = await response.Content.ReadFromJsonAsync<T>(
+                cancellationToken: requestCancellation.Token).ConfigureAwait(false);
             return result ?? throw Malformed("GitHub returned an empty object response.");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

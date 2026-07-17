@@ -235,6 +235,25 @@ public sealed class GitHubBlueprintPackageImportServiceTests
     }
 
     [Theory]
+    [InlineData(1_023, "\n")]
+    [InlineData(1_024, "\n")]
+    [InlineData(1_025, "\n")]
+    [InlineData(1_023, "\r\n")]
+    [InlineData(1_024, "\r\n")]
+    [InlineData(1_025, "\r\n")]
+    public void LfsPointerDetection_UsesInclusiveNormalizedSizeBoundary(
+        int normalizedLength,
+        string lineEnding)
+    {
+        var pointer = LfsPointerWithNormalizedLength(normalizedLength, lineEnding);
+        var normalized = pointer.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Encoding.UTF8.GetByteCount(normalized).Should().Be(normalizedLength);
+        GitHubBlueprintPackageImportService.IsLfsPointer(Encoding.UTF8.GetBytes(pointer))
+            .Should().Be(normalizedLength <= 1_024);
+    }
+
+    [Theory]
     [InlineData("ordinary text")]
     [InlineData("version https://git-lfs.github.com/spec/v1\nthis is documentation, not a pointer\n")]
     [InlineData("version https://git-lfs.github.com/spec/v1\noid sha256:not-a-hash\nsize 42\n")]
@@ -242,6 +261,19 @@ public sealed class GitHubBlueprintPackageImportServiceTests
     public void LfsPointerDetection_DoesNotRejectOrdinaryOrMalformedText(string text)
     {
         GitHubBlueprintPackageImportService.IsLfsPointer(Encoding.UTF8.GetBytes(text)).Should().BeFalse();
+    }
+
+    private static string LfsPointerWithNormalizedLength(int normalizedLength, string lineEnding)
+    {
+        const string version = "version https://git-lfs.github.com/spec/v1";
+        const string extensionPrefix = "ext-0-";
+        const string extensionValue = " sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        const string suffix = "\noid sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nsize 42\n";
+        var extensionNameLength = normalizedLength - Encoding.UTF8.GetByteCount(
+            version + "\n" + extensionPrefix + extensionValue + suffix);
+
+        return (version + "\n" + extensionPrefix + new string('a', extensionNameLength) + extensionValue + suffix)
+            .Replace("\n", lineEnding, StringComparison.Ordinal);
     }
 
     private sealed record Owner(string OwnerId) : IAuthenticatedOwnerContext;

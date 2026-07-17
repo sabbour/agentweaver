@@ -59,6 +59,71 @@ public sealed class GitHubBlueprintPackageClientTests
         error.Message.Should().Be("GitHub request timed out.");
     }
 
+    [Fact]
+    public async Task Request_MapsTimeoutDuringSuccessJsonBodyReadToStableTransportFailure()
+    {
+        var client = CreateClient(
+            new DelegateHandler((_, _) => Task.FromResult(ResponseWithStalledBody(HttpStatusCode.OK))),
+            TimeSpan.FromMilliseconds(20));
+
+        var action = () => client.ReadTreeAsync(
+            Locator, ImportTestSupport.CommitSha, ImportTestSupport.TreeSha, recursive: false);
+
+        var error = (await action.Should().ThrowAsync<GitHubBlueprintPackageAcquisitionException>()).Which;
+        error.Failure.Should().Be(GitHubBlueprintPackageAcquisitionFailure.Transport);
+        error.Message.Should().Be("GitHub request timed out.");
+    }
+
+    [Fact]
+    public async Task Request_MapsTimeoutDuringBlobBodyReadToStableTransportFailure()
+    {
+        var client = CreateClient(
+            new DelegateHandler((_, _) => Task.FromResult(ResponseWithStalledBody(HttpStatusCode.OK))),
+            TimeSpan.FromMilliseconds(20));
+
+        var action = () => client.ReadBlobAsync(
+            Locator, ImportTestSupport.CommitSha, ImportTestSupport.TreeSha);
+
+        var error = (await action.Should().ThrowAsync<GitHubBlueprintPackageAcquisitionException>()).Which;
+        error.Failure.Should().Be(GitHubBlueprintPackageAcquisitionFailure.Transport);
+        error.Message.Should().Be("GitHub request timed out.");
+    }
+
+    [Fact]
+    public async Task Request_MapsTimeoutDuringSecondaryRateLimitBodyReadToStableTransportFailure()
+    {
+        var client = CreateClient(
+            new DelegateHandler((_, _) => Task.FromResult(ResponseWithStalledBody(HttpStatusCode.Forbidden))),
+            TimeSpan.FromMilliseconds(20));
+
+        var action = () => client.ResolveCommitAsync(Locator);
+
+        var error = (await action.Should().ThrowAsync<GitHubBlueprintPackageAcquisitionException>()).Which;
+        error.Failure.Should().Be(GitHubBlueprintPackageAcquisitionFailure.Transport);
+        error.Message.Should().Be("GitHub request timed out.");
+    }
+
+    [Fact]
+    public async Task Request_PreservesCallerCancellationDuringBodyRead()
+    {
+        var stream = new StalledReadStream();
+        var client = CreateClient(new DelegateHandler(
+            (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(stream),
+            })));
+        using var cancellation = new CancellationTokenSource();
+        var action = client.ReadTreeAsync(
+            Locator, ImportTestSupport.CommitSha, ImportTestSupport.TreeSha, recursive: false, cancellation.Token);
+
+        await stream.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        var error = await Record.ExceptionAsync(() => action);
+        error.Should().BeAssignableTo<OperationCanceledException>();
+        error.Should().NotBeOfType<GitHubBlueprintPackageAcquisitionException>();
+    }
+
     [Theory]
     [InlineData("retry-after")]
     [InlineData("remaining")]
@@ -118,6 +183,9 @@ public sealed class GitHubBlueprintPackageClientTests
     private static HttpResponseMessage Json(HttpStatusCode status, string content) =>
         new(status) { Content = new StringContent(content, Encoding.UTF8, "application/json") };
 
+    private static HttpResponseMessage ResponseWithStalledBody(HttpStatusCode status) =>
+        new(status) { Content = new StreamContent(new StalledReadStream()) };
+
     private sealed class SingleClientFactory(HttpMessageHandler handler, TimeSpan? timeout) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) =>
@@ -130,6 +198,44 @@ public sealed class GitHubBlueprintPackageClientTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken) => send(request, cancellationToken);
+    }
+
+    private sealed class StalledReadStream : Stream
+    {
+        internal TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush() => throw new NotSupportedException();
+        public override Task FlushAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            ReadStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            ReadStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
     }
 
     private sealed class ScopeProvider : IGitHubTokenScopeProvider

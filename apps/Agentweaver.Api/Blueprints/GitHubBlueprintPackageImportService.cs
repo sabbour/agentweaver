@@ -299,7 +299,7 @@ public sealed class GitHubBlueprintPackageImportService
                 return false;
 
         var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal);
-        if (Encoding.UTF8.GetByteCount(normalized) >= 1_024)
+        if (Encoding.UTF8.GetByteCount(normalized) > 1_024)
             return false;
         var lines = normalized.Split('\n').ToList();
         if (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
