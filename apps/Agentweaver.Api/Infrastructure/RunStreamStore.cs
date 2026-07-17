@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Infrastructure;
@@ -12,6 +13,9 @@ public readonly record struct StreamSnapshot(IReadOnlyList<RunEvent> Events, boo
 
 public sealed class RunStreamEntry
 {
+    private static readonly IComparer<RunEvent> SequenceComparer =
+        Comparer<RunEvent>.Create((left, right) => left.Sequence.CompareTo(right.Sequence));
+
     /// <summary>
     /// The submitting user who owns this run. Used to authorize stream access for
     /// in-progress runs where the persistent Run record might not yet be fetched.
@@ -74,15 +78,14 @@ public sealed class RunStreamEntry
     public int NextSequence()
     {
         lock (_lock)
-            return _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
+            return NextInMemorySequenceLocked();
     }
 
     /// <summary>
-    /// Atomically allocates the next sequence number and records the event under a
-    /// single lock acquisition, preventing a race between <see cref="NextSequence"/>
-    /// and <see cref="Record"/>. Use this when the caller does not already hold the
-    /// lock (e.g. recovery paths that emit a single synthetic event).
-    /// Returns the monotonic sequence assigned to the recorded event.
+    /// Records an event and returns its sequence. When a durable event stream is configured, sequence
+    /// assignment is delegated to that shared stream (Sequence=0 => provider assigns MAX+1) so direct
+    /// and entry writers share one authority. Without a durable stream, falls back to deterministic
+    /// in-memory allocation.
     /// </summary>
     public int RecordNext(string type, object payload)
     {
@@ -90,29 +93,59 @@ public sealed class RunStreamEntry
     }
 
     /// <summary>
-    /// Atomically allocates the next sequence number, builds a payload with that assigned sequence,
-    /// and records the event under a single lock acquisition. Use this when the payload itself carries
-    /// a sequence/version field that must stay monotonic with the stream event.
+    /// Records an event with a payload factory. When a durable stream is configured, the
+    /// <paramref name="payloadFactory"/> receives the in-memory next-sequence hint while the durable
+    /// stream remains the authority for the assigned sequence returned by this method.
     /// </summary>
     public int RecordNext(string type, Func<int, object> payloadFactory)
     {
-        TaskCompletionSource? previous;
-        int seq;
-        object payload;
-        RunEvent stamped;
-        lock (_lock)
+        ArgumentNullException.ThrowIfNull(payloadFactory);
+
+        var timestampUtc = DateTimeOffset.UtcNow;
+        RunEvent recorded;
+        TaskCompletionSource? previous = null;
+        var added = false;
+
+        if (HasDurableSequenceAuthority)
         {
-            seq = _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
-            payload = payloadFactory(seq);
-            // Stamp the server-side append time here — the single source of truth for "when this
-            // event happened" — rather than requiring every emitter to embed its own timestamp.
-            stamped = new RunEvent(seq, type, payload, DateTimeOffset.UtcNow);
-            _history.Add(stamped);
-            previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            // Durable sequence authority: ask the shared event stream to allocate MAX+1 (Sequence=0)
+            // so direct writers and entry writers cannot race each other with local sequence guesses.
+            var sequenceHint = NextSequence();
+            var payload = payloadFactory(sequenceHint);
+            var assignedSequence = _eventStream!
+                .AppendAsync(_runId, new RunEvent(0, type, payload, timestampUtc))
+                .AsTask().GetAwaiter().GetResult();
+            if (assignedSequence <= 0)
+                return 0;
+
+            recorded = new RunEvent(assignedSequence, type, payload, timestampUtc);
+
+            lock (_lock)
+            {
+                added = TryInsertOrValidateLocked(recorded);
+                if (added)
+                    previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            }
         }
-        previous.TrySetResult();
-        PersistBestEffort(stamped);
-        return seq;
+        else
+        {
+            lock (_lock)
+            {
+                var sequence = NextInMemorySequenceLocked();
+                var payload = payloadFactory(sequence);
+                recorded = new RunEvent(sequence, type, payload, timestampUtc);
+                added = TryInsertOrValidateLocked(recorded);
+                if (added)
+                    previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            }
+
+            PersistBestEffort(recorded);
+        }
+
+        if (added)
+            previous!.TrySetResult();
+
+        return recorded.Sequence;
     }
 
     /// <summary>
@@ -123,15 +156,48 @@ public sealed class RunStreamEntry
     /// </summary>
     public void Record(RunEvent evt)
     {
-        TaskCompletionSource? previous;
         var stamped = evt with { TimestampUtc = DateTimeOffset.UtcNow };
-        lock (_lock)
+        RunEvent recorded;
+        TaskCompletionSource? previous = null;
+        var added = false;
+
+        if (HasDurableSequenceAuthority)
         {
-            _history.Add(stamped);
-            previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            // Explicit Sequence>0 preserves historical/backfill intent; Sequence<=0 requests
+            // provider-assigned MAX+1 for live writers.
+            var durableCandidate = stamped.Sequence > 0
+                ? stamped
+                : stamped with { Sequence = 0 };
+            var assignedSequence = _eventStream!
+                .AppendAsync(_runId, durableCandidate)
+                .AsTask().GetAwaiter().GetResult();
+            if (assignedSequence <= 0)
+                return;
+
+            recorded = stamped with { Sequence = assignedSequence };
+
+            lock (_lock)
+            {
+                added = TryInsertOrValidateLocked(recorded);
+                if (added)
+                    previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            }
         }
-        previous.TrySetResult();
-        PersistBestEffort(stamped);
+        else
+        {
+            recorded = stamped;
+            lock (_lock)
+            {
+                added = TryInsertOrValidateLocked(recorded);
+                if (added)
+                    previous = Interlocked.Exchange(ref _eventSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            }
+
+            PersistBestEffort(recorded);
+        }
+
+        if (added)
+            previous!.TrySetResult();
     }
 
     /// <summary>
@@ -198,6 +264,54 @@ public sealed class RunStreamEntry
         catch
         {
             // Best-effort mirror only. Terminal backfill paths reconcile any missed events.
+        }
+    }
+
+    private bool HasDurableSequenceAuthority =>
+        _eventStream is not null && !string.IsNullOrWhiteSpace(_runId);
+
+    private int NextInMemorySequenceLocked() =>
+        _history.Count == 0 ? 1 : _history[^1].Sequence + 1;
+
+    private bool TryInsertOrValidateLocked(RunEvent candidate)
+    {
+        var index = _history.BinarySearch(candidate, SequenceComparer);
+        if (index >= 0)
+        {
+            if (EventsEquivalent(_history[index], candidate))
+                return false;
+
+            throw new RunEventSequenceCollisionException(
+                $"RunStreamEntry sequence collision detected for run '{_runId}' sequence {candidate.Sequence}: " +
+                "the existing in-memory event payload/type differs from the incoming event.");
+        }
+
+        _history.Insert(~index, candidate);
+        return true;
+    }
+
+    private static bool EventsEquivalent(RunEvent existing, RunEvent candidate)
+    {
+        if (!string.Equals(existing.Type, candidate.Type, StringComparison.Ordinal))
+            return false;
+
+        if (ReferenceEquals(existing.Payload, candidate.Payload))
+            return true;
+
+        var leftJson = JsonSerializer.Serialize(existing.Payload);
+        var rightJson = JsonSerializer.Serialize(candidate.Payload);
+        if (string.Equals(leftJson, rightJson, StringComparison.Ordinal))
+            return true;
+
+        try
+        {
+            using var left = JsonDocument.Parse(leftJson);
+            using var right = JsonDocument.Parse(rightJson);
+            return JsonElement.DeepEquals(left.RootElement, right.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 }

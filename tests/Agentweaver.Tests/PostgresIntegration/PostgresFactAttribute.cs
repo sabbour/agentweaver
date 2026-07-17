@@ -16,6 +16,14 @@ public sealed class PostgresFactAttribute : FactAttribute
     }
 }
 
+/// <summary>
+/// Postgres/Testcontainers test that MUST run (or fail) when selected. Unlike
+/// <see cref="PostgresFactAttribute"/>, this attribute never sets <see cref="FactAttribute.Skip"/>,
+/// so missing/unreachable Docker fails the fixture instead of producing a skip.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+public sealed class PostgresRequiredFactAttribute : FactAttribute;
+
 internal static class PostgresTestEnvironment
 {
     private static readonly Lazy<string?> _skipReason = new(DetectSkipReason);

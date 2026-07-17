@@ -11,7 +11,7 @@ namespace Agentweaver.Tests.PostgresIntegration;
 [Trait("Category", "PostgresIntegration")]
 public sealed class RunEventStreamPostgresTests(PostgresFixture pg)
 {
-    [PostgresFact]
+    [PostgresRequiredFact]
     public async Task AppendAsync_ConcurrentSameRunAcrossIndependentStreams_AssignsUniqueContiguousSequences()
     {
         var runId = "run-events-pg-" + Guid.NewGuid().ToString("N");
@@ -81,7 +81,7 @@ public sealed class RunEventStreamPostgresTests(PostgresFixture pg)
         }
     }
 
-    [PostgresFact]
+    [PostgresRequiredFact]
     public async Task AppendAsync_ExplicitSequence_DuplicateIdenticalEvent_IsIdempotent()
     {
         var runId = "run-events-pg-idempotent-" + Guid.NewGuid().ToString("N");
@@ -111,7 +111,7 @@ public sealed class RunEventStreamPostgresTests(PostgresFixture pg)
         rows[0].EventType.Should().Be(EventTypes.ToolResult);
     }
 
-    [PostgresFact]
+    [PostgresRequiredFact]
     public async Task AppendAsync_ExplicitSequence_DuplicateDifferentPayload_Throws()
     {
         var runId = "run-events-pg-mismatch-" + Guid.NewGuid().ToString("N");
@@ -132,5 +132,92 @@ public sealed class RunEventStreamPostgresTests(PostgresFixture pg)
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*explicit sequence collision*")
             .ConfigureAwait(false);
+    }
+
+    [PostgresRequiredFact]
+    public async Task RecordNext_InterleavedWithDirectSequenceZeroAppend_PersistsBothEventsWithoutCollision()
+    {
+        var runId = "run-events-pg-mixed-" + Guid.NewGuid().ToString("N");
+        const string entryEventType = "coordinator.topology";
+        var inner = new EfRunEventStream(pg.Factory);
+        var interleaved = new InterleavingRunEventStream(inner, entryEventType);
+        var entry = new RunStreamEntry("owner", runId, interleaved);
+        var start = new Barrier(2);
+
+        var entryWrite = Task.Run(() =>
+        {
+            start.SignalAndWait();
+            return entry.RecordNext(entryEventType, new
+            {
+                writer = "entry",
+                marker = "entry-record-next",
+            });
+        });
+
+        var directWrite = Task.Run(async () =>
+        {
+            start.SignalAndWait();
+            await interleaved.EntryAppendIntercepted.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            try
+            {
+                return await interleaved.AppendAsync(runId, new RunEvent(0, EventTypes.ToolCall, new
+                {
+                    writer = "direct",
+                    marker = "direct-sequence-zero",
+                })).ConfigureAwait(false);
+            }
+            finally
+            {
+                interleaved.ReleaseEntryAppend();
+            }
+        });
+
+        var assigned = await Task.WhenAll(entryWrite, directWrite).ConfigureAwait(false);
+        assigned[0].Should().NotBe(assigned[1]);
+
+        await using var db = await pg.CreateDbContextAsync().ConfigureAwait(false);
+        var rows = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId)
+            .OrderBy(e => e.Sequence)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        rows.Should().HaveCount(2);
+        rows.Select(r => r.Sequence).Should().Equal(1, 2);
+        rows.Count(r => r.EventType == entryEventType).Should().Be(1);
+        rows.Count(r => r.EventType == EventTypes.ToolCall).Should().Be(1);
+    }
+
+    private sealed class InterleavingRunEventStream(IRunEventStream inner, string gateOnType) : IRunEventStream
+    {
+        private readonly TaskCompletionSource _entryAppendIntercepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseEntryAppend = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _gateUsed;
+
+        public TaskCompletionSource EntryAppendIntercepted => _entryAppendIntercepted;
+
+        public async ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            if (evt.Sequence == 0
+                && string.Equals(evt.Type, gateOnType, StringComparison.Ordinal)
+                && Interlocked.Exchange(ref _gateUsed, 1) == 0)
+            {
+                _entryAppendIntercepted.TrySetResult();
+                await _releaseEntryAppend.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+
+            return await inner.AppendAsync(runId, evt, ct).ConfigureAwait(false);
+        }
+
+        public IAsyncEnumerable<RunEvent> SubscribeAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.SubscribeAsync(runId, fromSequence, ct);
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            inner.CompleteAsync(runId, ct);
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.GetPersistedEventsAsync(runId, fromSequence, ct);
+
+        public void ReleaseEntryAppend() => _releaseEntryAppend.TrySetResult();
     }
 }

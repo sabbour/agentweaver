@@ -4193,13 +4193,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
         var state = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
-        entry.RecordNext(EventTypes.CoordinatorTopology, seq => CoordinatorTopology.BuildSnapshot(
+        var topologySeq = entry.NextSequence();
+        entry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
             coordinatorRunId,
             workPlanId,
             status,
             subtasks,
             edges,
-            seq,
+            topologySeq,
             _podRegistry,
             _k8sEnv?.PodName,
             state?.AssemblyStage,

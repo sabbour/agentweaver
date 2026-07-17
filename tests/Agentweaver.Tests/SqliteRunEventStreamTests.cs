@@ -195,6 +195,54 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task RecordNext_InterleavedWithDirectSequenceZeroAppend_PersistsBothEventsWithoutCollision()
+    {
+        var runId = "run-sqlite-mixed";
+        const string entryEventType = "coordinator.topology";
+        var inner = new SqliteRunEventStream(_config);
+        var interleaved = new InterleavingRunEventStream(inner, entryEventType);
+        var entry = new RunStreamEntry("owner", runId, interleaved);
+        var start = new Barrier(2);
+
+        var entryWrite = Task.Run(() =>
+        {
+            start.SignalAndWait();
+            return entry.RecordNext(entryEventType, new
+            {
+                writer = "entry",
+                marker = "entry-record-next",
+            });
+        });
+
+        var directWrite = Task.Run(async () =>
+        {
+            start.SignalAndWait();
+            await interleaved.EntryAppendIntercepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            try
+            {
+                return await interleaved.AppendAsync(runId, new RunEvent(0, EventTypes.ToolCall, new
+                {
+                    writer = "direct",
+                    marker = "direct-sequence-zero",
+                }));
+            }
+            finally
+            {
+                interleaved.ReleaseEntryAppend();
+            }
+        });
+
+        var assigned = await Task.WhenAll(entryWrite, directWrite);
+        assigned[0].Should().NotBe(assigned[1]);
+
+        var persisted = await new SqliteRunEventStream(_config).GetPersistedEventsAsync(runId, 0);
+        persisted.Should().HaveCount(2);
+        persisted.Select(e => e.Sequence).Should().Equal(1, 2);
+        persisted.Count(e => e.Type == entryEventType).Should().Be(1);
+        persisted.Count(e => e.Type == EventTypes.ToolCall).Should().Be(1);
+    }
+
+    [Fact]
     public async Task AppendAsync_ExplicitSequence_DuplicateDifferentPayload_Throws()
     {
         var runId = "run-explicit-mismatch-sqlite";
@@ -392,5 +440,38 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
             replayed.Add(evt);
         return replayed;
+    }
+
+    private sealed class InterleavingRunEventStream(IRunEventStream inner, string gateOnType) : IRunEventStream
+    {
+        private readonly TaskCompletionSource _entryAppendIntercepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseEntryAppend = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _gateUsed;
+
+        public TaskCompletionSource EntryAppendIntercepted => _entryAppendIntercepted;
+
+        public async ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            if (evt.Sequence == 0
+                && string.Equals(evt.Type, gateOnType, StringComparison.Ordinal)
+                && Interlocked.Exchange(ref _gateUsed, 1) == 0)
+            {
+                _entryAppendIntercepted.TrySetResult();
+                await _releaseEntryAppend.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+
+            return await inner.AppendAsync(runId, evt, ct).ConfigureAwait(false);
+        }
+
+        public IAsyncEnumerable<RunEvent> SubscribeAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.SubscribeAsync(runId, fromSequence, ct);
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            inner.CompleteAsync(runId, ct);
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.GetPersistedEventsAsync(runId, fromSequence, ct);
+
+        public void ReleaseEntryAppend() => _releaseEntryAppend.TrySetResult();
     }
 }
