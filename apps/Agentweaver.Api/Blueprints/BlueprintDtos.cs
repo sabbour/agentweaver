@@ -87,7 +87,7 @@ public sealed record BlueprintSkillBindingDto
         RoleId = binding.RoleId,
         Skills = binding.Skills,
     };
-    public BlueprintSkillBinding ToModel() => new(RoleId ?? string.Empty, Skills ?? []);
+
     public BlueprintSkillBinding ToModel() => new(RoleId ?? string.Empty, Skills ?? []);
 }
 
