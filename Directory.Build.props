@@ -25,5 +25,10 @@
     <!-- Belt-and-suspenders: if any project somehow still ends up with duplicates, suppress the error
          rather than failing the build. -->
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
+    <!-- The GitHub.Copilot.SDK download target (above) defaults to https://registry.npmjs.org, which
+         Microsoft-managed devices block outbound access to. Route it through the corporate npm proxy
+         instead (verified to mirror the exact @github/copilot-<platform> tarballs this target needs)
+         so local `dotnet build`/`dotnet run` doesn't trip Defender/network-policy blocks. -->
+    <CopilotNpmRegistryUrl Condition="'$(CopilotNpmRegistryUrl)' == ''">https://packagefeedproxy.microsoft.io/npm/</CopilotNpmRegistryUrl>
   </PropertyGroup>
 </Project>
