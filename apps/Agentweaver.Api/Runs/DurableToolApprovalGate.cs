@@ -114,6 +114,20 @@ public sealed class DurableToolApprovalGate(
     public bool IsKnownRequest(string runId, string requestId) =>
         LatestContext(runId, requestId) is not null;
 
+    public bool HasArmedApproval(string runId)
+    {
+        // A request is ARMED when its context was registered (after the last clear) but no resolution
+        // has been recorded yet — i.e. the operator has not granted/denied and it has not expired.
+        var pendingRequestIds = _state.Load(runId, RequestContext, RunCleared)
+            .TakeLastAfterClear()
+            .Where(e => e.EventType == RequestContext)
+            .Select(e => JsonSerializer.Deserialize<ApprovalContext>(e.PayloadJson, JsonDefaults.Options)?.RequestId)
+            .Where(id => id is not null)
+            .Distinct(StringComparer.Ordinal);
+
+        return pendingRequestIds.Any(id => LatestResolution(runId, id!) is null);
+    }
+
     public ToolApprovalRequestState GetRequestState(string runId, string requestId)
     {
         if (LatestResolutionRecord(runId, requestId) is { } resolution)

@@ -35,6 +35,29 @@ the revised turn emits the same assemble_ready terminal a first-time dispatch do
 
 ---
 
+## [LRN-20260716-001] correction
+
+**Logged**: 2026-07-16T14:04:04-07:00
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+Do not infer that an in-progress deployment is GitHub Actions when another local agent may be deploying directly.
+
+### Details
+The user clarified that the competing deployment was launched by another local agent, not GHA. GitHub workflow status was therefore not an authoritative completion signal.
+
+### Suggested Action
+Before a release, identify the deployment source. For local-agent deployments, gate on AKS rollout/image stability and refresh `origin/main` immediately before integration instead of relying on GHA status.
+
+### Metadata
+- Source: user_feedback
+- Related Files: scripts/aks/
+- Tags: deployment, local-agent, github-actions, aks, release-safety
+
+---
+
 ## [LRN-20260710-001] correction
 
 **Logged**: 2026-07-10T05:18:22-07:00

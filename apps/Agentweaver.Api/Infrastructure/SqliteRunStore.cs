@@ -371,6 +371,38 @@ public sealed class SqliteRunStore : IRunStore
         return rows > 0;
     }
 
+    public async Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default)
+    {
+        // CAS: only the replica that still sees this run as in_progress parks it dormant. Deliberately
+        // does NOT set ended_at — an Idle run is paused, not ended (woken via TryWakeFromIdleAsync).
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET status = $idle
+             WHERE run_id = $runId AND status = 'in_progress';
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$idle", RunStatus.Idle.ToApiString());
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryWakeFromIdleAsync(RunId runId, CancellationToken ct = default)
+    {
+        // CAS: only the replica that still sees this run as idle wakes it back to in_progress.
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET status = 'in_progress'
+             WHERE run_id = $runId AND status = 'idle';
+            """,
+            cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
+            ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
     /// <summary>
     /// Transitions a pre-inserted Pending run to InProgress, recording the worktree path, branch,
     /// and actual start time. Called by the project-run path after TryCreateProjectRunAsync reserves

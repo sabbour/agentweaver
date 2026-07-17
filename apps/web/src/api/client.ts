@@ -657,8 +657,15 @@ export class AgentweaverApiClient {
   //
   // POST /api/assistant/runs → 201 {run_id, status:"in_progress", message?, tools_invoked?}
   //   429 with error:"operator_run_limit" when the per-user concurrency cap is reached.
+  //   Accepts optional `resume_from_run_id`: auto-seeds the new run's model context with a
+  //   prior run's full history so an idle-closed conversation can continue seamlessly in a
+  //   new run (the old run itself is never modified/revived). 404 run_not_found / 403
+  //   forbidden if that referenced run doesn't exist or isn't owned by the caller.
   // POST /api/assistant/runs/{id}/messages → 200 {run_id, role:"assistant", message, status, tools_invoked}
-  //   404 with error:"run_not_found" when the run has been idle-closed.
+  //   404 with error:"run_not_found" when the run has been idle-closed (legacy symptom).
+  //   409 with error:"operator_run_closed" when the run's durable event stream is already
+  //   sealed with a terminal run.completed event (current behavior - the server refuses to
+  //   revive a sealed run instead of silently flipping it back to in-progress).
   createAssistantRun(req: CreateAssistantRunRequest): Promise<CreateAssistantRunResponse> {
     return this.request<CreateAssistantRunResponse>('POST', '/assistant/runs', req);
   }

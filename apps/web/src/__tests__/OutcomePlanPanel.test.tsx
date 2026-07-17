@@ -277,6 +277,36 @@ describe('OutcomePlanPanel drafting state and polling', () => {
   });
 });
 
+describe('OutcomePlanPanel terminal run after a plan was already drafted', () => {
+  it('disables Confirm/Clarify and shows a dead-run banner instead of a live confirmable plan', async () => {
+    // Real bug: the spec was drafted successfully (awaiting_confirmation, full content) but
+    // the run itself later crashed (status: "failed"). The spec's own status field never
+    // flips, so without a proactive runStatus check the panel would render live, enabled
+    // Confirm/Clarify buttons for a run that can no longer accept either action.
+    vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue(awaitingSpec);
+
+    render(
+      <Wrapper>
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="done" runStatus="failed" />
+      </Wrapper>,
+    );
+
+    const confirmButton = await screen.findByRole('button', { name: /confirm plan/i });
+    expect((confirmButton as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /clarify plan/i }) as HTMLButtonElement).disabled).toBe(true);
+
+    expect(screen.getByTestId('outcome-plan-dead-run-banner')).toBeTruthy();
+    expect(screen.getByText(/can no longer be confirmed/i)).toBeTruthy();
+
+    // The drafted plan content itself is preserved, not hidden.
+    expect(screen.getByText('Ship the feature')).toBeTruthy();
+
+    // Clicking the (disabled) button must never reach the API.
+    await userEvent.click(confirmButton);
+    expect(apiClient.confirmOutcomeSpec).not.toHaveBeenCalled();
+  });
+});
+
 describe('OutcomePlanPanel terminal REST status precedence', () => {
   it('shows declined from the REST snapshot even when the latest SSE spec event is awaiting confirmation', async () => {
     vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue({ ...awaitingSpec, status: 'declined' });

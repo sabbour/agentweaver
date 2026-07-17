@@ -91,6 +91,20 @@ public sealed class OperatorAssistantAgent(
         WriteIndented = false,
     };
 
+    /// <summary>
+    /// Hard per-invocation deadline for a single MCP tool call. The Copilot SDK auto-invokes tools,
+    /// and each MCP tool call is a <c>tools/call</c> HTTP round-trip to the AgentweaverMCP server that
+    /// can fan out into further backend work (e.g. <c>coordinator_steer stop</c> deletes an AgentHost
+    /// pod via the Kubernetes API). None of that had a bound: when a downstream dependency hung (a
+    /// degraded K8s API was observed), the tool call never returned, so the turn's streaming loop
+    /// never completed, the run's turn semaphore was never released, and no <c>tool.result</c> was
+    /// ever written — the whole operator conversation wedged until the 30-minute idle sweep force-
+    /// closed it. This deadline is a runtime backstop that guarantees no single tool call can block a
+    /// turn forever; it is deliberately generous (legitimate MCP calls return in seconds) and only
+    /// trips on a genuinely stuck dependency.
+    /// </summary>
+    internal static readonly TimeSpan ToolInvocationTimeout = TimeSpan.FromMinutes(3);
+
     public async Task<OperatorAssistantResponse> RunTurnAsync(
         OperatorAssistantRequest request,
         IOperatorAssistantTurnSink? sink,
@@ -251,12 +265,59 @@ public sealed class OperatorAssistantAgent(
         var declarations = new List<AIFunctionDeclaration>(session.Tools.Count);
         foreach (var tool in session.Tools)
         {
+            // Every tool invocation is bounded by a hard deadline (ToolInvocationTimeout) so a single
+            // stuck tool call can never wedge the whole turn. Consequential tools are additionally
+            // wrapped in the human-approval gate; the deadline applies to the actual tool call, not to
+            // the (separately time-boxed) approval wait.
+            AIFunction bounded = new DeadlineAIFunction(tool, ToolInvocationTimeout);
             if (sink is not null && OperatorToolApprovalPolicy.RequiresApproval(tool.Name))
-                declarations.Add(new ApprovalGatingAIFunction(tool, sink, ct));
+                declarations.Add(new ApprovalGatingAIFunction(bounded, sink, ct));
             else
-                declarations.Add(tool);
+                declarations.Add(bounded);
         }
         return declarations;
+    }
+
+    /// <summary>Test seam: wraps <paramref name="inner"/> in the per-invocation deadline wrapper the
+    /// production tool set uses, so the timeout backstop can be exercised without a live model/MCP
+    /// session. Not for production call sites.</summary>
+    internal static AIFunction CreateDeadlineToolForTests(AIFunction inner, TimeSpan timeout) =>
+        new DeadlineAIFunction(inner, timeout);
+
+    /// <summary>
+    /// Wraps an MCP <see cref="AIFunction"/> so its invocation is abandoned once
+    /// <see cref="ToolInvocationTimeout"/> elapses, returning a clear timeout result to the model so
+    /// the turn completes gracefully instead of hanging forever on an unbounded downstream dependency.
+    /// A genuine turn cancellation (client disconnect / host shutdown) is propagated unchanged — only
+    /// the deadline-expiry case is converted into a model-visible result. All declaration metadata is
+    /// forwarded verbatim so the model still sees the tool's real name, description, and schema.
+    /// </summary>
+    private sealed class DeadlineAIFunction(AIFunction inner, TimeSpan timeout) : AIFunction
+    {
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => inner.AdditionalProperties;
+        public override JsonElement JsonSchema => inner.JsonSchema;
+        public override JsonElement? ReturnJsonSchema => inner.ReturnJsonSchema;
+        public override MethodInfo? UnderlyingMethod => inner.UnderlyingMethod;
+        public override JsonSerializerOptions JsonSerializerOptions => inner.JsonSerializerOptions;
+
+        protected override async ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments, CancellationToken cancellationToken)
+        {
+            using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadlineCts.CancelAfter(timeout);
+            try
+            {
+                return await inner.InvokeAsync(arguments, deadlineCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                return $"The '{inner.Name}' action did not complete within {timeout.TotalSeconds:0} seconds and was " +
+                       "aborted to keep the conversation responsive. It may still be taking effect in the background — " +
+                       "do not assume it failed; tell the user it timed out and offer to check its status.";
+            }
+        }
     }
 
     /// <summary>

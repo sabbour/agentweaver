@@ -54,14 +54,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     maxWidth: '640px',
   },
-  idleTimeoutNotice: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
-    backgroundColor: tokens.colorNeutralBackground3,
-    borderRadius: tokens.borderRadiusMedium,
-    maxWidth: '640px',
-  },
   approvals: {
     display: 'flex',
     flexDirection: 'column',
@@ -286,6 +278,15 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const [pendingMessage, setPendingMessage] = useState<{ id: string; text: string } | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const scrolledForRunRef = useRef<string | null>(null);
+  // Remembers the run id of a conversation that turned out to be genuinely, permanently
+  // gone (404 run_not_found / 409 operator_run_closed below — NOT plain idle timeout, which
+  // now wakes the same run transparently), so the NEXT createAssistantRun call (the user's
+  // very next submit) can pass it as resume_from_run_id and auto-seed the new run's context
+  // with whatever of that conversation's history is still recoverable. Only those two
+  // reactive error branches ever set this — a ref (not state) so setting it never triggers
+  // a render, and it's cleared right after being consumed so it can't leak into an unrelated
+  // new conversation started later (e.g. via "New Session" from the Sessions page).
+  const pendingResumeFromRunIdRef = useRef<string | null>(null);
 
   const { events, status: streamStatus } = useSeededRunStream(runId, undefined);
 
@@ -307,18 +308,6 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const pendingApprovals = useMemo(
     () => (runId ? derivePendingApprovals(events, runId) : []),
     [events, runId],
-  );
-
-  // Detect idle-timeout: the backend emits run.completed {reason:"idle_timeout"} when the
-  // operator run is closed due to inactivity. Treat this as a terminal state distinct from
-  // a normal completion — the composer stays editable so the user can start a new run.
-  const idleTimedOut = useMemo(
-    () => events.some(
-      (e) => e.type === 'run.completed' &&
-        typeof e.payload === 'object' &&
-        (e.payload as Record<string, unknown>)['reason'] === 'idle_timeout',
-    ),
-    [events],
   );
 
   // Clear the optimistic pending message once its server-confirmed counterpart appears in
@@ -358,7 +347,11 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         const created = await apiClient.createAssistantRun({
           message,
           project_id: effectiveProjectId,
+          resume_from_run_id: pendingResumeFromRunIdRef.current ?? undefined,
         });
+        // Consumed (or not needed) — clear so it never leaks into a later, unrelated new
+        // conversation (e.g. one started via "New Session" from the Sessions page).
+        pendingResumeFromRunIdRef.current = null;
         setRunId(created.run_id);
       } else {
         await apiClient.sendAssistantMessage(runId, { message });
@@ -381,10 +374,28 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         err.status === 404 &&
         parseApiBody(err.body).error === 'run_not_found'
       ) {
-        // The run was idle-closed by the server. Reset to the start state so the user can
-        // open a new conversation; the transcript stays visible below the notice.
+        // Idle timeout no longer causes this — an idle run now goes dormant server-side and
+        // wakes transparently (same run id, normal 200) the next time a message is sent.
+        // This only fires for a genuinely gone run: a foreign/nonexistent run id, or a
+        // legacy pre-fix zombie row from before that behavior shipped. Remember its id so
+        // the next submit auto-seeds a fresh run with whatever history we can recover, then
+        // reset to the start state so the user can send that next message.
+        pendingResumeFromRunIdRef.current = runId;
         setRunId('');
-        setError('This conversation timed out. Start a new one below.');
+        setError('This conversation could not be found, so it can no longer be continued. Send your message again to start a new one that remembers this conversation.');
+      } else if (
+        !isNewRun &&
+        err instanceof ApiError &&
+        err.status === 409 &&
+        parseApiBody(err.body).error === 'operator_run_closed'
+      ) {
+        // The run's durable event stream is already sealed with a genuinely terminal
+        // run.completed event — a real end-of-conversation, not plain inactivity (idle runs
+        // are dormant, not sealed, and wake transparently). Remember its id (same auto-seed
+        // handoff as the run_not_found case above) and reset to the start state.
+        pendingResumeFromRunIdRef.current = runId;
+        setRunId('');
+        setError('This conversation has ended and can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else {
         setError(formatApiErrorMessage(err));
       }
@@ -426,11 +437,6 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
             </div>
             <span className={styles.pendingMessageStatus}>Sending…</span>
           </div>
-        )}
-        {idleTimedOut && (
-          <Text className={styles.idleTimeoutNotice} data-testid="assistant-idle-timeout">
-            Conversation ended due to inactivity. Start a new one below.
-          </Text>
         )}
         {pendingApprovals.length > 0 && (
           <div className={styles.approvals} data-testid="assistant-approvals">

@@ -933,6 +933,10 @@ public sealed record StartAssistantRunRequest
     [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }
+    /// <summary>Optional id of a prior (typically idle-closed/sealed) operator run whose conversation
+    /// history should seed this brand-new run's model context, so replies feel continuous even though
+    /// the old run itself is never revived or modified.</summary>
+    [JsonPropertyName("resume_from_run_id")] public string? ResumeFromRunId { get; init; }
 }
 
 /// <summary>Response body for POST /api/assistant/runs.</summary>

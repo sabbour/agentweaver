@@ -75,6 +75,15 @@ public interface IToolApprovalGate
     /// </summary>
     bool IsKnownRequest(string runId, string requestId) => true;
 
+    /// <summary>
+    /// Returns <see langword="true"/> if the run currently has at least one ARMED tool-approval
+    /// request — registered and still awaiting the operator's grant/deny decision (not yet resolved,
+    /// denied, expired, or cleared). A run parked on an approval card is not "idle": it is actively
+    /// blocked on the accountable human, so idle/close sweeps must not seal it out from under a human
+    /// who has merely stepped away. Mirrors the coordinator's indefinite-safe HITL wait.
+    /// </summary>
+    bool HasArmedApproval(string runId) => false;
+
     /// <summary>Clears all pending approvals for a run (called on run completion).</summary>
     void Clear(string runId);
 

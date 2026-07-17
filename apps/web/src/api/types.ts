@@ -768,6 +768,13 @@ export interface CreateAssistantRunRequest {
   message: string;
   /** Optional project scope for MCP tool calls that need a project context. */
   project_id?: string;
+  /**
+   * Auto-seed a brand-new run's model context with a prior (now closed) run's full
+   * conversation history so replies feel continuous. The referenced run is never modified —
+   * this always creates a new `run_id`. Used to make idle-closed conversations "resumable"
+   * without literally reviving the sealed run (which the server permanently rejects).
+   */
+  resume_from_run_id?: string | null;
 }
 
 export interface CreateAssistantRunResponse {

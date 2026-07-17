@@ -398,6 +398,18 @@ public sealed class CoordinatorSteeringService
     private readonly SandboxRuntimeOptions _sandboxRuntime;
 
     /// <summary>
+    /// Hard deadline for the best-effort AgentHost pod release triggered by a steering stop. Deleting
+    /// a <c>SandboxClaim</c> is a fast K8s API call under normal conditions, but if the cluster API is
+    /// degraded (we have observed "Connection reset by peer"/reaper-sweep failures against it) the
+    /// underlying delete can block for minutes with no intrinsic timeout. Because this release runs
+    /// INLINE inside the synchronous <c>coordinator_steer</c> tool call, an unbounded block here is
+    /// what wedged the calling operator turn forever (the tool never returned a result). Bounding it
+    /// keeps the steer responsive; a timeout is swallowed as best-effort — the AgentHost reaper sweep
+    /// is the durable backstop for an unreleased pod.
+    /// </summary>
+    private static readonly TimeSpan PodReleaseTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>
     /// Statuses where the coordinator is still an operator-addressable control loop. In particular,
     /// AwaitingReview is not terminal for coordinator orchestration: it is the collective assembly
     /// human-review parking state, so steering and free-form messages must remain enabled.
@@ -453,11 +465,24 @@ public sealed class CoordinatorSteeringService
         if (_podLifecycle is null || !_sandboxRuntime.IsPodPerRun || string.IsNullOrEmpty(runId))
             return;
 
+        // Bound the release so a degraded K8s API cannot block the inline steer (and therefore the
+        // caller's tool call / turn) indefinitely. On the deadline the operation is abandoned as
+        // best-effort; the AgentHost reaper sweep still tears the pod down out of band.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(PodReleaseTimeout);
+
         try
         {
-            await _podLifecycle.ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
+            await _podLifecycle.ReleaseAgentHostPodAsync(runId, timeoutCts.Token).ConfigureAwait(false);
             _logger.LogInformation(
                 "CoordinatorSteeringService: AgentHost pod released for stopped child run {RunId}", runId);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "CoordinatorSteeringService: AgentHost pod release for run {RunId} exceeded {TimeoutSeconds}s and was abandoned " +
+                "(best-effort; the AgentHost reaper will reclaim the pod).",
+                runId, PodReleaseTimeout.TotalSeconds);
         }
         catch (Exception ex)
         {

@@ -241,6 +241,36 @@ public sealed class EfRunStore : IRunStore
         return rows > 0;
     }
 
+    public async Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        var inProgressStr = RunStatus.InProgress.ToApiString();
+        var idleStr = RunStatus.Idle.ToApiString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        // CAS: only the replica that still sees this run as InProgress flips it to Idle. A loser
+        // (already parked by another replica, or since resumed/terminal) simply gets 0 rows. Note we
+        // intentionally do NOT touch EndedAt — an Idle run is dormant, not ended.
+        var rows = await db.Runs
+            .Where(r => r.RunId == id && r.Status == inProgressStr)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, idleStr), ct);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryWakeFromIdleAsync(RunId runId, CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        var idleStr = RunStatus.Idle.ToApiString();
+        var inProgressStr = RunStatus.InProgress.ToApiString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        // CAS: only the replica that still sees this run as Idle wakes it back to InProgress.
+        var rows = await db.Runs
+            .Where(r => r.RunId == id && r.Status == idleStr)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, inProgressStr), ct);
+        return rows > 0;
+    }
+
     public async Task UpdateToInProgressAsync(
         RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default)
     {

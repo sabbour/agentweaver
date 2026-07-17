@@ -112,11 +112,17 @@ public sealed class RunWatchLoopService
             }, renewCts.Token);
 
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
-            linkedCts.CancelAfter(_watchLoopTimeout);
+            // The watchdog bounds only ACTIVE execution spans, not human-decision-wait time. It is
+            // armed/paused from inside WatchAsync as the run moves between active execution and being
+            // parked at a RequestPort awaiting a human — so a run parked for a human decision can no
+            // longer be failed by the wall-clock timeout (see ExecutionWatchdog remarks). Genuine
+            // stuck/runaway ACTIVE execution is still caught: while armed, an active span exceeding
+            // _watchLoopTimeout cancels linkedCts exactly as before.
+            var watchdog = new ExecutionWatchdog(linkedCts, _watchLoopTimeout);
             var durableStopMonitor = MonitorDurableSteeringStopAsync(runId, entry, linkedCts.Token);
             try
             {
-                await WatchAsync(runId, streamingRun, entry, ownerUser, linkedCts.Token).ConfigureAwait(false);
+                await WatchAsync(runId, streamingRun, entry, ownerUser, watchdog, linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
             {
@@ -129,7 +135,8 @@ public sealed class RunWatchLoopService
             catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && !_appStopping.IsCancellationRequested)
             {
                 _logger.LogWarning(
-                    "Watch loop timed out for run {RunId} after {Timeout}; transitioning to Failed",
+                    "Watch loop timed out for run {RunId}: an active execution phase exceeded {Timeout} " +
+                    "without yielding a terminal event (human-decision-wait time is not counted); transitioning to Failed",
                     runId, _watchLoopTimeout);
                 await FailRunSafeAsync(runId, entry, "watch_loop_timeout").ConfigureAwait(false);
             }
@@ -278,6 +285,7 @@ public sealed class RunWatchLoopService
         StreamingRun streamingRun,
         RunStreamEntry entry,
         string ownerUser,
+        ExecutionWatchdog watchdog,
         CancellationToken ct)
     {
         // #331 — build/preview subtask terminal-emission gap: the agent turn itself can complete
@@ -291,8 +299,24 @@ public sealed class RunWatchLoopService
         // `watch_stream_completed_without_terminal_event`.
         AgentTurnOutput? lastSuccessfulAgentTurnOutput = null;
 
+        // Initialise the watchdog for THIS run's current phase. If the run is resumed straight into an
+        // awaiting-human state (e.g. restored by WorkflowRestartService while parked at a review gate),
+        // start PAUSED so the human-wait span is never counted; otherwise arm for the first active
+        // span. The per-active-span deadline is (re)armed on resume and paused on suspend below.
+        if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is not null)
+            watchdog.Pause();
+        else
+            watchdog.Arm();
+
         await foreach (var evt in streamingRun.WatchStreamAsync(ct))
         {
+            // Any event means the workflow is actively executing again. If we were parked awaiting a
+            // human decision, this is the resume signal (the operator responded and the workflow
+            // re-emitted): the human-wait span just ended, so re-arm the active-phase watchdog for the
+            // new span of real execution. Genuinely stuck ACTIVE spans remain bounded.
+            if (watchdog.IsPaused)
+                watchdog.Arm();
+
             switch (evt)
             {
                 // Per-executor lifecycle (MAF) -> live workflow.step events. This makes the graph
@@ -372,6 +396,14 @@ public sealed class RunWatchLoopService
                     // Resume correctness relies on the DB-backed ICheckpointStore + serialized
                     // session blob — not on A2A contextId state (§4.7.3).
                     await ReleasePodOnSuspendSafeAsync(runId).ConfigureAwait(false);
+
+                    // Parked at a RequestPort awaiting the accountable human — STOP the watchdog clock
+                    // so elapsed human-decision-wait time can never fail the run (standing rule: a run
+                    // must not die because a human was not around to respond; mirrors AssemblyReviewGate's
+                    // indefinite-safe wait). runCt/_appStopping stay live on the linked CTS, so run
+                    // cancellation and host shutdown remain immediate — only the wall-clock timeout is
+                    // suspended, and it is re-armed at the top of the loop when the workflow resumes.
+                    watchdog.Pause();
                     break;
 
                 case WorkflowOutputEvent woe:
@@ -991,5 +1023,41 @@ public sealed class RunWatchLoopService
         foreach (var (key, value) in extraTags)
             tags.Add(new(key, value));
         return tags.ToArray();
+    }
+
+    /// <summary>
+    /// Bounds only spans of <b>active</b> workflow/agent execution — never human-decision-wait time.
+    /// The watch-loop watchdog exists to catch a genuinely stuck/runaway ACTIVE phase (a hung agent
+    /// turn that never yields a terminal event), NOT to fail a run that is correctly parked at a
+    /// RequestPort awaiting the accountable human. Standing product rule: a run must never die simply
+    /// because a human was not around to respond — it may sleep indefinitely and must stay resumable
+    /// (mirrors <see cref="Agentweaver.Api.Coordinator.AssemblyReviewGate"/>'s indefinite-safe wait).
+    ///
+    /// <para>Mechanism: the same linked <see cref="CancellationTokenSource"/> that already ties the
+    /// watch loop to run-cancellation and host-shutdown carries the timeout. <see cref="Arm"/>
+    /// schedules the cancel after one active-span timeout; <see cref="Pause"/> reschedules it to
+    /// infinite (disabling the wall-clock deadline) while parked. Because only the timer is touched,
+    /// the CTS's linked parents (run cancel / <c>ApplicationStopping</c>) still fire immediately — a
+    /// paused watchdog delays only the timeout, never cancellation or shutdown.</para>
+    /// </summary>
+    internal sealed class ExecutionWatchdog(CancellationTokenSource linkedCts, TimeSpan activeTimeout)
+    {
+        /// <summary>True while the wall-clock timeout is suspended (run parked awaiting a human).</summary>
+        public bool IsPaused { get; private set; } = true;
+
+        /// <summary>Bounds the next span of active execution: cancels the linked CTS if it elapses.</summary>
+        public void Arm()
+        {
+            IsPaused = false;
+            linkedCts.CancelAfter(activeTimeout);
+        }
+
+        /// <summary>Suspends the wall-clock timeout indefinitely while the run is parked on a human
+        /// decision. Cancellation from the CTS's linked parents is unaffected.</summary>
+        public void Pause()
+        {
+            IsPaused = true;
+            linkedCts.CancelAfter(Timeout.InfiniteTimeSpan);
+        }
     }
 }

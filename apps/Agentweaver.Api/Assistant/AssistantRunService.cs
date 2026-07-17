@@ -26,6 +26,17 @@ public sealed class AssistantRunOptions
 
     /// <summary>How often the idle sweeper runs.</summary>
     public TimeSpan SweepInterval { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// De-dupe window for <see cref="IAssistantRunService.StartRunAsync"/>. <c>StartRunAsync</c> runs
+    /// the opening turn SYNCHRONOUSLY before the HTTP response returns, so a first turn with several
+    /// tool calls can outlast a client-side fetch/proxy timeout; if the client then retries with the
+    /// identical opening message believing the first attempt failed, the retry would otherwise mint a
+    /// second, fully independent run while the original is still executing (observed live: two
+    /// Operator runs with an identical opening message, 64 seconds apart). When a still-InProgress run
+    /// for the same user with the identical opening message started within this window, the retry is
+    /// treated as a duplicate and the existing run is returned instead of starting a new one.</summary>
+    public TimeSpan DuplicateStartWindow { get; set; } = TimeSpan.FromMinutes(2);
 }
 
 /// <summary>Raised when a user tries to open more concurrent operator runs than
@@ -53,7 +64,10 @@ public sealed record AssistantRunSummary(string RunId, RunStatus Status, string 
 public interface IAssistantRunService
 {
     /// <summary>Creates a new operator run for the caller and, when <paramref name="firstMessage"/> is
-    /// supplied, runs the opening turn. Enforces the per-user concurrency bound.</summary>
+    /// supplied, runs the opening turn. Enforces the per-user concurrency bound. When
+    /// <paramref name="resumeFromRunId"/> is supplied, the new run's model context is pre-loaded with
+    /// that prior operator run's conversation history (typically a run the user's previous session was
+    /// idle-closed) — the old run itself is never modified or revived.</summary>
     Task<StartAssistantRunResult> StartRunAsync(
         CallerContext caller,
         string callerBearerToken,
@@ -61,7 +75,8 @@ public interface IAssistantRunService
         string? projectId,
         string? contextRunId,
         string? modelId,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? resumeFromRunId = null);
 
     /// <summary>Runs the next conversational turn on an existing operator run owned by the caller.</summary>
     Task<OperatorAssistantResponse> SendMessageAsync(
@@ -147,13 +162,69 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         string? projectId,
         string? contextRunId,
         string? modelId,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? resumeFromRunId = null)
     {
         ArgumentNullException.ThrowIfNull(caller);
 
+        var now = DateTimeOffset.UtcNow;
+
+        // "Auto-seed" resume (#347 follow-up): when the caller's previous operator conversation was
+        // idle-closed (or otherwise no longer reachable via RehydrateRunAsync), the frontend starts a
+        // BRAND-NEW run and passes that old run's id here so the new conversation's model context is
+        // pre-loaded with the prior transcript. This validates and reads the OLD run only — it is never
+        // written to, revived, or otherwise modified; the sealed-run guard in RehydrateRunAsync is
+        // completely untouched. When resumeFromRunId is null/blank (the default, existing path) none of
+        // this runs and behavior is unchanged.
+        IReadOnlyList<ConsoleFacadeHistoryMessage>? resumeHistory = null;
+        if (!string.IsNullOrWhiteSpace(resumeFromRunId))
+        {
+            if (!RunId.TryParse(resumeFromRunId, out var parsedResumeRunId))
+                throw new AssistantRunHttpException(StatusCodes.Status404NotFound, "run_not_found",
+                    "No active operator run with that id. It may have been closed after an idle timeout.");
+
+            var oldRun = await _runStore.GetAsync(parsedResumeRunId, ct).ConfigureAwait(false);
+            if (oldRun is null || !string.Equals(oldRun.AgentName, OperatorAgentName, StringComparison.Ordinal))
+                throw new AssistantRunHttpException(StatusCodes.Status404NotFound, "run_not_found",
+                    "No active operator run with that id. It may have been closed after an idle timeout.");
+
+            if (!caller.Owns(oldRun.SubmittingUser))
+                throw new AssistantRunHttpException(StatusCodes.Status403Forbidden, "forbidden",
+                    "You do not own this operator run.");
+
+            var oldEvents = await _eventStream
+                .GetPersistedEventsAsync(resumeFromRunId, fromSequence: 0, ct)
+                .ConfigureAwait(false);
+            resumeHistory = BuildHistoryFromEvents(oldEvents);
+        }
+
+        // De-dupe guard against a retry-while-still-processing double submit (see
+        // AssistantRunOptions.DuplicateStartWindow for why this is needed). DB-backed (not the local
+        // _runs cache) so a retry landing on a different API replica is still caught. Only matches a
+        // run that is STILL InProgress — a genuinely-finished conversation with the same opening line
+        // is not treated as a duplicate.
+        if (!string.IsNullOrWhiteSpace(firstMessage))
+        {
+            var recent = await _runStore
+                .GetRunsBySubmittingUserAsync(caller.User, OperatorAgentName, limit: 5, ct)
+                .ConfigureAwait(false);
+            var duplicate = recent.FirstOrDefault(r =>
+                r.Status == RunStatus.InProgress &&
+                now - r.StartedAt <= _options.DuplicateStartWindow &&
+                string.Equals(r.Task, firstMessage, StringComparison.Ordinal));
+            if (duplicate is not null)
+            {
+                _logger.LogInformation(
+                    "StartRunAsync: request for user {User} matches still-running run {RunId} with an " +
+                    "identical opening message started {SecondsAgo:0}s ago; returning it instead of " +
+                    "starting a duplicate.",
+                    caller.User, duplicate.Id, (now - duplicate.StartedAt).TotalSeconds);
+                return new StartAssistantRunResult(duplicate.Id, duplicate.Status, FirstTurn: null);
+            }
+        }
+
         var runId = RunId.New();
         var key = runId.ToString();
-        var now = DateTimeOffset.UtcNow;
 
         // Reserve the concurrency slot atomically before any IO so two parallel starts cannot both
         // slip past the bound.
@@ -163,7 +234,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             if (active >= _options.MaxConcurrentRunsPerUser)
                 throw new AssistantConcurrencyLimitException(_options.MaxConcurrentRunsPerUser);
 
-            _runs[key] = new OperatorRunState(caller.User, projectId, modelId, now);
+            _runs[key] = new OperatorRunState(caller.User, projectId, modelId, now, seedHistory: resumeHistory);
         }
 
         try
@@ -203,6 +274,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             agentName = OperatorAgentName,
             projectId,
             contextRunId,
+            resumedFromRunId = resumeFromRunId,
         }, ct).ConfigureAwait(false);
 
         OperatorAssistantResponse? firstTurn = null;
@@ -365,15 +437,46 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             throw new AssistantRunHttpException(StatusCodes.Status403Forbidden, "forbidden",
                 "You do not own this operator run.");
 
-        var history = await BuildHistoryFromPersistedEventsAsync(runId, ct).ConfigureAwait(false);
+        var events = await _eventStream.GetPersistedEventsAsync(runId, fromSequence: 0, ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
 
-        // If the run was closed by the idle sweeper (or otherwise left Completed) but the caller is
-        // sending a new message right now, flip it back to InProgress so the Sessions list reflects
-        // reality. Mirrors CloseIdleRunAsync's InProgress -> Completed transition in the other
-        // direction; clears EndedAt since the conversation is active again.
-        if (run.Status == RunStatus.Completed)
-            await _runStore.UpdateStatusAsync(parsedRunId, RunStatus.InProgress, endedAt: null, ct).ConfigureAwait(false);
+        // "Genuinely unresumable" means a REAL terminal seal, NOT ordinary idle-timeout. A run is
+        // sealed only when its durable event stream carries an actual terminal `run.completed` marker
+        // (reserved for a true end-of-conversation) — or its DB status is the legacy-terminal
+        // RunStatus.Completed (defensive guard against any pre-dormancy zombie that a prior buggy
+        // revival may have left behind). Reviving such a run — which the very first buggy version did
+        // unconditionally — created a permanent "zombie": the DB row read `in_progress` (so the
+        // Sessions UI showed the conversation as live) while the stream was already sealed at the
+        // terminal marker, so it could never actually resume.
+        //
+        // Idle-timeout no longer seals: CloseIdleRunAsync now PARKS the conversation as the
+        // non-terminal RunStatus.Idle with a NON-terminal `run.idle` marker and leaves the stream
+        // open. An Idle run therefore is NOT sealed and falls through to the normal rebuild path
+        // below, then is woken back to InProgress — continuing as the SAME run with history intact.
+        var isSealed = run.Status == RunStatus.Completed
+            || events.Any(e => string.Equals(e.Type, EventTypes.RunCompleted, StringComparison.Ordinal));
+        if (isSealed)
+            throw new AssistantRunHttpException(StatusCodes.Status409Conflict, "operator_run_closed",
+                "This operator conversation was closed and cannot be resumed. " +
+                "Start a new conversation to continue.");
+
+        // Wake a dormant (Idle) conversation. Idle is a non-terminal pause, so we rebuild history from
+        // the durable events exactly as for a cache-miss and CAS the DB status Idle -> InProgress. The
+        // CAS is single-winner across replicas (mirrors CloseIdleRunAsync's park CAS): if another
+        // replica already woke it, our CAS returns false and we simply continue — the run is
+        // InProgress either way, so the conversation resumes exactly once no matter which replica
+        // handles the waking message.
+        if (run.Status == RunStatus.Idle)
+        {
+            var woke = await _runStore.TryWakeFromIdleAsync(parsedRunId, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                woke
+                    ? "Woke dormant operator run {RunId} (idle -> in_progress); resuming the same conversation."
+                    : "Dormant operator run {RunId} was already woken by another replica; resuming the same conversation.",
+                runId);
+        }
+
+        var history = BuildHistoryFromEvents(events);
 
         // Concurrency accounting: rehydration does NOT count against MaxConcurrentRunsPerUser. The
         // limit exists to bound how many conversations a user can have OPEN AT ONCE (enforced in
@@ -412,11 +515,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// replays each turn from persisted <see cref="EventTypes.AgentMessage"/> events, taking at most
     /// the most recent <see cref="MaxHistoryMessages"/> in chronological order (events are already
     /// persisted/read in ascending sequence order).</summary>
-    private async Task<IReadOnlyList<ConsoleFacadeHistoryMessage>> BuildHistoryFromPersistedEventsAsync(
-        string runId, CancellationToken ct)
+    private static IReadOnlyList<ConsoleFacadeHistoryMessage> BuildHistoryFromEvents(IReadOnlyList<RunEvent> events)
     {
-        var events = await _eventStream.GetPersistedEventsAsync(runId, fromSequence: 0, ct).ConfigureAwait(false);
-
         var messages = new List<ConsoleFacadeHistoryMessage>();
         foreach (var evt in events)
         {
@@ -449,6 +549,23 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         {
             if (now - state.LastActivityUtc < _options.IdleTimeout)
                 continue;
+
+            // Never idle-close a run that is actively blocked on a human tool-approval decision. A
+            // conversation parked on an approval card is NOT abandoned — it is waiting on the
+            // accountable operator (who may have simply stepped away), exactly like the coordinator's
+            // AssemblyReviewGate indefinite-safe wait. Closing here would call _approvalGate.Clear(key)
+            // and seal the stream, permanently destroying the in-flight approval so the run could
+            // never resume — a run must not die from human-response wait time. Leave it resident and
+            // resumable; once the operator responds (or the underlying approval times out on its own),
+            // normal activity resumes and the idle clock restarts from the next real activity.
+            if (_approvalGate.HasArmedApproval(key))
+            {
+                _logger.LogInformation(
+                    "Skipping idle-close for operator run {RunId}: an armed tool-approval is awaiting the operator.",
+                    key);
+                continue;
+            }
+
             if (!_runs.TryRemove(key, out _))
                 continue;
 
@@ -460,22 +577,51 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     {
         try
         {
-            if (RunId.TryParse(key, out var runId))
-                await _runStore.UpdateStatusAsync(runId, RunStatus.Completed, DateTimeOffset.UtcNow)
-                    .ConfigureAwait(false);
+            if (!RunId.TryParse(key, out var runId))
+                return;
 
-            await AppendAsync(key, EventTypes.RunCompleted, new
+            // Multi-replica-safe DORMANCY (not termination). The API runs multiple replicas (k8s
+            // api-deployment replicas: 2), each with its OWN in-memory `_runs` map, its OWN idle-sweep
+            // timer, and NO session affinity — so both replicas can independently rehydrate the same
+            // run and then each, on its own schedule, decide it is idle. Gate the whole park on a
+            // compare-and-set InProgress -> Idle transition so only ONE replica wins: the loser gets
+            // `false` and does nothing (no duplicate run.idle marker).
+            //
+            // Crucially this PARKS the conversation, it does NOT end it. A standing product directive
+            // is that no Assistant/Operator run may die from human-response wait time — an idle
+            // conversation must be able to un-sleep and continue as the SAME run. So unlike a genuine
+            // terminal close we (a) CAS to the non-terminal RunStatus.Idle (not Completed) leaving
+            // ended_at NULL, (b) append a NON-terminal run.idle marker (not run.completed), and
+            // (c) deliberately do NOT call _eventStream.CompleteAsync — sealing the SSE stream is
+            // reserved for a genuine end-of-conversation, which does not currently exist for Operator
+            // runs. The next message rehydrates and wakes the run (RehydrateRunAsync: Idle ->
+            // InProgress) and the conversation resumes transparently.
+            var parked = await _runStore
+                .TryTransitionToIdleAsync(runId, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (!parked)
+            {
+                _logger.LogInformation(
+                    "Idle operator run {RunId} was not InProgress (already parked or resumed by another replica); skipping duplicate park.",
+                    key);
+                return;
+            }
+
+            await AppendAsync(key, EventTypes.RunIdle, new
             {
                 runId = key,
                 reason = "idle_timeout",
             }, CancellationToken.None).ConfigureAwait(false);
 
-            await _eventStream.CompleteAsync(key).ConfigureAwait(false);
-            _approvalGate.Clear(key);
+            // NOTE: no _eventStream.CompleteAsync (would seal the stream terminally) and no
+            // _approvalGate.Clear (SweepIdleRuns already skips parking while an approval is armed, and
+            // dormancy preserves all conversational state for the wake).
+            _logger.LogInformation(
+                "Parked idle operator run {RunId} to dormant (idle_timeout); resumable on the next message.", key);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to close idle operator run {RunId}", key);
+            _logger.LogWarning(ex, "Failed to park idle operator run {RunId}", key);
         }
     }
 

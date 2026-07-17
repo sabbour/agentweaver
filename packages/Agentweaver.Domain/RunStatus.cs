@@ -30,4 +30,17 @@ public enum RunStatus
     /// hand-off contract the coordinator's assemble wave reads.
     /// </summary>
     AssembleReady,
+    /// <summary>
+    /// Non-terminal DORMANT state for an Assistant/Operator conversation that has gone idle beyond
+    /// the idle-timeout with NO pending human approval. The conversation is PAUSED, not ended: its
+    /// durable event stream is NOT sealed (no terminal <c>run.completed</c> marker) and it can be
+    /// transparently woken back to <see cref="InProgress"/> on the next message (see
+    /// AssistantRunService.RehydrateRunAsync), continuing as the SAME run id with prior history
+    /// intact. Distinct from <see cref="Completed"/>, which is genuinely terminal and unresumable.
+    /// MUST remain the LAST enum value: <c>Run.Status</c> is persisted by string name
+    /// (RunStatusExtensions.ToApiString/ParseStatus), so ordinal position is not load-bearing, but
+    /// appending is kept as a defensive invariant so any future ordinal-based persistence cannot
+    /// silently renumber the pre-existing values.
+    /// </summary>
+    Idle,
 }

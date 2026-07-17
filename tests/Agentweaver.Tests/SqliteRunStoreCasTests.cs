@@ -157,8 +157,80 @@ public sealed class SqliteRunStoreCasTests
     }
 
     // =========================================================================
+    // Dormancy CAS (HITL resumability v2): TryTransitionToIdleAsync parks an
+    // InProgress run to the non-terminal Idle state, single-winner across
+    // replicas, WITHOUT setting ended_at (an Idle run is paused, not ended).
+    // =========================================================================
+    [Fact]
+    public async Task TryTransitionToIdle_ParksInProgressRun_SingleWinner_NoEndedAt()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var runId = await InsertInProgressRunAsync(store);
+
+        var first = await store.TryTransitionToIdleAsync(runId);
+        first.Should().BeTrue("first CAS must park an in_progress run dormant");
+
+        var parked = await store.GetAsync(runId);
+        parked!.Status.Should().Be(RunStatus.Idle, "the run must be parked dormant, not terminal");
+        parked.EndedAt.Should().BeNull("a dormant run is paused, not ended — ended_at must stay null");
+
+        var second = await store.TryTransitionToIdleAsync(runId);
+        second.Should().BeFalse("second CAS must be a no-op: the run is already idle, not in_progress");
+    }
+
+    [Fact]
+    public async Task TryTransitionToIdle_FailsWhenNotInProgress()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var runId = await InsertAwaitingReviewRunAsync(store);
+
+        var parked = await store.TryTransitionToIdleAsync(runId);
+        parked.Should().BeFalse("only an in_progress run may be parked dormant");
+
+        var run = await store.GetAsync(runId);
+        run!.Status.Should().Be(RunStatus.AwaitingReview, "a non-in_progress run must be left untouched");
+    }
+
+    [Fact]
+    public async Task TryWakeFromIdle_WakesDormantRun_SingleWinner()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var runId = await InsertInProgressRunAsync(store);
+        (await store.TryTransitionToIdleAsync(runId)).Should().BeTrue();
+
+        var first = await store.TryWakeFromIdleAsync(runId);
+        first.Should().BeTrue("first waker wins the CAS");
+
+        var woken = await store.GetAsync(runId);
+        woken!.Status.Should().Be(RunStatus.InProgress, "waking must return a dormant run to in_progress");
+
+        var second = await store.TryWakeFromIdleAsync(runId);
+        second.Should().BeFalse("second waker must be a no-op: the run is already in_progress — no double-wake");
+    }
+
+    // =========================================================================
     // Helper
     // =========================================================================
+
+    private static async Task<RunId> InsertInProgressRunAsync(SqliteRunStore store)
+    {
+        var runId = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id                = runId,
+            RepositoryPath    = "dummy-repo-path",
+            OriginatingBranch = "main",
+            ModelSource       = ModelSource.GitHubCopilot,
+            Task              = "cas idle unit test task",
+            SubmittingUser    = "cas-test-user",
+            Status            = RunStatus.InProgress,
+            StartedAt         = DateTimeOffset.UtcNow,
+        });
+        return runId;
+    }
 
     private static async Task<RunId> InsertAwaitingReviewRunAsync(SqliteRunStore store)
     {

@@ -540,7 +540,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             "KubernetesSandboxExecutor: releasing AgentHost pod for run {RunId} (claim {Claim})",
             runId, claimName);
 
-        await DeleteClaimAsync(claimName).ConfigureAwait(false);
+        await DeleteClaimAsync(claimName, ct).ConfigureAwait(false);
         _podRegistry?.Unregister(runId);
         _turnTokenRegistry?.UnregisterTurnToken(runId);
         await DeletePreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
@@ -1176,12 +1176,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         }
     }
 
-    private async Task DeleteClaimAsync(string claimName)
+    private async Task DeleteClaimAsync(string claimName, CancellationToken ct = default)
     {
         try
         {
             await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
-                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName);
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName, cancellationToken: ct);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: deleted claim {Claim}", claimName);
         }

@@ -430,6 +430,61 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         reread.Should().NotBeNull();
         reread!.Status.Should().Be(RunStatus.Merged);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Dormancy CAS (HITL resumability v2): InProgress -> Idle park and
+    // Idle -> InProgress wake, each single-winner across replicas.
+    // ─────────────────────────────────────────────────────────────────────────
+    private async Task<RunId> InsertInProgressRunAsync(EfRunStore store)
+    {
+        var runId = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = "/repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "idle cas test",
+            SubmittingUser = "alice",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        return runId;
+    }
+
+    [PostgresFact]
+    public async Task TryTransitionToIdle_ParksInProgressRun_SingleWinner_NoEndedAt()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var runId = await InsertInProgressRunAsync(store);
+
+        var first = await store.TryTransitionToIdleAsync(runId);
+        first.Should().BeTrue("first CAS must park an in_progress run dormant");
+
+        var parked = await store.GetAsync(runId);
+        parked!.Status.Should().Be(RunStatus.Idle);
+        parked.EndedAt.Should().BeNull("a dormant run is paused, not ended");
+
+        var second = await store.TryTransitionToIdleAsync(runId);
+        second.Should().BeFalse("second CAS must be a no-op: run is already idle");
+    }
+
+    [PostgresFact]
+    public async Task TryWakeFromIdle_WakesDormantRun_SingleWinner()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var runId = await InsertInProgressRunAsync(store);
+        (await store.TryTransitionToIdleAsync(runId)).Should().BeTrue();
+
+        var first = await store.TryWakeFromIdleAsync(runId);
+        first.Should().BeTrue("first waker wins the CAS");
+
+        var woken = await store.GetAsync(runId);
+        woken!.Status.Should().Be(RunStatus.InProgress);
+
+        var second = await store.TryWakeFromIdleAsync(runId);
+        second.Should().BeFalse("second waker must be a no-op — no double-wake");
+    }
 }
 
 [Collection("PostgresIntegration")]

@@ -14,6 +14,15 @@ public static class EventTypes
     /// </summary>
     public const string RunError = "run.error";
 
+    /// <summary>
+    /// NON-terminal dormancy marker: an Assistant/Operator conversation went idle beyond the
+    /// idle-timeout with no pending human approval and was PARKED (see AssistantRunService.
+    /// CloseIdleRunAsync). Unlike <see cref="RunCompleted"/> this is intentionally NOT in the event
+    /// stream's terminal set — the SSE stream is paused, never sealed — so the next message wakes the
+    /// run (Idle -&gt; InProgress) and the same conversation resumes. Payload: { runId, reason }.
+    /// </summary>
+    public const string RunIdle = "run.idle";
+
     public const string ReviewRequested = "review.requested";
     public const string ReviewApproved  = "review.approved";
     public const string ReviewDeclined  = "review.declined";

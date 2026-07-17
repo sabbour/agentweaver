@@ -25,6 +25,27 @@ public interface IRunStore
     Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default);
     Task<bool> SetAssembleReadyAsync(RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount, DateTimeOffset endedAt, CancellationToken ct = default);
     Task<bool> TrySetTerminalStatusAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default);
+
+    /// <summary>
+    /// CAS-transitions a run from <see cref="RunStatus.InProgress"/> to the NON-terminal
+    /// <see cref="RunStatus.Idle"/> dormant state (Assistant/Operator idle-timeout parking). Returns
+    /// <c>true</c> only for the single caller that actually observed InProgress and flipped it —
+    /// mirroring <see cref="TrySetTerminalStatusAsync"/>'s single-winner guarantee so two API
+    /// replicas racing to park the SAME run cannot both "win" (no duplicate <c>run.idle</c> marker).
+    /// Deliberately does NOT set <c>EndedAt</c>: an Idle run is paused, not ended, and is woken via
+    /// <see cref="TryWakeFromIdleAsync"/>. The default no-op returns <c>false</c> for in-memory test
+    /// stores that never exercise the idle-parking path.
+    /// </summary>
+    Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default) => Task.FromResult(false);
+
+    /// <summary>
+    /// CAS-transitions a dormant <see cref="RunStatus.Idle"/> run back to
+    /// <see cref="RunStatus.InProgress"/> when its conversation is woken (RehydrateRunAsync). Returns
+    /// <c>true</c> only for the single caller that observed Idle and flipped it, so two replicas
+    /// racing to wake the SAME run cannot both "win". The default no-op returns <c>false</c>.
+    /// </summary>
+    Task<bool> TryWakeFromIdleAsync(RunId runId, CancellationToken ct = default) => Task.FromResult(false);
+
     Task UpdateToInProgressAsync(RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default);
     Task DeleteAsync(RunId runId, CancellationToken ct = default);
     Task UpdateWorktreeAsync(RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default);

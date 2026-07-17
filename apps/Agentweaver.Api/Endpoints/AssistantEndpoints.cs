@@ -39,7 +39,8 @@ public static class AssistantEndpoints
                     request.ProjectId,
                     request.RunId,
                     request.ModelId,
-                    ct).ConfigureAwait(false);
+                    ct,
+                    resumeFromRunId: request.ResumeFromRunId).ConfigureAwait(false);
 
                 return Results.Json(new StartAssistantRunResponse
                 {

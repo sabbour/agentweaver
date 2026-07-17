@@ -436,6 +436,13 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
   const failedBeforeDraft = !hasContent && !revising && normalizedRunStatus !== '' && RUN_FAILURE_STATUSES.has(normalizedRunStatus);
   const terminalBeforeDraft = !hasContent && !revising && runTerminal && !failedBeforeDraft;
+  // The "zombie plan" bug this guards against: a plan was successfully drafted
+  // (hasContent) and is still sitting at awaiting_confirmation, but the run itself has
+  // since ended (crashed, declined, merge-failed, or otherwise gone terminal) — the
+  // OutcomeSpec row's own status field never flips when the run dies, so without this
+  // check the panel would show a live, confirmable plan for a run that can no longer
+  // accept it (the user only found out via a jarring 409 after clicking Confirm).
+  const confirmDeadAfterDraft = hasContent && runTerminal && status === 'awaiting_confirmation';
   const clarifying = useMemo(() => splitQuestions(toLines(spec?.clarifyingQuestions)), [spec?.clarifyingQuestions]);
 
   // Compose the revise feedback from the per-question answers plus any free-form feedback.
@@ -548,8 +555,11 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
         </Text>
       </div>
 
-      {/* Dispatch gate — make the safety property explicit (US1 / FR-008) */}
-      {(status === 'drafting' || status === 'awaiting_confirmation') && (
+      {/* Dispatch gate — make the safety property explicit (US1 / FR-008). Suppressed once
+          the run itself has gone terminal: telling the user to "confirm or clarify" a plan
+          whose run can no longer accept either action would contradict the dead-run banner
+          rendered further down. */}
+      {(status === 'drafting' || status === 'awaiting_confirmation') && !runTerminal && (
         <MessageBar intent="info" icon={<LockClosedRegular />}>
           <MessageBarBody>
             The coordinator translated your goal into a proposed outcome, scope, assumptions, and open questions.
@@ -631,6 +641,16 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
         </MessageBar>
       )}
 
+      {confirmDeadAfterDraft && (
+        <MessageBar intent="warning" icon={<DismissCircleRegular />} data-testid="outcome-plan-dead-run-banner">
+          <MessageBarBody>
+            This run {RUN_FAILURE_STATUSES.has(normalizedRunStatus) ? 'failed' : 'ended'} after this
+            Outcome plan was drafted, so it can no longer be confirmed. The plan below is kept for
+            reference only.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
       {awaiting && (
         <>
           <Field
@@ -639,7 +659,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
           >
             <Checkbox
               checked={allowTaskPromotion}
-              disabled={acting || revising || runInterrupted}
+              disabled={acting || revising || runInterrupted || runTerminal}
               label="Allow standalone backlog tasks for independent deliverables"
               onChange={(_, data) => setAllowTaskPromotion(Boolean(data.checked))}
             />
@@ -648,7 +668,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
             <Button
               appearance="primary"
               icon={<CheckmarkCircleRegular />}
-              disabled={acting || revising || runInterrupted}
+              disabled={acting || revising || runInterrupted || runTerminal}
               onClick={() => void handleConfirm()}
             >
               {acting ? 'Confirming plan...' : 'Confirm plan'}
@@ -656,7 +676,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
             <Button
               appearance="secondary"
               icon={<EditRegular />}
-              disabled={acting || revising || runInterrupted}
+              disabled={acting || revising || runInterrupted || runTerminal}
               onClick={openRevise}
             >
               Clarify plan

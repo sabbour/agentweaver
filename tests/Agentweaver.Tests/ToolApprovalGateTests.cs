@@ -329,6 +329,41 @@ public sealed class ToolApprovalGateTests
 
         gate.GetRequestState("run-s3", "req-never").Should().Be(ToolApprovalRequestState.Unknown);
     }
+
+    // ── HasArmedApproval (idle-close protection for HITL waits) ──────────────────
+
+    [Fact]
+    public async Task HasArmedApproval_TrueWhilePending_FalseOnceGranted()
+    {
+        var gate = CreateGate();
+        gate.HasArmedApproval("run-a1").Should().BeFalse("no request has been registered yet");
+
+        var task = Register(gate, "run-a1", "req-a1");
+        gate.HasArmedApproval("run-a1").Should().BeTrue(
+            "a registered, unresolved request is armed and awaiting the operator");
+
+        await gate.GrantAsync("run-a1", "req-a1", ApprovalScope.Once);
+        (await task).Should().BeTrue();
+        gate.HasArmedApproval("run-a1").Should().BeFalse("a granted request is no longer armed");
+    }
+
+    [Fact]
+    public async Task HasArmedApproval_FalseAfterDenyAndAfterClear()
+    {
+        var gate = CreateGate();
+
+        var denyTask = Register(gate, "run-a2", "req-a2");
+        gate.HasArmedApproval("run-a2").Should().BeTrue();
+        gate.Deny("run-a2", "req-a2").Should().BeTrue();
+        (await denyTask).Should().BeFalse();
+        gate.HasArmedApproval("run-a2").Should().BeFalse("a denied request is no longer armed");
+
+        var clearTask = Register(gate, "run-a3", "req-a3");
+        gate.HasArmedApproval("run-a3").Should().BeTrue();
+        gate.Clear("run-a3");
+        (await clearTask).Should().BeFalse();
+        gate.HasArmedApproval("run-a3").Should().BeFalse("clearing a run drops its armed approvals");
+    }
 }
 
 /// <summary>
@@ -544,6 +579,42 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         gate.Deny("child-run-d", "toolu_01def").Should().BeTrue();
         (await waitTask).Should().BeFalse();
         gate.GetRequestState("child-run-d", "toolu_01def").Should().Be(ToolApprovalRequestState.Denied);
+    }
+
+    // ── HasArmedApproval on the durable gate (idle-close protection for HITL waits) ──
+
+    [Fact]
+    public async Task HasArmedApproval_TrueWhilePending_FalseOnceResolved()
+    {
+        var streams = new RunStreamStore();
+        streams.Create("run-arm1", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+
+        gate.HasArmedApproval("run-arm1").Should().BeFalse("no request registered yet");
+
+        var waitTask = gate.WaitForApprovalAsync(
+            "run-arm1", "req-arm1", "coordinator_start", null, TimeSpan.FromSeconds(10), CancellationToken.None);
+
+        await WaitUntilAsync(async () => { await Task.CompletedTask; return gate.HasArmedApproval("run-arm1"); });
+        gate.HasArmedApproval("run-arm1").Should().BeTrue(
+            "a registered, unresolved request is armed and awaiting the operator");
+
+        gate.Deny("run-arm1", "req-arm1").Should().BeTrue();
+        (await waitTask).Should().BeFalse();
+        gate.HasArmedApproval("run-arm1").Should().BeFalse("a resolved request is no longer armed");
+    }
+
+    [Fact]
+    public async Task HasArmedApproval_FalseAfterExpiry()
+    {
+        var streams = new RunStreamStore();
+        streams.Create("run-arm2", "owner");
+        var gate = new DurableToolApprovalGate(NewState(), streams);
+
+        await gate.WaitForApprovalAsync(
+            "run-arm2", "req-arm2", "coordinator_start", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+
+        gate.HasArmedApproval("run-arm2").Should().BeFalse("an expired request must not count as armed");
     }
 
     private DurableRunControlState NewState() =>
