@@ -1,6 +1,6 @@
 # NetworkPolicy — A2A ingress to AgentHost (sandbox) pods.
 #
-# H2 (spec-018): scoped INGRESS to agentweaver-sandbox pods on ONLY the A2A
+# H2 (spec-018): scoped INGRESS to AgentHost sandbox pods on ONLY the A2A
 # port (8088), from the worker and API pods — label-selector scoped.
 # No other source may reach the A2A listener.
 #
@@ -29,7 +29,7 @@ spec:
   # Target: sandbox / AgentHost pods only.
   podSelector:
     matchLabels:
-      app: agentweaver-sandbox
+      app: agentweaver-agent-host
   policyTypes:
     - Ingress
   ingress:
@@ -46,3 +46,28 @@ spec:
         # A2A HTTPS/mTLS listener only.  No other port is opened.
         - protocol: TCP
           port: 8088
+---
+# AgentHost tools call the API for memory, decisions, and inbox operations.
+# Both source labels are required so ordinary sandbox pods cannot use this exception.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agenthost-to-api
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: agentweaver-agent-host
+              agentweaver.dev/sandbox: "true"
+      ports:
+        - protocol: TCP
+          port: 8080

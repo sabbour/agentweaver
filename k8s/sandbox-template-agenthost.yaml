@@ -19,11 +19,12 @@
 #     the pod lifetime. NO CSI volume, NO per-run SecretProviderClass, NO shared RWX token store.
 #     HOME points at a writable emptyDir (/home/appuser) for CopilotClient/git.
 #
-# Pod label `app: agentweaver-sandbox` is intentional: it makes ALL existing sandbox
-# NetworkPolicies apply unchanged (ingress 8088 from worker+api, DNS egress, Cilium FQDN
-# egress allowlist) — no policy edits, --enable-acns/Cilium policies untouched. The extra
-# component label distinguishes agent-host pods for observability. The same NetworkPolicy that
-# restricts ingress to worker+api is what guards the unauthenticated /configure endpoint.
+# Pod labels `app: agentweaver-agent-host` and `agentweaver.dev/sandbox: "true"` identify
+# this workload narrowly. The sandbox NetworkPolicy selectors use the same app label
+# (ingress 8088 from worker+api, DNS egress, Cilium FQDN
+# egress allowlist). The extra component label distinguishes agent-host pods for observability.
+# The same NetworkPolicy that restricts ingress to worker+api is what guards the
+# unauthenticated /configure endpoint.
 #
 # Apply (envsubst):
 #   ACR_LOGIN_SERVER=agentweaverregistry.azurecr.io AGENTHOST_IMAGE_TAG=be1e28fa \
@@ -47,13 +48,15 @@ spec:
   podTemplate:
     metadata:
       labels:
-        app: agentweaver-sandbox
+        app: agentweaver-agent-host
+        agentweaver.dev/sandbox: "true"
         app.kubernetes.io/part-of: agentweaver
         app.kubernetes.io/component: agent-host
         # Workload identity webhook mutates the pod (projected SA token + AZURE_* env)
         # so the CSI secrets-store driver can authenticate to Key Vault.
         azure.workload.identity/use: "true"
     spec:
+      dnsPolicy: ClusterFirst
       runtimeClassName: kata-vm-isolation
       # Dedicated kata scheduling (fix/kata-userpool): prefer the fixed kata USER pool
       # (katapool, labeled agentweaver.io/kata=true, tainted sandbox=kata:NoSchedule) so

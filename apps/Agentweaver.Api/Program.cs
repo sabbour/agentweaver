@@ -558,6 +558,9 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     // AddAgentRuntime() registers WorkflowAgentFactory; this last-wins override replaces it.
     if (agentMode == AgentExecutionMode.PodPerRun)
     {
+        // Validate before the host starts. Remote execution must never serialize the local
+        // loopback URL into AgentHost setup parameters.
+        _ = RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(builder.Configuration);
         builder.Services.AddSingleton<IWorkflowAgentFactory>(sp =>
             sp.GetRequiredService<RemoteWorkflowAgentFactory>());
     }

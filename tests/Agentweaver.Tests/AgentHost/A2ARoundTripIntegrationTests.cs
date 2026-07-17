@@ -50,6 +50,8 @@ namespace Agentweaver.Tests.AgentHost;
 /// </summary>
 public sealed class A2ARoundTripIntegrationTests
 {
+    private const string RemoteApiBaseUrl = "http://agentweaver-api.agentweaver.svc.cluster.local:8080";
+
     private readonly ITestOutputHelper _output;
 
     public A2ARoundTripIntegrationTests(ITestOutputHelper output) => _output = output;
@@ -93,7 +95,8 @@ public sealed class A2ARoundTripIntegrationTests
             var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
             var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
 
-            await using var proxy = new RemoteAgentProxy(resolver, httpFactory, NullLoggerFactory.Instance);
+            await using var proxy = new RemoteAgentProxy(
+                resolver, httpFactory, NullLoggerFactory.Instance, RemoteApiBaseUrl);
 
             // The side-channel the proxy forwards decoded RunEvents onto (worker-side assertion target).
             var workerEvents = Channel.CreateUnbounded<RunEvent>();
@@ -107,8 +110,8 @@ public sealed class A2ARoundTripIntegrationTests
                 streamWriter: workerEvents.Writer,
                 projectId: null,
                 agentName: null,
-                apiBaseUrl: null,
-                apiKey: null,
+                apiBaseUrl: "http://localhost:8080",
+                apiKey: "test-api-key",
                 ct: TestCt,
                 userId: null);
 
@@ -153,6 +156,11 @@ public sealed class A2ARoundTripIntegrationTests
             runner.Calls[0].Should().Be(("first task", false), "turn (a) is a fresh turn");
             runner.Calls[1].Should().Be(("second task", true),
                 "turn (b)'s IsRevision=true must survive the AgentSetupParams DataPart across real A2A");
+            runner.Contexts.Should().HaveCount(2);
+            runner.Contexts.Should().OnlyContain(c => c.ApiBaseUrl == RemoteApiBaseUrl,
+                "the remote URL must replace the caller's loopback URL at the A2A boundary");
+            runner.Contexts.Should().OnlyContain(c => c.ApiKey == "test-api-key",
+                "the mandatory API bearer credential must survive A2A serialization");
         }
         finally
         {
@@ -191,7 +199,8 @@ public sealed class A2ARoundTripIntegrationTests
             await using var proxy = new RemoteAgentProxy(
                 resolver,
                 httpFactory,
-                NullLoggerFactory.Instance);
+                NullLoggerFactory.Instance,
+                RemoteApiBaseUrl);
             var workerEvents = Channel.CreateUnbounded<RunEvent>();
             await proxy.SetupAsync(
                 "/workspace",
@@ -257,7 +266,8 @@ public sealed class A2ARoundTripIntegrationTests
             using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
             var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
             var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
-            await using var proxy = new RemoteAgentProxy(resolver, httpFactory, NullLoggerFactory.Instance);
+            await using var proxy = new RemoteAgentProxy(
+                resolver, httpFactory, NullLoggerFactory.Instance, RemoteApiBaseUrl);
             var workerEvents = Channel.CreateUnbounded<RunEvent>();
             await proxy.SetupAsync(
                 "/workspace",
@@ -322,8 +332,20 @@ public sealed class A2ARoundTripIntegrationTests
     {
         private ChannelWriter<RunEvent>? _writer;
         public List<(string Task, bool IsRevision)> Calls { get; } = new();
+        public List<(string? ApiBaseUrl, string? ApiKey)> Contexts { get; } = new();
 
         public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) => _writer = streamWriter;
+
+        public bool ApplyPerTurnContext(
+            string? systemPromptContext,
+            string? projectId,
+            string? agentName,
+            string? apiBaseUrl = null,
+            string? apiKey = null)
+        {
+            Contexts.Add((apiBaseUrl, apiKey));
+            return true;
+        }
 
         public async Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken cancellationToken)
         {
