@@ -1,10 +1,15 @@
 using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace Agentweaver.Tests.PostgresIntegration;
@@ -221,9 +226,10 @@ public sealed class PostgresSkillDefaultsTests(PostgresFixture pg)
     }
 
     [PostgresFact]
-    public async Task DeleteProjectSkillState_RemovesOnlyTargetProject()
+    public async Task DeleteProject_CascadesOnlyTargetProjectSkillState()
     {
         var store = new EfSkillStore(pg.Factory);
+        var projectStore = new EfProjectStore(pg.Factory);
         var first = ProjectId.New();
         var second = ProjectId.New();
         await InsertProjectAsync(first);
@@ -235,13 +241,145 @@ public sealed class PostgresSkillDefaultsTests(PostgresFixture pg)
         await store.AssignAsync(first, firstSkill.Id, "Tank", DateTimeOffset.UtcNow);
         await store.AssignAsync(second, secondSkill.Id, "Trinity", DateTimeOffset.UtcNow);
 
-        await store.DeleteProjectSkillStateAsync(first);
+        await projectStore.DeleteAsync(first);
 
         (await store.ListByProjectAsync(first)).Should().BeEmpty();
         (await store.ListAssignmentsByProjectAsync(first)).Should().BeEmpty();
         (await store.ListByProjectAsync(second)).Should().ContainSingle(skill => skill.Id == secondSkill.Id);
         (await store.ListAssignmentsByProjectAsync(second))
             .Should().ContainSingle(assignment => assignment.SkillId == secondSkill.Id);
+    }
+
+    [PostgresFact]
+    public async Task ConcurrentDefaultsApplyAndProjectDelete_LeavesNoSkillState()
+    {
+        var skillStore = new EfSkillStore(pg.Factory);
+        var projectStore = new EfProjectStore(pg.Factory);
+
+        for (var iteration = 0; iteration < 8; iteration++)
+        {
+            var project = NewProject(ProjectId.New());
+            await projectStore.InsertAsync(project);
+            var skill = NewBuiltIn(project.Id, $"postgres-delete-race-{iteration}");
+            var plan = new SkillDefaultsStorePlan(
+                project.Id,
+                project.TeamRevision,
+                SkillCatalogStateFingerprint.Compute([], []),
+                [skill],
+                [],
+                [new SkillAssignment
+                {
+                    ProjectId = project.Id,
+                    SkillId = skill.Id,
+                    AgentName = "Tank",
+                    CreatedAt = DateTimeOffset.UtcNow,
+                }]);
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var apply = Task.Run(async () =>
+            {
+                await start.Task;
+                return await skillStore.ApplyDefaultsAsync(plan);
+            });
+            var delete = Task.Run(async () =>
+            {
+                await start.Task;
+                await projectStore.DeleteAsync(project.Id);
+            });
+
+            start.SetResult();
+            await Task.WhenAll(apply, delete);
+
+            (await projectStore.GetAsync(project.Id)).Should().BeNull();
+            (await skillStore.ListByProjectAsync(project.Id)).Should().BeEmpty();
+            (await skillStore.ListAssignmentsByProjectAsync(project.Id)).Should().BeEmpty();
+        }
+    }
+
+    [PostgresFact]
+    public async Task Migration_UpgradeCleansOrphansBeforeAddingOwnershipCascades()
+    {
+        var schema = $"skill_upgrade_{Guid.NewGuid():N}";
+        await ExecuteAsync($"CREATE SCHEMA \"{schema}\";");
+        try
+        {
+            var connectionBuilder = new NpgsqlConnectionStringBuilder(pg.ConnectionString)
+            {
+                SearchPath = schema,
+            };
+            var services = new ServiceCollection();
+            services.AddDbContextFactory<MemoryDbContext>(options =>
+                options.UseNpgsql(
+                    connectionBuilder.ConnectionString,
+                    postgres => postgres.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+            using var provider = services.BuildServiceProvider();
+            var factory = provider.GetRequiredService<IDbContextFactory<MemoryDbContext>>();
+            await using (var before = await factory.CreateDbContextAsync())
+            {
+                await before.GetService<IMigrator>()
+                    .MigrateAsync("20260716213000_AddProjectTeamRevision");
+            }
+
+            var project = NewProject(ProjectId.New());
+            var projectStore = new EfProjectStore(factory);
+            var skillStore = new EfSkillStore(factory);
+            await projectStore.InsertAsync(project);
+            var validSkill = NewBuiltIn(project.Id, "valid-upgrade-skill");
+            await skillStore.InsertAsync(validSkill);
+            await skillStore.AssignAsync(project.Id, validSkill.Id, "Tank", DateTimeOffset.UtcNow);
+            await using (var connection = new NpgsqlConnection(connectionBuilder.ConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO skills (
+                        skill_id, project_id, name, description, instructions, provenance,
+                        content_hash, status, created_at, updated_at)
+                    VALUES (
+                        @orphanSkill, @orphanProject, 'orphan-upgrade-skill', 'orphan',
+                        'instructions', 'built-in', 'hash', 'active', now(), now());
+                    INSERT INTO skill_assignments (project_id, skill_id, agent_name, created_at)
+                    VALUES (@orphanProject, @orphanSkill, 'Smith', now());
+                    INSERT INTO skill_assignments (project_id, skill_id, agent_name, created_at)
+                    VALUES (@validProject, @missingSkill, 'Trinity', now());
+                    """;
+                command.Parameters.AddWithValue("orphanSkill", Guid.NewGuid().ToString());
+                command.Parameters.AddWithValue("orphanProject", Guid.NewGuid().ToString());
+                command.Parameters.AddWithValue("validProject", project.Id.ToString());
+                command.Parameters.AddWithValue("missingSkill", Guid.NewGuid().ToString());
+                await command.ExecuteNonQueryAsync();
+            }
+
+            await using (var after = await factory.CreateDbContextAsync())
+                await after.Database.MigrateAsync();
+
+            (await skillStore.ListByProjectAsync(project.Id)).Should().ContainSingle();
+            (await skillStore.ListAssignmentsByProjectAsync(project.Id)).Should().ContainSingle();
+            await using (var connection = new NpgsqlConnection(connectionBuilder.ConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    SELECT COUNT(*)
+                      FROM pg_constraint
+                     WHERE connamespace = current_schema()::regnamespace
+                       AND conname IN (
+                           'FK_skills_projects_project_id',
+                           'FK_skill_assignments_projects_project_id',
+                           'FK_skill_assignments_skills_project_id_skill_id');
+                    """;
+                ((long)(await command.ExecuteScalarAsync())!).Should().Be(3);
+            }
+
+            await projectStore.DeleteAsync(project.Id);
+            (await skillStore.ListByProjectAsync(project.Id)).Should().BeEmpty();
+            (await skillStore.ListAssignmentsByProjectAsync(project.Id)).Should().BeEmpty();
+        }
+        finally
+        {
+            await ExecuteAsync($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
+        }
     }
 
     private async Task ExecuteAsync(string sql)
@@ -271,7 +409,7 @@ public sealed class PostgresSkillDefaultsTests(PostgresFixture pg)
             Owner = "postgres-test",
             ProviderSettings = new ProjectProviderSettings
             {
-                DefaultProvider = ModelSource.GitHubCopilot,
+                DefaultProvider = Agentweaver.Domain.ModelSource.GitHubCopilot,
             },
             State = ProjectState.Active,
             CreatedAt = now,

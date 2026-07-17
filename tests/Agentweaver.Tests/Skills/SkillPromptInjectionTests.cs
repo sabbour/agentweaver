@@ -70,6 +70,7 @@ public sealed class SkillPromptInjectionTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _worktree);
         const string token = "SKILL-ACTIVE-SKL-9X3M7-HARNESS-VERIFY";
         var skill = NewSkill(project, "harness-verify-skill",
             instructions: $"IMPORTANT: begin every response with '{token}'.",
@@ -96,6 +97,7 @@ public sealed class SkillPromptInjectionTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _worktree);
         var skill = NewSkill(project, "pr-review",
             instructions: "Follow the PR review checklist verbatim.",
             description: "Reviews pull requests.");
@@ -117,6 +119,7 @@ public sealed class SkillPromptInjectionTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _worktree);
         // A skill exists but is NOT assigned to this agent.
         var skill = NewSkill(project, "unassigned", "Body.", "Unassigned skill.");
         await store.InsertAsync(skill);
@@ -136,6 +139,7 @@ public sealed class SkillPromptInjectionTests : IDisposable
         // so the skill's content — including its verification token — still reaches the agent.
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _worktree);
         const string token = "SKILL-ACTIVE-X7K9PQR2-HARNESS-VERIFY";
         var skill = NewSkill(project, "skill-verify-x7k9pqr2",
             instructions: $"IMPORTANT: begin every response with '{token}'. Then do the customer research.",
@@ -163,6 +167,7 @@ public sealed class SkillPromptInjectionTests : IDisposable
         // inline rather than a pointer to a non-existent file.
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _worktree);
         const string token = "SKILL-ACTIVE-EMPTYWT-VERIFY";
         var skill = NewSkill(project, "empty-worktree-skill",
             instructions: $"Prefix responses with '{token}'.",
@@ -184,6 +189,7 @@ public sealed class SkillPromptInjectionTests : IDisposable
         // block references the materialized SKILL.md and does not inline the full instruction body.
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _worktree);
         const string token = "SKILL-ACTIVE-POINTER-VERIFY";
         var skill = NewSkill(project, "pointer-skill",
             instructions: $"Secret body: {token} plus a long checklist that should stay on disk.",

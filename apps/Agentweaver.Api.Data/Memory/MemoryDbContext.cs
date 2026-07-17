@@ -376,6 +376,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<SkillRecord>(e =>
         {
             e.ToTable("skills").HasKey(s => s.SkillId);
+            e.HasAlternateKey(s => new { s.ProjectId, s.SkillId })
+                .HasName("AK_skills_project_id_skill_id");
             e.Property(s => s.SkillId).HasColumnName("skill_id");
             e.Property(s => s.ProjectId).HasColumnName("project_id");
             e.Property(s => s.Name).HasColumnName("name");
@@ -393,6 +395,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             // in the AddSkillCatalog migration (case-insensitive parity with SQLite's COLLATE NOCASE).
             // EF cannot model a lower() index, so it is intentionally not declared here; case-insensitive
             // lookups (EfSkillStore.GetByNameAsync) translate to WHERE lower(name) = … and use it.
+            e.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(s => s.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_skills_projects_project_id");
         });
 
         model.Entity<SkillAssignmentRecord>(e =>
@@ -405,6 +412,17 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(a => a.CreatedAt).HasColumnName("created_at");
             e.HasIndex(a => new { a.ProjectId, a.AgentName })
                 .HasDatabaseName("IX_skill_assignments_agent");
+            e.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(a => a.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_skill_assignments_projects_project_id");
+            e.HasOne<SkillRecord>()
+                .WithMany()
+                .HasForeignKey(a => new { a.ProjectId, a.SkillId })
+                .HasPrincipalKey(s => new { s.ProjectId, s.SkillId })
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_skill_assignments_skills_project_id_skill_id");
         });
 
         // Shared MAF workflow checkpoints. Each row is an independent, unique-PK checkpoint so the two

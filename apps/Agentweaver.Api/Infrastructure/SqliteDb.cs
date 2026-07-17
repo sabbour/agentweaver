@@ -207,11 +207,11 @@ public sealed class SqliteDb
                 content_hash      TEXT NOT NULL,
                 status            TEXT NOT NULL DEFAULT 'active',
                 created_at        TEXT NOT NULL,
-                updated_at        TEXT NOT NULL
+                updated_at        TEXT NOT NULL,
+                UNIQUE (project_id, skill_id),
+                FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
             );
             """, ct);
-        await TryAlterAsync(connection,
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_project_name ON skills (project_id, name COLLATE NOCASE);", ct);
         await TryAlterAsync(connection,
             """
             CREATE TABLE IF NOT EXISTS skill_assignments (
@@ -219,9 +219,15 @@ public sealed class SqliteDb
                 skill_id    TEXT NOT NULL,
                 agent_name  TEXT NOT NULL,
                 created_at  TEXT NOT NULL,
-                PRIMARY KEY (project_id, skill_id, agent_name)
+                PRIMARY KEY (project_id, skill_id, agent_name),
+                FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id, skill_id)
+                    REFERENCES skills (project_id, skill_id) ON DELETE CASCADE
             );
             """, ct);
+        await EnsureSkillOwnershipConstraintsAsync(connection, ct).ConfigureAwait(false);
+        await TryAlterAsync(connection,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_project_name ON skills (project_id, name COLLATE NOCASE);", ct);
         await TryAlterAsync(connection,
             "CREATE INDEX IF NOT EXISTS idx_skill_assignments_agent ON skill_assignments (project_id, agent_name);", ct);
 
@@ -280,6 +286,127 @@ public sealed class SqliteDb
         {
             // Column already exists — ignore.
         }
+    }
+
+    private static async Task EnsureSkillOwnershipConstraintsAsync(
+        SqliteConnection connection,
+        CancellationToken ct)
+    {
+        if (await HasCascadeForeignKeyAsync(
+                connection, "skills", "projects", ["project_id"], ct).ConfigureAwait(false)
+            && await HasCascadeForeignKeyAsync(
+                connection, "skill_assignments", "projects", ["project_id"], ct).ConfigureAwait(false)
+            && await HasCascadeForeignKeyAsync(
+                connection, "skill_assignments", "skills", ["project_id", "skill_id"], ct).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
+            .ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            DELETE FROM skill_assignments
+             WHERE NOT EXISTS (
+                       SELECT 1
+                         FROM projects AS p
+                        WHERE p.project_id = skill_assignments.project_id)
+                OR NOT EXISTS (
+                       SELECT 1
+                         FROM skills AS s
+                        WHERE s.project_id = skill_assignments.project_id
+                          AND s.skill_id = skill_assignments.skill_id);
+
+            DELETE FROM skills
+             WHERE NOT EXISTS (
+                       SELECT 1
+                         FROM projects AS p
+                        WHERE p.project_id = skills.project_id);
+
+            CREATE TABLE skills__ownership_migration (
+                skill_id          TEXT PRIMARY KEY,
+                project_id        TEXT NOT NULL,
+                name              TEXT NOT NULL,
+                description       TEXT NOT NULL,
+                instructions      TEXT NOT NULL,
+                resources         TEXT,
+                provenance        TEXT NOT NULL,
+                source_repository TEXT,
+                source_location   TEXT,
+                content_hash      TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'active',
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                UNIQUE (project_id, skill_id),
+                FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
+            );
+
+            INSERT INTO skills__ownership_migration (
+                skill_id, project_id, name, description, instructions, resources,
+                provenance, source_repository, source_location, content_hash, status,
+                created_at, updated_at)
+            SELECT skill_id, project_id, name, description, instructions, resources,
+                   provenance, source_repository, source_location, content_hash, status,
+                   created_at, updated_at
+              FROM skills;
+
+            CREATE TABLE skill_assignments__ownership_migration (
+                project_id  TEXT NOT NULL,
+                skill_id    TEXT NOT NULL,
+                agent_name  TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (project_id, skill_id, agent_name),
+                FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id, skill_id)
+                    REFERENCES skills__ownership_migration (project_id, skill_id) ON DELETE CASCADE
+            );
+
+            INSERT INTO skill_assignments__ownership_migration (
+                project_id, skill_id, agent_name, created_at)
+            SELECT project_id, skill_id, agent_name, created_at
+              FROM skill_assignments;
+
+            DROP TABLE skill_assignments;
+            DROP TABLE skills;
+            ALTER TABLE skills__ownership_migration RENAME TO skills;
+            ALTER TABLE skill_assignments__ownership_migration RENAME TO skill_assignments;
+            """;
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> HasCascadeForeignKeyAsync(
+        SqliteConnection connection,
+        string table,
+        string principalTable,
+        IReadOnlyList<string> columns,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA foreign_key_list('{table}');";
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var candidates = new Dictionary<long, List<(long Sequence, string Column)>>();
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(2), principalTable, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(reader.GetString(6), "CASCADE", StringComparison.OrdinalIgnoreCase))
+            {
+                var id = reader.GetInt64(0);
+                if (!candidates.TryGetValue(id, out var candidate))
+                {
+                    candidate = [];
+                    candidates.Add(id, candidate);
+                }
+                candidate.Add((reader.GetInt64(1), reader.GetString(3)));
+            }
+        }
+        return candidates.Values.Any(candidate =>
+            candidate.OrderBy(part => part.Sequence)
+                .Select(part => part.Column)
+                .SequenceEqual(columns, StringComparer.OrdinalIgnoreCase));
     }
 
     private static async Task RecreateBacklogOrderKeyIndexAsync(SqliteConnection connection, CancellationToken ct)

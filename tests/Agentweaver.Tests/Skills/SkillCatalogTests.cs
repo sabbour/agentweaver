@@ -262,6 +262,9 @@ public sealed class SkillCatalogTests : IDisposable
         UpdatedAt = DateTimeOffset.UtcNow,
     };
 
+    private Task InsertProjectAsync(ProjectId id) =>
+        new SqliteProjectStore(_db).InsertAsync(NewProject(id, _dir));
+
     private static CastMember Member(string name, string roleId) => new(
         name,
         new Role(roleId, roleId, "test role", "test", [], [], []),
@@ -274,6 +277,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await InsertProjectAsync(project);
         var skill = NewSkill(project, "code-review");
 
         await store.InsertAsync(skill);
@@ -291,6 +295,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await InsertProjectAsync(project);
         await store.InsertAsync(NewSkill(project, "Code-Review"));
 
         var byLower = await store.GetByNameAsync(project, "code-review");
@@ -302,6 +307,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await InsertProjectAsync(project);
         var skill = NewSkill(project, "docs");
         await store.InsertAsync(skill);
         await store.AssignAsync(project, skill.Id, "Smith", DateTimeOffset.UtcNow);
@@ -319,6 +325,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await InsertProjectAsync(project);
         var skill = NewSkill(project, "lint");
         await store.InsertAsync(skill);
 
@@ -334,6 +341,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await InsertProjectAsync(project);
 
         var assignedActive = NewSkill(project, "assigned-active");
         var assignedMissing = NewSkill(project, "assigned-missing", SkillStatus.Missing);
@@ -357,6 +365,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await InsertProjectAsync(project);
         var skill = NewSkill(project, "format");
         await store.InsertAsync(skill);
         await store.AssignAsync(project, skill.Id, "Trinity", DateTimeOffset.UtcNow);
@@ -566,6 +575,7 @@ public sealed class SkillCatalogTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = NewProject(ProjectId.New(), _dir);
+        await new SqliteProjectStore(_db).InsertAsync(project);
         await store.InsertAsync(NewSkill(project.Id, "system-design") with { Provenance = SkillProvenance.Manual });
         var service = new SkillDefaultsService(store, null!);
         var blueprint = new Blueprint("defaults", "Defaults", "test", ["lead-architect"], ["default"], "default", "default")

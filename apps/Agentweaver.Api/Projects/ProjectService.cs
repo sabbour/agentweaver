@@ -4,8 +4,6 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
-using Agentweaver.Domain.Skills;
-using System.Runtime.ExceptionServices;
 
 namespace Agentweaver.Api.Projects;
 
@@ -22,7 +20,6 @@ public sealed class ProjectService
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
-    private readonly ISkillStore _skillStore;
     private readonly ILogger<ProjectService> _logger;
 
     public ProjectService(
@@ -32,7 +29,6 @@ public sealed class ProjectService
         IGitHubTokenStore tokenStore,
         IGitHubTokenScopeProvider scopeProvider,
         ILogger<ProjectService> logger,
-        ISkillStore skillStore,
         IGitHubAccessTokenProvider? accessTokenProvider = null)
     {
         _store = store;
@@ -41,7 +37,6 @@ public sealed class ProjectService
         _tokenStore = tokenStore;
         _scopeProvider = scopeProvider;
         _accessTokenProvider = accessTokenProvider;
-        _skillStore = skillStore;
         _logger = logger;
     }
 
@@ -320,42 +315,21 @@ public sealed class ProjectService
         var project = await _store.GetAsync(id, CancellationToken.None).ConfigureAwait(false);
         if (project is null) return;
 
-        var failures = new List<Exception>();
         try
         {
-            try
-            {
-                await _skillStore
-                    .DeleteProjectSkillStateAsync(id, CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                failures.Add(ex);
-                _logger.LogError(ex, "Failed to purge skill state while rolling back project {ProjectId}", id);
-            }
-
-            try
-            {
-                // Creation compensation must finish even when the request cancellation token fired.
-                // Otherwise a cancelled defaults apply can leave a project record/workspace behind.
-                await DeleteAsync(id, runStore, workflowRegistry, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                failures.Add(ex);
-                _logger.LogError(ex, "Failed to delete project record while rolling back project {ProjectId}", id);
-            }
+            // The project-row delete is the authoritative database boundary: skill state is
+            // removed by cascading foreign keys in the same transaction/statement.
+            await DeleteAsync(id, runStore, workflowRegistry, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to delete project record while rolling back project {ProjectId}", id);
+            throw;
         }
         finally
         {
             TryDeleteDirectory(project.WorkingDirectory);
         }
-
-        if (failures.Count == 1)
-            ExceptionDispatchInfo.Capture(failures[0]).Throw();
-        if (failures.Count > 1)
-            throw new AggregateException("Project creation rollback encountered multiple failures.", failures);
     }
 
     // -----------------------------------------------------------------------

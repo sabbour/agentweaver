@@ -189,29 +189,6 @@ public sealed class SqliteSkillStore : ISkillStore
         return results;
     }
 
-    public async Task DeleteProjectSkillStateAsync(ProjectId projectId, CancellationToken ct = default)
-    {
-        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var transaction = (SqliteTransaction)await connection
-            .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
-            .ConfigureAwait(false);
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = "DELETE FROM skill_assignments WHERE project_id = $projectId;";
-            command.Parameters.AddWithValue("$projectId", projectId.ToString());
-            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = "DELETE FROM skills WHERE project_id = $projectId;";
-            command.Parameters.AddWithValue("$projectId", projectId.ToString());
-            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }
-        await transaction.CommitAsync(ct).ConfigureAwait(false);
-    }
-
     public async Task<SkillDefaultsStoreApplyResult> ApplyDefaultsAsync(
         SkillDefaultsStorePlan plan,
         CancellationToken ct = default)

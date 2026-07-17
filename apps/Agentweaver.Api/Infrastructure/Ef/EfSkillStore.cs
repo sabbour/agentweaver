@@ -149,22 +149,6 @@ public sealed class EfSkillStore : ISkillStore
         return recs.Select(FromRecord).ToList();
     }
 
-    public async Task DeleteProjectSkillStateAsync(ProjectId projectId, CancellationToken ct = default)
-    {
-        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-        var pid = projectId.ToString();
-        await db.SkillAssignments
-            .Where(assignment => assignment.ProjectId == pid)
-            .ExecuteDeleteAsync(ct)
-            .ConfigureAwait(false);
-        await db.Skills
-            .Where(skill => skill.ProjectId == pid)
-            .ExecuteDeleteAsync(ct)
-            .ConfigureAwait(false);
-        await transaction.CommitAsync(ct).ConfigureAwait(false);
-    }
-
     public async Task<SkillDefaultsStoreApplyResult> ApplyDefaultsAsync(
         SkillDefaultsStorePlan plan,
         CancellationToken ct = default)

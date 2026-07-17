@@ -5,6 +5,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
@@ -44,14 +45,13 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
 
     private static ProjectService BuildService(
         IProjectStore store,
-        ISkillStore skillStore,
         IProjectWorkspaceProvider? workspace = null)
     {
         workspace ??= TestWorkspaceProviders.CreateLocal();
         return new ProjectService(
             store, workspace, new NoOpGitInitializer(),
             new InMemoryGitHubTokenStore(), new FixedInstallationScopeProvider(),
-            NullLogger<ProjectService>.Instance, skillStore);
+            NullLogger<ProjectService>.Instance);
     }
 
     private static async Task<Project> CreateProjectAsync(
@@ -84,7 +84,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
+        var svc          = BuildService(projectStore);
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -107,7 +107,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var projectStore = new SqliteProjectStore(testDb.Db);
-        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
+        var svc          = BuildService(projectStore);
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -130,7 +130,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
+        var svc          = BuildService(projectStore);
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -156,7 +156,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
+        var svc          = BuildService(projectStore);
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -165,6 +165,25 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
 
         var result = await projectStore.GetAsync(project.Id);
         result.Should().BeNull("project record must be removed after delete");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_CascadesAllProjectSkillState()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projectStore = new SqliteProjectStore(testDb.Db);
+        var skillStore = new SqliteSkillStore(testDb.Db);
+        var svc = BuildService(projectStore);
+        var project = await CreateProjectAsync(svc, NewDir());
+        var skill = BuiltInSkill(project.Id, "system-design");
+        await skillStore.InsertAsync(skill);
+        await skillStore.AssignAsync(project.Id, skill.Id, "Tank", DateTimeOffset.UtcNow);
+
+        await svc.DeleteAsync(project.Id, new SqliteRunStore(testDb.Db), new RunWorkflowRegistry());
+
+        (await projectStore.GetAsync(project.Id)).Should().BeNull();
+        (await skillStore.ListByProjectAsync(project.Id)).Should().BeEmpty();
+        (await skillStore.ListAssignmentsByProjectAsync(project.Id)).Should().BeEmpty();
     }
 
     // =========================================================================
@@ -177,7 +196,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
+        var svc          = BuildService(projectStore);
 
         var result = await svc.DeleteAsync(ProjectId.New(), runStore, registry);
 
@@ -194,7 +213,7 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
         var projectStore = new SqliteProjectStore(testDb.Db);
         var runStore     = new SqliteRunStore(testDb.Db);
         var registry     = new RunWorkflowRegistry();
-        var svc          = BuildService(projectStore, new SqliteSkillStore(testDb.Db));
+        var svc          = BuildService(projectStore);
         var dir          = NewDir();
 
         var project = await CreateProjectAsync(svc, dir);
@@ -230,5 +249,24 @@ public sealed class ProjectServiceDeleteTests : IAsyncDisposable
             Directory.CreateDirectory(workingDirectory);
             return "main";
         }
+    }
+
+    private static Skill BuiltInSkill(ProjectId projectId, string name)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new Skill
+        {
+            Id = SkillId.New(),
+            ProjectId = projectId,
+            Name = name,
+            Description = name,
+            Instructions = "instructions",
+            Provenance = SkillProvenance.BuiltIn,
+            SourceLocation = $"catalog/skills/{name}",
+            ContentHash = SkillParser.ComputeContentHash(name, name, "instructions", []),
+            Status = SkillStatus.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
     }
 }

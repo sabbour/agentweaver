@@ -35,6 +35,28 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         var migrations = db.Database.GetMigrations().ToList();
         migrations.Should().Contain("20260627000000_InitialPostgres",
             "migration must be discoverable via [DbContext] attribute + MigrationsAssembly config");
+        migrations.Should().Contain("20260717003000_AddSkillProjectOwnershipCascades");
+    }
+
+    [PostgresFact]
+    public async Task Model_SkillOwnershipForeignKeysAreCascading()
+    {
+        await using var db = await pg.CreateDbContextAsync();
+        var skill = db.Model.FindEntityType(typeof(SkillRecord))!;
+        var assignment = db.Model.FindEntityType(typeof(SkillAssignmentRecord))!;
+
+        skill.GetForeignKeys().Should().ContainSingle(
+            foreignKey =>
+                foreignKey.PrincipalEntityType.ClrType == typeof(ProjectRecord)
+                && foreignKey.DeleteBehavior == DeleteBehavior.Cascade);
+        assignment.GetForeignKeys().Should().Contain(
+            foreignKey =>
+                foreignKey.PrincipalEntityType.ClrType == typeof(ProjectRecord)
+                && foreignKey.DeleteBehavior == DeleteBehavior.Cascade);
+        assignment.GetForeignKeys().Should().Contain(
+            foreignKey =>
+                foreignKey.PrincipalEntityType.ClrType == typeof(SkillRecord)
+                && foreignKey.DeleteBehavior == DeleteBehavior.Cascade);
     }
 
     [PostgresFact]

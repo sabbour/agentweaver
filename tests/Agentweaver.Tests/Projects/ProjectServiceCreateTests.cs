@@ -56,12 +56,10 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         gitInit       ??= new NoOpGitInitializer();
         tokenStore    ??= new InMemoryGitHubTokenStore();
         scopeProvider ??= new FixedInstallationScopeProvider();
-        skillStore    ??= new SqliteSkillStore(db ?? throw new ArgumentNullException(nameof(db)));
 
         return new ProjectService(
             store, workspace, gitInit, tokenStore, scopeProvider,
-            NullLogger<ProjectService>.Instance,
-            skillStore);
+            NullLogger<ProjectService>.Instance);
     }
 
     // =========================================================================
@@ -218,6 +216,40 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
             .Should().ContainSingle(assignment => assignment.SkillId == preservedSkill.Id);
     }
 
+    [Fact]
+    public async Task RollbackCreationAsync_ProjectDeleteFailure_DoesNotPurgeSkillState()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projectStore = new SqliteProjectStore(testDb.Db);
+        var skillStore = new SqliteSkillStore(testDb.Db);
+        var createService = BuildService(projectStore, db: testDb.Db);
+        var project = await createService.CreateBlankAsync(
+            "Rollback delete failure",
+            NewDir(),
+            null,
+            null,
+            null,
+            "user");
+        var skill = BuiltInSkill(project.Id, "system-design");
+        await skillStore.InsertAsync(skill);
+        await skillStore.AssignAsync(project.Id, skill.Id, "Tank", DateTimeOffset.UtcNow);
+        var faultingStore = new FaultingProjectStore(projectStore, throwOnDelete: true);
+        var rollbackService = BuildService(faultingStore, db: testDb.Db);
+
+        var act = () => rollbackService.RollbackCreationAsync(
+            project.Id,
+            new SqliteRunStore(testDb.Db),
+            new RunWorkflowRegistry());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*delete failure*");
+        (await projectStore.GetAsync(project.Id)).Should().NotBeNull();
+        (await skillStore.ListByProjectAsync(project.Id))
+            .Should().ContainSingle(existing => existing.Id == skill.Id);
+        (await skillStore.ListAssignmentsByProjectAsync(project.Id))
+            .Should().ContainSingle(existing => existing.SkillId == skill.Id);
+    }
+
     // =========================================================================
     // PC-06: RenameAsync updates name and returns true for existing project
     // =========================================================================
@@ -365,11 +397,16 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         private readonly IProjectStore _inner;
         private readonly bool _throwOnInsert;
+        private readonly bool _throwOnDelete;
 
-        public FaultingProjectStore(IProjectStore inner, bool throwOnInsert)
+        public FaultingProjectStore(
+            IProjectStore inner,
+            bool throwOnInsert = false,
+            bool throwOnDelete = false)
         {
             _inner = inner;
             _throwOnInsert = throwOnInsert;
+            _throwOnDelete = throwOnDelete;
         }
 
         public Task InsertAsync(Project project, CancellationToken ct = default)
@@ -397,8 +434,12 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         public Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default) =>
             _inner.TryBeginDeleteAsync(id, ct);
 
-        public Task DeleteAsync(ProjectId id, CancellationToken ct = default) =>
-            _inner.DeleteAsync(id, ct);
+        public Task DeleteAsync(ProjectId id, CancellationToken ct = default)
+        {
+            if (_throwOnDelete)
+                throw new InvalidOperationException("inject fault: simulated DB delete failure");
+            return _inner.DeleteAsync(id, ct);
+        }
 
         public Task UpdatePickupSettingsAsync(ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdatePickupSettingsAsync(id, maxReadyPerHeartbeat, autopilot, autoApproveTools, updatedAt, ct);
