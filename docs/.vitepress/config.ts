@@ -62,6 +62,7 @@ export default withMermaid({
             { text: 'Board and Backlog', link: '/guide/board' },
             { text: 'Runs', link: '/guide/runs' },
             { text: 'Review & Merge', link: '/guide/review' },
+            { text: 'The Assistant and Sessions', link: '/guide/assistant' },
           ],
         },
         {
@@ -123,6 +124,7 @@ export default withMermaid({
             { text: 'Project skills', link: '/experience/project-skills' },
             { text: 'Browser console', link: '/experience/browser-console' },
             { text: 'Runs board & watch', link: '/experience/runs-board-watch' },
+            { text: 'Sessions & the Assistant', link: '/experience/assistant-sessions' },
             { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
             { text: 'Unified steering', link: '/experience/unified-steering' },
             { text: 'Resilient assembly-review loop', link: '/experience/resilient-assembly-review' },
@@ -169,6 +171,7 @@ export default withMermaid({
             { text: 'Workflow selection', link: '/deep-dive/workflow-selection' },
             { text: 'Team & casting', link: '/deep-dive/team-casting' },
             { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
+            { text: 'Assistant runtime', link: '/deep-dive/assistant-runtime' },
             { text: 'Browser console', link: '/deep-dive/browser-console' },
             { text: 'Agent communication', link: '/deep-dive/agent-communication' },
             { text: 'Review & merge', link: '/deep-dive/review-merge' },

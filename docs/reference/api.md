@@ -66,6 +66,16 @@ Run endpoints are owner-scoped. The authenticated caller must own the run being 
 | `GET` | `/api/runs/{runId}/sandbox/port-forward` | List sandbox port-forwards for a run |
 | `DELETE` | `/api/runs/{runId}/sandbox/port-forward/{sessionId}` | Stop a sandbox port-forward |
 
+### Assistant
+
+Assistant endpoints back the **Sessions** feature (see [The Assistant and Sessions — Getting Started](/guide/assistant)): a chat-driven, top-level (not project-scoped) conversation that calls MCP tools on the caller's behalf. A session is stored as a run record (`agent_name: "Operator"`) so it's deleted via the generic `DELETE /api/runs/{id}` above — there is no separate Assistant delete endpoint.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/assistant/runs` | Start a new session, optionally running an opening turn |
+| `GET` | `/api/assistant/runs` | List the caller's own sessions, newest first |
+| `POST` | `/api/assistant/runs/{id}/messages` | Send the next message into an existing session |
+
 ### Projects
 
 | Method | Path | Purpose |
@@ -718,6 +728,81 @@ Request:
 Response: `200 OK` `{ "run_id", "autopilot": true }`.
 
 Errors: `400` invalid run id; `404` run not found; `403` caller is not the run owner; `409` run is not active (`InProgress`).
+
+## Assistant endpoints
+
+These endpoints back the **Sessions** UI (see [Sessions & the Assistant — User Guide](/experience/assistant-sessions) and [Assistant runtime — Deep Dive](/deep-dive/assistant-runtime)). Every session is stored as a run record with `agent_name: "Operator"`, so `GET /api/runs/{id}`, `GET /api/runs/{id}/stream`/`/events`, and `DELETE /api/runs/{id}` documented above all work against a session's id too. Auth is enforced globally (no unauthenticated request reaches these handlers); a caller may only ever see their own sessions.
+
+### POST /api/assistant/runs
+
+Starts a new session. `message` is optional — if supplied, the opening turn runs immediately and its reply is returned in the same response; if omitted, the run is created empty and the first message is sent via `POST /api/assistant/runs/{id}/messages`.
+
+Request:
+
+```json
+{
+  "message": "What's blocked on the board right now?",
+  "project_id": null,
+  "run_id": null,
+  "model_id": null
+}
+```
+
+All fields are optional. `project_id` associates the session with a project (sessions are otherwise unscoped); `run_id` lets a caller pin a specific id instead of a server-generated one; `model_id` overrides the default model.
+
+Response `201 Created`:
+
+```json
+{
+  "run_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "status": "in_progress",
+  "message": "You have 4 items in Ready and 2 In Progress...",
+  "tools_invoked": ["backlog_list"]
+}
+```
+
+`message` and `tools_invoked` are `null` when no opening message was supplied. Errors: `429 Too Many Requests` with `{ "error": "operator_run_limit", "limit": 3 }` when the caller already has `MaxConcurrentRunsPerUser` (3) sessions in progress; other 4xx from `AssistantRunHttpException`; a model/provider failure maps to `401` (auth), `429` (rate limited), or `503` (other provider failure).
+
+### GET /api/assistant/runs
+
+Lists the caller's own sessions, newest first. Never returns another user's sessions.
+
+Query: `?limit=` — optional, defaults to `50`.
+
+Response `200 OK`:
+
+```json
+{
+  "runs": [
+    { "run_id": "3fa85f64-...", "status": "in_progress", "title": "What's blocked on the board right now?", "created_at": "2026-07-16T21:09:45.75Z" }
+  ]
+}
+```
+
+### POST /api/assistant/runs/{id}/messages
+
+Sends the next user message into an existing session and runs a turn. If the session isn't cached in the pod that receives this request — because it went idle (30-minute timeout), the request landed on a different replica, or the pod restarted — it's transparently rehydrated from the session's persisted history before the turn runs; see [Assistant runtime — Deep Dive](/deep-dive/assistant-runtime#the-life-of-a-session) for the mechanism. A session already idle-closed is flipped back to `in_progress`.
+
+Request:
+
+```json
+{ "message": "And which of those are mine?" }
+```
+
+`message` is required; a blank/whitespace-only value returns `400 Bad Request` (`error: "message_required"`).
+
+Response `200 OK`:
+
+```json
+{
+  "run_id": "3fa85f64-...",
+  "message": "Of those 4 in Ready, 2 are assigned to you...",
+  "status": "in_progress",
+  "tools_invoked": ["backlog_list"]
+}
+```
+
+Errors: `404` unknown session id, or one that's been permanently closed/deleted — `AssistantRunHttpException` (`error: "run_not_found"`); `403` the caller doesn't own the session (`error: "forbidden"`); provider failures map the same way as `POST /api/assistant/runs`.
 
 ## Sandbox port-forward endpoints
 
