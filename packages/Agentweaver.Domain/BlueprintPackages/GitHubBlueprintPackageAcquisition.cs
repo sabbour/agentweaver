@@ -39,8 +39,11 @@ public sealed record GitHubBlueprintPackageCommit(string CommitSha, string TreeS
 /// <summary>One Git tree entry returned for an immutable tree object.</summary>
 public sealed record GitHubBlueprintPackageTreeEntry(string Path, string Type, string Mode, string Sha, long? Size);
 
-/// <summary>An immutable Git tree object. Truncated listings are never accepted for package import.</summary>
-public sealed record GitHubBlueprintPackageTree(IReadOnlyList<GitHubBlueprintPackageTreeEntry> Entries, bool IsTruncated);
+/// <summary>An immutable Git tree object. Truncated package listings are never accepted.</summary>
+public sealed record GitHubBlueprintPackageTree(
+    string Sha,
+    IReadOnlyList<GitHubBlueprintPackageTreeEntry> Entries,
+    bool IsTruncated);
 
 /// <summary>Bytes returned for one Git blob object.</summary>
 public sealed record GitHubBlueprintPackageBlob(string Sha, byte[] Bytes);
@@ -55,6 +58,7 @@ public interface IGitHubBlueprintPackageClient
         GitHubBlueprintPackageLocator locator,
         string commitSha,
         string treeSha,
+        bool recursive,
         CancellationToken ct = default);
     Task<GitHubBlueprintPackageBlob> ReadBlobAsync(
         GitHubBlueprintPackageLocator locator,

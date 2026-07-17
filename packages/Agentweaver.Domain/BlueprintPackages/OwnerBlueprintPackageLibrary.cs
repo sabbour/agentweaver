@@ -140,7 +140,18 @@ public static class BlueprintPackageLibraryLimits
     public const int MaximumStoredPayloadSetBytes = 16_777_216;
 
     private static readonly Regex Digest = new(@"\A[a-f0-9]{64}\z", RegexOptions.CultureInvariant);
-    private static readonly Regex Sensitive = new(@"(?i)(token|secret|password|credential|authorization\s*:|://[^/\s:@]+:[^/\s@]+@)", RegexOptions.CultureInvariant);
+    private static readonly Regex FreeFormSensitive = new(
+        @"(?i)(token|secret|password|credential|authorization\s*:|://[^/\s@]+@)",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex StructuredCredential = new(
+        @"(?ix)(
+            authorization[ \t]*:
+            |\bbearer[ \t]+[A-Za-z0-9._~+/=-]+
+            |\b(?:api[_-]?key|access[_-]?token|token|secret|password|credential)[ \t]*[:=][ \t]*\S+
+            |://[^/\s@]+@
+            |\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})
+        )",
+        RegexOptions.CultureInvariant);
 
     public static void Validate(BlueprintPackageWrite package)
     {
@@ -181,11 +192,11 @@ public static class BlueprintPackageLibraryLimits
         {
             if (acquisition is null) throw new ArgumentException("Acquisition records cannot be null.", nameof(package.Acquisitions));
             Require(acquisition.Source, MaximumProvenanceFieldLength, nameof(acquisition.Source));
-            ValidateProvenance(acquisition.Source);
-            ValidateProvenance(acquisition.Producer);
-            ValidateProvenance(acquisition.Repository);
-            ValidateProvenance(acquisition.Revision);
-            ValidateProvenance(acquisition.RequestedRef);
+            ValidateFreeFormProvenance(acquisition.Source);
+            ValidateFreeFormProvenance(acquisition.Producer);
+            ValidateRepositoryProvenance(acquisition.Repository);
+            ValidateStructuredProvenance(acquisition.Revision);
+            ValidateStructuredProvenance(acquisition.RequestedRef);
         }
     }
 
@@ -252,9 +263,28 @@ public static class BlueprintPackageLibraryLimits
             throw new ArgumentException("Digest must be a lowercase SHA-256 hex value.", name);
     }
 
-    private static void ValidateProvenance(string? value)
+    private static void ValidateFreeFormProvenance(string? value)
     {
-        if (value is not null && (value.Length > MaximumProvenanceFieldLength || Sensitive.IsMatch(value)))
+        if (value is not null && (value.Length > MaximumProvenanceFieldLength
+            || value.Any(char.IsControl)
+            || FreeFormSensitive.IsMatch(value)))
             throw new ArgumentException("Provenance is oversized or contains credential-like content.");
+    }
+
+    private static void ValidateRepositoryProvenance(string? value)
+    {
+        ValidateStructuredProvenance(value);
+        if (value is not null
+            && Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && !string.IsNullOrEmpty(uri.UserInfo))
+            throw new ArgumentException("Repository provenance contains URI user information.");
+    }
+
+    private static void ValidateStructuredProvenance(string? value)
+    {
+        if (value is not null && (value.Length > MaximumProvenanceFieldLength
+            || value.Any(char.IsControl)
+            || StructuredCredential.IsMatch(value)))
+            throw new ArgumentException("Structured provenance is oversized or contains credential-like content.");
     }
 }

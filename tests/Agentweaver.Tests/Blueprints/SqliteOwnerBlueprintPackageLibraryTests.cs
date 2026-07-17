@@ -137,6 +137,52 @@ public sealed class SqliteOwnerBlueprintPackageLibraryTests
     }
 
     [Fact]
+    public async Task Persist_AllowsCredentialWordsInsideValidatedGitHubCoordinatesAndRefs()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteOwnerBlueprintPackageLibrary(testDb.Db, new Owner("owner-a"));
+        var locator = new GitHubBlueprintPackageLocator(
+            "octo", "token-service-blueprints", "package", "feature/token-refresh");
+        locator.Validate();
+        var acquisition = new BlueprintPackageAcquisition(
+            "github",
+            Repository: "https://github.com/octo/token-service-blueprints",
+            Revision: "1111111111111111111111111111111111111111",
+            RequestedRef: "feature/token-refresh");
+        var package = Package() with { Acquisitions = [acquisition] };
+
+        await store.PersistAsync(package);
+        var stored = await store.GetVersionAsync(package.PackageId, package.CanonicalVersion);
+
+        stored!.Acquisitions.Should().Equal(acquisition);
+    }
+
+    [Theory]
+    [InlineData("source", "token-service")]
+    [InlineData("producer", "password-automation")]
+    [InlineData("repository", "https://user@github.com/octo/blueprints")]
+    [InlineData("repository", "https://github.com/octo/blueprints\n")]
+    [InlineData("revision", "Bearer placeholder-value")]
+    [InlineData("requested-ref", "token=placeholder-value")]
+    public void Validate_RejectsActualCredentialSyntaxInTheAppropriateProvenanceField(string field, string value)
+    {
+        var acquisition = field switch
+        {
+            "source" => new BlueprintPackageAcquisition(value),
+            "producer" => new BlueprintPackageAcquisition("import", Producer: value),
+            "repository" => new BlueprintPackageAcquisition("import", Repository: value),
+            "revision" => new BlueprintPackageAcquisition("import", Revision: value),
+            "requested-ref" => new BlueprintPackageAcquisition("import", RequestedRef: value),
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+        var package = Package() with { Acquisitions = [acquisition] };
+
+        var action = () => BlueprintPackageLibraryLimits.Validate(package);
+
+        action.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
     public async Task Persist_RejectsPayloadBytesThatDoNotMatchTheSuppliedDigestBeforeWrite()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();

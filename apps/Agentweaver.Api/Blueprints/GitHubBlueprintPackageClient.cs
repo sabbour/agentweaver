@@ -10,6 +10,7 @@ namespace Agentweaver.Api.Blueprints;
 /// <summary>Authenticated github.com Git-object reader for Blueprint package acquisition.</summary>
 public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
 {
+    private const int MaximumErrorMetadataBytes = 8 * 1024;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly IGitHubAccessTokenProvider _accessTokenProvider;
@@ -60,6 +61,7 @@ public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
         GitHubBlueprintPackageLocator locator,
         string commitSha,
         string treeSha,
+        bool recursive,
         CancellationToken ct = default)
     {
         locator.Validate();
@@ -67,12 +69,17 @@ public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
             throw Malformed("An immutable Git object SHA is invalid.");
         var tree = await GetAsync<TreeResponse>(
             locator,
-            $"git/trees/{treeSha}?recursive=1",
+            $"git/trees/{treeSha}{(recursive ? "?recursive=1" : string.Empty)}",
             ct).ConfigureAwait(false);
+        if (!string.Equals(tree.Sha, treeSha, StringComparison.Ordinal))
+            throw new GitHubBlueprintPackageAcquisitionException(
+                GitHubBlueprintPackageAcquisitionFailure.ObjectChanged,
+                "GitHub returned a tree different from the requested immutable object.");
         if (tree.Tree is null)
             throw Malformed("GitHub returned no tree entries.");
 
         return new(
+            tree.Sha!,
             tree.Tree.Select(item => new GitHubBlueprintPackageTreeEntry(
                 item.Path ?? string.Empty,
                 item.Type ?? string.Empty,
@@ -130,9 +137,15 @@ public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            EnsureSuccess(response);
+            await EnsureSuccessAsync(response, ct).ConfigureAwait(false);
             var result = await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct).ConfigureAwait(false);
             return result ?? throw Malformed("GitHub returned an empty object response.");
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new GitHubBlueprintPackageAcquisitionException(
+                GitHubBlueprintPackageAcquisitionFailure.Transport,
+                "GitHub request timed out.");
         }
         catch (HttpRequestException)
         {
@@ -146,15 +159,19 @@ public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
         }
     }
 
-    private static void EnsureSuccess(HttpResponseMessage response)
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken ct)
     {
         if (response.IsSuccessStatusCode) return;
+        var rateLimited = response.StatusCode == HttpStatusCode.Forbidden
+            && (response.Headers.Contains("Retry-After")
+                || response.Headers.TryGetValues("X-RateLimit-Remaining", out var remaining)
+                    && remaining.Any(value => string.Equals(value.Trim(), "0", StringComparison.Ordinal))
+                || await HasSecondaryRateLimitMessageAsync(response.Content, ct).ConfigureAwait(false));
         var failure = response.StatusCode switch
         {
             HttpStatusCode.NotFound => GitHubBlueprintPackageAcquisitionFailure.NotFound,
             HttpStatusCode.Unauthorized => GitHubBlueprintPackageAcquisitionFailure.AuthenticationRequired,
-            HttpStatusCode.Forbidden when response.Headers.TryGetValues("X-RateLimit-Remaining", out var values)
-                && values.Contains("0", StringComparer.Ordinal) => GitHubBlueprintPackageAcquisitionFailure.RateLimited,
+            HttpStatusCode.Forbidden when rateLimited => GitHubBlueprintPackageAcquisitionFailure.RateLimited,
             HttpStatusCode.Forbidden => GitHubBlueprintPackageAcquisitionFailure.Forbidden,
             (HttpStatusCode)429 => GitHubBlueprintPackageAcquisitionFailure.RateLimited,
             HttpStatusCode.Conflict => GitHubBlueprintPackageAcquisitionFailure.RefMoved,
@@ -171,6 +188,42 @@ public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
         });
     }
 
+    private static async Task<bool> HasSecondaryRateLimitMessageAsync(HttpContent content, CancellationToken ct)
+    {
+        if (content.Headers.ContentLength is > MaximumErrorMetadataBytes)
+            return false;
+
+        await using var stream = await content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        var buffer = new byte[MaximumErrorMetadataBytes + 1];
+        var length = 0;
+        while (length < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(length, buffer.Length - length), ct).ConfigureAwait(false);
+            if (read == 0) break;
+            length += read;
+        }
+        if (length > MaximumErrorMetadataBytes)
+            return false;
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(buffer.AsMemory(0, length));
+            if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("message", out var messageElement)
+                || messageElement.ValueKind != System.Text.Json.JsonValueKind.String)
+                return false;
+            var message = messageElement.GetString();
+            return message is not null && message.Length <= 1_024
+                && (message.Contains("secondary rate limit", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("abuse detection", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("abuse rate limit", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
+
     private static GitHubBlueprintPackageAcquisitionException Malformed(string message) =>
         new(GitHubBlueprintPackageAcquisitionFailure.MalformedContent, message);
 
@@ -180,6 +233,7 @@ public sealed class GitHubBlueprintPackageClient : IGitHubBlueprintPackageClient
         [property: JsonPropertyName("tree")] GitTreeReference? Tree);
     private sealed record GitTreeReference([property: JsonPropertyName("sha")] string? Sha);
     private sealed record TreeResponse(
+        [property: JsonPropertyName("sha")] string? Sha,
         [property: JsonPropertyName("tree")] IReadOnlyList<TreeEntryResponse>? Tree,
         [property: JsonPropertyName("truncated")] bool Truncated);
     private sealed record TreeEntryResponse(

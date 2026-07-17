@@ -20,12 +20,13 @@ public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
         var service = new GitHubBlueprintPackageImportService(ImportTestSupport.ValidClient(), library);
 
         var result = await service.ImportAsync(
-            new GitHubBlueprintPackageLocator("octo", "private-blueprints", "package", "main"));
+            new GitHubBlueprintPackageLocator(
+                "octo", "token-service-blueprints", "package", "feature/token-refresh"));
         var stored = await library.GetVersionAsync(result.PackageId, result.CanonicalVersion);
 
         result.Disposition.Should().Be(BlueprintPackagePersistDisposition.Created);
-        stored!.Acquisitions.Should().ContainSingle().Which.RequestedRef.Should().Be("main");
-        stored.Acquisitions.Single().Repository.Should().Be("https://github.com/octo/private-blueprints");
+        stored!.Acquisitions.Should().ContainSingle().Which.RequestedRef.Should().Be("feature/token-refresh");
+        stored.Acquisitions.Single().Repository.Should().Be("https://github.com/octo/token-service-blueprints");
     }
 
     [PostgresFact]

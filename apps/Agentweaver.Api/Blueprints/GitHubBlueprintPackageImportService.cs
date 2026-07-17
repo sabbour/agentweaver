@@ -30,11 +30,11 @@ public sealed class GitHubBlueprintPackageImportService
         if (!GitHubBlueprintPackagePath.IsFullSha(commit.CommitSha) || !GitHubBlueprintPackagePath.IsFullSha(commit.TreeSha))
             throw Malformed("GitHub returned invalid immutable object identifiers.");
 
-        var tree = await _github.ReadTreeAsync(locator, commit.CommitSha, commit.TreeSha, ct).ConfigureAwait(false);
+        var tree = await ResolvePackageTreeAsync(locator, commit, ct).ConfigureAwait(false);
         if (tree.IsTruncated || tree.Entries.Count > MaximumTreeEntries)
             throw Malformed("GitHub tree is truncated or exceeds the package object limit.");
 
-        var files = SelectPackageFiles(locator, tree);
+        var files = SelectPackageFiles(tree);
         PreflightTree(files);
         if (!files.TryGetValue("manifest.json", out var manifestEntry))
             throw Malformed("Package manifest.json is missing.");
@@ -86,27 +86,72 @@ public sealed class GitHubBlueprintPackageImportService
             locator.Ref);
     }
 
-    private static Dictionary<string, GitHubBlueprintPackageTreeEntry> SelectPackageFiles(
+    private async Task<GitHubBlueprintPackageTree> ResolvePackageTreeAsync(
         GitHubBlueprintPackageLocator locator,
+        GitHubBlueprintPackageCommit commit,
+        CancellationToken ct)
+    {
+        var treeSha = commit.TreeSha;
+        if (!string.IsNullOrEmpty(locator.PackageRootPath))
+        {
+            foreach (var segment in locator.PackageRootPath.Split('/'))
+            {
+                var parent = await ReadVerifiedTreeAsync(
+                    locator, commit.CommitSha, treeSha, recursive: false, ct).ConfigureAwait(false);
+                if (parent.IsTruncated)
+                    throw Malformed("GitHub truncated a package-root traversal tree.");
+
+                var matches = parent.Entries
+                    .Where(entry => string.Equals(entry.Path, segment, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                if (matches.Length != 1 || !string.Equals(matches[0].Path, segment, StringComparison.Ordinal))
+                    throw Malformed("Package root is missing or has ambiguous casing.");
+
+                var selected = matches[0];
+                if (selected.Type != "tree" || selected.Mode != "040000"
+                    || !GitHubBlueprintPackagePath.IsFullSha(selected.Sha))
+                    throw Malformed("Package root contains a symlink, submodule, or non-tree path segment.");
+                treeSha = selected.Sha;
+            }
+        }
+
+        return await ReadVerifiedTreeAsync(
+            locator, commit.CommitSha, treeSha, recursive: true, ct).ConfigureAwait(false);
+    }
+
+    private async Task<GitHubBlueprintPackageTree> ReadVerifiedTreeAsync(
+        GitHubBlueprintPackageLocator locator,
+        string commitSha,
+        string treeSha,
+        bool recursive,
+        CancellationToken ct)
+    {
+        var tree = await _github.ReadTreeAsync(locator, commitSha, treeSha, recursive, ct).ConfigureAwait(false);
+        if (!string.Equals(tree.Sha, treeSha, StringComparison.Ordinal))
+            throw new GitHubBlueprintPackageAcquisitionException(
+                GitHubBlueprintPackageAcquisitionFailure.ObjectChanged,
+                "GitHub tree changed after the immutable commit was resolved.");
+        return tree;
+    }
+
+    private static Dictionary<string, GitHubBlueprintPackageTreeEntry> SelectPackageFiles(
         GitHubBlueprintPackageTree tree)
     {
-        var root = locator.PackageRootPath ?? string.Empty;
-        var prefix = root.Length == 0 ? string.Empty : $"{root}/";
         var sourcePaths = new HashSet<string>(StringComparer.Ordinal);
         var caseInsensitivePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var files = new Dictionary<string, GitHubBlueprintPackageTreeEntry>(StringComparer.Ordinal);
 
         foreach (var entry in tree.Entries)
         {
-            if (!entry.Path.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            var relative = entry.Path[prefix.Length..];
+            var relative = entry.Path;
             if (!GitHubBlueprintPackagePath.IsCanonicalPosixPath(relative)
                 || !sourcePaths.Add(relative)
                 || !caseInsensitivePaths.Add(relative))
                 throw Malformed("GitHub tree contains a non-canonical or case-colliding package path.");
             if (entry.Type == "tree")
             {
-                if (entry.Mode != "040000") throw Malformed("GitHub tree contains an unsupported directory object.");
+                if (entry.Mode != "040000" || !GitHubBlueprintPackagePath.IsFullSha(entry.Sha))
+                    throw Malformed("GitHub tree contains an unsupported directory object.");
                 continue;
             }
             if (entry.Type != "blob" || entry.Mode is not ("100644" or "100755")
@@ -233,9 +278,85 @@ public sealed class GitHubBlueprintPackageImportService
 
     private static void RejectLfsPointer(byte[] bytes)
     {
-        var prefix = Encoding.ASCII.GetBytes("version https://git-lfs.github.com/spec/v1\n");
-        if (bytes.AsSpan().StartsWith(prefix))
+        if (IsLfsPointer(bytes))
             throw Malformed("Git LFS pointers are not supported in Blueprint packages.");
+    }
+
+    internal static bool IsLfsPointer(byte[] bytes)
+    {
+        string text;
+        try
+        {
+            text = new UTF8Encoding(false, true).GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < text.Length; index++)
+            if (text[index] == '\r' && (index + 1 >= text.Length || text[index + 1] != '\n'))
+                return false;
+
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (Encoding.UTF8.GetByteCount(normalized) >= 1_024)
+            return false;
+        var lines = normalized.Split('\n').ToList();
+        if (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
+        if (lines.Count < 3
+            || lines[0] != "version https://git-lfs.github.com/spec/v1"
+            || lines.Any(line => line.Length == 0))
+            return false;
+
+        var indexOfLine = 1;
+        string? previousExtensionKey = null;
+        while (indexOfLine < lines.Count
+            && IsLfsExtension(lines[indexOfLine], out var extensionKey))
+        {
+            if (previousExtensionKey is not null
+                && string.CompareOrdinal(previousExtensionKey, extensionKey) >= 0)
+                return false;
+            previousExtensionKey = extensionKey;
+            indexOfLine++;
+        }
+        if (indexOfLine + 2 != lines.Count)
+            return false;
+
+        const string oidPrefix = "oid sha256:";
+        var oid = lines[indexOfLine++];
+        if (!oid.StartsWith(oidPrefix, StringComparison.Ordinal)
+            || oid.Length != oidPrefix.Length + 64
+            || !oid[oidPrefix.Length..].All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f'))
+            return false;
+
+        const string sizePrefix = "size ";
+        var size = lines[indexOfLine];
+        if (!size.StartsWith(sizePrefix, StringComparison.Ordinal))
+            return false;
+        var digits = size[sizePrefix.Length..];
+        return digits.Length is > 0 and <= 20
+            && digits.All(char.IsAsciiDigit)
+            && long.TryParse(digits, out _);
+    }
+
+    private static bool IsLfsExtension(string line, out string key)
+    {
+        key = string.Empty;
+        if (!line.StartsWith("ext-", StringComparison.Ordinal))
+            return false;
+        var priorityEnd = line.IndexOf('-', 4);
+        var nameEnd = line.IndexOf(' ', priorityEnd + 1);
+        if (priorityEnd <= 4 || nameEnd <= priorityEnd + 1 || nameEnd == line.Length - 1)
+            return false;
+        key = line[..nameEnd];
+        var value = line[(nameEnd + 1)..];
+        return line[4..priorityEnd].All(char.IsAsciiDigit)
+            && line[(priorityEnd + 1)..nameEnd]
+                .All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '-')
+            && value.StartsWith("sha256:", StringComparison.Ordinal)
+            && value.Length == "sha256:".Length + 64
+            && value["sha256:".Length..].All(
+                character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
     }
 
     private static GitHubBlueprintPackageAcquisitionException Malformed(string message) =>
