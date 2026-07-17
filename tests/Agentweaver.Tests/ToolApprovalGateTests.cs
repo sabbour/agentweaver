@@ -546,13 +546,20 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         gate.GetRequestState("child-run-d", "toolu_01def").Should().Be(ToolApprovalRequestState.Denied);
     }
 
-    private DurableRunControlState NewState() =>
-        new(NewProvider().GetRequiredService<IServiceScopeFactory>());
+    private DurableRunControlState NewState()
+    {
+        var provider = NewProvider();
+        return new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<IRunEventStream>());
+    }
 
     private ServiceProvider NewProvider()
     {
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddDbContextFactory<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddSingleton<IRunEventStream, EfRunEventStream>();
         var provider = services.BuildServiceProvider();
         _providers.Add(provider);
         return provider;

@@ -1,10 +1,8 @@
 using Microsoft.Agents.AI.Workflows;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
-using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -28,6 +26,7 @@ public sealed class WorkflowRestartService
     private readonly IWorktreeOperations _worktreeOps;
     private readonly RunWatchLoopService _watchLoop;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRunEventStream? _eventStream;
     private readonly ILogger<WorkflowRestartService> _logger;
 
     public WorkflowRestartService(
@@ -39,7 +38,8 @@ public sealed class WorkflowRestartService
         IWorktreeOperations worktreeOps,
         RunWatchLoopService watchLoop,
         IServiceScopeFactory scopeFactory,
-        ILogger<WorkflowRestartService> logger)
+        ILogger<WorkflowRestartService> logger,
+        IRunEventStream? eventStream = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -49,6 +49,7 @@ public sealed class WorkflowRestartService
         _worktreeOps = worktreeOps;
         _watchLoop = watchLoop;
         _scopeFactory = scopeFactory;
+        _eventStream = eventStream;
         _logger = logger;
     }
 
@@ -344,24 +345,25 @@ public sealed class WorkflowRestartService
         object payload,
         CancellationToken ct)
     {
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var maxSequence = await db.RunEvents
-            .Where(e => e.RunId == runId)
-            .Select(e => (int?)e.Sequence)
-            .MaxAsync(ct)
-            .ConfigureAwait(false) ?? 0;
-        var sequence = maxSequence + 1;
-
-        db.RunEvents.Add(new RunEventRecord
+        var stream = _eventStream;
+        if (stream is null)
         {
-            RunId = runId,
-            Sequence = sequence,
-            EventType = eventType,
-            PayloadJson = JsonSerializer.Serialize(payload),
-            CreatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            stream = scope.ServiceProvider.GetService<IRunEventStream>();
+        }
+
+        int sequence;
+        if (stream is null)
+        {
+            _logger.LogWarning(
+                "Workflow recovery: no IRunEventStream available while recording {EventType} for run {RunId}; using in-memory fallback sequence only",
+                eventType,
+                runId);
+            sequence = entry.RecordNext(eventType, payload);
+            return;
+        }
+
+        sequence = await stream.AppendAsync(runId, new RunEvent(0, eventType, payload), ct).ConfigureAwait(false);
         entry.Record(new RunEvent(sequence, eventType, payload));
     }
 

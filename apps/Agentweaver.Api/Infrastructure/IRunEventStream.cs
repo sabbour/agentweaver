@@ -16,10 +16,11 @@ public interface IRunEventStream
     /// Appends an event to the run's log. Performs a synchronous SQLite write BEFORE returning,
     /// then publishes to the in-process channel. The append is durable before it is acknowledged.
     /// If <paramref name="evt"/> already carries a positive <see cref="RunEvent.Sequence"/> it is
-    /// honored (idempotent on the unique <c>(RunId, Sequence)</c> index); otherwise a monotonic
-    /// sequence is assigned.
+    /// honored (idempotent on the unique <c>(RunId, Sequence)</c> index with payload/type verification);
+    /// otherwise a monotonic sequence is assigned.
+    /// Returns the durable sequence assigned to the persisted event row.
     /// </summary>
-    ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
+    ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
     /// Subscribes to a run's event stream. Replays persisted events from <paramref name="fromSequence"/>,

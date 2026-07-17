@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
@@ -185,13 +186,20 @@ public sealed class DurableRunControlStateTests : IDisposable
     private DurableQuestionGate NewQuestionGate() => new(NewState());
     private DurableShellApprovalStore NewShellApprovalStore() => new(NewState());
 
-    private DurableRunControlState NewState() =>
-        new(NewProvider().GetRequiredService<IServiceScopeFactory>());
+    private DurableRunControlState NewState()
+    {
+        var provider = NewProvider();
+        return new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<IRunEventStream>());
+    }
 
     private ServiceProvider NewProvider()
     {
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddDbContextFactory<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddSingleton<IRunEventStream, EfRunEventStream>();
         var provider = services.BuildServiceProvider();
         _providers.Add(provider);
         return provider;

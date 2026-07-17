@@ -189,6 +189,12 @@ public sealed class RunStreamEntry
         {
             _eventStream.AppendAsync(_runId, evt).AsTask().GetAwaiter().GetResult();
         }
+        catch (RunEventSequenceCollisionException)
+        {
+            // Distinct-payload collisions on an explicit sequence are data-integrity faults; never
+            // mask them as success. Callers decide how to surface/fail the run.
+            throw;
+        }
         catch
         {
             // Best-effort mirror only. Terminal backfill paths reconcile any missed events.

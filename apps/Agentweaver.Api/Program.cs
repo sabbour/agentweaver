@@ -121,7 +121,7 @@ builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>();
 // IRunEventStream is registered conditionally in the Database:Provider block below.
-// SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + serializable tx).
+// SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + advisory lock).
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
 
@@ -763,7 +763,7 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
         builder.Services.AddSingleton<IWorkflowRunStore>(sp => sp.GetRequiredService<EfWorkflowRunStore>());
         builder.Services.AddSingleton<EfCastProposalStore>();
 
-        // Durable pub/sub event stream backed by EF + Postgres (two-layer: serializable tx + channel)
+        // Durable pub/sub event stream backed by EF + Postgres (per-run advisory lock + bounded retry).
         builder.Services.AddSingleton<IRunEventStream, EfRunEventStream>();
 
         // Data migrator (SQLite → Postgres)

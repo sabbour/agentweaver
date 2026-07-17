@@ -305,50 +305,35 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         {
             var entry = _streamStore.Get(runId);
             var events = entry?.GetSnapshotSince(0).Events ?? [];
+            IRunEventStream? stream = _eventStream;
 
             if (events.Count > 0)
             {
-                if (_eventStream is not null)
+                if (stream is null)
+                {
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    stream = scope.ServiceProvider.GetService<IRunEventStream>();
+                }
+
+                if (stream is null)
+                {
+                    _loggerFactory.CreateLogger<RunWorkflowFactory>().LogWarning(
+                        "Unable to persist run event snapshot for {RunId} because no IRunEventStream is available",
+                        runId);
+                }
+                else
                 {
                     // Durable write-through is idempotent on the unique (RunId, Sequence) index,
                     // so re-appending the full history reconciles any gaps left by a dropped
                     // per-append mirror without duplicating rows.
-                    foreach (var e in events)
-                        await _eventStream.AppendAsync(runId, e).ConfigureAwait(false);
-                }
-                else
-                {
-                    await using var scope = _scopeFactory.CreateAsyncScope();
-                    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-                    var existingSeqs = db.RunEvents
-                        .Where(e => e.RunId == runId)
-                        .Select(e => e.Sequence)
-                        .ToHashSet();
-
-                    var toInsert = events
-                        .Where(e => !existingSeqs.Contains(e.Sequence))
-                        .Select(e => new RunEventRecord
-                        {
-                            RunId = runId,
-                            Sequence = e.Sequence,
-                            EventType = e.Type,
-                            PayloadJson = JsonSerializer.Serialize(e.Payload),
-                            CreatedAt = DateTime.UtcNow,
-                        })
-                        .ToList();
-
-                    if (toInsert.Count > 0)
-                    {
-                        db.RunEvents.AddRange(toInsert);
-                        await db.SaveChangesAsync().ConfigureAwait(false);
-                    }
+                    foreach (var e in events.OrderBy(e => e.Sequence))
+                        _ = await stream.AppendAsync(runId, e).ConfigureAwait(false);
                 }
             }
 
             // Close the live channel so any IRunEventStream subscribers drain and complete.
-            if (_eventStream is not null)
-                await _eventStream.CompleteAsync(runId).ConfigureAwait(false);
+            if (stream is not null)
+                await stream.CompleteAsync(runId).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

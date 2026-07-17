@@ -2021,28 +2021,29 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         try
         {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var nextSeq = ((await db.RunEvents
-                .Where(e => e.RunId == childRunId)
-                .MaxAsync(e => (int?)e.Sequence, ct).ConfigureAwait(false)) ?? 0) + 1;
-
-            db.RunEvents.Add(new RunEventRecord
+            var stream = _eventStream;
+            if (stream is null)
             {
-                RunId = childRunId,
-                Sequence = nextSeq,
-                EventType = "run.partial_output",
-                PayloadJson = JsonSerializer.Serialize(new
-                {
-                    subtaskId,
-                    lastSequence,
-                    reason,
-                    partialOutput,
-                    timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
-                }),
-                CreatedAt = DateTime.UtcNow,
-            });
-            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                using var scope = _scopeFactory.CreateScope();
+                stream = scope.ServiceProvider.GetService<IRunEventStream>();
+            }
+
+            if (stream is null)
+            {
+                _logger.LogWarning(
+                    "Coordinator observation: unable to persist partial output checkpoint for child {ChildRunId} because no IRunEventStream is available",
+                    childRunId);
+                return;
+            }
+
+            _ = await stream.AppendAsync(childRunId, new RunEvent(0, "run.partial_output", new
+            {
+                subtaskId,
+                lastSequence,
+                reason,
+                partialOutput,
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            }), ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

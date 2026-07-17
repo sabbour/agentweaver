@@ -485,8 +485,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         catch (Exception ex) { _logger.LogWarning(ex, "Operator run idle sweep failed."); }
     }
 
-    private ValueTask AppendAsync(string runId, string type, object payload, CancellationToken ct) =>
-        _eventStream.AppendAsync(runId, new RunEvent(0, type, payload), ct);
+    private async ValueTask AppendAsync(string runId, string type, object payload, CancellationToken ct) =>
+        _ = await _eventStream.AppendAsync(runId, new RunEvent(0, type, payload), ct).ConfigureAwait(false);
 
     public void Dispose() => _idleSweeper.Dispose();
 

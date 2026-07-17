@@ -77,14 +77,14 @@ public sealed class SqliteRunEventStream : IRunEventStream
     }
 
     /// <inheritdoc />
-    public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+    public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
         // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
         // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
         // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
         // subtask/topology event still persists post-terminal (durable audit + gapless replay).
         if (_completedRuns.ContainsKey(runId) && evt.Type == EventTypes.AgentMessageDelta)
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(0);
 
         // Layer 1: synchronous, durable write-through BEFORE the channel publish so the event is
         // crash-safe before any live subscriber observes it. Honors a pre-assigned sequence when
@@ -96,7 +96,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
             _logger?.LogWarning(
                 "Persisted late event {EventType} for completed run {RunId}; live channel remains closed",
                 evt.Type, runId);
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(sequence);
         }
 
         // Layer 2: publish to the live channel. TryWrite never blocks; if the bounded channel is
@@ -109,14 +109,14 @@ public sealed class SqliteRunEventStream : IRunEventStream
                 _logger?.LogWarning(
                     "Run {RunId} completed while appending event {EventType}; durable event {Sequence} will not resurrect live channel",
                     runId, evt.Type, sequence);
-                return ValueTask.CompletedTask;
+                return ValueTask.FromResult(sequence);
             }
 
             var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
             channel.Writer.TryWrite(stamped);
         }
 
-        return ValueTask.CompletedTask;
+        return ValueTask.FromResult(sequence);
     }
 
     /// <inheritdoc />
@@ -215,10 +215,17 @@ public sealed class SqliteRunEventStream : IRunEventStream
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
 
-        using (var pragma = connection.CreateCommand())
+        try
         {
-            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=2000;";
+            using var pragma = connection.CreateCommand();
+            pragma.CommandText = "PRAGMA journal_mode=WAL;";
             pragma.ExecuteNonQuery();
+            pragma.CommandText = "PRAGMA busy_timeout=2000;";
+            pragma.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "Failed to apply SQLite run-event PRAGMAs; continuing with defaults");
         }
 
         var payloadJson = JsonSerializer.Serialize(evt.Payload);
@@ -231,20 +238,52 @@ public sealed class SqliteRunEventStream : IRunEventStream
 
         if (evt.Sequence > 0)
         {
-            // Caller-assigned sequence: insert idempotently. A duplicate (RunId, Sequence) is a
-            // no-op (the row is already durable), e.g. when a terminal backfill re-persists events.
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = """
-                INSERT OR IGNORE INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
-                VALUES ($runId, $seq, $type, $payload, $createdAt);
-                """;
-            cmd.Parameters.AddWithValue("$runId", runId);
-            cmd.Parameters.AddWithValue("$seq", evt.Sequence);
-            cmd.Parameters.AddWithValue("$type", evt.Type);
-            cmd.Parameters.AddWithValue("$payload", payloadJson);
-            cmd.Parameters.AddWithValue("$createdAt", createdAt);
-            cmd.ExecuteNonQuery();
-            return evt.Sequence;
+            var existing = LoadExistingExplicitEvent(connection, runId, evt.Sequence);
+            if (existing is not null)
+            {
+                EnsureExplicitSequenceMatches(
+                    runId,
+                    evt.Sequence,
+                    evt.Type,
+                    payloadJson,
+                    existing.Value.EventType,
+                    existing.Value.PayloadJson);
+                return evt.Sequence;
+            }
+
+            try
+            {
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = """
+                    INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+                    VALUES ($runId, $seq, $type, $payload, $createdAt);
+                    """;
+                cmd.Parameters.AddWithValue("$runId", runId);
+                cmd.Parameters.AddWithValue("$seq", evt.Sequence);
+                cmd.Parameters.AddWithValue("$type", evt.Type);
+                cmd.Parameters.AddWithValue("$payload", payloadJson);
+                cmd.Parameters.AddWithValue("$createdAt", createdAt);
+                cmd.ExecuteNonQuery();
+                return evt.Sequence;
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+            {
+                // Concurrent explicit-sequence append: resolve idempotency against the durable row.
+                existing = LoadExistingExplicitEvent(connection, runId, evt.Sequence);
+                if (existing is not null)
+                {
+                    EnsureExplicitSequenceMatches(
+                        runId,
+                        evt.Sequence,
+                        evt.Type,
+                        payloadJson,
+                        existing.Value.EventType,
+                        existing.Value.PayloadJson);
+                    return evt.Sequence;
+                }
+
+                throw;
+            }
         }
 
         // Auto-assign the next monotonic sequence for this run. The MAX+1 select and insert run in
@@ -263,6 +302,64 @@ public sealed class SqliteRunEventStream : IRunEventStream
             cmd.Parameters.AddWithValue("$createdAt", createdAt);
             var result = cmd.ExecuteScalar();
             return Convert.ToInt32(result, CultureInfo.InvariantCulture);
+        }
+    }
+
+    private static (string EventType, string PayloadJson)? LoadExistingExplicitEvent(
+        SqliteConnection connection,
+        string runId,
+        int sequence)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT "EventType", "PayloadJson"
+            FROM "RunEvents"
+            WHERE "RunId" = $runId AND "Sequence" = $seq
+            LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$runId", runId);
+        cmd.Parameters.AddWithValue("$seq", sequence);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+            return null;
+
+        return (reader.GetString(0), reader.GetString(1));
+    }
+
+    private static void EnsureExplicitSequenceMatches(
+        string runId,
+        int sequence,
+        string incomingType,
+        string incomingPayloadJson,
+        string persistedType,
+        string persistedPayloadJson)
+    {
+        if (string.Equals(incomingType, persistedType, StringComparison.Ordinal)
+            && PayloadsEquivalent(incomingPayloadJson, persistedPayloadJson))
+        {
+            return;
+        }
+
+        throw new RunEventSequenceCollisionException(
+            $"RunEvent explicit sequence collision detected for run '{runId}' sequence {sequence}: " +
+            "the existing durable event payload/type differs from the incoming event.");
+    }
+
+    private static bool PayloadsEquivalent(string leftJson, string rightJson)
+    {
+        if (string.Equals(leftJson, rightJson, StringComparison.Ordinal))
+            return true;
+
+        try
+        {
+            using var leftDoc = JsonDocument.Parse(leftJson);
+            using var rightDoc = JsonDocument.Parse(rightJson);
+            return JsonElement.DeepEquals(leftDoc.RootElement, rightDoc.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

@@ -159,6 +159,66 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task AppendAsync_ConcurrentSameRunAcrossInstances_AssignsUniqueContiguousSequences()
+    {
+        var runId = "run-sqlite-concurrency";
+        const int workerCount = 2;
+        const int eventsPerWorker = 4;
+        var streams = Enumerable.Range(0, workerCount)
+            .Select(_ => new SqliteRunEventStream(_config))
+            .ToArray();
+        var start = new Barrier(workerCount);
+
+        var workers = streams.Select((stream, worker) => Task.Run(async () =>
+        {
+            start.SignalAndWait();
+            for (var index = 0; index < eventsPerWorker; index++)
+            {
+                await stream.AppendAsync(runId, new RunEvent(0, EventTypes.ToolCall, new
+                {
+                    worker,
+                    index,
+                }));
+            }
+        })).ToArray();
+
+        await Task.WhenAll(workers);
+
+        var verifier = new SqliteRunEventStream(_config);
+        await verifier.AppendAsync(runId, new RunEvent(0, EventTypes.RunCompleted, new { }));
+
+        var replayed = await ReplayWithTimeoutAsync(verifier, runId);
+        var expectedCount = (workerCount * eventsPerWorker) + 1;
+        replayed.Should().HaveCount(expectedCount);
+        replayed.Select(e => e.Sequence).Should().Equal(Enumerable.Range(1, expectedCount));
+        replayed.Select(e => e.Sequence).Distinct().Should().HaveCount(expectedCount);
+    }
+
+    [Fact]
+    public async Task AppendAsync_ExplicitSequence_DuplicateDifferentPayload_Throws()
+    {
+        var runId = "run-explicit-mismatch-sqlite";
+        var stream = new SqliteRunEventStream(_config);
+        await stream.AppendAsync(runId, new RunEvent(7, EventTypes.ToolResult, new
+        {
+            toolName = "project_list",
+            success = true,
+        }));
+
+        Func<Task> act = async () =>
+        {
+            _ = await stream.AppendAsync(runId, new RunEvent(7, EventTypes.ToolResult, new
+            {
+                toolName = "project_list",
+                success = false,
+            }));
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*explicit sequence collision*");
+    }
+
+    [Fact]
     public async Task SubscribeAsync_AfterLateAppendFollowingTerminal_DrainsPersistedDiagnosticsThenCompletes()
     {
         var runId = "run-late-assembly";
