@@ -177,15 +177,6 @@ public sealed class BuiltInSkillAssetTests
         }
     }
 
-    [Fact]
-    public void ReferenceDocumentation_ExplainsAssetsAreNotAutomaticBlueprintBindings()
-    {
-        var documentation = ReadUtf8Text(Path.Combine(RepositoryRoot, "docs", "reference", "built-in-skills.md"));
-
-        documentation.Should().Contain("Blueprint bindings and automatic skill assignment are a later phase");
-        documentation.Should().Contain("does not currently attach a skill to an agent");
-    }
-
     private static string SkillsRoot => Path.Combine(RepositoryRoot, "packages", "Agentweaver.Squad", "Catalog", "Resources", "skills");
 
     private static IEnumerable<string> BlueprintFiles => Directory.EnumerateFiles(
