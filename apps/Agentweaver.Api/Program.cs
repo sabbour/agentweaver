@@ -238,6 +238,12 @@ builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
+    Agentweaver.Api.Blueprints.HttpContextAuthenticatedOwnerContext>();
+builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IGitHubBlueprintPackageClient,
+    Agentweaver.Api.Blueprints.GitHubBlueprintPackageClient>();
+builder.Services.AddScoped<Agentweaver.Api.Blueprints.GitHubBlueprintPackageImportService>();
 
 // MCP OAuth 2.1 Authorization Server (Option C / Seraph design). T1-T3:
 //  - McpTokenService: signs short-lived (15m) audience-bound JWT access tokens; key from
@@ -308,6 +314,25 @@ builder.Services.AddSingleton<IProjectWorkspaceProvider>(sp =>
 });
 builder.Services.AddSingleton<ProjectGitInitializer>();
 builder.Services.AddSingleton<ProjectService>();
+
+// Owner-private Blueprint package library. Owner identity is request-scoped; storage remains
+// provider-aware so SQLite and PostgreSQL exercise the same immutable package contract.
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    var _isPostgres = _provider is "postgres" or "postgresql";
+    if (_isPostgres)
+    {
+        builder.Services.AddScoped<Agentweaver.Api.Infrastructure.Ef.EfOwnerBlueprintPackageLibrary>();
+        builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IOwnerBlueprintPackageLibrary>(
+            sp => sp.GetRequiredService<Agentweaver.Api.Infrastructure.Ef.EfOwnerBlueprintPackageLibrary>());
+    }
+    else
+    {
+        builder.Services.AddScoped<SqliteOwnerBlueprintPackageLibrary>();
+        builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IOwnerBlueprintPackageLibrary>(
+            sp => sp.GetRequiredService<SqliteOwnerBlueprintPackageLibrary>());
+    }
+}
 
 // Backlog & Kanban board (Feature 009)
 // Provider-aware: Postgres uses EfBacklogTaskStore; SQLite uses SqliteBacklogTaskStore.
