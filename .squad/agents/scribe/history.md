@@ -147,3 +147,43 @@ Processed Tank + Link batch: health check confirmed FSStorageProvider, Tank inbo
 
 ## 2026-07-14T15:15:00Z — v0.9.50-rc1 release documentation pass
 Merged a 57-file decisions inbox, wrote the release/session/orchestration logs, and updated cross-agent histories for the v0.9.50-rc1 staging ship. Archive and history summarization gates were checked; no additional summarization was needed this pass.
+
+## 2026-07-16T17-19-26-07-00 — v0.9.68 P0 regression → v0.9.69 hotfix → v0.9.70 stale-image fix Scribe pass
+
+**Health check:** Reviewed git log/VERSION/live code against the incident summary provided —
+confirmed `OperatorAssistantAgent.cs` code state, commit hashes (`ee1c8044`, `4c276761`,
+`59a90c14`), and VERSION=0.9.70 all match the reported narrative exactly. No discrepancies or
+regressions found in the verification pass.
+
+**Scope:** Logged the full incident/resolution arc: v0.9.68's session-store re-enable caused a
+live P0 (`database is locked`, every new assistant run failing) within minutes of deploy; root
+cause was `RunTurnAsync` creating a fresh SDK session every turn against one pod-local SQLite
+session-store file; emergency-reverted in v0.9.69 (committed direct to main, no worktree, P0);
+two false rollout-failure alarms from `30-deploy.ps1` (transient node-scheduling latency, not code
+regressions); a user-requested docs-landing merge caused a stale-image false-negative catch
+(#251 failure mode) fixed via v0.9.70 selective frontend rebuild; final 4/4 provenance-verified
+and live E2E smoke test confirmed both the regression is resolved and the original v0.9.68
+durable-rehydration feature works correctly in production.
+
+**Work completed:**
+1. **Decision entry:** Added one comprehensive entry to `decisions.md` covering root cause, fix,
+   both operational false-alarm patterns, and the queued follow-up (real SDK session resumption
+   for `OperatorAssistantAgent`, owner: Tank, not started).
+2. **History summarization gate:** Tank's `history.md` was at 16,084 bytes (over the 15,360-byte
+   hard gate) — condensed the 2026-06-29→2026-07-13 entries into one archived-summary block
+   (preserving key learnings) before appending the new incident entry. Result: 12,008 bytes.
+3. **Agent history updates:**
+   - **Tank:** Recorded the regression, root cause, revert, and the queued session-resumption
+     follow-up (explicitly flagged as not-yet-started, do-not-pick-up-without-checking-decisions).
+   - **Link:** Recorded both deploy false-alarms and the stale-image/provenance fix as reusable
+     operational patterns.
+4. **No regressions found during review:** cross-checked the narrative against
+   `OperatorAssistantAgent.cs` (comment + flag state matches exactly), git log (`ee1c8044`,
+   `4c276761`, `59a90c14` all present in the expected order), and `VERSION` (0.9.70, matches).
+   One unrelated, pre-existing local change was noted but not touched: `.learnings/LEARNINGS.md`
+   has an uncommitted local addition (`LRN-20260716-001`, about deployment-source attribution) from
+   a separate session — out of scope for this log pass, left as-is.
+
+**Size gates:** `decisions.md` grew to include the new entry; still within the 30-day/20KB
+archival threshold reset on 2026-07-14 (nothing in the active file is older than 30 days, so no
+archival was triggered this pass).

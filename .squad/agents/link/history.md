@@ -144,3 +144,24 @@ Fix: `k8s/api-deployment.yaml` now has `terminationGracePeriodSeconds: 120` + `p
 Scope exclusion: AgentHost per-run SandboxTemplate pods (`restartPolicy: Never`) not affected — no rolling deployment pattern there.
 
 Merged to main (commit `c68b9055`), released as v0.9.67, verified live in staging with post-deploy smoke test success.
+
+## 2026-07-16T17-19-26-07-00 — v0.9.69/v0.9.70: rollout false-alarms + stale-image fix
+
+**Deploy false alarms:** `scripts/aks/30-deploy.ps1` reported "API deployment rollout failed"
+(exit 1) twice this session (v0.9.69 and v0.9.70 deploys). Both were false alarms: `kubectl`
+events showed transient `FailedScheduling` (insufficient CPU / untolerated taints on some nodes)
+pushing new-pod scheduling past the script's wait timeout by ~1-2 minutes, plus normal image-pull
+time. Pods reached `1/1 Running/Ready` shortly after; manual `kubectl rollout status` confirmed
+success both times. **Reusable pattern:** treat `30-deploy` exit-1 as inconclusive, not proof of a
+real break — check `kubectl get pods`/`kubectl rollout status` manually before escalating; the
+script's timeout is tighter than worst-case scheduling+pull latency under transient node pressure.
+
+**Stale-image catch (#251 failure mode):** After the user's requested `merge-docs-landing-main`
+merge (`4c276761`, docs landing redesign) landed on `main` touching `apps/web/src` paths *after*
+v0.9.69's images were already built, `scripts/aks/25-verify-image-provenance.ps1` correctly flagged
+`agentweaver-frontend:v0.9.69` as a stale image. Fixed by bumping to v0.9.70 (`59a90c14`) and
+rebuilding only the frontend image; api/mcp/agent-host correctly retagged unchanged. Final state:
+4/4 images provenance-verified against the new HEAD. **Reusable takeaway:** run
+`25-verify-image-provenance` after *any* merge to `main` that lands after a build — even a
+disjoint/unrelated merge (docs-only, in this case) can invalidate an already-deployed image if the
+merge touches a watched path.

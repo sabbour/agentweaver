@@ -1,5 +1,31 @@
 # Tank — History (Summarized)
 
+## 2026-07-16 (later same day) — P0 regression from v0.9.68 session-store flip → emergency revert (v0.9.69)
+
+**What happened:** The `EnableSessionStore=true`/`InfiniteSessions=true` flip below (v0.9.68) caused
+a live P0 within minutes of deploy: every new operator-assistant run failed with
+`System.InvalidOperationException: Session error: Execution failed: Error: database is locked`.
+
+**Root cause:** `RunTurnAsync` creates a brand-new Copilot SDK session on **every turn** (calls
+`agent.CreateSessionAsync()`, never resumes). With the session store on, every turn of every
+concurrent conversation in a pod hammered the same pod-local SQLite session-store file —
+concurrent-write contention. This means the "one-shot ephemeral containers only" framing from
+github/copilot-sdk#1814 was incomplete: any workload creating many concurrent fresh sessions
+against one local SQLite file hits this, not just one-shot containers. My original architectural
+note (below) was wrong for this agent specifically.
+
+**Fix:** Reverted `EnableSessionStore`/`InfiniteSessions` to `false`/disabled in
+`OperatorAssistantAgent.BuildSessionConfig`, with an updated code comment recording the real
+mechanism. Committed directly to main (`ee1c8044`, no worktree — P0), shipped as v0.9.69.
+
+**Next queued (not started by me — do not pick up without checking decisions.md first):**
+Implement real SDK session resumption in `RunTurnAsync` (resume the deterministic
+`SessionId=agentweaver-operator-{conversationId}` on turn 2+ instead of always calling
+`CreateSessionAsync()`, mirroring `CopilotAIAgent.ResumeSessionAsync`). Only after that lands and
+is tested should the session store be re-enabled for this agent.
+
+---
+
 ## 2026-07-16 — Assistant session recall and backend endpoint
 
 **Task:** Implement durable rehydration for operator-assistant conversations.
@@ -20,101 +46,13 @@
 
 ---
 
-## 2026-06-29T07:22Z — Sandbox diagnosis: 40001 serialization race root cause + Postgres advisory lock fix
+## 2026-06-29 through 2026-07-13 — ARCHIVED SUMMARY
 
-Diagnosed "no SandboxClaims" incident: two API pods + one worker simultaneously recovering orphaned run `13f48ed2`. Both attempted to write RunEvents → **Postgres 40001 serialization conflict**. Run was in `drafting-spec` (no checkpoint) → coordinator failed before SandboxClaim step. **RC-1/RC-2 fix deployed:** `StartupRecoveryLeader` using `pg_try_advisory_lock(0x4157524356525900)` ensures exactly one pod wins and runs `WorkflowRestartService`; non-leaders skip + log early-exit. SQLite path always acts as leader. Commit `7ccfd1a`, image `c082df5` deployed by Link; zero 40001 errors post-deploy. Tests: 39/39 green.
+Diagnosed and fixed two Postgres/SQLite concurrency issues: (1) startup-recovery race on orphaned runs — Postgres advisory-lock leader election (`StartupRecoveryLeader`, `pg_try_advisory_lock`) ensures exactly one pod recovers, zero 40001 errors post-deploy (commit `7ccfd1a`); (2) coordinator-draft SQLite lock on shared RWX Azure Files — root cause is Azure Files' missing POSIX fcntl support (not a WAL/busy_timeout issue), fixed via per-run temp directory instead of shared workspace path. Removed static MCP API key (OAuth-only paths). Delivered Feature 019 token-usage backend (org/project/run/turn hierarchy, dual-backend store, MCP tools) and an MCP route-parameter escaping security fix (86 paths, admin-bypass removal across 4 endpoint files). Delivered three-issue parallel fixes (#175, #174), owned #183 lockout revision after Morpheus was rejected (41/41 tests), shipped v0.7.11/v0.7.12 new-project dialog releases, delivered the dependency-base propagation fix (rubber-duck GO-WITH-CHANGES + clean code review, shipped in v0.9.19-rc1), delivered #187 Build & Test gate design (preview-timing conflict left open for rubber-duck), and closed out #213 as stale while filing #305 for revision-child branch inheritance.
 
-**Also this session:** Removed static MCP API key (branch `020-remove-static-mcp-key`, not yet deployed). Deleted `McpApiKeyRegistry`, removed path-1 static key → Auth:User from `McpBearerTokenMiddleware`. MCP now accepts OAuth paths only; internal `Auth__ApiKey` kept for loopback. Branch prep: 81 passed / 29 skipped / 0 failed.
-
----
-
-## 2026-06-29T09:00Z — SQLite lock on coordinator-draft diagnosis + temp-dir fix
-
-Diagnosed coordinator-draft SQLite lock: `CopilotCoordinatorSpecDrafter.DraftAsync` calls `SetupAsync(workingDirectory: input.RepositoryPath)` — two API pods, shared `/workspace/{projectId}` on RWX Azure Files PVC. **Azure Files does not implement POSIX fcntl locks** → SQLite database-is-locked. WAL/busy_timeout cannot work at OS level; it's filesystem incompatibility.
-
-**Fix (Option B):** Change `CopilotCoordinatorSpecDrafter` to use per-run temp directory:
-```csharp
-var draftDir = Path.Combine(Path.GetTempPath(), "coordinator-draft", input.RunId);
-Directory.CreateDirectory(draftDir);
-await agent.SetupAsync(
-    workingDirectory: draftDir,           // ← emptyDir per-pod, no sharing
-    repositoryPath: input.RepositoryPath, // ← policy eval still uses real path
-    userId: input.SubmittingUser);        // ← fix per-user scoping too
-// cleanup draftDir in finally
-```
-
-**Not the cause:** MCP key removal (branch not deployed), 401 auth (Copilot client OK), kata capacity (healthy). **Missing userId in draft:** Expected; installation token fallback works. Should fix for per-user Copilot scoping.
+**Key learnings:** Postgres advisory locks (`pg_try_advisory_lock`) are the reliable pattern for single-leader election across replicas; SQLite + Azure Files RWX PVC is fundamentally incompatible (no POSIX fcntl) — always use per-pod temp/emptyDir for SQLite-backed work; durable persisted stores (not in-process aggregation) are required for any multi-replica usage/metrics tracking; MCP path traversal must be closed via consistent URI-escaping at the route-parameter level.
 
 ---
-
-## 2026-06-29T14:30–17:00Z — Feature 019 backend + Security fixes (Phase 2-3 delivery)
-
-**Timeline:** Parallel to Morpheus/security work
-
-**Scope:** Token usage backend (Feature 019 Phase 2-3), MCP route escaping security fix
-
-**Deliverables:**
-
-1. **Token usage backend stack (Feature 019, Phase 2-3):** Complete backend implementation of AIC and token monitoring.
-   - **Table:** `token_usage_records` with org/project/run/turn hierarchy
-   - **Dual-backend store:** SQLite (dev), EF (prod)
-   - **Projection:** Background service consuming `agent.turn.usage` events from event stream
-   - **API endpoints:** Four-level hierarchy (org/project/run/turn) with time-range aggregation
-   - **Metrics extension:** Registered into MetricsService
-   - **MCP tools:** Token usage tools wired into MCP
-   
-   All data served from persistent store; no client-side aggregation.
-
-2. **MCP route parameter escaping (Security fix #3):** URI-escaped 86 MCP tool API paths.
-   - **Routes escaped:** project_id, task_id, run_id, entry_id, decision_id, agent_name, memory_id
-   - **Tools affected:** Backlog, Coordinator, Memory, Project, Run, Team, Workflow, Workspace
-   - **Admin bypass removal:** Hardcoded `string.Equals(caller.User, "admin", ...)` removed from ProjectEndpoints, TeamEndpoints, RunEndpoints, BacklogEndpoints
-   - **Validation:** Grep confirmed no remaining hardcoded admin comparisons; all builds pass
-
-**Key learnings:**
-- Token data must be persisted in a durable store for multi-replica deployment (no in-process aggregation).
-- Four-level hierarchy (org/project/run/turn) matches operator mental model for cost allocation and usage visibility.
-- MCP path traversal vulnerability closed by consistent URI-escaping on all route parameters.
-- Admin bypass removal requires endpoint-by-endpoint audit (grep-validated).
-
-**Testing & validation:**
-- Build: 0 errors, 0 warnings
-- Feature 019 backend tests: all passing
-- MCP escaping: path-traversal test coverage added, all tests green
-- Security audit: hardcoded admin removal validated
-
-**Build:** 0 errors, 0 warnings.
-
-## 2026-07-05T13:17:12-07:00 — Three-issue parallel fixes
-
-Tank completed backend fixes for #175 and #174. #175 adds newly saved workflow ids to `AllowedWorkflowIds` before registry sync and improves reload diagnostics; PR #177 approved by Smith. #174 emits approval-resolved SSE events on all resolution paths and improves request resolution diagnostics; PR #182 approved by Smith and Seraph. No PRs merged; coordinator validates on staging first.
-
-## 2026-07-05T14:16:02-07:00 — Issue #183 lockout revision owner
-Tank owned the #183 revision after Morpheus was locked out by Smith's rejection. Tank added dual-path workflow-selection response capture, final-message-only regression tests, `InternalsVisibleTo`, and Smith's stripped-text last-resort parse suggestion; build was clean and WorkflowSelect passed 41/41.
-
-
-## 2026-07-05T20:40:00-07:00 — v0.7.11 release batch
-Redesigned Create blank/Create from GitHub dialogs and added `POST /api/blueprints/suggest` with GitHub repo analysis and graceful Templates fallback. Feature is merged into `release/v0.7.0` and deployed to staging as `v0.7.11`.
-
-
-## 2026-07-06T22:05:00Z — v0.7.12 new-project dialogs v2
-
-Delivered shared-base refactor for Blank and From-GitHub creation dialogs: one shell, shared Blueprint panel/tabs, Templates parity, fixed blank right-column scrolling/clipping, wired View all templates, single footer No-blueprint affordance, personal repos via user-first GitHub accounts/repos, and Suggested-only recommendation view. Commits `112addc`, `b066eed`, `0e7d92f`; merged to `release/v0.7.0` and deployed to staging.
-
-## 2026-07-11T00:00:00Z — Dependency-base propagation fix shipped to staging
-
-Implemented the backend dependency-base propagation fix after rubber-duck GO-WITH-CHANGES and code-review CLEAN: inclusion now trusts committed branch/tree validity instead of run.Diff, integration branches must contain satisfied dependency heads before dependent dispatch, and final assembly uses the same inclusion authority. Link included the change in local-only staging release v0.9.19-rc1 for Ahmed validation.
-
-📌 Team update (2026-07-10T05:55:00-07:00): #207 roots in 28 unbounded non-idempotent final Scribes executing in the API. The first design was rejected; Tank is locked out from revision and Morpheus owns the independent redesign. — decided by Rubber-duck and Seraph
-
-
-## 2026-07-12T06:33:29-07:00 — #187 Build & Test gate design
-
-Delivered `files/design-187.md`, proposing a shared gate runner for consistent Build & Test gate execution and policy handling. Preserved an unresolved design conflict for rubber-duck: approved-only preview activation contradicts the North Star requirement that preview be available at `awaiting_review`. Preview timing is not final until that criterion is resolved.
-
-
-## 2026-07-13T23:59:00-07:00 — E2E validation
-#213 was confirmed stale and closed. Run `18cdc7ce-6649-4b60-b001-17c317bcd281` confirmed parallelism works; stale outcome-plan UI behavior maps to #290. Filed #305 for revision children inheriting a prior sibling worktree branch instead of their own authoritative branch.
 
 ## 2026-07-14T02:35:00-07:00 — Batch merge: #270 revalidation, #175 workflow save, live-run diagnoses
 Scribe merged inbox notes: #270 revalidation confirms Kata bwrap root-cause fix holds; #175 workflow editor save-path fix; Hank/Skyler run-order and arrow-occlusion UI findings closed as non-bugs; #211 AgentHost sandbox fix live-validated; #226 human-steer redirect drop at assembly review fixed.

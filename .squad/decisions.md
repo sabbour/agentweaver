@@ -1,5 +1,118 @@
 # Squad Decisions
 
+## 2026-07-16T17-19-26-07-00 — v0.9.68 P0 regression, emergency revert (v0.9.69), and stale-image fix (v0.9.70)
+
+**Status**: RESOLVED & DEPLOYED (v0.9.70 live on staging, 4/4 images provenance-verified, E2E smoke passed).
+**By**: Tank (root cause + hotfix), Link (deploy + provenance fix), Coordinator (releases + live verification)
+**Refs**: `ee1c8044` (P0 hotfix), `4c276761` (docs-landing merge), `59a90c14` (v0.9.70 version bump)
+
+### What happened
+
+v0.9.68 (previous entry above) shipped Tank's durable rehydration fix alongside re-enabling the
+Copilot SDK's native session store (`EnableSessionStore`/`InfiniteSessions`) for
+`OperatorAssistantAgent`, on the theory — per github/copilot-sdk#1814 — that the SDK's
+"database is locked" issue was scoped to one-shot ephemeral sandbox containers only, and therefore
+safe to re-enable for a long-lived in-process agent.
+
+That theory was **wrong for this agent** and caused a live P0 within minutes of the v0.9.68 deploy:
+every new assistant run immediately failed with
+`System.InvalidOperationException: Session error: Execution failed: Error: database is locked`.
+
+### Root cause
+
+`OperatorAssistantAgent.RunTurnAsync` creates a **brand-new Copilot SDK session on every turn**
+(calls `agent.CreateSessionAsync()`, never resumes an existing session — no
+`ResumeSessionAsync`-equivalent path exists for this agent). With `EnableSessionStore` turned on,
+every turn of every concurrent conversation in a pod hammers the **same pod-local SQLite
+session-store file** with a fresh session-create, causing lock contention.
+
+This means the "one-shot ephemeral containers only" framing from copilot-sdk#1814 was
+**incomplete**: any workload that creates many concurrent fresh SDK sessions against one local
+SQLite file hits this, not just one-shot sandboxed containers. The real qualifying condition is
+"does this agent resume sessions or always create new ones," not "is this a one-shot pod."
+
+### Fix (v0.9.69 hotfix)
+
+Emergency-reverted `EnableSessionStore`/`InfiniteSessions` back to `false`/disabled in
+`OperatorAssistantAgent.BuildSessionConfig`
+(`packages/Agentweaver.AgentRuntime/OperatorAssistantAgent.cs`), with an updated code comment
+recording the real mechanism (quoted below) so the mistake isn't repeated:
+
+> `#1814 / v0.9.68 REGRESSION (reverted)`: EnableSessionStore/InfiniteSessions were briefly
+> flipped to true here on the theory that #1814's "database is locked" only affects
+> one-shot/ephemeral sandbox workloads, not a long-lived in-process agent. That theory was
+> wrong for THIS agent: RunTurnAsync creates a brand-new SDK session on EVERY turn (it never
+> resumes one), so enabling the store means every turn, across every concurrent conversation in
+> this pod, hammers the SAME pod-local SQLite session file — exactly the concurrent-write
+> contention #1814 describes. Reverted to false/disabled. Re-enabling this safely would require
+> first switching RunTurnAsync to actually resume the deterministic SessionId across turns (like
+> CopilotAIAgent.ResumeSessionAsync) — out of scope for this hotfix. Durable rehydration in
+> AssistantRunService (from the persisted RunEvents log) is unaffected and remains the correct
+> fix for cross-pod/idle-timeout/restart continuity.
+
+Committed **directly to `main`** (commit `ee1c8044`) — no worktree — per P0 emergency-fix
+convention. Shipped as v0.9.69.
+
+### Separate finding: two false rollout-failure alarms (operational learning, not a regression)
+
+`scripts/aks/30-deploy.ps1` reported "API deployment rollout failed" (exit 1) **twice** in this
+session — once deploying v0.9.69, once again deploying v0.9.70. Both were **false alarms**:
+`kubectl` events showed transient `FailedScheduling` (insufficient CPU / untolerated taints on
+some nodes) delaying new-pod scheduling by roughly 1-2 minutes beyond the script's wait timeout,
+compounded by normal image-pull time. Pods reached `1/1 Running/Ready` shortly after, and a manual
+`kubectl rollout status` re-check confirmed success both times. This is **not a code regression** —
+it's a cluster capacity/scheduling-latency-vs-script-timeout mismatch.
+
+**📌 Reusable operational pattern:** when `30-deploy.ps1` (or `.sh`) reports rollout failure, do
+NOT assume a real break — first manually check `kubectl get pods` / `kubectl rollout status`
+before escalating. The deploy script's wait timeout is tighter than worst-case pod-scheduling +
+image-pull latency under transient node pressure; a script exit-1 here is a known false-failure
+mode, not proof the deployed image/config is broken.
+
+### Separate finding: stale-image regression from an unrelated docs merge (#251 failure mode, caught and fixed)
+
+Per explicit user request, the long-lived local branch `merge-docs-landing-main` (docs landing
+page redesign: VitePress theme, `LandingWorkflowDemo.tsx`, `deploy-docs.yml`) was merged into
+`main` via `git merge --no-ff` (commit `4c276761`). This merge touched `apps/web/src` paths
+**after** the v0.9.69 images had already been built from an earlier commit, which made the
+already-deployed `agentweaver-frontend:v0.9.69` image provenance-stale.
+`scripts/aks/25-verify-image-provenance.ps1` correctly caught this: "STALE IMAGE (this is exactly
+the #251 failure mode)". Fixed by bumping to v0.9.70 (commit `59a90c14`) and rebuilding **only**
+the frontend image; api/mcp/agent-host were correctly retagged as unchanged against the new HEAD.
+
+**Why this matters as a pattern:** merging unrelated feature branches into `main` after images are
+already built — even completely disjoint work like a docs redesign — can silently invalidate the
+already-deployed image's provenance if the merge touches any watched path. Provenance verification
+caught it here exactly as designed (#251 precedent); the reusable takeaway is to run
+`25-verify-image-provenance` after **any** merge to `main` that lands after a build, not only after
+merges that look feature-related to the deployed service.
+
+### Final verification (v0.9.70)
+
+- All 4 images (api, frontend, mcp, agent-host) rebuilt/retagged as appropriate and confirmed
+  **4/4 provenance-verified** against the correct source commit, with no drift in watched paths.
+- Live E2E smoke test via real API calls: `POST /api/assistant/runs` then
+  `POST /api/assistant/runs/{id}/messages` for a second turn — both turns succeeded.
+- Log line `"Rehydrated operator run ... from durable storage (2 history messages restored)"`
+  confirmed in production, proving the v0.9.68 durable-rehydration feature (the correct, unaffected
+  part of that release) works live.
+- `kubectl logs` grep for `"database is locked"` / `"InvalidOperationException"` / `"Session
+  error"` across the trailing 5 minutes returned **zero matches** — P0 regression confirmed
+  resolved.
+- Test run cleaned up via `DELETE /api/runs/{id}`.
+
+### Outstanding follow-up (queued, not started)
+
+Implement **real SDK session resumption** for `OperatorAssistantAgent`: change `RunTurnAsync` so
+turn 2+ resumes the existing SDK session (deterministic `SessionId=agentweaver-operator-
+{conversationId}`, already computed in `BuildSessionConfig`) instead of always calling
+`CreateSessionAsync()`, mirroring `CopilotAIAgent.ResumeSessionAsync`. Only once that lands and is
+tested should `EnableSessionStore`/`InfiniteSessions` be safely re-enabled again for
+`OperatorAssistantAgent`. This is the next real piece of work on this thread — assign to Tank when
+picked up; do not re-enable the session store before the resumption fix ships.
+
+---
+
 ## 2026-07-16T19-15-00Z — Assistant session persistence and UI — v0.9.68 release
 
 **Status**: MERGED & DEPLOYED (v0.9.68 live on staging)
