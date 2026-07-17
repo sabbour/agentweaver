@@ -160,6 +160,7 @@ public sealed class CatalogConformanceSnapshotTests
                 workflowRegistry: new WorkflowRegistry(),
                 generator: null!,
                 workflowGenerator: null!,
+                skillDefaults: null!,
                 logger: NullLogger<BlueprintService>.Instance);
             var blueprint = new Blueprint(
                 "Legacy Blueprint",

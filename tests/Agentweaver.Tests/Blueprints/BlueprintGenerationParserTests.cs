@@ -241,7 +241,7 @@ public sealed class BlueprintGenerationParserTests
             casting: null!,
             projectStore: null!,
             sandboxPolicyStore: null!,
-            workflowRegistry: new WorkflowRegistry(catalog),
+            workflowRegistry: new WorkflowRegistry(new CatalogConformanceSnapshot(catalog)),
             generator: new StubBlueprintGenerator(raw),
             workflowGenerator,
             skillDefaults: null!,
