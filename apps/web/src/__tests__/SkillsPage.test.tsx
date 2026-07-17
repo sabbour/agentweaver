@@ -3,7 +3,7 @@ import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SkillsPage } from '../pages/SkillsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import {
   afterEach,
@@ -49,6 +49,24 @@ function renderPage(projectId = 'proj-001') {
   return render(
     <Wrapper>
       <MemoryRouter initialEntries={[`/projects/${projectId}/skills`]}>
+        <Routes>
+          <Route path="/projects/:projectId/skills" element={<SkillsPage />} />
+        </Routes>
+      </MemoryRouter>
+    </Wrapper>,
+  );
+}
+
+function ProjectNavigation() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate('/projects/proj-002/skills')}>Navigate to project B</button>;
+}
+
+function renderNavigablePage() {
+  return render(
+    <Wrapper>
+      <MemoryRouter initialEntries={['/projects/proj-001/skills']}>
+        <ProjectNavigation />
         <Routes>
           <Route path="/projects/:projectId/skills" element={<SkillsPage />} />
         </Routes>
@@ -417,6 +435,32 @@ describe('SkillsPage — blueprint defaults', () => {
     expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledWith('proj-001', 'blueprint-software-development', 'old-digest');
   });
 
+  it('preserves the last preview when an invalid 422 response has no replacement preview', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    const preview = makeDefaultsPreview({ digest: 'still-visible', assignments: [{
+      role_id: 'frontend-engineer',
+      agent_name: 'Trinity',
+      skill_name: 'ui-accessibility',
+      action: 'create',
+    }] });
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(preview);
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockRejectedValue(new ApiError(422, JSON.stringify({
+      outcome: 'invalid',
+      errors: ['The selected role must be confirmed.'],
+      preview: null,
+    })));
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+
+    await waitFor(() => expect(screen.getByText(/The selected role must be confirmed/)).toBeTruthy());
+    expect(screen.getByText('ui-accessibility')).toBeTruthy();
+    expect(screen.getByText(/preview still-visible/)).toBeTruthy();
+    expect(screen.queryByText(/This preview is stale/)).toBeNull();
+    expect(screen.queryByText('Preview latest defaults')).toBeNull();
+  });
+
   it('applies a matching preview only after sending its blueprint id and digest', async () => {
     vi.mocked(apiClient.listSkills).mockResolvedValue([]);
     const preview = makeDefaultsPreview({ digest: 'matching-digest' });
@@ -502,10 +546,11 @@ describe('SkillsPage — blueprint defaults', () => {
     await waitFor(() => expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy());
     await waitFor(() => expect(apiClient.listSkills).toHaveBeenCalledTimes(2));
     expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByText('Version 2026.07.16')).toBeNull();
   });
 
-  it('does not let a late dismissed stale response overwrite a reopened dialog', async () => {
+  it('renders a late dismissed 422 response in the reopened dialog', async () => {
     vi.mocked(apiClient.listSkills).mockResolvedValue([]);
     const preview = makeDefaultsPreview();
     const firstApply = deferred<ApplyBlueprintSkillDefaultsResponse>();
@@ -523,13 +568,119 @@ describe('SkillsPage — blueprint defaults', () => {
 
     firstApply.reject(new ApiError(422, JSON.stringify({
       outcome: 'invalid',
-      errors: ['Late stale response.'],
+      errors: ['Late validation response.'],
       preview: makeDefaultsPreview({ can_apply: false, errors: ['Late preview blocker.'] }),
     })));
 
-    await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
-    expect(screen.queryByText(/Late stale response/)).toBeNull();
-    expect(screen.queryByText(/Late preview blocker/)).toBeNull();
+    await waitFor(() => expect(screen.getByText(/Late validation response/)).toBeTruthy());
+    expect(screen.getByText('Late preview blocker.')).toBeTruthy();
+    expect(screen.getByText('create')).toBeTruthy();
+  });
+
+  it('renders a late dismissed 409 response in the reopened dialog and requires re-preview', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    const preview = makeDefaultsPreview({ digest: 'stale-digest' });
+    const firstApply = deferred<ApplyBlueprintSkillDefaultsResponse>();
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(preview);
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockReturnValue(firstApply.promise);
+    const user = userEvent.setup();
+
+    renderPage();
+    const trigger = await screen.findByRole('button', { name: 'Preview blueprint defaults' });
+    await user.click(trigger);
+    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+    await user.keyboard('{Escape}');
+    await user.click(trigger);
+    await screen.findByText(/This request will continue if you close this dialog/);
+
+    firstApply.reject(new ApiError(409, JSON.stringify({
+      outcome: 'stale',
+      errors: ['The project changed after this preview was generated.'],
+      preview: makeDefaultsPreview({
+        can_apply: false,
+        errors: ['Late stale preview blocker.'],
+        assignments: [{
+          role_id: 'frontend-engineer',
+          agent_name: 'Trinity',
+          skill_name: 'ui-accessibility',
+          action: 'blocked',
+        }],
+      }),
+    })));
+
+    await waitFor(() => expect(screen.getByText(/This preview is stale/)).toBeTruthy());
+    expect(screen.getByText('ui-accessibility')).toBeTruthy();
+    expect(screen.getByText('Late stale preview blocker.')).toBeTruthy();
+    expect(screen.getByText('blocked')).toBeTruthy();
+    expect(screen.getByText('Preview latest defaults')).toBeTruthy();
+  });
+
+  it('isolates a late project A success from project B while allowing project B to apply', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockImplementation((id) => Promise.resolve(makeProject({ project_id: id })));
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(makeDefaultsPreview());
+    const projectAApply = deferred<ApplyBlueprintSkillDefaultsResponse>();
+    const projectBApply = deferred<ApplyBlueprintSkillDefaultsResponse>();
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockImplementation((id) =>
+      id === 'proj-001' ? projectAApply.promise : projectBApply.promise,
+    );
+    const user = userEvent.setup();
+
+    renderNavigablePage();
+    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Preview blueprint defaults' }));
+    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+    expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledWith(
+      'proj-002',
+      'blueprint-software-development',
+      'preview-digest-1',
+    );
+
+    const projectBLoadsBeforeAResult = vi.mocked(apiClient.listSkills).mock.calls
+      .filter(([id]) => id === 'proj-002').length;
+    projectAApply.resolve({ outcome: 'applied', errors: [], preview: makeDefaultsPreview() });
+
+    await waitFor(() => expect(vi.mocked(apiClient.listSkills).mock.calls
+      .filter(([id]) => id === 'proj-002').length).toBe(projectBLoadsBeforeAResult));
+    expect(screen.queryByText('Blueprint defaults applied.')).toBeNull();
+
+    projectBApply.resolve({ outcome: 'applied', errors: [], preview: makeDefaultsPreview() });
+    await waitFor(() => expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy());
+    await waitFor(() => expect(vi.mocked(apiClient.listSkills).mock.calls
+      .filter(([id]) => id === 'proj-002').length).toBe(projectBLoadsBeforeAResult + 1));
+  });
+
+  it('isolates a late project A error from project B', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.getProject).mockImplementation((id) => Promise.resolve(makeProject({ project_id: id })));
+    vi.mocked(apiClient.previewBlueprintSkillDefaults).mockResolvedValue(makeDefaultsPreview());
+    const projectAApply = deferred<ApplyBlueprintSkillDefaultsResponse>();
+    vi.mocked(apiClient.applyBlueprintSkillDefaults).mockReturnValue(projectAApply.promise);
+    const user = userEvent.setup();
+
+    renderNavigablePage();
+    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
+    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    const projectBLoadsBeforeAResult = vi.mocked(apiClient.listSkills).mock.calls
+      .filter(([id]) => id === 'proj-002').length;
+    projectAApply.reject(new ApiError(422, JSON.stringify({
+      outcome: 'invalid',
+      errors: ['Project A validation error.'],
+      preview: null,
+    })));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText(/Project A validation error/)).toBeNull();
+    expect(screen.queryByText('Blueprint defaults applied.')).toBeNull();
+    expect(vi.mocked(apiClient.listSkills).mock.calls
+      .filter(([id]) => id === 'proj-002').length).toBe(projectBLoadsBeforeAResult);
   });
 
   it('ignores a late preview failure after a newer preview has completed', async () => {

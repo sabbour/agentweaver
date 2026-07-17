@@ -164,6 +164,37 @@ describe('AgentweaverApiClient AbortSignal plumbing', () => {
       expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.test/api/projects/project%2F1/skill-defaults/apply');
       expect(fetchMock.mock.calls[1][1].body).toBe('{"blueprint_id":"blueprint-software-development","digest":"preview-1"}');
     });
+
+    it('preserves the backend 422 invalid and 409 stale apply contracts', async () => {
+      const invalid = {
+        outcome: 'invalid',
+        errors: ['A confirmed team is required.'],
+        preview: null,
+      };
+      const stale = {
+        outcome: 'stale',
+        errors: ['Preview digest is stale.'],
+        preview: null,
+      };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 422,
+          text: async () => JSON.stringify(invalid),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          text: async () => JSON.stringify(stale),
+        });
+      vi.stubGlobal('fetch', fetchMock);
+      const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+      await expect(client.applyBlueprintSkillDefaults('project-1', 'blueprint-1', 'digest-1'))
+        .rejects.toMatchObject({ status: 422, payload: invalid });
+      await expect(client.applyBlueprintSkillDefaults('project-1', 'blueprint-1', 'digest-2'))
+        .rejects.toMatchObject({ status: 409, payload: stale });
+    });
   });
 
   it('forwards the signal from getProjectMetrics to fetch', async () => {
