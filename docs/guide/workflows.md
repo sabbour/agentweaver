@@ -14,10 +14,10 @@ Agentweaver ships seven built-in workflows:
 |---|---|
 | `software-delivery` | Code changes, new features, refactors, and migrations. Full delivery pipeline from spec to merged code. |
 | `bug-fix` | Targeted investigation and fix for a specific bug report or regression. Includes root-cause analysis. |
+| `code-review` | Automated review of a diff, branch, or pull request. Produces a structured review with categorized findings. |
 | `content-authoring` | Drafting and editing docs, blog posts, READMEs, release notes, and other written content. |
 | `pm-discovery` | Product discovery — user research synthesis, spec drafting, requirements analysis, and opportunity framing. |
 | `incident-response` | Live incident investigation, mitigation guidance, and postmortem drafting with full run tracing. |
-| `infra-ops` | Infrastructure operations, diagnostics, and safe remediation planning. |
 | `agent-evaluation` | Testing and evaluating agent outputs against criteria. Useful for validating agent behavior and quality. |
 
 ::: tip Automatic workflow matching
