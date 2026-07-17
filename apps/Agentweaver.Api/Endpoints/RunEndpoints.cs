@@ -1651,6 +1651,11 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     var targetRun = targetRunId == id
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
+    if (targetRun is null)
+        return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, targetRun))
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+
     // #349: only apply the run-active guard when there is a genuinely backend-tracked PENDING
     // request to protect. The frontend optimistically renders one HITL card per approval-gated
     // tool.call, but the agent SDK invokes the permission callback (which registers the approval
@@ -1745,6 +1750,11 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     var targetRun = targetRunId == id
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
+    if (targetRun is null)
+        return Results.NotFound();
+    if (!EndpointHelpers.IsOwner(httpContext, targetRun))
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+
     // #349: mirror the tool-approvals guard — only reject on run lifecycle when a genuinely
     // pending backend request is being protected. A phantom/Unknown request_id (posted from an
     // optimistic HITL card for a tool.call that has not yet reached the sequential permission

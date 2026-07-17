@@ -19,18 +19,24 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     // runId → requestId → terminal state
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ToolApprovalRequestState>> _resolved = new();
 
-    // Run-scoped allowlist: runId → set of tool-scoped policy keys.
-    private readonly ConcurrentDictionary<string, HashSet<string>> _runScopedAllowlist = new();
+    // Run-scoped allowlist: runId → server-derived owner/tool/risk policies.
+    private readonly ConcurrentDictionary<string, HashSet<ApprovalPolicy>> _runScopedAllowlist = new();
 
-    // Always-allowed policies: set of tool-scoped keys that survive across runs.
+    // Always-allowed policies survive across runs, but only for the same resolved owner.
     // TODO: persist this to the database so always-allowed policies survive process restarts.
-    private readonly HashSet<string> _alwaysAllowedPolicies = [];
+    private readonly HashSet<ApprovalPolicy> _alwaysAllowedPolicies = [];
     private readonly object _alwaysLock = new();
+    private readonly IToolApprovalOwnerResolver? _ownerResolver;
 
     // childRunId → parentRunId — populated by RegisterParentRun
     private readonly ConcurrentDictionary<string, string> _parentRuns = new();
 
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
+
+    public InMemoryToolApprovalGate(IToolApprovalOwnerResolver? ownerResolver = null)
+    {
+        _ownerResolver = ownerResolver;
+    }
 
     /// <inheritdoc />
     public async Task<bool> WaitForApprovalAsync(
@@ -84,31 +90,30 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
 
         if (resolved && scope != ApprovalScope.Once)
         {
-            // Look up the tool+url context that was stored by SetRequestContext.
             if (_requestContext.TryGetValue(runId, out var runCtx) &&
-                runCtx.TryGetValue(requestId, out var ctx))
+                runCtx.TryGetValue(requestId, out var ctx) &&
+                !string.IsNullOrWhiteSpace(ctx.ToolName) &&
+                OwnerOf(runId) is { } owner)
             {
-                // Approval policies deliberately apply to the tool, not one URL. Fetch
-                // requests commonly vary their path and query string within a single run.
-                var policyKey = PolicyKey(ctx.ToolName, null);
+                var policy = new ApprovalPolicy(
+                    owner,
+                    ctx.ToolName,
+                    ToolApprovalPolicySemantics.RiskFor(ctx.ToolName));
 
-                if (scope == ApprovalScope.Run)
+                if (scope is ApprovalScope.Run or ApprovalScope.Tool)
                 {
-                    AddRunPolicy(runId, policyKey);
-                    // Propagate to parent so siblings see the policy via IsAutoApproved.
-                    if (_parentRuns.TryGetValue(runId, out var parentId))
-                        AddRunPolicy(parentId, policyKey);
+                    AddRunPolicy(runId, policy);
+                    if (_parentRuns.TryGetValue(runId, out var parentId) &&
+                        OwnerOf(parentId) is { } parentOwner &&
+                        string.Equals(parentOwner, owner, StringComparison.Ordinal))
+                    {
+                        AddRunPolicy(parentId, policy);
+                    }
                 }
-                else if (scope == ApprovalScope.Tool)
+                else if (scope == ApprovalScope.Always &&
+                         ToolApprovalPolicySemantics.IsAlwaysEligible(ctx.ToolName))
                 {
-                    // Tool-scoped: approve this tool for any URL this run.
-                    AddRunPolicy(runId, policyKey);
-                    if (_parentRuns.TryGetValue(runId, out var parentId))
-                        AddRunPolicy(parentId, policyKey);
-                }
-                else if (scope == ApprovalScope.Always)
-                {
-                    lock (_alwaysLock) _alwaysAllowedPolicies.Add(policyKey);
+                    lock (_alwaysLock) _alwaysAllowedPolicies.Add(policy);
                 }
             }
         }
@@ -122,22 +127,29 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     /// <inheritdoc />
     public bool IsAutoApproved(string runId, string toolName, string? url)
     {
-        var key = PolicyKey(toolName, url);
-        var toolKey = PolicyKey(toolName, null); // tool-scoped wildcard (any URL)
+        if (string.IsNullOrWhiteSpace(toolName) || OwnerOf(runId) is not { } owner)
+            return false;
 
-        // Check always-allowed first (cheaper lookup with a small set).
-        lock (_alwaysLock)
+        var risk = ToolApprovalPolicySemantics.RiskFor(toolName);
+        if (ToolApprovalPolicySemantics.IsAlwaysEligible(toolName))
         {
-            if (_alwaysAllowedPolicies.Contains(key)) return true;
-            if (_alwaysAllowedPolicies.Contains(toolKey)) return true;
+            lock (_alwaysLock)
+            {
+                if (_alwaysAllowedPolicies.Any(p => PolicyMatches(p, owner, toolName, risk)))
+                    return true;
+            }
         }
 
-        // Check run-scoped allowlist for this run.
-        if (IsInRunAllowlist(runId, key, toolKey)) return true;
+        if (IsInRunAllowlist(runId, owner, toolName, risk))
+            return true;
 
-        // Check parent run's allowlist — a sibling child may have already been approved.
         if (_parentRuns.TryGetValue(runId, out var parentId) &&
-            IsInRunAllowlist(parentId, key, toolKey)) return true;
+            OwnerOf(parentId) is { } parentOwner &&
+            string.Equals(parentOwner, owner, StringComparison.Ordinal) &&
+            IsInRunAllowlist(parentId, parentOwner, toolName, risk))
+        {
+            return true;
+        }
 
         return false;
     }
@@ -205,18 +217,40 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         runResolved[requestId] = state;
     }
 
-    private void AddRunPolicy(string runId, string policyKey)
+    private void AddRunPolicy(string runId, ApprovalPolicy policy)
     {
         var allowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
-        lock (allowlist) allowlist.Add(policyKey);
+        lock (allowlist) allowlist.Add(policy);
     }
 
-    private bool IsInRunAllowlist(string runId, string key, string toolKey)
+    private bool IsInRunAllowlist(string runId, string owner, string toolName, string risk)
     {
         if (!_runScopedAllowlist.TryGetValue(runId, out var allowlist)) return false;
-        lock (allowlist) return allowlist.Contains(key) || allowlist.Contains(toolKey);
+        lock (allowlist)
+            return allowlist.Any(p => PolicyMatches(p, owner, toolName, risk));
     }
 
-    private static string PolicyKey(string toolName, string? url) =>
-        $"{toolName}:{url ?? ""}";
+    private string? OwnerOf(string runId)
+    {
+        try
+        {
+            var owner = _ownerResolver?.GetCanonicalOwner(runId);
+            return string.IsNullOrWhiteSpace(owner) ? null : owner;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool PolicyMatches(
+        ApprovalPolicy policy,
+        string owner,
+        string toolName,
+        string risk) =>
+        string.Equals(policy.Owner, owner, StringComparison.Ordinal)
+        && string.Equals(policy.ToolId, toolName, StringComparison.Ordinal)
+        && string.Equals(policy.RiskSemantics, risk, StringComparison.Ordinal);
+
+    private sealed record ApprovalPolicy(string Owner, string ToolId, string RiskSemantics);
 }
