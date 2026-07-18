@@ -75,9 +75,15 @@ public sealed class CastingService
     private async Task<IProjectTeamMutationLease> BeginTeamMutationAsync(
         Project project,
         CancellationToken ct)
+        => await BeginTeamMutationAsync(project, project.TeamRevision, ct).ConfigureAwait(false);
+
+    private async Task<IProjectTeamMutationLease> BeginTeamMutationAsync(
+        Project project,
+        long expectedRevision,
+        CancellationToken ct)
     {
         var lease = await _projectStore
-            .TryBeginTeamMutationAsync(project.Id, project.TeamRevision, ct)
+            .TryBeginTeamMutationAsync(project.Id, expectedRevision, ct)
             .ConfigureAwait(false);
         return lease ?? throw new TeamMutationConflictException(project.Id.ToString());
     }
@@ -213,7 +219,8 @@ public sealed class CastingService
             ExistingTeamPresent: existingTeamPresent,
             RunId: null,
             Warnings: [],
-            Rationale: template.Description);
+            Rationale: template.Description,
+            TeamRevision: project.TeamRevision);
 
         _proposalStore.Store(projectId, proposal, owner);
 
@@ -370,7 +377,8 @@ public sealed class CastingService
             ExistingTeamPresent: existingTeamPresent,
             RunId: null,
             Warnings: [],
-            Rationale: $"Team manually configured with {proposedMembers.Count} role{(proposedMembers.Count != 1 ? "s" : "")}.");
+            Rationale: $"Team manually configured with {proposedMembers.Count} role{(proposedMembers.Count != 1 ? "s" : "")}.",
+            TeamRevision: project.TeamRevision);
 
         _proposalStore.Store(projectId, proposal, owner);
 
@@ -635,7 +643,8 @@ public sealed class CastingService
             ExistingTeamPresent: existingTeamPresent,
             RunId: runId,
             Warnings: warnings,
-            Rationale: rationale);
+            Rationale: rationale,
+            TeamRevision: project.TeamRevision);
 
         _proposalStore.Store(projectId, proposal, owner);
 
@@ -872,8 +881,14 @@ public sealed class CastingService
             _ => throw new ArgumentException($"Invalid intent '{intent}'. Must be new, augment, or recast.", nameof(intent))
         };
 
-        await using var teamMutation = await BeginTeamMutationAsync(project, ct).ConfigureAwait(false);
+        await using var teamMutation = await BeginTeamMutationAsync(
+            project,
+            proposal.TeamRevision,
+            ct).ConfigureAwait(false);
         var reader = new SquadReader(project.WorkingDirectory);
+        if (reader.TeamExists() != proposal.ExistingTeamPresent)
+            throw new TeamMutationConflictException(project.Id.ToString());
+
         var writer = new SquadWriter(project.WorkingDirectory);
         var registryBefore = reader.ReadRegistry();
         var registryNamesBefore = new HashSet<string>(

@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agentweaver.Domain;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Casting;
 
@@ -57,6 +60,40 @@ public sealed class ScenarioCastingTests : IClassFixture<CastingWebApplicationFa
             ".squad/ directory was not created after confirm.");
         Assert.True(File.Exists(Path.Combine(workingDir, ".squad", "team.md")),
             "team.md was not created after confirm.");
+    }
+
+    [Fact]
+    public async Task ScenarioCast_ConfirmAfterTeamRevisionChanges_ReturnsConflict()
+    {
+        var workingDir = _factory.NewProjectWorkingDirectory();
+        using var client = _factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(client, workingDir);
+
+        using var proposeResponse = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/casting/proposals",
+            new { mode = "scenario", template_id = "quick-software-development" });
+        proposeResponse.EnsureSuccessStatusCode();
+        var proposal = await proposeResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var proposalId = proposal.GetProperty("proposal_id").GetString()!;
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+            var id = ProjectId.Parse(projectId);
+            var project = (await store.GetAsync(id))!;
+            await using var mutation = await store.TryBeginTeamMutationAsync(id, project.TeamRevision);
+            mutation.Should().NotBeNull();
+            await mutation!.CompleteAsync();
+        }
+
+        using var confirmResponse = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/casting/proposals/{proposalId}/confirm",
+            new { });
+
+        confirmResponse.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await confirmResponse.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("code").GetString().Should().Be("team_changed");
+        Directory.Exists(Path.Combine(workingDir, ".squad")).Should().BeFalse();
     }
 
     [Fact]
