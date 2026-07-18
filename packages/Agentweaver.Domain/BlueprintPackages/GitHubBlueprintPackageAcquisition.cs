@@ -9,15 +9,19 @@ public sealed record GitHubBlueprintPackageLocator(
     string? PackageRootPath = null,
     string? Ref = null)
 {
-    private static readonly Regex Name = new(
-        @"\A[A-Za-z0-9](?:[A-Za-z0-9.-]{0,99})\z",
+    private static readonly Regex OwnerName = new(
+        @"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\z",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+    private static readonly Regex RepositoryName = new(
+        @"\A[A-Za-z0-9._-]{1,100}\z",
         RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
     /// <summary>Validates that coordinates identify only a github.com repository and a canonical POSIX path.</summary>
     public void Validate()
     {
-        if (!IsRepositoryName(Owner) || !IsRepositoryName(Repository))
+        if (!IsOwnerName(Owner) || !IsRepositoryName(Repository))
             throw new GitHubBlueprintPackageAcquisitionException(
                 GitHubBlueprintPackageAcquisitionFailure.InvalidLocator,
                 "GitHub owner and repository names are invalid.");
@@ -28,9 +32,11 @@ public sealed record GitHubBlueprintPackageLocator(
                 "GitHub ref is invalid.");
     }
 
+    internal static bool IsOwnerName(string? value) =>
+        value is not null && value.Length <= 39 && OwnerName.IsMatch(value);
+
     internal static bool IsRepositoryName(string? value) =>
-        value is not null && value.Length <= 100 && Name.IsMatch(value)
-        && value[^1] != '.' && value[^1] != '-';
+        value is not null && RepositoryName.IsMatch(value) && value is not "." and not "..";
 }
 
 /// <summary>An immutable Git object snapshot resolved from a requested ref.</summary>

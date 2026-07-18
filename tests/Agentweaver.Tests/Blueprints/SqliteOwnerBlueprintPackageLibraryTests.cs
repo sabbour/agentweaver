@@ -158,6 +158,18 @@ public sealed class SqliteOwnerBlueprintPackageLibraryTests
     }
 
     [Theory]
+    [InlineData("github", ".github")]
+    [InlineData("binary-husky", "gpt_academic")]
+    public void GitHubLocator_AllowsValidRepositoryNaming(string owner, string repository)
+    {
+        var locator = new GitHubBlueprintPackageLocator(owner, repository);
+
+        var validate = locator.Validate;
+
+        validate.Should().NotThrow();
+    }
+
+    [Theory]
     [InlineData("source", "token-service")]
     [InlineData("producer", "password-automation")]
     [InlineData("repository", "https://user@github.com/octo/blueprints")]

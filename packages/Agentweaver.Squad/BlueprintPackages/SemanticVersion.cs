@@ -35,7 +35,7 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
     public static bool TryParse(string? value, out SemanticVersion? version)
     {
         version = null;
-        if (value is null) return false;
+        if (value is null || value.Length > BlueprintPackageLimits.MaximumVersionLength) return false;
         Match match;
         try
         {

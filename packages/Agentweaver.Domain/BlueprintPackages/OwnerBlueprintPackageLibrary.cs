@@ -200,6 +200,13 @@ public static class BlueprintPackageLibraryLimits
         }
     }
 
+    /// <summary>Fixed-width PostgreSQL identity for a canonical version stored in indexed keys.</summary>
+    public static string CanonicalVersionKey(string canonicalVersion)
+    {
+        var normalized = CanonicalSemanticVersion.Normalize(canonicalVersion);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
+    }
+
     /// <summary>SemVer ordering that compares arbitrary-length numeric identifiers without truncation.</summary>
     public static class CanonicalSemanticVersion
     {

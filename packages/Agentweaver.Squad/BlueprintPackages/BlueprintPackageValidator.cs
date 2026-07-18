@@ -111,7 +111,11 @@ public static class BlueprintPackageValidator
         var versionText = package is null ? null : RequiredString(package.Value, "version", "package", errors);
         if (package is not null) RejectUnknown(package.Value, ["id", "version"], "package", errors);
         if (packageId is not null && !IdPattern.IsMatch(packageId)) errors.Add("package.id has an invalid grammar.");
-        if (!SemanticVersion.TryParse(versionText, out var version)) errors.Add("package.version must be SemVer 2.0.0.");
+        SemanticVersion? version = null;
+        if (versionText?.Length > BlueprintPackageLimits.MaximumVersionLength)
+            errors.Add($"package.version exceeds the maximum length of {BlueprintPackageLimits.MaximumVersionLength} characters.");
+        else if (!SemanticVersion.TryParse(versionText, out version))
+            errors.Add("package.version must be SemVer 2.0.0.");
 
         var definitionsElement = RequiredArray(root, "definitions", "manifest", errors);
         var definitions = definitionsElement is null ? [] : ParseDefinitions(definitionsElement.Value, errors);

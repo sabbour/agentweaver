@@ -477,6 +477,24 @@ public sealed class BlueprintPackageContractTests
         result.Errors.Should().Contain(error => error.Contains("container SHA-256 conflicts", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Validate_RejectsVersionBeyondPersistenceLimit()
+    {
+        var version = new string('9', BlueprintPackageLimits.MaximumVersionLength - 3) + ".0.0";
+        var source = CreateDefinitionSource(
+            "blueprint",
+            "engineering",
+            "definitions/blueprints/engineering.json",
+            packageVersion: version);
+
+        var result = BlueprintPackageValidator.Validate(source);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(
+            $"package.version exceeds the maximum length of {BlueprintPackageLimits.MaximumVersionLength} characters.");
+        SemanticVersion.TryParse(version, out _).Should().BeFalse();
+    }
+
     private static BlueprintPackageSource CreateSource(params (string Path, byte[] Bytes)[] payloads)
     {
         var entries = payloads.Where(pair => pair.Path != "manifest.json").Select(pair =>

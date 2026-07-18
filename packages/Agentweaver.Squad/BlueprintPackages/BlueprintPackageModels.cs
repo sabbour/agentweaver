@@ -110,6 +110,7 @@ public static class BlueprintPackageLimits
     public const int MaximumTotalPayloadBytes = 16_777_216;
     public const int MaximumPathLength = 240;
     public const int MaximumIdentifierLength = 64;
+    public const int MaximumVersionLength = 4_096;
     /// <summary>Maximum lexical length of a JSON number before exact canonicalization.</summary>
     public const int MaximumCanonicalNumberTokenLength = 4_096;
     public const int MaximumErrors = 32;
