@@ -2108,3 +2108,12 @@ separately under a simple **Running an individual step** section, without “und
 credentials from local .NET user-secrets before prompting. That unsafe fallback caused the
 incident recorded above and was removed in `75a84f38`; staging credentials now require explicit
 operator input.
+
+---
+
+## 2026-07-18T04:55:22-07:00 — Push workflow restored
+
+**By:** Ahmed Sabbour
+**Decision:** The temporary hold-push directive is lifted. Once work is verified, commit and push
+directly to `origin/main`; no separate push confirmation is needed. This supersedes the
+2026-07-18T02:45:00-07:00 local-commit-only directive.
