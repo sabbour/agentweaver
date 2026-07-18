@@ -165,3 +165,14 @@ rebuilding only the frontend image; api/mcp/agent-host correctly retagged unchan
 `25-verify-image-provenance` after *any* merge to `main` that lands after a build — even a
 disjoint/unrelated merge (docs-only, in this case) can invalidate an already-deployed image if the
 merge touches a watched path.
+
+## 2026-07-18T02:58:30-07:00 — Staging OAuth recovery learning
+
+During the PowerShell reprovisioning of deleted staging `agentweaver-rg`, Link's background agent
+mistakenly auto-resolved LOCAL-DEV GitHub OAuth credentials from .NET user-secrets and wrote them
+to the staging Key Vault. This broke browser OAuth login (not bearer/API access) because staging
+uses a separate OAuth App. The auto-resolve fallback was removed from
+`15-setup-identity.ps1`/`.sh` in `75a84f38`; staging now requires explicit credentials. Correct
+historical Key Vault values were restored as new latest versions, pods restarted, and
+`40-verify.ps1` passed 23/23 with a live redirect at the new staging host. Always treat local
+user-secrets as local-only; never use them as a staging credential fallback.

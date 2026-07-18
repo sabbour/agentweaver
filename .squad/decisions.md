@@ -2009,3 +2009,102 @@ Persistent (`always`) and run-scoped tool approvals authorize only the run's can
 If the run owner cannot be resolved, approval persistence and auto-approval fail closed. Legacy global/unscoped grants authorize nobody, and the former process-wide `GlobalRunId` bucket is not a valid authorization source.
 
 The rejected-fix separation requirement was honored: Tank authored the revision in `.worktrees/fix-assistant-approval-scope`, and Seraph independently reviewed commit `cfcd76c5`. Seraph's verdict was **APPROVE**, with six attack vectors verified: cross-user auto-approval, caller-supplied owner trust, fail-open behavior, warm-pool leakage, parent/child cross-run leakage, and semantics spoofing.
+
+---
+
+## 2026-07-18T02:58:30-07:00 — Staging AKS recovery and GitHub OAuth credential incident
+
+**Status:** Resolved and live-verified.
+**Environment:** `agentweaver-rg` staging, now
+`https://agentweaver.6a5ae3080033ff0001ec6c42.westus2.staging.aksapp.io`.
+
+### Recovery
+
+The staging `agentweaver-rg` environment was found deleted and was reprovisioned using the new
+PowerShell ports of the AKS provisioning workflow (commit `f5053ea3`). During recovery, a
+background Link agent incorrectly wrote LOCAL-DEV's GitHub OAuth App credentials into the staging
+Key Vault. The browser GitHub login flow broke; bearer-token/API access remained unaffected.
+
+### Root cause and correction
+
+The auto-resolve fallback added to `15-setup-identity.ps1` and `.sh` read .NET user-secrets. That
+source is local-development-only and is invalid for staging because the environments use separate
+GitHub OAuth Apps. Commit `75a84f38` removed auto-resolution entirely; staging credentials now
+require explicit operator input at the prompt fallback.
+
+The correct staging credentials were recovered from Key Vault version history by matching the
+`github-client-id` / `github-client-secret` versions timestamped
+`2026-07-14T20:03:46Z` / `2026-07-14T20:03:50Z` to the user-confirmed client ID
+`Ov23liDx3W5jbG4KxA8l`. They were reapplied as the newest secret versions; the incorrect versions
+were retained for audit. This recovery established that the vault had not actually been purged,
+despite `az keyvault list-deleted` showing nothing — an unresolved discrepancy to investigate.
+
+API and worker pods were rollout-restarted. `40-verify.ps1` passed **23/23**, including a live OAuth
+redirect check. The correct OAuth App callback is
+`https://<host>/auth/github/callback`, not `/api/auth/github/callback`; the earlier coordinator
+reminder was corrected after checking `k8s/api-deployment.yaml`.
+
+---
+
+**Merged from inbox file:** `copilot-directive-2026-07-18T02-45-00.md`
+
+### 2026-07-18T02:45:00-07:00: User directive
+**By:** Ahmed Sabbour (via Copilot)
+**What:** Commit work locally to the `main` branch, but do not push to `origin/main` until explicitly
+told to do so. This supersedes the earlier standing convention of pushing directly to `main` after
+verification.
+**Why:** Reduce push conflicts while multiple agents concurrently commit to `main`.
+
+---
+
+**Merged from inbox file:** `copilot-directive-2026-07-18T02-41-57.md`
+
+### 2026-07-18T02:41:57-07:00: User directive
+**By:** Ahmed Sabbour (via Copilot)
+**What:** Use pnpm/npm scripts (`infra:deploy`, `release:images`, `release:deploy`, `dev:web`,
+`dev:api`, and `dev`) as the canonical workflow for AKS build/release/deploy and local development,
+rather than calling `scripts/aks/*.ps1` or `.sh` directly.
+**Why:** User request — captured for team memory.
+
+### Documentation update
+
+Commits `f3663762` and `837b90ff` updated the docs to make
+`npm run infra:deploy`, `release:images`, `release:deploy`, `dev:web`, `dev:api`, and `dev` the
+plainly documented primary workflows. Direct `scripts/aks/*.ps1` / `.sh` use remains documented
+separately under a simple **Running an individual step** section, without “under the hood” or
+“advanced” framing.
+
+---
+
+**Merged from inbox file:** `link-1-cross-platform-package-scripts.md`
+
+## Cross-platform package-script launcher
+
+- **Decision:** Root AKS package scripts call `scripts/run-os-script.mjs`. It runs the `.ps1`
+  counterpart on Windows and the `.sh` counterpart on POSIX, with a Windows fallback to the bash
+  script while a PowerShell port is unavailable.
+- **Rationale:** This preserves the existing paired AKS scripts without changing package managers
+  or requiring callers to select a shell-specific command.
+- **Compatibility:** `dev` and `start` explicitly invoke `pwsh.exe` so a WSL bash invocation uses
+  Windows PowerShell for the intentional Windows/WSL orchestrator.
+
+---
+
+**Merged from inbox file:** `link-powershell-aks-recovery.md`
+
+## PowerShell-only AKS staging recovery
+
+- **Owner:** Link
+- **Date:** 2026-07-17
+- **Decision:** Port the AKS provisioning and verification workflow to PowerShell while preserving
+  the bash scripts' resource names, flags, ordering, and idempotency guards.
+- **Rationale:** The staging environment must be recoverable from Windows without invoking Bash,
+  WSL, or `.sh` scripts.
+- **Implementation:** Added PowerShell ports for cluster, identity, monitoring, OAuth key,
+  PostgreSQL, deployment verification, and the A2A mTLS helper. Updated `30-deploy.ps1` to invoke
+  only PowerShell helpers.
+
+**Superseded detail:** The original inbox note said identity provisioning resolves GitHub OAuth
+credentials from local .NET user-secrets before prompting. That unsafe fallback caused the
+incident recorded above and was removed in `75a84f38`; staging credentials now require explicit
+operator input.
