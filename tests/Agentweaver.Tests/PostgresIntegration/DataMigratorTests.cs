@@ -28,6 +28,7 @@ public sealed class DataMigratorTests : IDisposable
     private readonly string _memoryDbPath;
     private readonly string _seededProjectId;
     private readonly string _seededPackageId;
+    private readonly string _seededPackageVersion;
 
     public DataMigratorTests(PostgresFixture pg)
     {
@@ -37,7 +38,7 @@ public sealed class DataMigratorTests : IDisposable
         _agentweaverDbPath = Path.Combine(_tempDir, "agentweaver.db");
         _memoryDbPath = Path.Combine(_tempDir, "memory.db");
 
-        (_seededProjectId, _seededPackageId) = SeedSqliteDb(_agentweaverDbPath);
+        (_seededProjectId, _seededPackageId, _seededPackageVersion) = SeedSqliteDb(_agentweaverDbPath);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -112,6 +113,43 @@ public sealed class DataMigratorTests : IDisposable
             "second migration run must not insert duplicate package versions");
     }
 
+    [PostgresFact]
+    public async Task Migrator_ConflictingPackageVersion_AbortsWithoutMergingChildren()
+    {
+        await using (var db = await _pg.CreateDbContextAsync())
+        {
+            db.BlueprintPackageLibrary.Add(new BlueprintPackageLibraryRecord
+            {
+                OwnerId = "alice",
+                PackageId = _seededPackageId,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            db.BlueprintPackageVersions.Add(new BlueprintPackageVersionRecord
+            {
+                OwnerId = "alice",
+                PackageId = _seededPackageId,
+                CanonicalVersionKey = BlueprintPackageLibraryLimits.CanonicalVersionKey(_seededPackageVersion),
+                CanonicalVersion = _seededPackageVersion,
+                ContentDigest = new string('d', 64),
+                PayloadSetDigest = new string('e', 64),
+                RawManifestSha256 = new string('f', 64),
+                RawManifest = "{}"u8.ToArray(),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var migrate = () => BuildMigrator().RunAsync();
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*immutable Blueprint package version conflicts*");
+        await using var verify = await _pg.CreateDbContextAsync();
+        (await verify.BlueprintPackagePayloads.CountAsync(
+            payload => payload.PackageId == _seededPackageId)).Should().Be(0);
+        (await verify.BlueprintPackageAcquisitions.CountAsync(
+            acquisition => acquisition.PackageId == _seededPackageId)).Should().Be(0);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
@@ -144,7 +182,7 @@ public sealed class DataMigratorTests : IDisposable
     /// statements below also use explicit column-name lists rather than positional VALUES, so
     /// future nullable/defaulted columns added via migration don't require touching this file.
     /// </summary>
-    private static (string ProjectId, string PackageId) SeedSqliteDb(string dbPath)
+    private static (string ProjectId, string PackageId, string PackageVersion) SeedSqliteDb(string dbPath)
     {
         var schemaConfig = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = dbPath })
@@ -214,7 +252,7 @@ public sealed class DataMigratorTests : IDisposable
                     '1111111111111111111111111111111111111111','{now}','feature/migrate');
             """;
         data.ExecuteNonQuery();
-        return (pid1, packageId);
+        return (pid1, packageId, packageVersion);
     }
 
     public void Dispose()

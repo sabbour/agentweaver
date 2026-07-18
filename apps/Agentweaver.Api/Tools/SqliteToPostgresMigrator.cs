@@ -242,13 +242,10 @@ public sealed class SqliteToPostgresMigrator
                     db.BlueprintPackageVersions.Add(record);
                     migratedVersions++;
                 }
-                else if (!string.Equals(
-                             existing.CanonicalVersion,
-                             record.CanonicalVersion,
-                             StringComparison.Ordinal))
+                else if (!SameImmutableIdentity(existing, record))
                 {
                     throw new InvalidOperationException(
-                        "A canonical Blueprint package version-key collision was detected during migration.");
+                        "An immutable Blueprint package version conflicts with the migration source.");
                 }
             }
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -297,6 +294,15 @@ public sealed class SqliteToPostgresMigrator
             migratedPayloads,
             migratedAcquisitions);
     }
+
+    private static bool SameImmutableIdentity(
+        BlueprintPackageVersionRecord existing,
+        BlueprintPackageVersionRecord source) =>
+        string.Equals(existing.CanonicalVersion, source.CanonicalVersion, StringComparison.Ordinal) &&
+        string.Equals(existing.ContentDigest, source.ContentDigest, StringComparison.Ordinal) &&
+        string.Equals(existing.PayloadSetDigest, source.PayloadSetDigest, StringComparison.Ordinal) &&
+        string.Equals(existing.RawManifestSha256, source.RawManifestSha256, StringComparison.Ordinal) &&
+        string.Equals(existing.ContainerSha256, source.ContainerSha256, StringComparison.Ordinal);
 
     private static async Task<List<BlueprintPackageLibraryRecord>> ReadBlueprintPackageLibrariesAsync(
         SqliteConnection conn,
