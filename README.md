@@ -57,10 +57,10 @@ bash install.sh --aks    # AKS deploy (requires az login + kubectl + envsubst + 
 
 ## Build & deploy
 
-### Canonical AKS workflow
+### AKS deployment
 
-From a cloned checkout, use the root package scripts for all AKS provisioning,
-image builds, releases, and deployment. Commands below use `pnpm`; `npm run <script>` is equivalent.
+From a cloned checkout, run these commands. Examples use `pnpm`; `npm run <script>`
+is equivalent.
 
 ```bash
 # First deployment: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be exported.
@@ -71,21 +71,25 @@ pnpm run release:images
 pnpm run release:deploy
 ```
 
-See the full [AKS deployment runbook](docs/guide/deployment-aks.md) for
-prerequisites, environment variables, recovery steps, and the installer
-alternative.
+See the [AKS deployment runbook](docs/guide/deployment-aks.md) for
+prerequisites, environment variables, and individual steps.
 
-### Local build (manual)
+### Local development
 
 ```bash
-# Build the .NET solution
-dotnet build agentweaver.sln
+# Full development environment
+pnpm run dev
 
-# Build the web frontend
-npm --prefix apps/web run build
+# Frontend only (builds, then starts Vite)
+pnpm run dev:web
+
+# API only (builds, then starts the API)
+pnpm run dev:api
 ```
 
-### Run locally
+Use `npm run` with the same script name if you use npm.
+
+### Run components manually
 
 Start each component from the repo root (three terminals):
 
@@ -100,10 +104,6 @@ dotnet run --project apps/Agentweaver.Mcp
 npm --prefix apps/web run dev
 ```
 
-> **Windows shortcut:** `.\start-dev.ps1` launches all three automatically.
-> **Package shortcut:** `pnpm run dev` (or `npm run dev`) starts the same full
-> Windows/WSL development environment.
-
 Configure the GitHub OAuth client secret for local dev with .NET user-secrets (do not put it in `appsettings*.json`):
 
 ```powershell
@@ -111,7 +111,7 @@ cd apps/Agentweaver.Api
 dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
 ```
 
-### Canonical package scripts
+### Package scripts
 
 From the repository root, run these with `pnpm run <script>` (preferred) or
 `npm run <script>`:

@@ -5,7 +5,7 @@ This guide covers the day-to-day operational procedures for running and releasin
 For provisioning, image builds, deployment, and verification, use the root
 package scripts (`pnpm run` preferred; `npm run` is equivalent). The
 [AKS deployment runbook](./deployment-aks.md) defines the canonical sequence
-and the advanced individual-step recovery path.
+and individual-step instructions.
 
 ## Release Process
 
@@ -151,8 +151,8 @@ FORCE_REBUILD=true pnpm run release:images
 | `pnpm run release:deploy` | Deploy to AKS and verify the result |
 
 Use `npm run` in place of `pnpm run` if npm is your selected package runner.
-The runbook's [advanced section](./deployment-aks.md#advanced-running-aks-steps-individually)
-lists the underlying AKS scripts for a targeted recovery.
+The runbook's [individual-step section](./deployment-aks.md#running-an-individual-step)
+shows how to rerun one step.
 
 ## Observability
 
@@ -161,7 +161,7 @@ Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry 
 ### Provisioning monitoring resources
 
 Monitoring is provisioned as part of `pnpm run infra:deploy`. To rerun only
-that advanced recovery step:
+that step:
 
 ```bash
 node scripts/run-os-script.mjs 15-provision-monitoring

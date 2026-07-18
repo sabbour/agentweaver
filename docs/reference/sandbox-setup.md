@@ -24,9 +24,8 @@ pnpm run release:deploy    # applies the template/warm pool and verifies it
 
 `release:deploy` applies `sandbox-template-agenthost.yaml` before
 `sandbox-warmpool-agenthost.yaml`; the warm pool depends on the template by
-name. For targeted recovery, the [AKS deployment runbook](../guide/deployment-aks.md#advanced-running-aks-steps-individually)
-documents the underlying individual scripts, including
-`gen-a2a-mtls-certs`.
+name. For targeted recovery, the [AKS deployment runbook](../guide/deployment-aks.md#running-an-individual-step)
+shows how to run individual steps, including `gen-a2a-mtls-certs`.
 
 ## AgentHost pod behavior
 

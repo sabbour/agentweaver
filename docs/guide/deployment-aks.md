@@ -4,10 +4,8 @@ title: Deploy to AKS
 
 # Deploy to AKS
 
-This is the operator path for a fresh Agentweaver AKS deployment. From a cloned
-checkout, use the root package scripts as the canonical workflow. They select the
-appropriate PowerShell or bash AKS implementation for the host OS and enforce the
-required provisioning, image, deployment, and verification order.
+Use the root package scripts from a cloned checkout to provision AKS and release
+Agentweaver.
 
 ## Prerequisites
 
@@ -29,7 +27,7 @@ Required local tools:
 | `envsubst` | manifest rendering |
 | `openssl` | OAuth/A2A key material |
 | `git` | default image tag = short commit SHA |
-| Node.js with `pnpm` or `npm` | canonical package-script workflow |
+| Node.js with `pnpm` or `npm` | run deployment commands |
 
 Create a GitHub OAuth App, then export:
 
@@ -38,8 +36,7 @@ export GITHUB_CLIENT_ID=<oauth-app-client-id>
 export GITHUB_CLIENT_SECRET=<oauth-app-client-secret>
 ```
 
-The same values are required before `pnpm run infra:deploy` (or its `npm run`
-equivalent), because the identity-provisioning step writes them to Key Vault.
+Set these values before `pnpm run infra:deploy` or `npm run infra:deploy`.
 
 In PowerShell:
 
@@ -48,10 +45,10 @@ $env:GITHUB_CLIENT_ID = '<oauth-app-client-id>'
 $env:GITHUB_CLIENT_SECRET = '<oauth-app-client-secret>'
 ```
 
-## Canonical package-script workflow
+## Commands
 
-Run these commands from the repository root. Examples use `pnpm`; replace
-`pnpm run` with `npm run` to use npm instead.
+Run these commands from the repository root. Examples use `pnpm`; use `npm run`
+with the same script name if you use npm.
 
 ### 1. Provision AKS infrastructure
 
@@ -59,9 +56,7 @@ Run these commands from the repository root. Examples use `pnpm`; replace
 pnpm run infra:deploy
 ```
 
-This provisions the resource group, ACR, AKS cluster and node pools, workload
-identity and Key Vault secrets, monitoring, the MCP OAuth signing key, and
-PostgreSQL. It is the required first-deploy command.
+Provision the cluster, identity, monitoring, OAuth key, and PostgreSQL.
 
 ### 2. Build, push, and verify images
 
@@ -69,10 +64,8 @@ PostgreSQL. It is the required first-deploy command.
 pnpm run release:images
 ```
 
-For unattended frontend builds, export `AZURE_ARTIFACTS_NPM_PAT` (preferred) or
-`AZURE_ARTIFACTS_NPM_PASSWORD_B64` first. Otherwise the build uses an existing
-`~/.npmrc` credential and only then falls back to interactive helper flows on
-supported hosts.
+For unattended frontend builds, set `AZURE_ARTIFACTS_NPM_PAT` (preferred) or
+`AZURE_ARTIFACTS_NPM_PASSWORD_B64`.
 
 ### 3. Deploy and verify the release
 
@@ -80,9 +73,8 @@ supported hosts.
 pnpm run release:deploy
 ```
 
-This applies the release and runs the post-deploy verification checks. Run the
-three commands in order for a first deployment; for a normal redeploy, run the
-last two.
+Deploy the release and verify it. Run all three commands for a first deployment;
+for a redeploy, run the last two.
 
 ## Installer alternative
 
@@ -110,26 +102,21 @@ to the installer:
 
 Never use `latest`. By default, `IMAGE_TAG` is `git rev-parse --short HEAD`; `AGENTHOST_IMAGE_TAG` defaults to the same value.
 
-## Advanced: running AKS steps individually
+## Running an individual step
 
-The package scripts run these underlying steps in order:
-
-| Package script | Underlying AKS steps |
-| --- | --- |
-| `infra:deploy` | `00-variables` → `10-create-cluster` → `15-setup-identity` → `15-provision-monitoring` → `16-provision-oauth-signing-key` → `17-provision-postgres` |
-| `release:images` | `20-build-push-images` → `25-verify-image-provenance` |
-| `release:deploy` | `30-deploy` → `40-verify` |
-
-Use the canonical commands for normal operations. When recovering a single
-failed step, the cross-platform launcher can run it without choosing a shell:
+To re-run identity setup:
 
 ```bash
 node scripts/run-os-script.mjs 15-setup-identity
 ```
 
-The launcher uses the matching `scripts/aks/<step>.ps1` implementation on
-Windows and `<step>.sh` on macOS/Linux. To invoke an implementation directly,
-use its native form:
+To re-run verification without deploying:
+
+```bash
+node scripts/run-os-script.mjs 40-verify
+```
+
+To run a step directly:
 
 ```powershell
 .\scripts\aks\15-setup-identity.ps1
@@ -139,67 +126,16 @@ use its native form:
 bash scripts/aks/15-setup-identity.sh
 ```
 
-For a complete manual bash sequence when debugging a deployment:
-
-```bash
-source scripts/aks/00-variables.sh
-bash scripts/aks/10-create-cluster.sh
-bash scripts/aks/15-setup-identity.sh
-bash scripts/aks/15-provision-monitoring.sh
-bash scripts/aks/16-provision-oauth-signing-key.sh
-bash scripts/aks/17-provision-postgres.sh
-bash scripts/aks/20-build-push-images.sh
-bash scripts/aks/25-verify-image-provenance.sh
-bash scripts/aks/gen-a2a-mtls-certs.sh
-bash scripts/aks/30-deploy.sh
-bash scripts/aks/40-verify.sh
-```
-
-Each underlying step sources `00-variables` itself, so the package-script
-workflow does not need to preserve a shell session between steps. The
-`gen-a2a-mtls-certs` step is available for advanced certificate recovery and is
-not part of the three canonical package commands.
-
-## What the canonical commands deploy
-
-- AKS cluster with `apppool` for app workloads and `katapool` for Kata-isolated AgentHost pods.
-- Azure Container Registry images:
-  - `agentweaver-api:${IMAGE_TAG}`
-  - `agentweaver-frontend:${IMAGE_TAG}`
-  - `agentweaver-mcp:${IMAGE_TAG}`
-  - `agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}`
-- Azure Key Vault secrets for GitHub OAuth and MCP OAuth signing.
-- Azure Database for PostgreSQL Flexible Server using FQDN `<server>.postgres.database.azure.com`; private connectivity comes from the VNet-linked `privatelink.postgres.database.azure.com` zone.
-- Agent-sandbox CRDs/controller plus one AgentHost `SandboxTemplate` and one `SandboxWarmPool`, both named `agentweaver-agent-host`.
-
-`release:images` is redeploy-efficient: its underlying image-build step resolves
-the prior deployed image tag to its Git tag or the commit that wrote its value to
-`VERSION`, rebuilds only components whose relevant paths changed, and retags
-unchanged images with `az acr import`. For advanced troubleshooting, preview that
-underlying bash step without invoking ACR with `DRY_RUN=true
-PREVIOUS_IMAGE_TAG=vX.Y.Z bash scripts/aks/20-build-push-images.sh`.
-
-## Deploy-order invariants
-
-`release:deploy` applies manifests through its underlying deployment step in
-dependency order. The important invariants are:
-
-1. `storageclass-workspace.yaml` before `pvc-workspace.yaml`.
-2. `sandbox-template-agenthost.yaml` before `sandbox-warmpool-agenthost.yaml`.
-3. Services/gateways/routes before deployments.
-4. Deployments include API, frontend, MCP, worker, and worker HPA.
-
 ## Verify
 
-`pnpm run release:deploy` completes the deployment and its verification as one
-operation. To rerun only verification while troubleshooting, use the advanced
-individual-step launcher:
+`pnpm run release:deploy` deploys and verifies in one command. To re-run only
+verification:
 
 ```bash
 node scripts/run-os-script.mjs 40-verify
 ```
 
-The verifier checks pods, main and preview gateways, routes, SecretProviderClass sync, API sandbox RBAC, Kata runtime, AgentHost template/warm pool, workspace storage, and HTTP health.
+The verifier checks cluster resources, routes, and health.
 
 Useful follow-up commands:
 
@@ -218,9 +154,6 @@ pnpm run release:deploy
 ```
 
 In PowerShell, use `$env:IMAGE_TAG = '<tag>'` before the same two commands.
-The image build creates `apps/web/dist` locally before `az acr build`, then
-uploads only the compiled frontend assets. Its temporary `.npmrc.build` is
-deleted on exit so feed secrets never enter Docker layers.
 
 The installer alternative remains:
 
