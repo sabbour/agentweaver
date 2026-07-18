@@ -198,6 +198,19 @@ public sealed class BlueprintService
 
             // Validate each bespoke role's shape and that it is actually rostered.
             var rosterSet = new HashSet<string>(blueprint.Roster, StringComparer.OrdinalIgnoreCase);
+            foreach (var binding in blueprint.SkillBindings)
+            {
+                if (string.IsNullOrWhiteSpace(binding.RoleId))
+                {
+                    errors.Add("a skill binding is missing its 'role_id'.");
+                    continue;
+                }
+                if (!rosterSet.Contains(binding.RoleId))
+                    errors.Add($"skill binding role '{binding.RoleId}' is not referenced in the roster.");
+                if (binding.Skills is null || binding.Skills.Count == 0)
+                    errors.Add($"skill binding role '{binding.RoleId}' has no skills.");
+            }
+
             foreach (var b in blueprint.BespokeRoles)
             {
                 if (string.IsNullOrWhiteSpace(b.Id))

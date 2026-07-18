@@ -169,6 +169,32 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
+    public async Task ValidateBlueprint_NullSkillBinding_ReturnsValidationError()
+    {
+        var response = await _client.PostAsJsonAsync("/api/blueprints/validate", new
+        {
+            blueprint = new
+            {
+                id = "blueprint-null-binding",
+                name = "Null Binding",
+                description = "Malformed binding fixture",
+                roster = new[] { "qa-engineer" },
+                workflows = new[] { "default" },
+                review_policy = "default",
+                sandbox_profile = "default",
+                skill_bindings = new object?[] { null },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("valid").GetBoolean().Should().BeFalse();
+        body.GetProperty("errors").EnumerateArray()
+            .Select(error => error.GetString())
+            .Should().Contain(error => error!.Contains("role_id", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ValidateBlueprint_UnknownRole_IsRejected()
     {
         var request = new ValidateBlueprintRequest
