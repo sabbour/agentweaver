@@ -859,7 +859,7 @@ export function SkillsPage() {
         open={defaultsOpen}
         modalType="modal"
         onOpenChange={(_, data) => {
-          if (!data.open) closeDefaults();
+          if (!data.open && defaultsDialogKey === defaultsDialogGeneration.current) closeDefaults();
         }}
       >
         <DialogSurface aria-describedby="blueprint-defaults-description">
