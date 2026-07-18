@@ -13,17 +13,20 @@ This reference covers the AKS setup used by the deployment scripts. The live in-
 
 ## Install order
 
-`install.sh --aks` and the manual AKS path apply sandbox pieces in this order:
+The canonical workflow provisions and deploys the sandbox pieces through the
+root package scripts (`pnpm run` shown; `npm run` is equivalent):
 
 ```bash
-bash scripts/aks/10-create-cluster.sh        # installs controller + CRDs
-bash scripts/aks/20-build-push-images.sh     # publishes agentweaver-agent-host
-bash scripts/aks/gen-a2a-mtls-certs.sh       # creates A2A TLS secrets
-bash scripts/aks/30-deploy.sh                # applies template, then warm pool
-bash scripts/aks/40-verify.sh                # validates runtime resources
+pnpm run infra:deploy      # installs the controller + CRDs
+pnpm run release:images    # publishes agentweaver-agent-host
+pnpm run release:deploy    # applies the template/warm pool and verifies it
 ```
 
-`30-deploy.sh` applies `sandbox-template-agenthost.yaml` before `sandbox-warmpool-agenthost.yaml`; the warm pool depends on the template by name.
+`release:deploy` applies `sandbox-template-agenthost.yaml` before
+`sandbox-warmpool-agenthost.yaml`; the warm pool depends on the template by
+name. For targeted recovery, the [AKS deployment runbook](../guide/deployment-aks.md#advanced-running-aks-steps-individually)
+documents the underlying individual scripts, including
+`gen-a2a-mtls-certs`.
 
 ## AgentHost pod behavior
 
@@ -47,7 +50,9 @@ Per-run context is not injected through `SandboxClaim.spec.env`; doing so bypass
 | Key Vault URI | `https://${KEYVAULT_NAME}.vault.azure.net/` |
 | Workspace | PVC `agentweaver-workspace`, mounted at `/workspace` |
 
-The AgentHost image is built by `scripts/aks/20-build-push-images.sh` from `apps/Agentweaver.AgentHost/Dockerfile`. It must publish with `--runtime linux-x64 --self-contained false` so the Copilot native runtime is included.
+The AgentHost image is built by `pnpm run release:images` from
+`apps/Agentweaver.AgentHost/Dockerfile`. It must publish with `--runtime
+linux-x64 --self-contained false` so the Copilot native runtime is included.
 
 ## Verify
 
@@ -56,7 +61,7 @@ kubectl api-resources --api-group=extensions.agents.x-k8s.io
 kubectl get runtimeclass kata-vm-isolation
 kubectl get sandboxtemplate,sandboxwarmpool -n agentweaver
 kubectl get pods -n agentweaver -l app.kubernetes.io/component=agent-host
-bash scripts/aks/40-verify.sh
+node scripts/run-os-script.mjs 40-verify
 ```
 
 Expected resources:
@@ -73,5 +78,5 @@ sandboxwarmpool.extensions.agents.x-k8s.io/agentweaver-agent-host
 | Warm pods do not appear | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` |
 | Pods stay Pending | `kubectl get runtimeclass`, `kubectl describe node`, and `katapool` capacity |
 | Image pull failure | image tag matches `AGENTHOST_IMAGE_TAG` and ACR is attached to AKS |
-| `/configure` or A2A fails | NetworkPolicies allow API/worker to AgentHost TCP `8088`; run `40-verify.sh` |
+| `/configure` or A2A fails | NetworkPolicies allow API/worker to AgentHost TCP `8088`; run `node scripts/run-os-script.mjs 40-verify` |
 | Token fetch fails | service account `agentweaver-agent-host` has workload identity federation and Key Vault access |

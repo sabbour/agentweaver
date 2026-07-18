@@ -45,7 +45,7 @@ Cluster checks run concurrently each time the page loads:
 |---|---|---|
 | **Postgres** | Connectivity to the Postgres database | Network policy, password rotation |
 | **GitHub token store** | Configured GitHub token store validity for the current scope | Token expiry, missing per-user token, GitHub API outage |
-| **Azure Key Vault** | Key Vault reachability and required `mcp-oauth-signing-key` lookup | Managed identity misconfiguration, network policy, or skipped `scripts/aks/16-provision-oauth-signing-key.sh` |
+| **Azure Key Vault** | Key Vault reachability and required `mcp-oauth-signing-key` lookup | Managed identity misconfiguration, network policy, or skipped `pnpm run infra:deploy` |
 | **Agent pod quota** | CPU headroom in the namespace. Since #217 removed the `ResourceQuota` CPU cap there is no hard limit to measure against, so this check now reports `unknown`. | Node-pool autoscaling delays |
 | **Warm pool** | Warm-pool agent-sandbox availability for generic sandboxes (`replicas: 3`) and AgentHost (`replicas: 2`) | Warm-pool replica count below target, SandboxTemplate CRD issue |
 | **Kubernetes API** | Kubernetes API server reachability | In-cluster network policy, apiserver overload |
@@ -58,7 +58,10 @@ Each check shows:
 
 All six checks have a **5-second individual timeout**. A timed-out check appears as `fail` with the detail `"timed out"`.
 
-If the Key Vault row shows `critical: secret 'mcp-oauth-signing-key' not found`, the required OAuth signing-key provisioning step was skipped. Run `scripts/aks/16-provision-oauth-signing-key.sh` before redeploying; do not use the installer `--skip-oauth-key` flag for a production first deploy.
+If the Key Vault row shows `critical: secret 'mcp-oauth-signing-key' not found`,
+the required OAuth signing-key provisioning step was skipped. Run `pnpm run infra:deploy`
+before redeploying (`npm run infra:deploy` is equivalent); do not use the installer
+`--skip-oauth-key` flag for a production first deploy.
 
 ## Active agent pods table
 

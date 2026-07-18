@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh
 irm https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1 | iex
 ```
 
-**Deploy to AKS — one command** (requires `az login` + `kubectl` + `envsubst` + `openssl`):
+**Installer alternative: deploy to AKS in one command** (requires `az login` + `kubectl` + `envsubst` + `openssl`):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
 ```
@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh
 > skip optional provisioning steps if those resources already exist.
 
 <details>
-<summary>From a cloned checkout</summary>
+<summary>Installer alternative from a cloned checkout</summary>
 
 **Windows (PowerShell):**
 ```powershell
@@ -57,7 +57,25 @@ bash install.sh --aks    # AKS deploy (requires az login + kubectl + envsubst + 
 
 ## Build & deploy
 
-### Local build
+### Canonical AKS workflow
+
+From a cloned checkout, use the root package scripts for all AKS provisioning,
+image builds, releases, and deployment. Commands below use `pnpm`; `npm run <script>` is equivalent.
+
+```bash
+# First deployment: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be exported.
+pnpm run infra:deploy
+
+# Every release or redeploy
+pnpm run release:images
+pnpm run release:deploy
+```
+
+See the full [AKS deployment runbook](docs/guide/deployment-aks.md) for
+prerequisites, environment variables, recovery steps, and the installer
+alternative.
+
+### Local build (manual)
 
 ```bash
 # Build the .NET solution
@@ -83,6 +101,8 @@ npm --prefix apps/web run dev
 ```
 
 > **Windows shortcut:** `.\start-dev.ps1` launches all three automatically.
+> **Package shortcut:** `pnpm run dev` (or `npm run dev`) starts the same full
+> Windows/WSL development environment.
 
 Configure the GitHub OAuth client secret for local dev with .NET user-secrets (do not put it in `appsettings*.json`):
 
@@ -91,9 +111,10 @@ cd apps/Agentweaver.Api
 dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
 ```
 
-### Package scripts
+### Canonical package scripts
 
-From the repository root, run these with either `npm run <script>` or `pnpm run <script>`:
+From the repository root, run these with `pnpm run <script>` (preferred) or
+`npm run <script>`:
 
 | Script | Purpose |
 | --- | --- |
@@ -104,7 +125,7 @@ From the repository root, run these with either `npm run <script>` or `pnpm run 
 | `dev:api` | Build the API in Release mode, then run it without rebuilding. |
 | `dev` / `start` | Start the existing full Windows/WSL development environment. |
 
-### Deploy / redeploy to AKS
+### Installer alternative: deploy / redeploy to AKS
 
 **First deploy:**
 ```bash

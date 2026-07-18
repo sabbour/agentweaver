@@ -2,6 +2,11 @@
 
 This guide covers the day-to-day operational procedures for running and releasing Agentweaver in production on AKS.
 
+For provisioning, image builds, deployment, and verification, use the root
+package scripts (`pnpm run` preferred; `npm run` is equivalent). The
+[AKS deployment runbook](./deployment-aks.md) defines the canonical sequence
+and the advanced individual-step recovery path.
+
 ## Release Process
 
 Agentweaver uses [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`). The current version is tracked in the [`VERSION`](../../VERSION) file at the repo root. All container images and GitHub releases are tagged with this version.
@@ -54,7 +59,7 @@ The [`scripts/release.sh`](../../scripts/release.sh) script automates the full r
 7. **Identifies changed images** — compares file paths against the previous tag using `git diff`.
 8. **Builds changed images** — uses `az acr build` (no local Docker daemon required).
 9. **Retags unchanged images** — uses `az acr import` for a server-side copy (fast, no rebuild).
-10. **Deploys** — runs `scripts/aks/30-deploy.sh` with `IMAGE_TAG=vX.Y.Z`.
+10. **Deploys** — applies the release with its selected immutable image tag.
 11. **Pushes** — pushes the commit and tag to `origin`.
 
 ### Image tags
@@ -104,28 +109,29 @@ Each image is built with the following OCI labels:
 
 ## Rolling back a release
 
-To roll back to a previous version, re-run the deploy step with the old tag:
+To roll back to a previous version, re-run the canonical deployment workflow
+with the old tag:
 
 ```bash
-IMAGE_TAG=v0.6.0 bash scripts/aks/30-deploy.sh
+IMAGE_TAG=v0.6.0 pnpm run release:deploy
 ```
 
 All previous semver tags remain in ACR and are not deleted by the release script.
 
 ## Manual image builds (development)
 
-To build and push images without cutting a release (e.g. for a staging environment):
+To build and push images without cutting a release (e.g. for a staging
+environment), use the canonical image workflow:
 
 ```bash
 # Builds using the current git SHA as the tag
-source scripts/aks/00-variables.sh
-bash scripts/aks/20-build-push-images.sh
+pnpm run release:images
 ```
 
 To force a rebuild of all images (ignore changed-path optimisation):
 
 ```bash
-FORCE_REBUILD=true bash scripts/aks/20-build-push-images.sh
+FORCE_REBUILD=true pnpm run release:images
 ```
 
 ## Observability notes
@@ -137,14 +143,16 @@ FORCE_REBUILD=true bash scripts/aks/20-build-push-images.sh
 
 ## Related scripts
 
-| Script | Purpose |
+| Command | Purpose |
 |---|---|
 | `scripts/release.sh` | Full semver release (see above) |
-| `scripts/aks/00-variables.sh` | Shared AKS variables (source this before other scripts) |
-| `scripts/aks/15-provision-monitoring.sh` | Provision Application Insights + AKS Managed Prometheus |
-| `scripts/aks/20-build-push-images.sh` | Build and push images to ACR |
-| `scripts/aks/30-deploy.sh` | Deploy to AKS |
-| `scripts/aks/40-verify.sh` | Smoke-test the deployed cluster |
+| `pnpm run infra:deploy` | Provision AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
+| `pnpm run release:images` | Build, push, and verify images in ACR |
+| `pnpm run release:deploy` | Deploy to AKS and verify the result |
+
+Use `npm run` in place of `pnpm run` if npm is your selected package runner.
+The runbook's [advanced section](./deployment-aks.md#advanced-running-aks-steps-individually)
+lists the underlying AKS scripts for a targeted recovery.
 
 ## Observability
 
@@ -152,11 +160,11 @@ Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry 
 
 ### Provisioning monitoring resources
 
-Monitoring is provisioned automatically by `scripts/aks/30-deploy.sh` when Application Insights does not yet exist. To provision it standalone:
+Monitoring is provisioned as part of `pnpm run infra:deploy`. To rerun only
+that advanced recovery step:
 
 ```bash
-source scripts/aks/00-variables.sh
-bash scripts/aks/15-provision-monitoring.sh
+node scripts/run-os-script.mjs 15-provision-monitoring
 ```
 
 This creates:

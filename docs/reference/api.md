@@ -261,7 +261,7 @@ Six component health checks run **concurrently** with a 5-second individual time
 | --- | --- |
 | `postgresql` | Postgres connectivity |
 | `github_installation_token` | GitHub token-store validity for the configured scope |
-| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means `scripts/aks/16-provision-oauth-signing-key.sh` was skipped. |
+| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means the signing-key step in `pnpm run infra:deploy` was skipped. |
 | `agent_pod_quota` | CPU headroom in the sandbox namespace. Since #217 removed the `ResourceQuota` CPU cap there is no hard limit to measure against, so this check reports `unknown`. |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |
