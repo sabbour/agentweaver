@@ -1,6 +1,6 @@
-# Frontend assets are built before `az acr build` runs, so the private Azure
-# Artifacts npm credential never enters the Docker build context, layer
-# filesystem, `RUN` command metadata, or build logs.
+# Frontend assets are built before `az acr build` runs (see scripts/release.sh and
+# scripts/aks/20-build-push-images.*), so this Dockerfile only copies the prebuilt
+# apps/web/dist output below — it never runs npm install itself.
 # Stage 1: Build the ASP.NET Core static file host
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS dotnet-build
 WORKDIR /src

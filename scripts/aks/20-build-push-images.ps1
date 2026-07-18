@@ -54,10 +54,6 @@ $FrontendNodeModulesBackupDir = "$RepoRoot.frontend-node_modules.$PID"
 # this script launches (see Invoke-ScheduleImage below).
 . (Join-Path $ScriptDir "_image-functions.ps1")
 
-function Remove-FrontendNpmrcBuild {
-  Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $RepoRoot "apps\web\.npmrc.build")
-}
-
 function Restore-FrontendNodeModules {
   if (-not (Test-Path $FrontendNodeModulesBackupDir)) { return }
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $FrontendNodeModulesDir
@@ -65,7 +61,6 @@ function Restore-FrontendNodeModules {
 }
 
 function Invoke-CleanupFrontendBuildArtifacts {
-  Remove-FrontendNpmrcBuild
   Restore-FrontendNodeModules
 }
 
@@ -114,50 +109,6 @@ if (-not $resolvedTarget) {
 }
 $TargetCommit = $resolvedTarget.Trim()
 
-function Get-FrontendNpmPasswordB64 {
-  if ($env:AZURE_ARTIFACTS_NPM_PASSWORD_B64) { return $env:AZURE_ARTIFACTS_NPM_PASSWORD_B64 }
-  if ($env:AZURE_ARTIFACTS_NPM_PAT) {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($env:AZURE_ARTIFACTS_NPM_PAT)
-    return [Convert]::ToBase64String($bytes)
-  }
-  return $null
-}
-
-function Get-FrontendNpmUserconfig {
-  $homeNpmrc = Join-Path $env:USERPROFILE ".npmrc"
-  $buildNpmrc = Join-Path $RepoRoot "apps\web\.npmrc.build"
-
-  $passwordB64 = Get-FrontendNpmPasswordB64
-  if ($passwordB64) {
-    Copy-Item (Join-Path $RepoRoot "apps\web\.npmrc") $buildNpmrc -Force
-    @(
-      '; begin auth token'
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:username=agentweaver'
-      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:_password=$passwordB64"
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:email=npm requires email to be set but does not use the value'
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:username=agentweaver'
-      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:_password=$passwordB64"
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:email=npm requires email to be set but does not use the value'
-      '; end auth token'
-    ) | Add-Content -Path $buildNpmrc
-    return $buildNpmrc
-  }
-
-  if ((Test-Path $homeNpmrc) -and (Select-String -Path $homeNpmrc -Pattern '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' -Quiet)) {
-    return $homeNpmrc
-  }
-
-  return $null
-}
-
-function Invoke-FrontendNpmCredentialProvider {
-  # PowerShell/native Windows path: the ado-npm-auth fallback works fine here
-  # (the bash version only blocks this on Linux/WSL due to a RID-specific
-  # credential-provider asset mismatch under gzip decoding).
-  $env:npm_config_registry = "https://registry.npmjs.org"
-  npx --yes ado-npm-auth -c (Join-Path $RepoRoot "apps\web\.npmrc")
-}
-
 function Move-FrontendNodeModulesOutsideAcrContext {
   if (-not (Test-Path $FrontendNodeModulesDir)) { return }
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $FrontendNodeModulesBackupDir
@@ -176,31 +127,17 @@ function Invoke-PrepareFrontendDist {
   }
 
   Write-Host "--- Building local frontend assets for agentweaver-frontend ---"
-  $userconfig = Get-FrontendNpmUserconfig
-  if ($userconfig) {
-    Write-Host "  [frontend] Using PAT-backed npm userconfig outside the Docker context"
-  } else {
-    Write-Host "  [frontend] No PAT-backed npm userconfig found; attempting interactive auth helper"
-  }
 
   Push-Location (Join-Path $RepoRoot "apps\web")
   try {
-    if ($userconfig) {
-      $env:NPM_CONFIG_USERCONFIG = $userconfig
-      npm ci --legacy-peer-deps
-    } else {
-      Invoke-FrontendNpmCredentialProvider
-      npm ci --legacy-peer-deps
-    }
+    npm ci --legacy-peer-deps
     Remove-Item Env:\VITE_API_URL -ErrorAction SilentlyContinue
     Remove-Item Env:\VITE_API_KEY -ErrorAction SilentlyContinue
     npm run build
   } finally {
-    if ($userconfig) { Remove-Item Env:\NPM_CONFIG_USERCONFIG -ErrorAction SilentlyContinue }
     Pop-Location
   }
 
-  Remove-FrontendNpmrcBuild
   # Keep prebuilt dist/ but move node_modules out of the repo before az acr build:
   # az's context tar step can choke on broken symlinks even when .dockerignore excludes them.
   Move-FrontendNodeModulesOutsideAcrContext

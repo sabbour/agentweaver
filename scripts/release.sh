@@ -25,10 +25,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FRONTEND_NODE_MODULES_DIR="${REPO_ROOT}/apps/web/node_modules"
 FRONTEND_NODE_MODULES_BACKUP_DIR="${REPO_ROOT}.frontend-node_modules.$$"
 
-cleanup_frontend_npmrc_build() {
-  rm -f "${REPO_ROOT}/apps/web/.npmrc.build"
-}
-
 stash_frontend_node_modules_outside_acr_context() {
   if [[ ! -d "${FRONTEND_NODE_MODULES_DIR}" ]]; then
     return 0
@@ -49,7 +45,6 @@ restore_frontend_node_modules() {
 }
 
 cleanup_frontend_build_artifacts() {
-  cleanup_frontend_npmrc_build
   restore_frontend_node_modules
 }
 
@@ -281,64 +276,6 @@ image_needs_build() {
   return 1
 }
 
-frontend_npm_password_b64() {
-  if [[ -n "${AZURE_ARTIFACTS_NPM_PASSWORD_B64:-}" ]]; then
-    printf '%s' "${AZURE_ARTIFACTS_NPM_PASSWORD_B64}"
-    return 0
-  fi
-
-  if [[ -n "${AZURE_ARTIFACTS_NPM_PAT:-}" ]]; then
-    node -e "process.stdout.write(Buffer.from(process.argv[1], 'utf8').toString('base64'))" "${AZURE_ARTIFACTS_NPM_PAT}"
-    return 0
-  fi
-
-  return 1
-}
-
-frontend_npm_userconfig() {
-  local home_npmrc="${HOME:-}/.npmrc"
-  local build_npmrc="${REPO_ROOT}/apps/web/.npmrc.build"
-  local password_b64=""
-
-  if password_b64="$(frontend_npm_password_b64 2>/dev/null)"; then
-    cp "${REPO_ROOT}/apps/web/.npmrc" "${build_npmrc}"
-    printf '%s\n' \
-      '; begin auth token' \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:username=agentweaver' \
-      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:_password=${password_b64}" \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/registry/:email=npm requires email to be set but does not use the value' \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:username=agentweaver' \
-      "//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:_password=${password_b64}" \
-      '//pkgs.dev.azure.com/office/Office/_packaging/1JS/npm/:email=npm requires email to be set but does not use the value' \
-      '; end auth token' >> "${build_npmrc}"
-    printf '%s' "${build_npmrc}"
-    return 0
-  fi
-
-  if [[ -f "${home_npmrc}" ]] && grep -q -E '^//pkgs\.dev\.azure\.com/office/Office/_packaging/1JS/npm(/registry)?/:_password=' "${home_npmrc}"; then
-    printf '%s' "${home_npmrc}"
-    return 0
-  fi
-
-  return 1
-}
-
-run_frontend_npm_credential_provider() {
-  local uname_s
-  uname_s="$(uname -s 2>/dev/null || echo unknown)"
-  if [[ "${uname_s}" == "Linux" ]]; then
-    echo "ERROR: interactive frontend feed auth is currently unavailable on Linux/WSL in this script." >&2
-    echo "  The ado-npm-auth fallback bundles artifacts-credprovider v1.4.1 but requests a RID-specific" >&2
-    echo "  Microsoft.Net8.<rid>.NuGet.CredentialProvider.tar.gz asset that GitHub serves as a non-gzip error page." >&2
-    echo "  That is why previous runs ended with 'gzip: stdin: not in gzip format'." >&2
-    echo "  Export AZURE_ARTIFACTS_NPM_PAT (preferred), AZURE_ARTIFACTS_NPM_PASSWORD_B64, or refresh ~/.npmrc" >&2
-    echo "  with a valid 1JS feed token before rerunning the build." >&2
-    return 1
-  fi
-
-  npm_config_registry=https://registry.npmjs.org npx --yes ado-npm-auth -c "${REPO_ROOT}/apps/web/.npmrc"
-}
-
 prepare_frontend_dist() {
   if ! command -v npm >/dev/null 2>&1; then
     echo "ERROR: npm is required to build apps/web before az acr build." >&2
@@ -346,26 +283,14 @@ prepare_frontend_dist() {
   fi
 
   echo "  [frontend] Building local dist/ before az acr build"
-  local userconfig=""
-  if userconfig="$(frontend_npm_userconfig 2>/dev/null)"; then
-    echo "  [frontend] Using PAT-backed npm userconfig outside the Docker context"
-  else
-    echo "  [frontend] No PAT-backed npm userconfig found; attempting interactive auth helper"
-  fi
 
   (
     cd "${REPO_ROOT}/apps/web"
-    if [[ -n "${userconfig}" ]]; then
-      NPM_CONFIG_USERCONFIG="${userconfig}" npm ci --legacy-peer-deps
-    else
-      run_frontend_npm_credential_provider
-      npm ci --legacy-peer-deps
-    fi
+    npm ci --legacy-peer-deps
     unset VITE_API_URL VITE_API_KEY
     npm run build
   )
 
-  cleanup_frontend_npmrc_build
   # Keep prebuilt dist/ but move node_modules out of the repo before az acr build:
   # az's context tar step can choke on broken symlinks even when .dockerignore excludes them.
   stash_frontend_node_modules_outside_acr_context
