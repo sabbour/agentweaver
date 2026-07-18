@@ -1,3 +1,4 @@
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -33,8 +34,9 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
                 npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
         using var provider = services.BuildServiceProvider();
         var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
-        var stateA = new DurableRunControlState(scopeFactory);
-        var stateB = new DurableRunControlState(scopeFactory);
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var stateA = new DurableRunControlState(scopeFactory, eventStream);
+        var stateB = new DurableRunControlState(scopeFactory, eventStream);
         var gateA = new DurableToolApprovalGate(stateA, runStore: runStore);
         var gateB = new DurableToolApprovalGate(stateB, runStore: runStore);
 
