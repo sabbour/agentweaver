@@ -91,6 +91,19 @@ cd apps/Agentweaver.Api
 dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
 ```
 
+### Package scripts
+
+From the repository root, run these with either `npm run <script>` or `pnpm run <script>`:
+
+| Script | Purpose |
+| --- | --- |
+| `infra:deploy` | Provision the AKS cluster, identity, monitoring, OAuth key, and PostgreSQL. |
+| `release:images` | Build, push, and verify image provenance. |
+| `release:deploy` | Deploy the current release to AKS and verify it. |
+| `dev:web` | Build the web frontend, then start Vite. |
+| `dev:api` | Build the API in Release mode, then run it without rebuilding. |
+| `dev` / `start` | Start the existing full Windows/WSL development environment. |
+
 ### Deploy / redeploy to AKS
 
 **First deploy:**
