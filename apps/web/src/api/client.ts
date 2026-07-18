@@ -658,14 +658,20 @@ export class AgentweaverApiClient {
   // POST /api/assistant/runs → 201 {run_id, status:"in_progress", message?, tools_invoked?}
   //   429 with error:"operator_run_limit" when the per-user concurrency cap is reached.
   //   Accepts optional `resume_from_run_id`: auto-seeds the new run's model context with a
-  //   prior run's full history so an idle-closed conversation can continue seamlessly in a
-  //   new run (the old run itself is never modified/revived). 404 run_not_found / 403
+  //   prior run's full history so a genuinely-gone conversation (see below — NOT plain idle
+  //   timeout, which now wakes the same run transparently) can continue seamlessly in a new
+  //   run (the old run itself is never modified/revived). 404 run_not_found / 403
   //   forbidden if that referenced run doesn't exist or isn't owned by the caller.
   // POST /api/assistant/runs/{id}/messages → 200 {run_id, role:"assistant", message, status, tools_invoked}
-  //   404 with error:"run_not_found" when the run has been idle-closed (legacy symptom).
+  //   Idle timeout is no longer terminal: an idle run goes dormant server-side and wakes as
+  //   the SAME run (same run id, full history intact) on the next message, with a normal
+  //   200 — no error, nothing for the frontend to special-case.
+  //   404 with error:"run_not_found" for a foreign/nonexistent run id, or a legacy pre-fix
+  //   zombie row from before idle runs stopped being terminal.
   //   409 with error:"operator_run_closed" when the run's durable event stream is already
-  //   sealed with a terminal run.completed event (current behavior - the server refuses to
-  //   revive a sealed run instead of silently flipping it back to in-progress).
+  //   sealed with a genuinely terminal run.completed event (a real end-of-conversation, not
+  //   mere inactivity) — the server refuses to revive a sealed run instead of silently
+  //   flipping it back to in-progress.
   createAssistantRun(req: CreateAssistantRunRequest): Promise<CreateAssistantRunResponse> {
     return this.request<CreateAssistantRunResponse>('POST', '/assistant/runs', req);
   }

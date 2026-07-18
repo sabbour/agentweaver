@@ -769,10 +769,12 @@ export interface CreateAssistantRunRequest {
   /** Optional project scope for MCP tool calls that need a project context. */
   project_id?: string;
   /**
-   * Auto-seed a brand-new run's model context with a prior (now closed) run's full
+   * Auto-seed a brand-new run's model context with a prior, genuinely-gone run's full
    * conversation history so replies feel continuous. The referenced run is never modified —
-   * this always creates a new `run_id`. Used to make idle-closed conversations "resumable"
-   * without literally reviving the sealed run (which the server permanently rejects).
+   * this always creates a new `run_id`. This is a fallback for runs that truly can't be
+   * continued (a foreign/nonexistent run id, or a sealed run.completed) — NOT for plain
+   * idle timeout, which now wakes the same run transparently with no client-side handling
+   * needed.
    */
   resume_from_run_id?: string | null;
 }

@@ -185,14 +185,15 @@ describe('AssistantRunPage', () => {
     expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
   });
 
-  it('shows conversation-timeout message and resets on 404 run_not_found from sendAssistantMessage', async () => {
+  it('shows a conversation-gone message and resets on 404 run_not_found from sendAssistantMessage', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
 
     // First message creates the run.
     typeAndSend('first message');
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
 
-    // Now the run gets idle-closed on the next message.
+    // The run turns out to be genuinely gone (foreign/nonexistent id, or a legacy pre-fix
+    // zombie row) — NOT plain idle timeout, which now wakes the same run transparently.
     const err = new ApiError(404, JSON.stringify({ error: 'run_not_found', message: 'Run not found.' }));
     vi.mocked(apiClient.sendAssistantMessage).mockRejectedValue(err);
 
@@ -200,21 +201,78 @@ describe('AssistantRunPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('assistant-error')).toBeTruthy();
     });
-    expect(screen.getByTestId('assistant-error').textContent).toContain('timed out');
+    expect(screen.getByTestId('assistant-error').textContent).toContain('could not be found');
     // Page resets: empty state reappears so the user can start a new run.
     await waitFor(() => {
       expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
     });
   });
 
-  it('passes resume_from_run_id on the next new-run request after a 404 idle-closed reset', async () => {
+  it('passes resume_from_run_id on the next new-run request after a 404 run_not_found reset', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
 
-    // First message creates the run — this is the run that will later be idle-closed.
+    // First message creates the run — this is the run that will later turn out to be gone.
     typeAndSend('first message');
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
 
     const err = new ApiError(404, JSON.stringify({ error: 'run_not_found', message: 'Run not found.' }));
+    vi.mocked(apiClient.sendAssistantMessage).mockRejectedValue(err);
+
+    typeAndSend('second message');
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
+    });
+
+    // The very next submit starts a brand-new run and should auto-seed it with the
+    // just-lost run's history via resume_from_run_id.
+    typeAndSend('continuing message');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(2));
+    expect(apiClient.createAssistantRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        message: 'continuing message',
+        resume_from_run_id: 'assistant-run-1',
+      }),
+    );
+  });
+
+  it('shows a conversation-ended message and resets on 409 operator_run_closed from sendAssistantMessage', async () => {
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+
+    // First message creates the run.
+    typeAndSend('first message');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+
+    // The run's durable event stream is already sealed with a genuinely terminal
+    // run.completed event — a real end-of-conversation, not plain inactivity (idle runs are
+    // dormant, not sealed, and wake transparently as the same run).
+    const err = new ApiError(
+      409,
+      JSON.stringify({ error: 'operator_run_closed', message: 'Run is closed.' }),
+    );
+    vi.mocked(apiClient.sendAssistantMessage).mockRejectedValue(err);
+
+    typeAndSend('second message');
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-error')).toBeTruthy();
+    });
+    expect(screen.getByTestId('assistant-error').textContent).toContain('has ended');
+    // Page resets: empty state reappears so the user can start a new run.
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
+    });
+  });
+
+  it('passes resume_from_run_id on the next new-run request after a 409 operator_run_closed reset', async () => {
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+
+    // First message creates the run — this is the run that will later be sealed as closed.
+    typeAndSend('first message');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+
+    const err = new ApiError(
+      409,
+      JSON.stringify({ error: 'operator_run_closed', message: 'Run is closed.' }),
+    );
     vi.mocked(apiClient.sendAssistantMessage).mockRejectedValue(err);
 
     typeAndSend('second message');
@@ -232,81 +290,5 @@ describe('AssistantRunPage', () => {
         resume_from_run_id: 'assistant-run-1',
       }),
     );
-  });
-
-  it('shows conversation-closed message and resets on 409 operator_run_closed from sendAssistantMessage', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
-
-    // First message creates the run.
-    typeAndSend('first message');
-    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
-
-    // The run's durable event stream is already sealed (idle-closed) — the server now
-    // refuses to revive it with a 409 instead of the legacy 404 run_not_found.
-    const err = new ApiError(
-      409,
-      JSON.stringify({ error: 'operator_run_closed', message: 'Run is closed.' }),
-    );
-    vi.mocked(apiClient.sendAssistantMessage).mockRejectedValue(err);
-
-    typeAndSend('second message');
-    await waitFor(() => {
-      expect(screen.getByTestId('assistant-error')).toBeTruthy();
-    });
-    expect(screen.getByTestId('assistant-error').textContent).toContain('closed after being idle');
-    // Page resets: empty state reappears so the user can start a new run.
-    await waitFor(() => {
-      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
-    });
-  });
-
-  it('passes resume_from_run_id on the next new-run request after a 409 idle-closed reset', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
-
-    // First message creates the run — this is the run that will later be idle-closed.
-    typeAndSend('first message');
-    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
-
-    const err = new ApiError(
-      409,
-      JSON.stringify({ error: 'operator_run_closed', message: 'Run is closed.' }),
-    );
-    vi.mocked(apiClient.sendAssistantMessage).mockRejectedValue(err);
-
-    typeAndSend('second message');
-    await waitFor(() => {
-      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
-    });
-
-    // The very next submit starts a brand-new run and should auto-seed it with the
-    // just-closed run's history via resume_from_run_id.
-    typeAndSend('continuing message');
-    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(2));
-    expect(apiClient.createAssistantRun).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        message: 'continuing message',
-        resume_from_run_id: 'assistant-run-1',
-      }),
-    );
-  });
-
-  it('shows idle-timeout notice in the transcript when run.completed reason is idle_timeout', async () => {
-    // Seed an idle-timeout completion event on the stream.
-    mockRunStreamState.current = {
-      ...mockRunStreamState.current,
-      events: [
-        { sequence: 1, type: 'run.completed', payload: { reason: 'idle_timeout' } },
-      ],
-    };
-
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
-
-    typeAndSend('hello');
-    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
-
-    // The idle-timeout notice renders in the transcript area.
-    const notice = await screen.findByTestId('assistant-idle-timeout');
-    expect(notice).toBeTruthy();
-    expect(notice.textContent).toContain('inactivity');
   });
 });
