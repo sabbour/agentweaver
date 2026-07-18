@@ -84,7 +84,7 @@ Invoke-VerifyImage -Label "mcp"        -Image "agentweaver-mcp"        -PodSelec
 # and keep serving the older image until that run finishes. Provenance for the
 # released AgentHost build should therefore verify the live warm-pool sandboxes
 # sourced from the current SandboxTemplate, not every active claimed run pod.
-Invoke-VerifyImage -Label "agent-host" -Image "agentweaver-agent-host" -PodSelector "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host,agents.x-k8s.io/warm-pool-sandbox" -ExpectedReplicas "" -AllowEphemeralPods $true -Paths ($CommonDotnetPaths + @("apps/Agentweaver.AgentHost")) -VerifyCommit $VerifyCommit
+Invoke-VerifyImage -Label "agent-host" -Image "agentweaver-agent-host" -PodSelector "app=agentweaver-agent-host,app.kubernetes.io/component=agent-host,agents.x-k8s.io/warm-pool-sandbox" -ExpectedReplicas "" -AllowEphemeralPods $true -Paths ($CommonDotnetPaths + @("apps/Agentweaver.AgentHost")) -VerifyCommit $VerifyCommit
 
 Write-Host ""
 Write-Host "==================================================="

@@ -289,7 +289,7 @@ verify_image() {
 verify_image "api"         "agentweaver-api"        "app=agentweaver-api"                                     "$(desired_deployment_replicas agentweaver-api)"        "false" "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.Api"
 verify_image "frontend"    "agentweaver-frontend"   "app=agentweaver-frontend"                                "$(desired_deployment_replicas agentweaver-frontend)"   "false" "apps/web" "apps/Agentweaver.Web"
 verify_image "mcp"         "agentweaver-mcp"        "app=agentweaver-mcp"                                     "$(desired_deployment_replicas agentweaver-mcp)"        "false" "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.Mcp"
-verify_image "agent-host"  "agentweaver-agent-host" "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host" ""                                               "true"  "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.AgentHost"
+verify_image "agent-host"  "agentweaver-agent-host" "app=agentweaver-agent-host,app.kubernetes.io/component=agent-host" ""                                               "true"  "${COMMON_DOTNET_PATHS[@]}" "apps/Agentweaver.AgentHost"
 
 echo ""
 echo "==================================================="

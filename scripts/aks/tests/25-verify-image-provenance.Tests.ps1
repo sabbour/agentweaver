@@ -28,10 +28,10 @@ BeforeAll {
   $script:ClaimedSandboxDigest = "sha256:$('b' * 64)"
   $script:ClaimedSandboxLine = "agent-host-run-abc123`tRunning`ttrue`tacr.example.io/agentweaver-agent-host:v1.9.0`tdocker-pullable://acr.example.io/agentweaver-agent-host@$script:ClaimedSandboxDigest`t"
 
-  $script:WarmPoolSelector = "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host,agents.x-k8s.io/warm-pool-sandbox"
+  $script:WarmPoolSelector = "app=agentweaver-agent-host,app.kubernetes.io/component=agent-host,agents.x-k8s.io/warm-pool-sandbox"
   # The selector 25-verify-image-provenance.ps1 used BEFORE the #351 fix --
   # matches every live AgentHost pod, warm-pool or claimed-run alike.
-  $script:PreFixBroadSelector = "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host"
+  $script:PreFixBroadSelector = "app=agentweaver-agent-host,app.kubernetes.io/component=agent-host"
 }
 
 Describe "Get-LiveDigestStateForSelector (AgentHost warm-pool vs. claimed sandbox)" {
@@ -120,5 +120,36 @@ Describe "25-verify-image-provenance.ps1 selector definition" {
   It "scopes the AgentHost pod selector to warm-pool sandboxes, not every live AgentHost pod" {
     $scriptContent = Get-Content -Raw "$PSScriptRoot\..\25-verify-image-provenance.ps1"
     $scriptContent | Should -Match 'agents\.x-k8s\.io/warm-pool-sandbox'
+  }
+
+  # Regression for #352: AgentHost pods were relabeled from
+  # `app=agentweaver-sandbox` to `app=agentweaver-agent-host`, but the local
+  # verifier's selector was never updated, so it matched zero live pods and
+  # silently skipped verification (AllowEphemeralPods=true treats "no pods
+  # found" as an automatic pass). Assert the retired label can never
+  # reappear, and that the current label is present.
+  It "does NOT use the #352-retired 'app=agentweaver-sandbox' AgentHost selector" {
+    $scriptContent = Get-Content -Raw "$PSScriptRoot\..\25-verify-image-provenance.ps1"
+    $scriptContent | Should -Not -Match 'app=agentweaver-sandbox\b'
+  }
+
+  It "uses the current 'app=agentweaver-agent-host' AgentHost selector" {
+    $scriptContent = Get-Content -Raw "$PSScriptRoot\..\25-verify-image-provenance.ps1"
+    $scriptContent | Should -Match 'app=agentweaver-agent-host,app\.kubernetes\.io/component=agent-host'
+  }
+}
+
+Describe "25-verify-image-provenance.sh selector definition" {
+  # Regression for #352 (bash equivalent): same stale-label defect as the
+  # PowerShell script above -- guard both implementations independently so
+  # a future edit to only one of the two can't silently reintroduce it.
+  It "does NOT use the #352-retired 'app=agentweaver-sandbox' AgentHost selector" {
+    $scriptContent = Get-Content -Raw "$PSScriptRoot\..\25-verify-image-provenance.sh"
+    $scriptContent | Should -Not -Match 'app=agentweaver-sandbox\b'
+  }
+
+  It "uses the current 'app=agentweaver-agent-host' AgentHost selector" {
+    $scriptContent = Get-Content -Raw "$PSScriptRoot\..\25-verify-image-provenance.sh"
+    $scriptContent | Should -Match 'app=agentweaver-agent-host,app\.kubernetes\.io/component=agent-host'
   }
 }
