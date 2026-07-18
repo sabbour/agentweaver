@@ -23,6 +23,7 @@ import { GraphControls } from './CoordinatorTopologyGraph';
 import { SCENARIOS } from './landing/scenarios';
 import { STAGE, type Scenario, type ScenarioNode, type StageIndex } from './landing/types';
 import { computeDispatchWaves, maxDispatchWave, planItemWave } from './landing/waves';
+import { layoutScenarioGraph } from './landing/layout';
 import {
   forwardEdge,
   iconForRole,
@@ -44,14 +45,8 @@ const PLAN_MS = 950;
 const DISPATCH_MS = 640;
 const ARTIFACT_MS = 520;
 
-// Compact authored grid → pixel mapping. Tight enough that fitView keeps the run
-// tree dense and readable at the default zoom instead of shrinking it into a
-// wide, mostly-empty band.
-const COL_STEP = 188;
-// Rows are spaced so the authored envelope (cols 0-5, rows 0.4-2.6) resolves to
-// an aspect ratio close to the run stage — fitView then fills the frame densely
-// instead of leaving a tall blank band above and below a short, wide tree.
-const ROW_STEP = 142;
+// Node positions come from the deterministic layered-DAG layout helper
+// (see landing/layout.ts). Nothing here multiplies hand-authored grid indices.
 
 const DISCLAIMER =
   'Illustrative simulated runs. Outputs are authored examples, not professional advice or real actions.';
@@ -291,40 +286,34 @@ const useStyles = makeStyles({
   stepLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
   stepLabelActive: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
   stepArrow: { color: tokens.colorNeutralStroke1, fontSize: '11px', flexShrink: 0 },
-  // The run surface: one stage that holds the graph and (at the final beat) the
-  // artifact, plus the floating planning console. Height is intentionally
-  // contained so fitView keeps the tree dense instead of leaving a blank band.
+  // The run surface: one stage that frames the graph as a centred horizontal
+  // band. A compact goal strip caps the top and a compact plan panel anchors the
+  // bottom-left, so the space around a wide-short DAG reads as intentional
+  // composition rather than blank quadrants. The artifact floats over this in a
+  // bounded window at the final beat — the graph never unmounts.
   stage: {
     position: 'relative',
     minWidth: 0,
-    height: 'clamp(404px, 48vh, 500px)',
+    height: 'clamp(420px, 50vh, 512px)',
     backgroundColor: tokens.colorNeutralBackground1,
     overflow: 'hidden',
-    '@media (max-width: 720px)': { height: '544px' },
-    '@media (max-width: 380px)': { height: '520px' },
+    '@media (max-width: 720px)': { height: '540px' },
+    '@media (max-width: 380px)': { height: '516px' },
   },
-  layer: {
+  // The graph layer fills the stage and dims to settled context under the
+  // artifact window (still visible, no longer the focus).
+  graphLayer: {
     position: 'absolute',
     inset: 0,
     minWidth: 0,
-    transitionProperty: 'opacity',
-    transitionDuration: '320ms',
+    transitionProperty: 'opacity, filter',
+    transitionDuration: '360ms',
     transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
     '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
   },
-  layerHidden: {
-    opacity: 0,
-    pointerEvents: 'none',
-    visibility: 'hidden',
-  },
-  artifactLayer: {
-    display: 'flex',
-    flexDirection: 'column',
-    padding: tokens.spacingHorizontalL,
-    backgroundColor: tokens.colorNeutralBackground2,
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    '@media (max-width: 720px)': { padding: tokens.spacingHorizontalM },
+  graphSettled: {
+    opacity: 0.42,
+    filter: 'saturate(0.72)',
   },
   graph: {
     width: '100%',
@@ -337,51 +326,136 @@ const useStyles = makeStyles({
     zIndex: 6,
     right: tokens.spacingHorizontalM,
     bottom: tokens.spacingVerticalS,
-    maxWidth: '260px',
+    maxWidth: '220px',
     textAlign: 'right',
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase100,
     lineHeight: '15px',
     pointerEvents: 'none',
-    '@media (max-width: 720px)': { display: 'none' },
+    '@media (max-width: 900px)': { display: 'none' },
   },
-  // Floating, non-modal planning console. Left rail on desktop, bottom sheet on
-  // mobile — an overlay over the run tree, never a permanent layout column.
-  console: {
+  // Compact, integrated goal typing surface pinned to the top of the stage.
+  goalStrip: {
     position: 'absolute',
     zIndex: 7,
-    top: tokens.spacingVerticalM,
+    top: 0,
+    left: 0,
+    right: 0,
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
+    backgroundColor: 'color-mix(in srgb, var(--colorNeutralBackground1) 88%, transparent)',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    transitionProperty: 'opacity, transform',
+    transitionDuration: '280ms',
+    transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
+    '@media (max-width: 720px)': { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}` },
+  },
+  goalTag: {
+    flexShrink: 0,
+    fontSize: tokens.fontSizeBase100,
+    textTransform: 'uppercase',
+    letterSpacing: '0.07em',
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground3,
+  },
+  goalText: {
+    minWidth: 0,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: '18px',
+    color: tokens.colorNeutralForeground1,
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
+  // Compact, non-modal plan panel docked to the lower-left. Never more than a
+  // corner of the stage — the graph stays visually dominant.
+  planPanel: {
+    position: 'absolute',
+    zIndex: 7,
     left: tokens.spacingHorizontalM,
-    width: 'clamp(232px, 30%, 320px)',
-    maxHeight: `calc(100% - ${tokens.spacingVerticalM} * 2)`,
+    bottom: tokens.spacingVerticalM,
+    width: 'clamp(226px, 27%, 296px)',
+    maxHeight: '42%',
     display: 'flex',
     flexDirection: 'column',
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: '0 12px 32px rgba(39, 35, 32, 0.14)',
+    boxShadow: '0 10px 28px rgba(39, 35, 32, 0.16)',
     overflow: 'hidden',
     transitionProperty: 'opacity, transform',
-    transitionDuration: '320ms',
+    transitionDuration: '300ms',
     transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
     '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
     '@media (max-width: 720px)': {
-      top: 'auto',
       left: tokens.spacingHorizontalM,
       right: tokens.spacingHorizontalM,
       bottom: tokens.spacingVerticalM,
       width: 'auto',
-      maxHeight: '48%',
+      maxHeight: '46%',
     },
   },
-  consoleHidden: {
+  overlayHidden: {
     opacity: 0,
-    transform: 'translateY(-6px)',
+    transform: 'translateY(8px)',
     pointerEvents: 'none',
     visibility: 'hidden',
-    '@media (max-width: 720px)': { transform: 'translateY(8px)' },
   },
-  consoleScroll: {
+  // Scrim behind the bounded artifact window — a soft focus cue, NOT a modal
+  // trap. It is inert (aria-hidden, pointer-events none) so the graph, tabs and
+  // replay stay reachable.
+  artifactScrim: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 8,
+    backgroundColor: 'rgba(39, 35, 32, 0.28)',
+    pointerEvents: 'none',
+    animationName: { from: { opacity: 0 }, to: { opacity: 1 } },
+    animationDuration: '360ms',
+    animationTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none' },
+  },
+  // Bounded artifact window floating over the settled graph. Authored to ~66%w
+  // / 74%h on desktop, near-full width on mobile with a visible stage edge.
+  artifactWindow: {
+    position: 'absolute',
+    zIndex: 9,
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '66%',
+    height: '74%',
+    maxWidth: '760px',
+    display: 'flex',
+    flexDirection: 'column',
+    borderRadius: tokens.borderRadiusXLarge,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    boxShadow: '0 24px 60px rgba(39, 35, 32, 0.30)',
+    overflow: 'hidden',
+    animationName: {
+      from: { opacity: 0, transform: 'translate(-50%, -46%) scale(0.985)' },
+      to: { opacity: 1, transform: 'translate(-50%, -50%) scale(1)' },
+    },
+    animationDuration: '380ms',
+    animationTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none' },
+    '@media (max-width: 900px)': { width: '78%', height: '76%' },
+    '@media (max-width: 720px)': { width: '92%', height: '80%', maxWidth: 'none' },
+  },
+  artifactWindowBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    flex: 1,
+    overflow: 'hidden',
+  },
+  planScroll: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
@@ -687,14 +761,18 @@ export function ScenarioTheater() {
   );
 
   // ---- Derived graph nodes/edges -------------------------------------------
+  // Deterministic layered-DAG positions derived from roles + dependency waves.
+  const layout = useMemo(() => layoutScenarioGraph(scenario), [scenario]);
+
   const nodes = useMemo<Node<WorkflowNodeData>[]>(
     () =>
       scenario.nodes.map((node) => {
         const runtime = nodeStatus(node, state.stage, state.dispatchStep, waves);
+        const pos = layout.positions.get(node.id) ?? { x: 0, y: 0 };
         return {
           id: node.id,
           type: 'workflow',
-          position: { x: node.col * COL_STEP, y: node.row * ROW_STEP },
+          position: { x: pos.x, y: pos.y },
           data: {
             def: {
               key: node.role,
@@ -714,7 +792,7 @@ export function ScenarioTheater() {
           },
         };
       }),
-    [scenario, state.stage, state.dispatchStep, waves],
+    [scenario, state.stage, state.dispatchStep, waves, layout],
   );
 
   const edges = useMemo<Edge[]>(() => {
@@ -732,13 +810,17 @@ export function ScenarioTheater() {
   const typed = scenario.goal.slice(0, state.typedLen);
   const showCaret = state.stage === STAGE.TYPING;
   const panelId = 'aw-theater-panel';
-  // The artifact takes over the stage at the final beat; the planning console
-  // rides along until then, crossfading out as the artifact reveals in place.
+  // At the final beat the artifact floats in a bounded window over the graph,
+  // which stays mounted and dims back as settled context — never a full-stage
+  // takeover and never a modal focus trap.
   const showArtifact = state.stage >= STAGE.ARTIFACT;
-  const showConsole = !showArtifact;
+  const showPlanPanel = state.stage >= STAGE.OUTCOME && !showArtifact;
+  // The graph is framed as a horizontal band: the goal strip caps the top and
+  // the plan panel + hint anchor the bottom, so fitView keeps the run tree in
+  // the centre of the stage rather than letting it drift into a corner.
   const fitPadding = compact
-    ? ({ top: '5%', right: '6%', bottom: '48%', left: '6%' } as const)
-    : ({ top: '6%', right: '6%', bottom: '8%', left: '25%' } as const);
+    ? ({ top: '13%', right: '5%', bottom: '42%', left: '5%' } as const)
+    : ({ top: '11%', right: '5%', bottom: '30%', left: '6%' } as const);
 
   return (
     <FluentProvider theme={agentweaverLightTheme}>
@@ -836,7 +918,7 @@ export function ScenarioTheater() {
 
           <div className={styles.stage} aria-label="Run surface">
             <section
-              className={mergeClasses(styles.layer, showArtifact && styles.layerHidden)}
+              className={mergeClasses(styles.graphLayer, showArtifact && styles.graphSettled)}
               aria-label="Run tree"
               aria-hidden={showArtifact}
               onPointerDownCapture={pauseFromInteraction}
@@ -850,7 +932,7 @@ export function ScenarioTheater() {
                 nodeTypes={workflowNodeTypes}
                 edgeTypes={workflowEdgeTypes}
                 fitView
-                fitViewOptions={{ padding: fitPadding, maxZoom: 1.35 }}
+                fitViewOptions={{ padding: fitPadding, maxZoom: 1.15 }}
                 minZoom={0.3}
                 maxZoom={1.5}
                 nodesDraggable={false}
@@ -876,8 +958,8 @@ export function ScenarioTheater() {
                         : '#b8afa8'
                   }
                   style={{
-                    width: 96,
-                    height: 62,
+                    width: 92,
+                    height: 58,
                     border: '1px solid var(--colorNeutralStroke2)',
                     borderRadius: 8,
                   }}
@@ -888,33 +970,30 @@ export function ScenarioTheater() {
               </Text>
             </section>
 
-            <aside
-              className={mergeClasses(styles.console, !showConsole && styles.consoleHidden)}
-              aria-label="Run plan"
-              aria-hidden={!showConsole}
+            <div
+              className={mergeClasses(styles.goalStrip, showArtifact && styles.overlayHidden)}
+              aria-hidden={showArtifact}
             >
-              <div className={styles.consoleScroll}>
-                <div>
-                  <div className={styles.composerLabel}>Goal</div>
-                  <div className={styles.composerText}>
-                    {typed}
-                    {showCaret && <span className={styles.caret} aria-hidden="true" />}
-                  </div>
-                </div>
+              <span className={styles.goalTag}>Goal</span>
+              <span className={styles.goalText}>
+                {typed}
+                {showCaret && <span className={styles.caret} aria-hidden="true" />}
+              </span>
+            </div>
 
-                {state.stage >= STAGE.OUTCOME && (
-                  <div className={styles.consoleBlock}>
+            <aside
+              className={mergeClasses(styles.planPanel, !showPlanPanel && styles.overlayHidden)}
+              aria-label="Run plan"
+              aria-hidden={!showPlanPanel}
+            >
+              <div className={styles.planScroll}>
+                {state.stage >= STAGE.OUTCOME && state.stage < STAGE.PLAN && (
+                  <div>
                     <div className={styles.cardTitle}>Outcome spec</div>
                     <div className={styles.outcomeGoal}>{scenario.outcome.goal}</div>
                     <div className={styles.metaLabel}>Scope</div>
                     <ul className={styles.list}>
                       {scenario.outcome.scope.map((item) => (
-                        <li className={styles.listItem} key={item}>{item}</li>
-                      ))}
-                    </ul>
-                    <div className={styles.metaLabel}>Assumptions</div>
-                    <ul className={styles.list}>
-                      {scenario.outcome.assumptions.map((item) => (
                         <li className={styles.listItem} key={item}>{item}</li>
                       ))}
                     </ul>
@@ -928,7 +1007,7 @@ export function ScenarioTheater() {
                 )}
 
                 {state.stage >= STAGE.PLAN && (
-                  <div className={styles.consoleBlock}>
+                  <div>
                     <div className={styles.cardTitle}>Work plan</div>
                     {scenario.plan.map((item, index) => {
                       const wave = planItemWave(waves, agentNodeIds, index);
@@ -942,7 +1021,6 @@ export function ScenarioTheater() {
                           </span>
                           <span className={styles.planCopy}>
                             <span className={styles.planTitle}>{item.title}</span>
-                            <span className={styles.planDetail}>{item.detail}</span>
                             <span className={styles.planOwner}>Owner · {item.owner}</span>
                           </span>
                         </div>
@@ -953,16 +1031,18 @@ export function ScenarioTheater() {
               </div>
             </aside>
 
-            <div
-              className={mergeClasses(styles.layer, styles.artifactLayer, !showArtifact && styles.layerHidden)}
-              aria-hidden={!showArtifact}
-            >
-              {showArtifact && (
-                <ArtifactFrame label={scenario.artifactLabel} caption={scenario.artifactCaption}>
-                  <scenario.Artifact />
-                </ArtifactFrame>
-              )}
-            </div>
+            {showArtifact && (
+              <>
+                <div className={styles.artifactScrim} aria-hidden="true" />
+                <div className={styles.artifactWindow} aria-label="Run artifact">
+                  <div className={styles.artifactWindowBody}>
+                    <ArtifactFrame label={scenario.artifactLabel} caption={scenario.artifactCaption}>
+                      <scenario.Artifact />
+                    </ArtifactFrame>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

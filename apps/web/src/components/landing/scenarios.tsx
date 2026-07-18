@@ -324,7 +324,7 @@ export const SCENARIOS: Scenario[] = [
       scope: [
         'HUD with score, high score, and lives',
         'Four enemy rows, defensive shields, and a player cannon',
-        'In-flight projectiles rendered as a still frame',
+        'Marching invaders and in-flight projectiles animated in CSS',
       ],
       assumptions: [
         'Visual demo only — no game loop or input handling',
@@ -356,7 +356,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-pr2', 'palette', 'review'],
     ],
     artifactLabel: 'Game scene preview',
-    artifactCaption: 'Authored splash scene — a static visual, not a playable game.',
+    artifactCaption: 'Authored splash scene — an animated, non-playable demo.',
     Artifact: SpaceInvadersArtifact,
   },
   {

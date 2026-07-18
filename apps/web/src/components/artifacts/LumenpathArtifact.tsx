@@ -2,26 +2,48 @@ import { makeStyles } from '@fluentui/react-components';
 import { FauxButton, FauxControl, FauxLink } from './primitives';
 
 /**
- * Lumenpath — a fictional product-analytics brand with a nocturnal, cartographic
- * art direction: it maps the routes users take through a product. The loud,
- * saturated palette contrasts hard with Agentweaver's warm-monochrome frame to
- * prove the platform can produce work in a completely different voice.
- * No gradient text, no glassmorphism; colour is carried by flat bold fields and
- * inline SVG. The visual language is a route map (waypoints, paths, drop-offs).
+ * Lumenpath — a fictional "journey-path intelligence" brand. It replays product
+ * sessions as a single route map: the paths that convert, the ones that stall,
+ * and the exact step a segment turns back.
+ *
+ * Art direction is deliberately NOT a generic SaaS template. It is editorial and
+ * asymmetric: a dominant authored map surface anchors the hero, capabilities are
+ * laid out with varied weight (no uniform card grid), and plans are a recommended
+ * lead row with two quieter secondary rows (no symmetric three-up with a floating
+ * middle). Nocturnal saturated palette — Lumenpath is a distinct brand, allowed to
+ * be loud against Agentweaver's warm monochrome. No gradient text, no glass
+ * (backdrop blur), no side-stripe cards, no fake hero metric, no pill soup.
  */
+
+const NIGHT = '#160b32';
+const PANEL = '#1d1147';
+const INK = '#f3efff';
+const MUTED = '#b6a9e0';
+const DIM = '#8578ad';
+const LINE = '#31215e';
+const VIOLET = '#7b5cff';
+const TEAL = '#19e6b0';
+const CORAL = '#ff5c8a';
+const AMBER = '#ffc94b';
+
 const useStyles = makeStyles({
   root: {
     fontFamily: '"Segoe UI", ui-sans-serif, system-ui, sans-serif',
-    backgroundColor: '#140a2b',
-    color: '#f4efff',
+    backgroundColor: NIGHT,
+    color: INK,
     minWidth: 0,
+    backgroundImage:
+      'linear-gradient(rgba(123,92,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(123,92,255,0.06) 1px, transparent 1px)',
+    backgroundSize: '46px 46px',
   },
+
   nav: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: '16px',
-    padding: '16px 26px',
+    padding: '16px 30px',
+    borderBottom: `1px solid ${LINE}`,
     flexWrap: 'wrap',
   },
   brand: {
@@ -29,68 +51,63 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: '10px',
     fontWeight: 800,
-    fontSize: '19px',
+    fontSize: '18px',
     letterSpacing: '-0.02em',
-  },
-  brandMark: {
-    display: 'inline-flex',
   },
   navLinks: {
     display: 'flex',
-    gap: '20px',
-    fontSize: '13.5px',
+    gap: '22px',
+    marginLeft: 'auto',
+    marginRight: '18px',
+    fontSize: '13px',
     fontWeight: 600,
-    color: '#c8bbef',
+    color: MUTED,
     flexWrap: 'wrap',
+    '@media (max-width: 560px)': { display: 'none' },
   },
   navCta: {
-    padding: '9px 16px',
-    borderRadius: '9999px',
-    backgroundColor: '#12e6b4',
-    color: '#0a2a22',
-    fontWeight: 800,
-    fontSize: '13.5px',
+    padding: '8px 16px',
+    borderRadius: '9px',
+    border: `1px solid ${VIOLET}`,
+    color: INK,
+    fontWeight: 700,
+    fontSize: '13px',
   },
+
   hero: {
-    position: 'relative',
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, 0.9fr)',
-    gap: '28px',
+    gridTemplateColumns: 'minmax(0, 0.86fr) minmax(0, 1.14fr)',
+    gap: '32px',
     alignItems: 'center',
-    padding: '40px 26px 48px',
-    overflow: 'hidden',
-    '@media (max-width: 680px)': {
+    padding: '46px 30px 40px',
+    '@media (max-width: 720px)': {
       gridTemplateColumns: '1fr',
+      gap: '28px',
+      padding: '34px 22px 30px',
     },
   },
-  eyebrow: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    padding: '5px 12px',
-    borderRadius: '9999px',
-    backgroundColor: 'rgba(255, 92, 138, 0.16)',
-    border: '1px solid rgba(255, 92, 138, 0.5)',
-    color: '#ff89ad',
+  kicker: {
     fontSize: '12px',
     fontWeight: 700,
-    letterSpacing: '0.04em',
+    letterSpacing: '0.16em',
     textTransform: 'uppercase',
-    marginBottom: '18px',
+    color: TEAL,
+    marginBottom: '16px',
   },
   h1: {
     margin: 0,
-    fontSize: 'clamp(2.3rem, 5.6vw, 3.4rem)',
-    lineHeight: 1.04,
+    fontSize: 'clamp(2.2rem, 5vw, 3.15rem)',
+    lineHeight: 1.02,
     fontWeight: 850,
-    letterSpacing: '-0.035em',
+    letterSpacing: '-0.038em',
   },
-  h1AccentPink: { color: '#ff5c8a' },
+  h1turn: { color: CORAL },
   lede: {
-    marginTop: '18px',
-    maxWidth: '46ch',
-    fontSize: '15.5px',
-    lineHeight: 1.6,
-    color: '#cabff0',
+    marginTop: '20px',
+    maxWidth: '42ch',
+    fontSize: '15px',
+    lineHeight: 1.62,
+    color: MUTED,
   },
   heroCtas: {
     display: 'flex',
@@ -99,178 +116,277 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
   },
   ctaPrimary: {
-    padding: '13px 22px',
-    borderRadius: '12px',
-    backgroundColor: '#7b5cff',
-    color: '#ffffff',
+    padding: '12px 22px',
+    borderRadius: '11px',
+    backgroundColor: TEAL,
+    color: '#04241b',
     fontWeight: 800,
-    fontSize: '14.5px',
-    boxShadow: '0 12px 30px rgba(123, 92, 255, 0.45)',
+    fontSize: '14px',
   },
   ctaGhost: {
-    padding: '13px 22px',
-    borderRadius: '12px',
-    border: '1.5px solid rgba(244, 239, 255, 0.35)',
-    color: '#f4efff',
+    padding: '12px 20px',
+    borderRadius: '11px',
+    border: `1.5px solid ${LINE}`,
+    color: INK,
     fontWeight: 700,
-    fontSize: '14.5px',
+    fontSize: '14px',
   },
-  heroProof: {
-    marginTop: '22px',
+  heroNote: {
+    marginTop: '20px',
     fontSize: '12.5px',
     fontWeight: 600,
-    color: '#8fe9d4',
-    letterSpacing: '0.01em',
+    color: DIM,
   },
-  heroArt: {
+
+  mapCard: {
     position: 'relative',
-    minHeight: '250px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  customers: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px 26px',
-    padding: '15px 26px',
-    backgroundColor: '#0e0720',
-    borderTop: '1px solid #26183f',
-    borderBottom: '1px solid #26183f',
-    flexWrap: 'wrap',
-  },
-  customersLabel: {
-    fontSize: '11px',
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: '0.14em',
-    color: '#8f83b8',
-  },
-  customerName: {
-    fontSize: '14px',
-    fontWeight: 800,
-    letterSpacing: '-0.01em',
-    color: '#d8cef5',
-  },
-  features: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-    gap: '16px',
-    padding: '44px 26px',
-  },
-  card: {
-    padding: '22px',
-    borderRadius: '16px',
-    backgroundColor: '#1e1140',
-    border: '1px solid rgba(123, 92, 255, 0.28)',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-  },
-  cardBig: {
-    gridColumn: 'span 2',
-    backgroundColor: '#ffd23f',
-    color: '#241a02',
-    border: 'none',
-    borderRadius: '20px',
-    '@media (max-width: 520px)': { gridColumn: 'span 1' },
-  },
-  cardIcon: { width: '38px', height: '38px' },
-  cardTitle: { fontSize: '16px', fontWeight: 800, letterSpacing: '-0.01em' },
-  cardText: { fontSize: '13px', lineHeight: 1.55, color: '#bcb0e4' },
-  cardTextDark: { fontSize: '13.5px', lineHeight: 1.55, color: '#4a3a08', fontWeight: 500 },
-  pricing: {
-    padding: '20px 26px 48px',
-  },
-  pricingHead: {
-    textAlign: 'center',
-    marginBottom: '26px',
-  },
-  pricingTitle: {
-    margin: 0,
-    fontSize: 'clamp(1.6rem, 4vw, 2.3rem)',
-    fontWeight: 850,
-    letterSpacing: '-0.03em',
-  },
-  tierGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-    gap: '16px',
-  },
-  tier: {
-    padding: '24px 22px',
     borderRadius: '18px',
-    backgroundColor: '#1e1140',
-    border: '1px solid rgba(200, 187, 239, 0.18)',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
+    backgroundColor: PANEL,
+    border: `1px solid ${LINE}`,
+    boxShadow: '0 26px 60px rgba(6, 2, 20, 0.55)',
+    overflow: 'hidden',
   },
-  tierFeatured: {
-    backgroundColor: '#7b5cff',
-    border: '1px solid #a58bff',
-    transform: 'translateY(-6px)',
-    boxShadow: '0 20px 48px rgba(123, 92, 255, 0.4)',
-  },
-  tierHead: {
+  mapBar: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: '8px',
+    gap: '10px',
+    padding: '13px 16px',
+    borderBottom: `1px solid ${LINE}`,
+    backgroundColor: '#190e3d',
   },
-  tierName: { fontSize: '13px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#12e6b4' },
-  tierNameFeatured: { color: '#ffffff' },
-  tierBadge: {
+  mapTitle: { fontSize: '12.5px', fontWeight: 700, color: INK, letterSpacing: '-0.01em' },
+  mapRange: { fontSize: '11px', fontWeight: 600, color: DIM },
+  mapSvg: { display: 'block', width: '100%', height: 'auto' },
+  mapLegend: {
+    display: 'flex',
+    gap: '18px',
+    padding: '11px 16px',
+    borderTop: `1px solid ${LINE}`,
+    backgroundColor: '#190e3d',
+    flexWrap: 'wrap',
+    margin: 0,
+  },
+  legendItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '7px',
+    fontSize: '11px',
+    fontWeight: 600,
+    color: MUTED,
+  },
+  legendDot: { width: '9px', height: '9px', borderRadius: '3px' },
+
+  band: {
+    padding: '20px 30px 46px',
+    '@media (max-width: 720px)': { padding: '8px 22px 36px' },
+  },
+  bandLead: {
+    margin: '0 0 6px',
+    fontSize: 'clamp(1.5rem, 3.6vw, 2.05rem)',
+    fontWeight: 850,
+    letterSpacing: '-0.03em',
+    maxWidth: '18ch',
+  },
+  bandLeadSub: {
+    margin: '0 0 30px',
+    maxWidth: '52ch',
+    fontSize: '14.5px',
+    lineHeight: 1.6,
+    color: MUTED,
+  },
+  splitRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 0.95fr)',
+    gap: '20px',
+    alignItems: 'stretch',
+    '@media (max-width: 660px)': { gridTemplateColumns: '1fr' },
+  },
+  askPanel: {
+    borderRadius: '16px',
+    backgroundColor: PANEL,
+    border: `1px solid ${LINE}`,
+    padding: '22px 22px 24px',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  askEyebrow: {
+    fontSize: '11px',
+    fontWeight: 700,
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    color: AMBER,
+    marginBottom: '12px',
+  },
+  askTitle: { fontSize: '18px', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '8px' },
+  askText: { fontSize: '13.5px', lineHeight: 1.58, color: MUTED, marginBottom: '18px' },
+  askQuery: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '9px',
+    padding: '11px 13px',
+    borderRadius: '10px',
+    backgroundColor: '#120830',
+    border: `1px solid ${LINE}`,
+    fontSize: '13px',
+    fontWeight: 600,
+    color: INK,
+  },
+  askCaret: { color: TEAL, fontWeight: 800 },
+  askAnswer: {
+    marginTop: '10px',
+    paddingLeft: '13px',
+    fontSize: '12.5px',
+    lineHeight: 1.55,
+    color: MUTED,
+  },
+  askAnswerStrong: { color: CORAL, fontWeight: 700 },
+  capList: {
+    listStyle: 'none',
+    margin: 0,
+    padding: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  capItem: {
+    display: 'grid',
+    gridTemplateColumns: '20px minmax(0, 1fr)',
+    gap: '12px',
+    alignItems: 'start',
+    padding: '13px 2px',
+    borderTop: `1px solid ${LINE}`,
+  },
+  capItemFirst: { borderTop: 'none' },
+  capGlyph: { marginTop: '2px' },
+  capName: { display: 'block', fontSize: '13.5px', fontWeight: 700, color: INK, letterSpacing: '-0.01em' },
+  capDetail: { display: 'block', fontSize: '12px', lineHeight: 1.5, color: DIM, marginTop: '2px' },
+
+  plans: { padding: '4px 30px 44px', '@media (max-width: 720px)': { padding: '0 22px 36px' } },
+  plansHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: '14px',
+    marginBottom: '20px',
+    flexWrap: 'wrap',
+  },
+  plansTitle: {
+    margin: 0,
+    fontSize: 'clamp(1.4rem, 3.4vw, 1.95rem)',
+    fontWeight: 850,
+    letterSpacing: '-0.03em',
+    maxWidth: '20ch',
+  },
+  plansNote: { fontSize: '12.5px', fontWeight: 600, color: DIM },
+
+  leadPlan: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: '20px',
+    alignItems: 'center',
+    padding: '24px 26px',
+    borderRadius: '18px',
+    backgroundColor: VIOLET,
+    color: INK,
+    '@media (max-width: 620px)': { gridTemplateColumns: '1fr', gap: '16px' },
+  },
+  leadTop: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' },
+  leadName: { fontSize: '15px', fontWeight: 850, letterSpacing: '0.01em' },
+  leadBadge: {
     fontSize: '10.5px',
     fontWeight: 800,
     textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    color: '#241a02',
-    backgroundColor: '#ffd23f',
-    padding: '3px 9px',
+    letterSpacing: '0.06em',
+    color: '#2a1a02',
+    backgroundColor: AMBER,
+    padding: '3px 10px',
     borderRadius: '9999px',
   },
-  price: { fontSize: '34px', fontWeight: 850, letterSpacing: '-0.03em' },
-  priceUnit: { fontSize: '13px', fontWeight: 500, color: '#a99fce' },
-  priceUnitFeatured: { color: '#e4dcff' },
-  tierList: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '8px' },
-  tierItem: { display: 'flex', gap: '8px', alignItems: 'baseline', fontSize: '12.5px', lineHeight: 1.4, color: '#d6cdf2' },
-  tierItemFeatured: { color: '#f1ecff' },
-  tierCheck: { color: '#12e6b4', fontWeight: 800, fontSize: '12px' },
-  tierCheckFeatured: { color: '#ffd23f' },
-  tierCta: {
-    marginTop: '4px',
-    padding: '11px 16px',
+  leadIncludes: { fontSize: '13px', lineHeight: 1.55, color: '#efeaff', maxWidth: '46ch', margin: 0 },
+  leadRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '18px',
+    '@media (max-width: 620px)': { justifyContent: 'space-between' },
+  },
+  leadPrice: { fontSize: '30px', fontWeight: 850, letterSpacing: '-0.03em', whiteSpace: 'nowrap' },
+  leadPriceUnit: { fontSize: '13px', fontWeight: 600, color: '#d9ceff' },
+  leadCta: {
+    padding: '12px 20px',
     borderRadius: '10px',
-    textAlign: 'center',
+    backgroundColor: NIGHT,
+    color: INK,
     fontWeight: 800,
     fontSize: '13.5px',
-    backgroundColor: '#12e6b4',
-    color: '#0a2a22',
+    whiteSpace: 'nowrap',
   },
-  tierCtaFeatured: { backgroundColor: '#ffd23f', color: '#241a02' },
-  finalCta: {
-    margin: '0 26px 34px',
-    padding: '36px 28px',
-    borderRadius: '24px',
-    backgroundColor: '#12e6b4',
-    color: '#052019',
+
+  secondaryRow: {
+    marginTop: '12px',
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '12px',
+    '@media (max-width: 560px)': { gridTemplateColumns: '1fr' },
+  },
+  minorPlan: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: '12px',
+    padding: '16px 18px',
+    borderRadius: '14px',
+    backgroundColor: PANEL,
+    border: `1px solid ${LINE}`,
+  },
+  minorLeft: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 },
+  minorName: { fontSize: '13.5px', fontWeight: 800, color: INK },
+  minorDetail: { fontSize: '11.5px', lineHeight: 1.45, color: DIM },
+  minorPrice: { fontSize: '15px', fontWeight: 800, color: TEAL, whiteSpace: 'nowrap' },
+
+  close: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: '20px',
+    gap: '18px',
+    margin: '0 30px 36px',
+    padding: '26px 0 0',
+    borderTop: `1px solid ${LINE}`,
     flexWrap: 'wrap',
+    '@media (max-width: 720px)': { margin: '0 22px 30px' },
   },
-  finalTitle: { margin: 0, fontSize: 'clamp(1.5rem, 4vw, 2.1rem)', fontWeight: 850, letterSpacing: '-0.03em', maxWidth: '20ch' },
-  finalBtn: {
-    padding: '14px 26px',
-    borderRadius: '12px',
-    backgroundColor: '#140a2b',
-    color: '#f4efff',
+  closeTitle: {
+    margin: 0,
+    fontSize: 'clamp(1.3rem, 3.2vw, 1.8rem)',
+    fontWeight: 850,
+    letterSpacing: '-0.03em',
+    maxWidth: '22ch',
+  },
+  closeCta: {
+    padding: '13px 24px',
+    borderRadius: '11px',
+    backgroundColor: TEAL,
+    color: '#04241b',
     fontWeight: 800,
-    fontSize: '15px',
+    fontSize: '14.5px',
+    whiteSpace: 'nowrap',
   },
 });
+
+function Check({ color }: { color: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M3 8.5 L6.4 12 L13 4.5"
+        stroke={color}
+        strokeWidth="2.2"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export function LumenpathArtifact() {
   const s = useStyles();
@@ -278,149 +394,218 @@ export function LumenpathArtifact() {
     <div className={s.root}>
       <header className={s.nav}>
         <span className={s.brand}>
-          <svg className={s.brandMark} width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
-            <rect width="26" height="26" rx="8" fill="#7b5cff" />
-            <path d="M6 17 L13 6 L20 17" stroke="#12e6b4" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            <circle cx="13" cy="17" r="2.4" fill="#ffd23f" />
+          <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+            <rect width="26" height="26" rx="8" fill={VIOLET} />
+            <path
+              d="M5 18 L11 8 L15 13 L21 6"
+              stroke={TEAL}
+              strokeWidth="2.4"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx="11" cy="8" r="2.1" fill={AMBER} />
+            <circle cx="21" cy="6" r="2.1" fill={INK} />
           </svg>
           Lumenpath
         </span>
         <nav className={s.navLinks}>
           <FauxLink>Product</FauxLink>
           <FauxLink>Pricing</FauxLink>
-          <FauxLink>Docs</FauxLink>
+          <FauxLink>Changelog</FauxLink>
         </nav>
         <FauxButton className={s.navCta}>Start free</FauxButton>
       </header>
 
       <section className={s.hero}>
         <div>
-          <span className={s.eyebrow}>Product journey analytics</span>
+          <p className={s.kicker}>Journey-path intelligence</p>
           <h1 className={s.h1}>
-            Find the exact step where users <span className={s.h1AccentPink}>turn back.</span>
+            Find the exact step a segment <span className={s.h1turn}>turns back.</span>
           </h1>
           <p className={s.lede}>
-            Lumenpath stitches every session into a route map — so you can see which turns
-            convert, which ones stall, and exactly who drops off.
+            Lumenpath replays every session as one route map — the paths that convert, the
+            ones that stall, and the precise moment a cohort abandons the flow.
           </p>
           <div className={s.heroCtas}>
-            <FauxButton className={s.ctaPrimary}>Get started free</FauxButton>
-            <FauxControl className={s.ctaGhost}>See a sample map</FauxControl>
+            <FauxButton className={s.ctaPrimary}>Map your first flow</FauxButton>
+            <FauxControl className={s.ctaGhost}>Tour a live map</FauxControl>
           </div>
-          <p className={s.heroProof}>First map in under a minute. No SDK rewrite, no tracking plan to design.</p>
+          <p className={s.heroNote}>Connects to your existing events. No tracking plan to redesign.</p>
         </div>
-        <div className={s.heroArt}>
-          <svg width="300" height="240" viewBox="0 0 300 240" role="img" aria-label="Journey route map">
-            <rect x="14" y="18" width="272" height="204" rx="16" fill="#1e1140" stroke="#3a2470" />
-            <line x1="24" y1="120" x2="276" y2="120" stroke="#2a1a52" strokeWidth="1" strokeDasharray="3 7" />
-            <path d="M48 176 L104 138 L168 150 L246 74" stroke="#12e6b4" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M168 150 L214 200" stroke="#ff5c8a" strokeWidth="3.5" fill="none" strokeLinecap="round" strokeDasharray="2 7" />
-            <circle cx="48" cy="176" r="6.5" fill="#ffd23f" />
-            <circle cx="104" cy="138" r="6" fill="#7b5cff" stroke="#f4efff" strokeWidth="1.5" />
-            <circle cx="168" cy="150" r="7" fill="#7b5cff" stroke="#ff5c8a" strokeWidth="2.5" />
-            <circle cx="246" cy="74" r="8" fill="#12e6b4" stroke="#052019" strokeWidth="2" />
-            <circle cx="214" cy="200" r="5" fill="#ff5c8a" />
-            <text x="48" y="196" fill="#a99fce" fontSize="8.5" textAnchor="middle" fontFamily="Segoe UI">Landing</text>
-            <text x="104" y="126" fill="#a99fce" fontSize="8.5" textAnchor="middle" fontFamily="Segoe UI">Browse</text>
-            <text x="168" y="170" fill="#cabff0" fontSize="8.5" textAnchor="middle" fontFamily="Segoe UI">Cart</text>
-            <text x="246" y="60" fill="#8fe9d4" fontSize="8.5" textAnchor="middle" fontWeight="700" fontFamily="Segoe UI">Checkout</text>
-            <text x="222" y="214" fill="#ff89ad" fontSize="8" textAnchor="middle" fontFamily="Segoe UI">Exit</text>
-            <rect x="118" y="84" width="70" height="34" rx="8" fill="#140a2b" stroke="#ff5c8a" />
-            <text x="127" y="101" fill="#ff5c8a" fontSize="12" fontWeight="800" fontFamily="Segoe UI">−38%</text>
-            <text x="127" y="113" fill="#a99fce" fontSize="7.5" fontFamily="Segoe UI">drop at Cart</text>
+
+        <figure className={s.mapCard} style={{ margin: 0 }}>
+          <div className={s.mapBar}>
+            <span className={s.mapTitle}>Checkout flow</span>
+            <span className={s.mapRange}>Mapped · last 7 days · illustrative</span>
+          </div>
+          <svg className={s.mapSvg} viewBox="0 0 460 250" role="img" aria-label="Journey route map">
+            {[70, 140, 210, 280, 350, 420].map((x) => (
+              <line key={`v${x}`} x1={x} y1={18} x2={x} y2={214} stroke="#271655" strokeWidth="1" />
+            ))}
+            <line x1="24" y1="150" x2="436" y2="150" stroke="#271655" strokeWidth="1" strokeDasharray="2 8" />
+
+            <path
+              d="M56 178 L150 150 L244 156 L410 70"
+              stroke={TEAL}
+              strokeWidth="4.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M244 156 L318 210"
+              stroke={CORAL}
+              strokeWidth="3.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeDasharray="2 8"
+            />
+
+            <circle cx="56" cy="178" r="7" fill={AMBER} />
+            <circle cx="150" cy="150" r="6.5" fill={VIOLET} stroke={INK} strokeWidth="1.5" />
+            <circle cx="244" cy="156" r="8" fill={VIOLET} stroke={CORAL} strokeWidth="2.5" />
+            <circle cx="410" cy="70" r="8.5" fill={TEAL} stroke="#04241b" strokeWidth="2" />
+            <circle cx="318" cy="210" r="5.5" fill={CORAL} />
+
+            <text x="56" y="200" fill={DIM} fontSize="9" textAnchor="middle" fontFamily="Segoe UI">Landing</text>
+            <text x="150" y="138" fill={DIM} fontSize="9" textAnchor="middle" fontFamily="Segoe UI">Browse</text>
+            <text x="244" y="176" fill={MUTED} fontSize="9" textAnchor="middle" fontFamily="Segoe UI">Cart</text>
+            <text x="410" y="56" fill={TEAL} fontSize="9.5" textAnchor="middle" fontWeight="700" fontFamily="Segoe UI">
+              Checkout
+            </text>
+            <text x="326" y="226" fill={CORAL} fontSize="8.5" textAnchor="middle" fontFamily="Segoe UI">Exit</text>
+
+            <rect x="150" y="86" width="112" height="44" rx="9" fill="#120830" stroke={CORAL} />
+            <text x="164" y="106" fill={CORAL} fontSize="15" fontWeight="800" fontFamily="Segoe UI">−38%</text>
+            <text x="164" y="120" fill={MUTED} fontSize="8.5" fontFamily="Segoe UI">mobile drops at Cart</text>
           </svg>
+          <figcaption className={s.mapLegend}>
+            <span className={s.legendItem}>
+              <span className={s.legendDot} style={{ backgroundColor: TEAL }} /> Converting route
+            </span>
+            <span className={s.legendItem}>
+              <span className={s.legendDot} style={{ backgroundColor: CORAL }} /> Turn-back
+            </span>
+            <span className={s.legendItem}>
+              <span className={s.legendDot} style={{ backgroundColor: AMBER }} /> Waypoint
+            </span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <section className={s.band}>
+        <h2 className={s.bandLead}>One map for every surface.</h2>
+        <p className={s.bandLeadSub}>
+          Web, mobile, and email sessions stitch into a single route — so a drop-off is a
+          step on the map, not a number in a table you have to reconstruct.
+        </p>
+
+        <div className={s.splitRow}>
+          <div className={s.askPanel}>
+            <span className={s.askEyebrow}>Ask a route</span>
+            <div className={s.askTitle}>Question in. Cohort out.</div>
+            <p className={s.askText}>
+              Type a plain-language question about any path. Lumenpath returns the segment,
+              the step that stalled it, and the size of the miss.
+            </p>
+            <div className={s.askQuery}>
+              <span className={s.askCaret}>›</span>
+              Where do mobile shoppers leave checkout?
+            </div>
+            <p className={s.askAnswer}>
+              <span className={s.askAnswerStrong}>1,204 mobile sessions</span> abandon at Cart after
+              adding an item — 38% above the desktop route.
+            </p>
+          </div>
+
+          <ul className={s.capList}>
+            <li className={`${s.capItem} ${s.capItemFirst}`}>
+              <span className={s.capGlyph}>
+                <Check color={TEAL} />
+              </span>
+              <span>
+                <span className={s.capName}>Cross-surface stitching</span>
+                <span className={s.capDetail}>Web · mobile · email joined on one identity.</span>
+              </span>
+            </li>
+            <li className={s.capItem}>
+              <span className={s.capGlyph}>
+                <Check color={TEAL} />
+              </span>
+              <span>
+                <span className={s.capName}>Segment-aware drop-off</span>
+                <span className={s.capDetail}>See which cohort turns back, not just how many.</span>
+              </span>
+            </li>
+            <li className={s.capItem}>
+              <span className={s.capGlyph}>
+                <Check color={TEAL} />
+              </span>
+              <span>
+                <span className={s.capName}>Release guardrails</span>
+                <span className={s.capDetail}>Flags a ship the moment a watched route slips.</span>
+              </span>
+            </li>
+            <li className={s.capItem}>
+              <span className={s.capGlyph}>
+                <Check color={TEAL} />
+              </span>
+              <span>
+                <span className={s.capName}>Warehouse sync</span>
+                <span className={s.capDetail}>Every mapped route lands back in your tables.</span>
+              </span>
+            </li>
+          </ul>
         </div>
       </section>
 
-      <div className={s.customers}>
-        <span className={s.customersLabel}>Reading trails for</span>
-        <span className={s.customerName}>Northwind</span>
-        <span className={s.customerName}>Aperture</span>
-        <span className={s.customerName}>Hollowtide</span>
-        <span className={s.customerName}>Brightfold</span>
-        <span className={s.customerName}>Kestrel</span>
-      </div>
-
-      <section className={s.features}>
-        <article className={`${s.card} ${s.cardBig}`}>
-          <svg className={s.cardIcon} viewBox="0 0 38 38" aria-hidden="true">
-            <rect width="38" height="38" rx="11" fill="#241a02" />
-            <path d="M10 26 L16 16 L22 22 L28 12" stroke="#ffd23f" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <span className={s.cardTitle}>One map, every surface</span>
-          <span className={s.cardTextDark}>
-            Stitch web, mobile, and email sessions into one route map. See the exact step
-            where momentum breaks — and the segment it breaks for.
-          </span>
-        </article>
-        <article className={s.card}>
-          <svg className={s.cardIcon} viewBox="0 0 38 38" aria-hidden="true">
-            <rect width="38" height="38" rx="11" fill="#12e6b4" />
-            <circle cx="19" cy="19" r="8" fill="none" stroke="#0a2a22" strokeWidth="3" />
-            <path d="M25 25 L30 30" stroke="#0a2a22" strokeWidth="3" strokeLinecap="round" />
-          </svg>
-          <span className={s.cardTitle}>Ask in plain language</span>
-          <span className={s.cardText}>Type a question about a route. Get the cohort, the chart, and the reason it stalled.</span>
-        </article>
-        <article className={s.card}>
-          <svg className={s.cardIcon} viewBox="0 0 38 38" aria-hidden="true">
-            <rect width="38" height="38" rx="11" fill="#ff5c8a" />
-            <path d="M19 9 L27 14 V24 L19 29 L11 24 V14 Z" fill="none" stroke="#2a0713" strokeWidth="2.6" strokeLinejoin="round" />
-          </svg>
-          <span className={s.cardTitle}>Guardrails on every rollout</span>
-          <span className={s.cardText}>Lumenpath flags a release the moment it starts hurting a route you care about.</span>
-        </article>
-      </section>
-
-      <section className={s.pricing}>
-        <div className={s.pricingHead}>
-          <h2 className={s.pricingTitle}>Pay for the sessions you map.</h2>
+      <section className={s.plans}>
+        <div className={s.plansHead}>
+          <h2 className={s.plansTitle}>Plans scale with the sessions you map.</h2>
+          <span className={s.plansNote}>Session-based · cancel anytime</span>
         </div>
-        <div className={s.tierGrid}>
-          <article className={s.tier}>
-            <div className={s.tierHead}>
-              <span className={s.tierName}>Spark</span>
+
+        <div className={s.leadPlan}>
+          <div>
+            <div className={s.leadTop}>
+              <span className={s.leadName}>Trail</span>
+              <span className={s.leadBadge}>Most popular</span>
             </div>
-            <span className={s.price}>$0<span className={s.priceUnit}> /mo</span></span>
-            <ul className={s.tierList}>
-              <li className={s.tierItem}><span className={s.tierCheck}>✓</span>Up to 10k sessions</li>
-              <li className={s.tierItem}><span className={s.tierCheck}>✓</span>3 saved routes</li>
-              <li className={s.tierItem}><span className={s.tierCheck}>✓</span>Community support</li>
-            </ul>
-            <FauxControl className={s.tierCta}>Start free</FauxControl>
-          </article>
-          <article className={`${s.tier} ${s.tierFeatured}`}>
-            <div className={s.tierHead}>
-              <span className={`${s.tierName} ${s.tierNameFeatured}`}>Trail</span>
-              <span className={s.tierBadge}>Most popular</span>
-            </div>
-            <span className={s.price}>$79<span className={`${s.priceUnit} ${s.priceUnitFeatured}`}> /mo</span></span>
-            <ul className={s.tierList}>
-              <li className={`${s.tierItem} ${s.tierItemFeatured}`}><span className={`${s.tierCheck} ${s.tierCheckFeatured}`}>✓</span>Up to 1M sessions</li>
-              <li className={`${s.tierItem} ${s.tierItemFeatured}`}><span className={`${s.tierCheck} ${s.tierCheckFeatured}`}>✓</span>Unlimited routes</li>
-              <li className={`${s.tierItem} ${s.tierItemFeatured}`}><span className={`${s.tierCheck} ${s.tierCheckFeatured}`}>✓</span>Plain-language insights</li>
-              <li className={`${s.tierItem} ${s.tierItemFeatured}`}><span className={`${s.tierCheck} ${s.tierCheckFeatured}`}>✓</span>Rollout guardrails</li>
-            </ul>
-            <FauxControl className={`${s.tierCta} ${s.tierCtaFeatured}`}>Choose Trail</FauxControl>
-          </article>
-          <article className={s.tier}>
-            <div className={s.tierHead}>
-              <span className={s.tierName}>Beacon</span>
-            </div>
-            <span className={s.price}>Custom</span>
-            <ul className={s.tierList}>
-              <li className={s.tierItem}><span className={s.tierCheck}>✓</span>Unlimited volume</li>
-              <li className={s.tierItem}><span className={s.tierCheck}>✓</span>SSO &amp; audit logs</li>
-              <li className={s.tierItem}><span className={s.tierCheck}>✓</span>Named success engineer</li>
-            </ul>
-            <FauxControl className={s.tierCta}>Talk to sales</FauxControl>
-          </article>
+            <p className={s.leadIncludes}>
+              Up to 1M sessions/mo · unlimited saved routes · plain-language answers · release
+              guardrails · warehouse sync.
+            </p>
+          </div>
+          <div className={s.leadRight}>
+            <span className={s.leadPrice}>
+              $79<span className={s.leadPriceUnit}> /mo</span>
+            </span>
+            <FauxControl className={s.leadCta}>Choose Trail</FauxControl>
+          </div>
+        </div>
+
+        <div className={s.secondaryRow}>
+          <div className={s.minorPlan}>
+            <span className={s.minorLeft}>
+              <span className={s.minorName}>Spark</span>
+              <span className={s.minorDetail}>Up to 10k sessions · 3 saved routes · community support.</span>
+            </span>
+            <span className={s.minorPrice}>Free</span>
+          </div>
+          <div className={s.minorPlan}>
+            <span className={s.minorLeft}>
+              <span className={s.minorName}>Beacon</span>
+              <span className={s.minorDetail}>Unlimited volume · SSO &amp; audit · named success engineer.</span>
+            </span>
+            <span className={s.minorPrice}>Custom</span>
+          </div>
         </div>
       </section>
 
-      <section className={s.finalCta}>
-        <h2 className={s.finalTitle}>Your users left a trail today. Come read it.</h2>
-        <FauxButton className={s.finalBtn}>Create your workspace →</FauxButton>
+      <section className={s.close}>
+        <h2 className={s.closeTitle}>Your users left a trail today. Come read it.</h2>
+        <FauxButton className={s.closeCta}>Create your workspace →</FauxButton>
       </section>
     </div>
   );

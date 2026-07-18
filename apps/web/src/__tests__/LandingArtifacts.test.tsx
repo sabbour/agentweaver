@@ -64,11 +64,16 @@ describe('artifact inert semantics', () => {
     // Still preview: no real controls.
     expect(container.querySelectorAll('button, a, input, textarea, select')).toHaveLength(0);
     expect(container.querySelector('[tabindex="0"]')).toBeNull();
-    // Featured tier shows a real tier name AND the badge (not the badge as its name),
+    // Recommended plan shows a real tier name AND the badge (not the badge as its name),
     // and the CTA matches the tier name.
     expect(screen.getByText('Trail')).toBeTruthy();
     expect(screen.getByText('Most popular')).toBeTruthy();
     expect(screen.getByText('Choose Trail')).toBeTruthy();
+    // Secondary plans are named and present (editorial lead + quieter rows, not a 3-up grid).
+    expect(screen.getByText('Spark')).toBeTruthy();
+    expect(screen.getByText('Beacon')).toBeTruthy();
+    // Product-specific brand voice, not interchangeable SaaS copy.
+    expect(screen.getByText(/Journey-path intelligence/i)).toBeTruthy();
     // AI landing-page tells that were removed must stay gone.
     const text = container.textContent ?? '';
     expect(text).not.toContain('3.2M');
@@ -76,6 +81,8 @@ describe('artifact inert semantics', () => {
     expect(text).not.toContain('Watch the 2-min tour');
     expect(text).not.toContain('Answers, not dashboards');
     expect(text).not.toContain('◆');
+    // The rejected template patterns (logo wall, uniform feature-card grid) must stay gone.
+    expect(text).not.toContain('Reading trails for');
   });
 
   it('lumenpath journey map is accessible as a named image with no hidden ancestor', () => {

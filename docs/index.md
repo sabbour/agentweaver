@@ -15,49 +15,21 @@ import { withBase } from 'vitepress'
       <p class="aw-hero-kicker">Open-source agent orchestration</p>
       <h1 id="hero-heading">Turn a goal into a reviewed, finished outcome.</h1>
       <p class="aw-hero-lede">
-        You approve the OutcomeSpec and work plan before any specialist runs. The team
-        works on a live run tree, and one artifact comes back to review — nothing
-        publishes, merges, or ships on its own.
+        You approve the plan before any specialist runs, watch the team work on a live run
+        tree, and get one artifact back to review — nothing ships on its own.
       </p>
       <div class="aw-hero-actions">
         <a class="aw-button aw-button-primary" href="#scenario-theater">See it run</a>
         <a class="aw-button aw-button-secondary" href="./guide/getting-started">Run your first team</a>
         <a class="aw-button aw-button-secondary" href="https://github.com/sabbour/agentweaver">View on GitHub</a>
       </div>
-      <div class="aw-hero-proof" aria-label="Agentweaver goal-to-artifact flow">
-        <span>Goal</span>
-        <span>OutcomeSpec</span>
-        <span>Work plan</span>
-        <span>Dispatch</span>
-        <span>Artifact</span>
-      </div>
-    </div>
-    <div class="aw-hero-aside">
-      <figure class="aw-hero-contract" aria-label="Example goal and the OutcomeSpec Agentweaver drafts from it">
-        <div class="aw-contract-row aw-contract-goal">
-          <span class="aw-contract-tag">Goal</span>
-          <p>Add a per-project API rate-limit setting with a migration, service enforcement, and tests.</p>
-        </div>
-        <span class="aw-contract-arrow" aria-hidden="true"></span>
-        <div class="aw-contract-row aw-contract-spec">
-          <span class="aw-contract-tag">OutcomeSpec</span>
-          <dl class="aw-contract-spec-body">
-            <div>
-              <dt>Scope</dt>
-              <dd>Nullable <code>rate_limit</code> migration · 429 + Retry-After middleware · settings control · tests</dd>
-            </div>
-            <div>
-              <dt>Assumptions</dt>
-              <dd>Unlimited when null · per-project, not per-key</dd>
-            </div>
-            <div>
-              <dt>Review</dt>
-              <dd>Human review before merge — nothing deploys automatically</dd>
-            </div>
-          </dl>
-        </div>
-        <figcaption>Representative authored example of the contract each run agrees on first.</figcaption>
-      </figure>
+      <ol class="aw-hero-proof" aria-label="Agentweaver goal-to-artifact flow">
+        <li>Goal</li>
+        <li>OutcomeSpec</li>
+        <li>Work plan</li>
+        <li>Dispatch</li>
+        <li>Artifact</li>
+      </ol>
     </div>
   </section>
 

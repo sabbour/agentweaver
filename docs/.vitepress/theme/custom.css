@@ -267,10 +267,11 @@ html.dark .mermaid .sequenceNumber {
 
 .aw-hero {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.5fr);
-  min-height: 540px;
-  padding: clamp(56px, 7.5vw, 104px) max(24px, calc((100vw - var(--aw-max)) / 2));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: clamp(48px, 6vw, 80px) max(24px, calc((100vw - var(--aw-max)) / 2))
+    clamp(40px, 4.5vw, 60px);
   color: #faf6f2;
   background: var(--aw-ink);
   isolation: isolate;
@@ -289,9 +290,8 @@ html.dark .mermaid .sequenceNumber {
   z-index: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  max-width: 850px;
-  padding-right: clamp(24px, 5vw, 84px);
+  width: 100%;
+  max-width: 960px;
 }
 
 .aw-hero-kicker,
@@ -303,24 +303,24 @@ html.dark .mermaid .sequenceNumber {
 }
 
 .aw-hero-kicker {
-  margin-bottom: 26px !important;
+  margin-bottom: 20px !important;
   color: rgba(250, 246, 242, 0.72);
 }
 
 .aw-hero h1 {
-  max-width: 15ch;
-  font-size: clamp(3.25rem, 6.6vw, 5.75rem);
+  max-width: 22ch;
+  font-size: clamp(2.65rem, 5.2vw, 4.35rem);
   font-weight: 620;
-  line-height: 0.96;
-  letter-spacing: -0.04em;
+  line-height: 1;
+  letter-spacing: -0.035em;
 }
 
 .aw-hero-lede {
-  max-width: 65ch;
-  margin-top: 34px !important;
+  max-width: 58ch;
+  margin-top: 22px !important;
   color: rgba(250, 246, 242, 0.78);
-  font-size: clamp(1.05rem, 1.5vw, 1.28rem);
-  line-height: 1.62;
+  font-size: clamp(1.02rem, 1.35vw, 1.2rem);
+  line-height: 1.55;
 }
 
 .aw-hero-actions,
@@ -332,7 +332,7 @@ html.dark .mermaid .sequenceNumber {
 }
 
 .aw-hero-actions {
-  margin-top: 38px;
+  margin-top: 30px;
 }
 
 .aw-button {
@@ -391,122 +391,28 @@ html.dark .mermaid .sequenceNumber {
 .aw-hero-proof {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0;
-  margin-top: 60px;
-  color: rgba(250, 246, 242, 0.66);
-  font-size: 0.84rem;
+  margin: 34px 0 0;
+  padding: 0;
+  list-style: none;
+  color: rgba(250, 246, 242, 0.62);
+  font-size: 0.82rem;
+  font-weight: 560;
+  letter-spacing: 0.005em;
 }
 
-.aw-hero-proof span {
+.aw-hero-proof li {
   display: inline-flex;
   align-items: center;
 }
 
-.aw-hero-proof span:not(:last-child)::after {
-  width: 20px;
+.aw-hero-proof li:not(:last-child)::after {
+  width: 22px;
   height: 1px;
-  margin: 0 11px;
+  margin: 0 12px;
   background: rgba(250, 246, 242, 0.3);
   content: "";
-}
-
-.aw-hero-aside {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-  padding-left: clamp(24px, 3vw, 48px);
-  border-left: 1px solid rgba(250, 246, 242, 0.14);
-}
-
-.aw-hero-contract {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 380px;
-  margin: 0;
-}
-
-.aw-contract-row {
-  border: 1px solid rgba(250, 246, 242, 0.16);
-  border-radius: 16px;
-  background: rgba(250, 246, 242, 0.05);
-  padding: 16px 18px;
-}
-
-.aw-contract-tag {
-  display: inline-block;
-  margin-bottom: 8px;
-  color: rgba(250, 246, 242, 0.62);
-  font-size: 0.72rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.aw-contract-goal p {
-  margin: 0 !important;
-  color: rgba(250, 246, 242, 0.92);
-  font-size: 0.95rem;
-  line-height: 1.5;
-}
-
-.aw-contract-spec {
-  background: rgba(250, 246, 242, 0.08);
-}
-
-.aw-contract-spec-body {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  margin: 0;
-}
-
-.aw-contract-spec-body > div {
-  display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
-}
-
-.aw-contract-spec-body dt {
-  color: rgba(250, 246, 242, 0.58);
-  font-size: 0.72rem;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.aw-contract-spec-body dd {
-  margin: 0;
-  color: rgba(250, 246, 242, 0.84);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
-.aw-contract-spec-body code {
-  padding: 1px 5px;
-  border-radius: 8px;
-  background: rgba(250, 246, 242, 0.12);
-  color: #faf6f2;
-  font-size: 0.78rem;
-}
-
-.aw-contract-arrow {
-  display: block;
-  width: 1px;
-  height: 16px;
-  margin: 0 auto;
-  background: rgba(250, 246, 242, 0.3);
-}
-
-.aw-hero-contract figcaption {
-  margin-top: 2px;
-  color: rgba(250, 246, 242, 0.56);
-  font-size: 0.78rem;
-  line-height: 1.45;
 }
 
 .aw-live-proof,
@@ -874,28 +780,6 @@ html.dark .mermaid .sequenceNumber {
 }
 
 @media (max-width: 980px) {
-  .aw-hero {
-    grid-template-columns: 1fr;
-    min-height: auto;
-  }
-
-  .aw-hero-copy {
-    padding-right: 0;
-  }
-
-  .aw-hero-aside {
-    min-height: 0;
-    margin-top: 44px;
-    padding-top: 40px;
-    padding-left: 0;
-    border-top: 1px solid rgba(250, 246, 242, 0.14);
-    border-left: 0;
-  }
-
-  .aw-hero-contract {
-    max-width: 460px;
-  }
-
   .aw-section-heading-wide,
   .aw-control-sequence,
   .aw-team-story,
@@ -934,16 +818,19 @@ html.dark .mermaid .sequenceNumber {
   }
 
   .aw-hero h1 {
-    font-size: clamp(3rem, 14vw, 4.4rem);
+    font-size: clamp(2.5rem, 11vw, 3.8rem);
   }
 
   .aw-hero-proof {
-    display: grid;
-    gap: 9px;
+    row-gap: 9px;
   }
 
-  .aw-hero-proof span:not(:last-child)::after {
+  .aw-hero-proof li:not(:last-child)::after {
     display: none;
+  }
+
+  .aw-hero-proof li:not(:last-child) {
+    margin-right: 14px;
   }
 
   .aw-live-proof,
