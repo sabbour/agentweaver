@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/00-variables.sh"
 
 if [[ -z "${TENANT_ID:-}" ]]; then
@@ -11,14 +12,52 @@ if [[ -z "${TENANT_ID:-}" ]]; then
   export TENANT_ID
 fi
 
+resolve_github_oauth_from_user_secrets() {
+  [[ -n "${GITHUB_CLIENT_ID:-}" && -n "${GITHUB_CLIENT_SECRET:-}" ]] && return 0
+  command -v dotnet >/dev/null 2>&1 || return 0
+
+  local api_project="${REPO_ROOT}/apps/Agentweaver.Api"
+  [[ -d "${api_project}" ]] || return 0
+
+  local secrets
+  if ! secrets="$(dotnet user-secrets list --project "${api_project}" 2>/dev/null)"; then
+    return 0
+  fi
+
+  if [[ -z "${GITHUB_CLIENT_ID:-}" ]]; then
+    GITHUB_CLIENT_ID="$(printf '%s\n' "${secrets}" | awk '/^Auth:GitHub:ClientId[[:space:]]*=/ {sub(/^[^=]*=[[:space:]]*/, ""); print; exit}')"
+  fi
+  if [[ -z "${GITHUB_CLIENT_SECRET:-}" ]]; then
+    GITHUB_CLIENT_SECRET="$(printf '%s\n' "${secrets}" | awk '/^Auth:GitHub:ClientSecret[[:space:]]*=/ {sub(/^[^=]*=[[:space:]]*/, ""); print; exit}')"
+  fi
+}
+
+resolve_github_oauth_from_user_secrets
+
+if [[ -t 0 && -t 1 ]]; then
+  if [[ -z "${GITHUB_CLIENT_ID:-}" ]]; then
+    read -r -p "GitHub OAuth client ID: " GITHUB_CLIENT_ID || true
+  fi
+  if [[ -z "${GITHUB_CLIENT_SECRET:-}" ]]; then
+    read -r -s -p "GitHub OAuth client secret: " GITHUB_CLIENT_SECRET || true
+    echo
+  fi
+fi
+
 missing=()
 [[ -z "${GITHUB_CLIENT_ID:-}" ]] && missing+=("GITHUB_CLIENT_ID")
 [[ -z "${GITHUB_CLIENT_SECRET:-}" ]] && missing+=("GITHUB_CLIENT_SECRET")
 if [[ ${#missing[@]} -gt 0 ]]; then
-  echo "ERROR: refusing to write placeholder Key Vault secrets. Set these variables:" >&2
+  echo "ERROR: unable to resolve GitHub OAuth secrets from the environment or local user-secrets." >&2
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "       This non-interactive session cannot prompt. Set these variables:" >&2
+  else
+    echo "       Prompted values were empty. Set these variables:" >&2
+  fi
   for v in "${missing[@]}"; do echo "  ${v}" >&2; done
   exit 1
 fi
+export GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET
 
 echo ""
 echo "=== Step 1: Create user-assigned managed identity ==="

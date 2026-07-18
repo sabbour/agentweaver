@@ -13,23 +13,6 @@ $RenderedDir = Join-Path $ScriptDir ".rendered"
 # PowerShell equivalent of bash's `trap 'rm -rf "${RENDERED_DIR}"' EXIT`.
 try {
 
-# On Windows, `bash` on PATH commonly resolves to the WSL launcher stub at
-# C:\Windows\System32\bash.exe, not Git Bash -- and the WSL stub can't resolve
-# Windows-style paths (even with forward slashes) the way Git Bash does.
-# Explicitly prefer the real Git Bash executable when invoking .sh helpers.
-function Resolve-GitBashExe {
-  $gitBashCandidates = @(
-    "$env:ProgramFiles\Git\bin\bash.exe",
-    "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
-  )
-  foreach ($candidate in $gitBashCandidates) {
-    if (Test-Path $candidate) { return $candidate }
-  }
-  # Fall back to whatever 'bash' resolves to on PATH (may be the WSL stub).
-  return "bash"
-}
-$script:GitBashExe = Resolve-GitBashExe
-
 function Invoke-ApplyRendered {
   param([string]$Fname)
   kubectl apply -f (Join-Path $RenderedDir $Fname)
@@ -90,10 +73,8 @@ az monitor app-insights component show --app agentweaver-insights -g $env:RESOUR
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""
   Write-Host "Provisioning monitoring (Application Insights + Managed Prometheus)..."
-  # bash mangles Windows-style backslash paths (escape-char semantics); use forward slashes.
-  $monitoringScriptPath = (Join-Path $ScriptDir "15-provision-monitoring.sh") -replace '\\', '/'
-  & $script:GitBashExe $monitoringScriptPath
-  if ($LASTEXITCODE -ne 0) { throw "15-provision-monitoring.sh failed (exit $LASTEXITCODE)" }
+  & (Join-Path $ScriptDir "15-provision-monitoring.ps1")
+  if ($LASTEXITCODE -ne 0) { throw "15-provision-monitoring.ps1 failed (exit $LASTEXITCODE)" }
 }
 
 $env:APPINSIGHTS_WORKSPACE_ID = (az monitor log-analytics workspace show `
@@ -215,12 +196,8 @@ Write-Host ""
 Write-Host "Applying services, gateway, and routes..."
 # H1 (spec-018): generate A2A mTLS certs (idempotent -- skips if secrets exist).
 Write-Host "Ensuring A2A mTLS certificates are present (H1)..."
-# bash treats backslashes as escape characters, so a Windows-style path is
-# mangled (drive letter + directories get glued together). Convert to
-# forward slashes, which Git Bash/WSL bash both accept for Windows paths.
-$a2aScriptPath = (Join-Path $ScriptDir "gen-a2a-mtls-certs.sh") -replace '\\', '/'
-& $script:GitBashExe $a2aScriptPath
-if ($LASTEXITCODE -ne 0) { throw "gen-a2a-mtls-certs.sh failed (exit $LASTEXITCODE)" }
+& (Join-Path $ScriptDir "gen-a2a-mtls-certs.ps1")
+if ($LASTEXITCODE -ne 0) { throw "gen-a2a-mtls-certs.ps1 failed (exit $LASTEXITCODE)" }
 # H4/H3 (spec-018): AgentHost Kestrel + card-authz config.
 Invoke-ApplyRendered "configmap-agenthost.yaml"
 Invoke-ApplyRendered "api-service.yaml"
@@ -354,7 +331,7 @@ Write-Host "  Sandbox__Preview__GatewayName:      agentweaver-preview-gateway"
 Write-Host "  Sandbox__Preview__GatewayNamespace: agentweaver"
 Write-Host ""
 Write-Host "  Next step:"
-Write-Host "    .\scripts\aks\40-verify.sh"
+Write-Host "    .\scripts\aks\40-verify.ps1"
 Write-Host ""
 Write-Host "  To check status:"
 Write-Host "    kubectl get gateway,httproute,pod,svc -n $($env:NAMESPACE)"
