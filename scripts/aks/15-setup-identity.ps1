@@ -7,7 +7,6 @@
 param()
 
 $ScriptDir = $PSScriptRoot
-$RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
 . (Join-Path $ScriptDir "00-variables.ps1")
 
 function Assert-LastExitCode {
@@ -44,26 +43,6 @@ function Set-KeyVaultSecretWithRetry {
   }
 }
 
-function Resolve-GitHubOAuthFromUserSecrets {
-  if ($env:GITHUB_CLIENT_ID -and $env:GITHUB_CLIENT_SECRET) { return }
-  if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { return }
-
-  $apiProject = Join-Path $RepoRoot "apps\Agentweaver.Api"
-  if (-not (Test-Path $apiProject)) { return }
-
-  $secrets = & dotnet user-secrets list --project $apiProject 2>$null
-  if ($LASTEXITCODE -ne 0) { return }
-
-  foreach ($line in $secrets) {
-    if ($line -match '^\s*Auth:GitHub:ClientId\s*=\s*(?<value>.+?)\s*$' -and -not $env:GITHUB_CLIENT_ID) {
-      $env:GITHUB_CLIENT_ID = $matches.value
-    }
-    if ($line -match '^\s*Auth:GitHub:ClientSecret\s*=\s*(?<value>.+?)\s*$' -and -not $env:GITHUB_CLIENT_SECRET) {
-      $env:GITHUB_CLIENT_SECRET = $matches.value
-    }
-  }
-}
-
 function Test-InteractiveConsole {
   try {
     return -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
@@ -76,8 +55,6 @@ if (-not $env:TENANT_ID) {
   $env:TENANT_ID = (az account show --query tenantId --output tsv | Out-String).Trim()
   Assert-LastExitCode "Reading Azure tenant ID"
 }
-
-Resolve-GitHubOAuthFromUserSecrets
 
 $canPrompt = Test-InteractiveConsole
 if ($canPrompt -and -not $env:GITHUB_CLIENT_ID) {
@@ -97,7 +74,7 @@ $missing = @()
 if (-not $env:GITHUB_CLIENT_ID) { $missing += "GITHUB_CLIENT_ID" }
 if (-not $env:GITHUB_CLIENT_SECRET) { $missing += "GITHUB_CLIENT_SECRET" }
 if ($missing.Count -gt 0) {
-  Write-Host "ERROR: unable to resolve GitHub OAuth secrets from the environment or local user-secrets." -ForegroundColor Red
+  Write-Host "ERROR: GitHub OAuth credentials are missing." -ForegroundColor Red
   if (-not $canPrompt) {
     Write-Host "       This non-interactive session cannot prompt. Set these variables:" -ForegroundColor Red
   } else {
