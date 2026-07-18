@@ -13,20 +13,24 @@ import { withBase } from 'vitepress'
   <section class="aw-hero">
     <div class="aw-hero-copy">
       <p class="aw-hero-kicker">Open-source agent orchestration</p>
-      <h1>Run AI agent teams without surrendering control.</h1>
+      <h1>Turn a goal into a reviewed, finished outcome.</h1>
       <p class="aw-hero-lede">
-        Turn a goal into a confirmed outcome, a specialist-owned work graph, and one
-        reviewable delivery. Watch every agent work. Steer when the plan changes.
-        Nothing merges until you approve it.
+        Every request walks the same visible path: you state a goal, the coordinator
+        writes an OutcomeSpec, a work plan appears, specialists dispatch on a live run
+        tree, and one realistic artifact comes back for review. Watch it happen below —
+        nothing publishes, merges, or ships on its own.
       </p>
       <div class="aw-hero-actions">
-        <a class="aw-button aw-button-primary" href="./guide/getting-started">Run your first team</a>
+        <a class="aw-button aw-button-primary" href="#scenario-theater">See it run</a>
+        <a class="aw-button aw-button-secondary" href="./guide/getting-started">Run your first team</a>
         <a class="aw-button aw-button-secondary" href="https://github.com/sabbour/agentweaver">View on GitHub</a>
       </div>
-      <div class="aw-hero-proof" aria-label="Agentweaver control flow">
-        <span>Outcome confirmed</span>
-        <span>Specialists dispatched</span>
-        <span>Human review enforced</span>
+      <div class="aw-hero-proof" aria-label="Agentweaver goal-to-artifact flow">
+        <span>Goal</span>
+        <span>OutcomeSpec</span>
+        <span>Work plan</span>
+        <span>Dispatch</span>
+        <span>Artifact</span>
       </div>
     </div>
     <div class="aw-hero-aside" aria-hidden="true">
@@ -37,20 +41,22 @@ import { withBase } from 'vitepress'
         <span class="aw-hero-mark-node"></span>
         <span class="aw-hero-mark-node"></span>
       </div>
-      <p>One system from intent to merge.</p>
+      <p>From goal to artifact, in full view.</p>
     </div>
   </section>
 
-  <section class="aw-live-proof" aria-labelledby="live-proof-title">
+  <section id="scenario-theater" class="aw-live-proof" aria-labelledby="live-proof-title">
     <div class="aw-section-heading aw-section-heading-wide">
       <div>
-        <p class="aw-section-index">The workflow is the product</p>
-        <h2 id="live-proof-title">See the whole delivery system while it is running.</h2>
+        <p class="aw-section-index">The scenario theater</p>
+        <h2 id="live-proof-title">Watch eight scenarios run goal to artifact.</h2>
       </div>
       <p>
-        This is the production React graph engine and run-tree control, rendered with
-        synthetic Northstar data. Pan, zoom, select a task, and inspect the agent,
-        model, duration, and sandbox behind it.
+        Pick a scenario and watch Agentweaver's real run-tree UI play an authored,
+        simulated example end to end — goal typed in, OutcomeSpec drafted, plan built,
+        specialists dispatched, and a distinct artifact produced. These are illustrative
+        authored outputs, not live production runs, professional advice, or autonomous
+        publishing.
       </p>
     </div>
     <ClientOnly>
@@ -59,7 +65,7 @@ import { withBase } from 'vitepress'
         <img
           class="aw-proof-fallback"
           :src="withBase('/screenshots/workflow-run-graph.png')"
-          alt="Agentweaver workflow graph with a running implementation task selected"
+          alt="Still frame of an authored, simulated Agentweaver scenario run — the interactive scenario theater needs JavaScript"
         />
       </template>
     </ClientOnly>

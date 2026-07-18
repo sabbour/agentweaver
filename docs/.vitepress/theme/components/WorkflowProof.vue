@@ -1,20 +1,26 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { createLazyMounter } from '../../../../apps/web/src/components/landing/createLazyMounter'
 
 const host = ref<HTMLElement | null>(null)
-let unmount: (() => void) | undefined
+let dispose: (() => void) | undefined
 
-onMounted(async () => {
+onMounted(() => {
   if (!host.value) return
-  const { mountLandingWorkflowDemo } = await import(
-    '../../../../apps/web/src/components/LandingWorkflowDemo'
-  )
-  unmount = mountLandingWorkflowDemo(host.value)
+  // Only load and mount the heavy React player once the host nears the viewport;
+  // createLazyMounter owns the IntersectionObserver and teardown race-safety.
+  dispose = createLazyMounter({
+    host: host.value,
+    load: async () => {
+      const mod = await import('../../../../apps/web/src/components/LandingWorkflowDemo')
+      return mod.mountLandingWorkflowDemo
+    },
+  })
 })
 
 onBeforeUnmount(() => {
-  unmount?.()
-  unmount = undefined
+  dispose?.()
+  dispose = undefined
 })
 </script>
 
