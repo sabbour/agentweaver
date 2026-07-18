@@ -33,14 +33,10 @@ export interface ScenarioNode {
    *  Rendered as the message subtext on completed nodes in the scenario theater
    *  (e.g. "48s" under a done agent node instead of the generic "Finished"). */
   duration?: string;
-  /** Grid column (0-based) — x = col * 210. */
+  /** Grid column (0-based); mapped to an x pixel by the player. */
   col: number;
-  /** Grid row (fractional allowed) — y = row * 108. */
+  /** Grid row (fractional allowed); mapped to a y pixel by the player. */
   row: number;
-  /** Dispatch ordering for specialist agents; when the dispatch stage reaches
-   *  this step the node completes. Structural nodes (coordinator/outcome/plan/
-   *  review) leave this undefined. */
-  dispatchOrder?: number;
   /** Human-review gate never auto-completes; it stays a pending gate. */
   isReviewGate?: boolean;
 }

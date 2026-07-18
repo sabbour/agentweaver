@@ -52,7 +52,10 @@ describe('ScenarioTheater playback', () => {
 
     await waitForText('Illustrative output');
     expect(screen.getByText('Pull request preview')).toBeTruthy();
-    expect(screen.queryByText(/appears here once the run/i)).toBeNull();
+    // The artifact reveals inside the primary run surface (crossfading with the
+    // graph) rather than being appended below the fold.
+    const surface = screen.getByLabelText('Run surface');
+    expect(surface.textContent).toContain('Pull request preview');
   }, 25000);
 
   it('resets to a fresh run and replays when another tab is selected', async () => {
@@ -66,7 +69,9 @@ describe('ScenarioTheater playback', () => {
     // The prior artifact is gone immediately and the new scenario resets to typing.
     expect(screen.queryByText('Pull request preview')).toBeNull();
     expect(screen.getByText('Design a marketing launch page')).toBeTruthy();
-    expect(screen.getByText(/appears here once the run/i)).toBeTruthy();
+    // The new run has not reached its artifact yet — the run surface shows the graph.
+    expect(screen.queryByText('Landing page preview')).toBeNull();
+    expect(screen.getByLabelText('Run surface')).toBeTruthy();
 
     // The fresh run plays through to the marketing artifact.
     await waitForText('Landing page preview');
@@ -81,7 +86,7 @@ describe('ScenarioTheater playback', () => {
     fireEvent.click(screen.getByRole('button', { name: /Replay/i }));
     // Replay clears the artifact and restarts from typing.
     expect(screen.queryByText('Pull request preview')).toBeNull();
-    expect(screen.getByText(/appears here once the run/i)).toBeTruthy();
+    expect(screen.getByLabelText('Run surface')).toBeTruthy();
 
     await waitForText('Pull request preview');
   }, 45000);

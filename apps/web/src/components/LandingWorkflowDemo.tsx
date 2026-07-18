@@ -11,6 +11,7 @@ import {
   ArrowClockwiseRegular,
   CheckmarkCircleFilled,
   CircleRegular,
+  LockClosedRegular,
 } from '@fluentui/react-icons';
 import { MiniMap, Panel, ReactFlow, type Edge, type Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -21,6 +22,7 @@ import { ArtifactFrame } from './artifacts/ArtifactFrame';
 import { GraphControls } from './CoordinatorTopologyGraph';
 import { SCENARIOS } from './landing/scenarios';
 import { STAGE, type Scenario, type ScenarioNode, type StageIndex } from './landing/types';
+import { computeDispatchWaves, maxDispatchWave, planItemWave } from './landing/waves';
 import {
   forwardEdge,
   iconForRole,
@@ -42,8 +44,17 @@ const PLAN_MS = 950;
 const DISPATCH_MS = 640;
 const ARTIFACT_MS = 520;
 
+// Compact authored grid → pixel mapping. Tight enough that fitView keeps the run
+// tree dense and readable at the default zoom instead of shrinking it into a
+// wide, mostly-empty band.
+const COL_STEP = 188;
+// Rows are spaced so the authored envelope (cols 0-5, rows 0.4-2.6) resolves to
+// an aspect ratio close to the run stage — fitView then fills the frame densely
+// instead of leaving a tall blank band above and below a short, wide tree.
+const ROW_STEP = 142;
+
 const DISCLAIMER =
-  'Illustrative simulated runs. Outputs are authored examples, not professional advice, autonomous publishing, or production actions.';
+  'Illustrative simulated runs. Outputs are authored examples, not professional advice or real actions.';
 
 // ---------------------------------------------------------------------------
 // Run-token state machine
@@ -113,14 +124,11 @@ function runReducer(state: RunState, action: RunAction): RunState {
 // ---------------------------------------------------------------------------
 // Node status derivation (pure — no timers)
 // ---------------------------------------------------------------------------
-function specialistCount(scenario: Scenario): number {
-  return scenario.nodes.filter((n) => n.dispatchOrder != null).length;
-}
-
 function nodeStatus(
   node: ScenarioNode,
   stage: StageIndex,
   dispatchStep: number,
+  waves: Map<string, number>,
 ): { status: StepStatus; statusLabel: string; message?: string } {
   if (node.isReviewGate) {
     return { status: 'pending', statusLabel: 'Awaiting human review' };
@@ -142,13 +150,15 @@ function nodeStatus(
     if (stage === STAGE.PLAN) return { status: 'started', statusLabel: 'Planning', message: 'Breaking down the work' };
     return { status: 'pending', statusLabel: 'Queued' };
   }
-  // Specialist agents dispatch during the DISPATCH stage in dispatchOrder.
-  const order = node.dispatchOrder ?? 99;
+  // Specialist agents dispatch during the DISPATCH stage by dependency wave.
+  // Every specialist in the same wave transitions together — the scheduler steps
+  // one wave per tick, so concurrent nodes light up (and complete) as a group.
+  const wave = waves.get(node.id) ?? Number.POSITIVE_INFINITY;
   // Show the authored duration as subtext on completed agent nodes (replaces generic "Finished").
   if (stage >= STAGE.ARTIFACT) return { status: 'completed', statusLabel: 'Ready', message: node.duration };
   if (stage < STAGE.DISPATCH) return { status: 'pending', statusLabel: 'Queued' };
-  if (order <= dispatchStep) return { status: 'completed', statusLabel: 'Ready', message: node.duration };
-  if (order === dispatchStep + 1) return { status: 'started', statusLabel: 'Running', message: 'Executing in an isolated sandbox' };
+  if (wave <= dispatchStep) return { status: 'completed', statusLabel: 'Ready', message: node.duration };
+  if (wave === dispatchStep + 1) return { status: 'started', statusLabel: 'Running', message: 'Executing in an isolated sandbox' };
   return { status: 'pending', statusLabel: 'Queued' };
 }
 
@@ -281,31 +291,103 @@ const useStyles = makeStyles({
   stepLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
   stepLabelActive: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
   stepArrow: { color: tokens.colorNeutralStroke1, fontSize: '11px', flexShrink: 0 },
-  body: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 360px) minmax(0, 1fr)',
+  // The run surface: one stage that holds the graph and (at the final beat) the
+  // artifact, plus the floating planning console. Height is intentionally
+  // contained so fitView keeps the tree dense instead of leaving a blank band.
+  stage: {
+    position: 'relative',
     minWidth: 0,
-    '@media (max-width: 900px)': { gridTemplateColumns: '1fr' },
+    height: 'clamp(404px, 48vh, 500px)',
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'hidden',
+    '@media (max-width: 720px)': { height: '544px' },
+    '@media (max-width: 380px)': { height: '520px' },
   },
-  narrative: {
+  layer: {
+    position: 'absolute',
+    inset: 0,
+    minWidth: 0,
+    transitionProperty: 'opacity',
+    transitionDuration: '320ms',
+    transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
+  },
+  layerHidden: {
+    opacity: 0,
+    pointerEvents: 'none',
+    visibility: 'hidden',
+  },
+  artifactLayer: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
     padding: tokens.spacingHorizontalL,
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    minWidth: 0,
-    '@media (max-width: 900px)': {
-      borderRight: 'none',
-      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    },
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    '@media (max-width: 720px)': { padding: tokens.spacingHorizontalM },
   },
-  composer: {
+  graph: {
+    width: '100%',
+    height: '100%',
+    '& .react-flow__pane': { cursor: 'grab' },
+    '& .react-flow__pane:active': { cursor: 'grabbing' },
+  },
+  graphHint: {
+    position: 'absolute',
+    zIndex: 6,
+    right: tokens.spacingHorizontalM,
+    bottom: tokens.spacingVerticalS,
+    maxWidth: '260px',
+    textAlign: 'right',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: '15px',
+    pointerEvents: 'none',
+    '@media (max-width: 720px)': { display: 'none' },
+  },
+  // Floating, non-modal planning console. Left rail on desktop, bottom sheet on
+  // mobile — an overlay over the run tree, never a permanent layout column.
+  console: {
+    position: 'absolute',
+    zIndex: 7,
+    top: tokens.spacingVerticalM,
+    left: tokens.spacingHorizontalM,
+    width: 'clamp(232px, 30%, 320px)',
+    maxHeight: `calc(100% - ${tokens.spacingVerticalM} * 2)`,
+    display: 'flex',
+    flexDirection: 'column',
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: '0 12px 32px rgba(39, 35, 32, 0.14)',
+    overflow: 'hidden',
+    transitionProperty: 'opacity, transform',
+    transitionDuration: '320ms',
+    transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
+    '@media (max-width: 720px)': {
+      top: 'auto',
+      left: tokens.spacingHorizontalM,
+      right: tokens.spacingHorizontalM,
+      bottom: tokens.spacingVerticalM,
+      width: 'auto',
+      maxHeight: '48%',
+    },
+  },
+  consoleHidden: {
+    opacity: 0,
+    transform: 'translateY(-6px)',
+    pointerEvents: 'none',
+    visibility: 'hidden',
+    '@media (max-width: 720px)': { transform: 'translateY(8px)' },
+  },
+  consoleScroll: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
     padding: tokens.spacingHorizontalM,
-    minWidth: 0,
+    overflowY: 'auto',
+    minHeight: 0,
   },
   composerLabel: {
     fontSize: tokens.fontSizeBase100,
@@ -315,17 +397,18 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   composerText: {
-    marginTop: '6px',
-    fontSize: tokens.fontSizeBase300,
-    lineHeight: '22px',
+    marginTop: '4px',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: '19px',
     color: tokens.colorNeutralForeground1,
-    minHeight: '44px',
+    minHeight: '38px',
     fontFamily: tokens.fontFamilyMonospace,
+    wordBreak: 'break-word',
   },
   caret: {
     display: 'inline-block',
     width: '2px',
-    height: '15px',
+    height: '13px',
     marginLeft: '1px',
     backgroundColor: tokens.colorNeutralForeground1,
     verticalAlign: 'text-bottom',
@@ -336,12 +419,11 @@ const useStyles = makeStyles({
     },
     animationDuration: '1s',
     animationIterationCount: 'infinite',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none', opacity: 1 },
   },
-  card: {
-    borderRadius: tokens.borderRadiusLarge,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    padding: tokens.spacingHorizontalM,
+  consoleBlock: {
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     minWidth: 0,
   },
   cardTitle: {
@@ -353,23 +435,24 @@ const useStyles = makeStyles({
     letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3,
     fontWeight: tokens.fontWeightSemibold,
-    marginBottom: tokens.spacingVerticalS,
+    marginBottom: tokens.spacingVerticalXS,
   },
-  outcomeGoal: { fontSize: tokens.fontSizeBase300, lineHeight: '20px', marginBottom: tokens.spacingVerticalS },
+  outcomeGoal: { fontSize: tokens.fontSizeBase200, lineHeight: '18px', marginBottom: '6px', color: tokens.colorNeutralForeground1 },
   metaLabel: {
     fontSize: tokens.fontSizeBase100,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground2,
-    marginTop: tokens.spacingVerticalXS,
+    marginTop: '5px',
   },
-  list: { margin: '2px 0 0', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '3px' },
-  listItem: { fontSize: tokens.fontSizeBase200, lineHeight: '17px', color: tokens.colorNeutralForeground2 },
+  list: { margin: '2px 0 0', paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '2px' },
+  listItem: { fontSize: tokens.fontSizeBase100, lineHeight: '15px', color: tokens.colorNeutralForeground2 },
   reviewLine: {
-    marginTop: tokens.spacingVerticalS,
-    padding: '6px 10px',
+    marginTop: '6px',
+    padding: '5px 8px',
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
-    fontSize: tokens.fontSizeBase200,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: '15px',
     color: tokens.colorNeutralForeground2,
     display: 'flex',
     gap: '6px',
@@ -378,55 +461,15 @@ const useStyles = makeStyles({
   planItem: {
     display: 'flex',
     gap: tokens.spacingHorizontalS,
-    padding: '7px 0',
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: '5px 0',
+    ':not(:first-child)': { borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
   },
-  planIcon: { flexShrink: 0, marginTop: '1px', color: tokens.colorNeutralForeground3 },
+  planIcon: { flexShrink: 0, marginTop: '1px', color: tokens.colorNeutralForeground3, fontSize: '14px', display: 'inline-flex' },
   planIconDone: { color: tokens.colorPaletteGreenForeground1 },
   planCopy: { display: 'flex', flexDirection: 'column', minWidth: 0 },
-  planTitle: { fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1 },
-  planDetail: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, lineHeight: '15px' },
+  planTitle: { fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, lineHeight: '15px' },
+  planDetail: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, lineHeight: '14px' },
   planOwner: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 },
-  graphWrap: {
-    position: 'relative',
-    minWidth: 0,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  graphHint: {
-    position: 'absolute',
-    zIndex: 8,
-    left: tokens.spacingHorizontalL,
-    top: tokens.spacingVerticalM,
-    maxWidth: '360px',
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase100,
-    pointerEvents: 'none',
-  },
-  graph: {
-    width: '100%',
-    height: '480px',
-    '@media (max-width: 900px)': { height: '420px' },
-    '@media (max-width: 480px)': { height: '360px' },
-    '& .react-flow__pane': { cursor: 'grab' },
-    '& .react-flow__pane:active': { cursor: 'grabbing' },
-  },
-  artifactRegion: {
-    padding: tokens.spacingHorizontalL,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  artifactPending: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '120px',
-    borderRadius: tokens.borderRadiusXLarge,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    textAlign: 'center',
-    padding: tokens.spacingHorizontalL,
-  },
   srOnly: {
     position: 'absolute',
     width: '1px',
@@ -480,6 +523,7 @@ export function ScenarioTheater() {
   const styles = useStyles();
   const [state, dispatch] = useReducer(runReducer, undefined, initialState);
   const [inView, setInView] = useState(false);
+  const [compact, setCompact] = useState(false);
 
   const scenario = useMemo(
     () => SCENARIOS.find((s) => s.id === state.activeId) ?? SCENARIOS[0],
@@ -499,7 +543,7 @@ export function ScenarioTheater() {
   useEffect(() => {
     if (state.phase !== 'running') return;
     const goalLen = scenario.goal.length;
-    const specialists = specialistCount(scenario);
+    const waveCount = maxDispatchWave(scenario);
     const scheduledToken = state.token;
 
     let delay = STAGE_MS;
@@ -518,7 +562,10 @@ export function ScenarioTheater() {
     } else if (state.stage === STAGE.PLAN) {
       delay = PLAN_MS;
     } else if (state.stage === STAGE.DISPATCH) {
-      if (state.dispatchStep < specialists) {
+      // One tick per dependency WAVE (not per specialist): every concurrent node
+      // in the wave advances together, and a scenario never spends a tick on an
+      // empty wave because waves are contiguous 1..waveCount.
+      if (state.dispatchStep < waveCount) {
         delay = DISPATCH_MS;
         action = { type: 'DISPATCH_TICK' };
       } else {
@@ -571,6 +618,22 @@ export function ScenarioTheater() {
     }
   }, [inView, state.phase]);
 
+  // Track the compact breakpoint so the planning console can switch from a left
+  // rail to a bottom sheet and fitView can reserve the right region of padding.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(max-width: 720px)');
+    const sync = () => setCompact(mq.matches);
+    sync();
+    // addEventListener is the modern API; fall back for older Safari engines.
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', sync);
+      return () => mq.removeEventListener('change', sync);
+    }
+    mq.addListener(sync);
+    return () => mq.removeListener(sync);
+  }, []);
+
   // ---- Tab keyboard handling (roving tabindex) -----------------------------
   const selectByIndex = useCallback((index: number) => {
     const clamped = (index + SCENARIOS.length) % SCENARIOS.length;
@@ -613,15 +676,25 @@ export function ScenarioTheater() {
     if (phaseRef.current === 'running') dispatch({ type: 'PAUSE' });
   }, []);
 
+  // Dependency waves are derived once per scenario from its edges — the single
+  // source of truth for which specialists run concurrently.
+  const waves = useMemo(() => computeDispatchWaves(scenario), [scenario]);
+
+  // Ordered agent node IDs matching the plan items array (plan[i] ↔ agentNodeIds[i]).
+  const agentNodeIds = useMemo(
+    () => scenario.nodes.filter((n) => n.role === 'agent').map((n) => n.id),
+    [scenario],
+  );
+
   // ---- Derived graph nodes/edges -------------------------------------------
   const nodes = useMemo<Node<WorkflowNodeData>[]>(
     () =>
       scenario.nodes.map((node) => {
-        const runtime = nodeStatus(node, state.stage, state.dispatchStep);
+        const runtime = nodeStatus(node, state.stage, state.dispatchStep, waves);
         return {
           id: node.id,
           type: 'workflow',
-          position: { x: node.col * 210, y: node.row * 108 },
+          position: { x: node.col * COL_STEP, y: node.row * ROW_STEP },
           data: {
             def: {
               key: node.role,
@@ -641,24 +714,31 @@ export function ScenarioTheater() {
           },
         };
       }),
-    [scenario, state.stage, state.dispatchStep],
+    [scenario, state.stage, state.dispatchStep, waves],
   );
 
   const edges = useMemo<Edge[]>(() => {
     const startedIds = new Set(
       scenario.nodes
-        .filter((n) => nodeStatus(n, state.stage, state.dispatchStep).status === 'started')
+        .filter((n) => nodeStatus(n, state.stage, state.dispatchStep, waves).status === 'started')
         .map((n) => n.id),
     );
     return scenario.edges.map(([id, source, target]) =>
       forwardEdge(id, source, target, startedIds.has(target)),
     );
-  }, [scenario, state.stage, state.dispatchStep]);
+  }, [scenario, state.stage, state.dispatchStep, waves]);
 
   const badge = phaseBadge(state.phase);
   const typed = scenario.goal.slice(0, state.typedLen);
   const showCaret = state.stage === STAGE.TYPING;
   const panelId = 'aw-theater-panel';
+  // The artifact takes over the stage at the final beat; the planning console
+  // rides along until then, crossfading out as the artifact reveals in place.
+  const showArtifact = state.stage >= STAGE.ARTIFACT;
+  const showConsole = !showArtifact;
+  const fitPadding = compact
+    ? ({ top: '5%', right: '6%', bottom: '48%', left: '6%' } as const)
+    : ({ top: '6%', right: '6%', bottom: '8%', left: '25%' } as const);
 
   return (
     <FluentProvider theme={agentweaverLightTheme}>
@@ -754,85 +834,25 @@ export function ScenarioTheater() {
             })}
           </div>
 
-          <div className={styles.body}>
-            <aside className={styles.narrative} aria-label="Run narrative">
-              <div className={styles.composer}>
-                <div className={styles.composerLabel}>Goal</div>
-                <div className={styles.composerText}>
-                  {typed}
-                  {showCaret && <span className={styles.caret} aria-hidden="true" />}
-                </div>
-              </div>
-
-              {state.stage >= STAGE.OUTCOME && (
-                <div className={styles.card}>
-                  <div className={styles.cardTitle}>Outcome spec</div>
-                  <div className={styles.outcomeGoal}>{scenario.outcome.goal}</div>
-                  <div className={styles.metaLabel}>Scope</div>
-                  <ul className={styles.list}>
-                    {scenario.outcome.scope.map((item) => (
-                      <li className={styles.listItem} key={item}>{item}</li>
-                    ))}
-                  </ul>
-                  <div className={styles.metaLabel}>Assumptions</div>
-                  <ul className={styles.list}>
-                    {scenario.outcome.assumptions.map((item) => (
-                      <li className={styles.listItem} key={item}>{item}</li>
-                    ))}
-                  </ul>
-                  {scenario.outcome.review.map((item) => (
-                    <div className={styles.reviewLine} key={item}>
-                      <span aria-hidden="true">🔒</span>
-                      <span>{item}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {state.stage >= STAGE.PLAN && (
-                <div className={styles.card}>
-                  <div className={styles.cardTitle}>Work plan</div>
-                  {scenario.plan.map((item, index) => {
-                    const done =
-                      state.stage > STAGE.DISPATCH ||
-                      (state.stage === STAGE.DISPATCH && state.dispatchStep > index);
-                    return (
-                      <div className={styles.planItem} key={item.id}>
-                        <span className={mergeClasses(styles.planIcon, done && styles.planIconDone)}>
-                          {done ? <CheckmarkCircleFilled /> : <CircleRegular />}
-                        </span>
-                        <span className={styles.planCopy}>
-                          <span className={styles.planTitle}>{item.title}</span>
-                          <span className={styles.planDetail}>{item.detail}</span>
-                          <span className={styles.planOwner}>Owner · {item.owner}</span>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </aside>
-
+          <div className={styles.stage} aria-label="Run surface">
             <section
-              className={styles.graphWrap}
+              className={mergeClasses(styles.layer, showArtifact && styles.layerHidden)}
               aria-label="Run tree"
+              aria-hidden={showArtifact}
               onPointerDownCapture={pauseFromInteraction}
               onWheelCapture={pauseFromInteraction}
             >
-              <Text className={styles.graphHint}>
-                Drag to pan · use the controls to zoom. Interacting pauses the simulated playback.
-              </Text>
               <ReactFlow
-                key={scenario.id}
+                key={`${scenario.id}:${compact ? 'c' : 'w'}`}
                 className={styles.graph}
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={workflowNodeTypes}
                 edgeTypes={workflowEdgeTypes}
                 fitView
-                fitViewOptions={{ padding: 0.18 }}
+                fitViewOptions={{ padding: fitPadding, maxZoom: 1.35 }}
                 minZoom={0.3}
-                maxZoom={1.6}
+                maxZoom={1.5}
                 nodesDraggable={false}
                 nodesConnectable={false}
                 panOnDrag
@@ -856,26 +876,93 @@ export function ScenarioTheater() {
                         : '#b8afa8'
                   }
                   style={{
-                    width: 108,
-                    height: 72,
+                    width: 96,
+                    height: 62,
                     border: '1px solid var(--colorNeutralStroke2)',
                     borderRadius: 8,
                   }}
                 />
               </ReactFlow>
+              <Text className={styles.graphHint}>
+                Drag to pan · zoom with the controls. Interacting pauses playback.
+              </Text>
             </section>
-          </div>
 
-          <div className={styles.artifactRegion}>
-            {state.stage >= STAGE.ARTIFACT ? (
-              <ArtifactFrame label={scenario.artifactLabel} caption={scenario.artifactCaption}>
-                <scenario.Artifact />
-              </ArtifactFrame>
-            ) : (
-              <div className={styles.artifactPending}>
-                The illustrative output appears here once the run reaches its final stage.
+            <aside
+              className={mergeClasses(styles.console, !showConsole && styles.consoleHidden)}
+              aria-label="Run plan"
+              aria-hidden={!showConsole}
+            >
+              <div className={styles.consoleScroll}>
+                <div>
+                  <div className={styles.composerLabel}>Goal</div>
+                  <div className={styles.composerText}>
+                    {typed}
+                    {showCaret && <span className={styles.caret} aria-hidden="true" />}
+                  </div>
+                </div>
+
+                {state.stage >= STAGE.OUTCOME && (
+                  <div className={styles.consoleBlock}>
+                    <div className={styles.cardTitle}>Outcome spec</div>
+                    <div className={styles.outcomeGoal}>{scenario.outcome.goal}</div>
+                    <div className={styles.metaLabel}>Scope</div>
+                    <ul className={styles.list}>
+                      {scenario.outcome.scope.map((item) => (
+                        <li className={styles.listItem} key={item}>{item}</li>
+                      ))}
+                    </ul>
+                    <div className={styles.metaLabel}>Assumptions</div>
+                    <ul className={styles.list}>
+                      {scenario.outcome.assumptions.map((item) => (
+                        <li className={styles.listItem} key={item}>{item}</li>
+                      ))}
+                    </ul>
+                    {scenario.outcome.review.map((item) => (
+                      <div className={styles.reviewLine} key={item}>
+                        <LockClosedRegular aria-hidden="true" fontSize={13} />
+                        <span>{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {state.stage >= STAGE.PLAN && (
+                  <div className={styles.consoleBlock}>
+                    <div className={styles.cardTitle}>Work plan</div>
+                    {scenario.plan.map((item, index) => {
+                      const wave = planItemWave(waves, agentNodeIds, index);
+                      const done =
+                        state.stage > STAGE.DISPATCH ||
+                        (state.stage === STAGE.DISPATCH && wave <= state.dispatchStep);
+                      return (
+                        <div className={styles.planItem} key={item.id}>
+                          <span className={mergeClasses(styles.planIcon, done && styles.planIconDone)}>
+                            {done ? <CheckmarkCircleFilled /> : <CircleRegular />}
+                          </span>
+                          <span className={styles.planCopy}>
+                            <span className={styles.planTitle}>{item.title}</span>
+                            <span className={styles.planDetail}>{item.detail}</span>
+                            <span className={styles.planOwner}>Owner · {item.owner}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
+            </aside>
+
+            <div
+              className={mergeClasses(styles.layer, styles.artifactLayer, !showArtifact && styles.layerHidden)}
+              aria-hidden={!showArtifact}
+            >
+              {showArtifact && (
+                <ArtifactFrame label={scenario.artifactLabel} caption={scenario.artifactCaption}>
+                  <scenario.Artifact />
+                </ArtifactFrame>
+              )}
+            </div>
           </div>
         </div>
 

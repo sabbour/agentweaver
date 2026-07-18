@@ -10,15 +10,14 @@ import { withBase } from 'vitepress'
 </script>
 
 <div class="aw-home">
-  <section class="aw-hero">
+  <section class="aw-hero" aria-labelledby="hero-heading">
     <div class="aw-hero-copy">
       <p class="aw-hero-kicker">Open-source agent orchestration</p>
-      <h1>Turn a goal into a reviewed, finished outcome.</h1>
+      <h1 id="hero-heading">Turn a goal into a reviewed, finished outcome.</h1>
       <p class="aw-hero-lede">
-        Every request walks the same visible path: you state a goal, the coordinator
-        writes an OutcomeSpec, a work plan appears, specialists dispatch on a live run
-        tree, and one realistic artifact comes back for review. Watch it happen below —
-        nothing publishes, merges, or ships on its own.
+        You approve the OutcomeSpec and work plan before any specialist runs. The team
+        works on a live run tree, and one artifact comes back to review — nothing
+        publishes, merges, or ships on its own.
       </p>
       <div class="aw-hero-actions">
         <a class="aw-button aw-button-primary" href="#scenario-theater">See it run</a>
@@ -33,32 +32,36 @@ import { withBase } from 'vitepress'
         <span>Artifact</span>
       </div>
     </div>
-    <div class="aw-hero-aside" aria-hidden="true">
-      <div class="aw-hero-orbit aw-hero-orbit-one"></div>
-      <div class="aw-hero-orbit aw-hero-orbit-two"></div>
-      <div class="aw-hero-mark">
-        <span class="aw-hero-mark-node"></span>
-        <span class="aw-hero-mark-node"></span>
-        <span class="aw-hero-mark-node"></span>
-      </div>
-      <p>From goal to artifact, in full view.</p>
+    <div class="aw-hero-aside">
+      <figure class="aw-hero-contract" aria-label="Example goal and the OutcomeSpec Agentweaver drafts from it">
+        <div class="aw-contract-row aw-contract-goal">
+          <span class="aw-contract-tag">Goal</span>
+          <p>Add a per-project API rate-limit setting with a migration, service enforcement, and tests.</p>
+        </div>
+        <span class="aw-contract-arrow" aria-hidden="true"></span>
+        <div class="aw-contract-row aw-contract-spec">
+          <span class="aw-contract-tag">OutcomeSpec</span>
+          <dl class="aw-contract-spec-body">
+            <div>
+              <dt>Scope</dt>
+              <dd>Nullable <code>rate_limit</code> migration · 429 + Retry-After middleware · settings control · tests</dd>
+            </div>
+            <div>
+              <dt>Assumptions</dt>
+              <dd>Unlimited when null · per-project, not per-key</dd>
+            </div>
+            <div>
+              <dt>Review</dt>
+              <dd>Human review before merge — nothing deploys automatically</dd>
+            </div>
+          </dl>
+        </div>
+        <figcaption>Representative authored example of the contract each run agrees on first.</figcaption>
+      </figure>
     </div>
   </section>
 
-  <section id="scenario-theater" class="aw-live-proof" aria-labelledby="live-proof-title">
-    <div class="aw-section-heading aw-section-heading-wide">
-      <div>
-        <p class="aw-section-index">The scenario theater</p>
-        <h2 id="live-proof-title">Watch eight scenarios run goal to artifact.</h2>
-      </div>
-      <p>
-        Pick a scenario and watch Agentweaver's real run-tree UI play an authored,
-        simulated example end to end — goal typed in, OutcomeSpec drafted, plan built,
-        specialists dispatched, and a distinct artifact produced. These are illustrative
-        authored outputs, not live production runs, professional advice, or autonomous
-        publishing.
-      </p>
-    </div>
+  <section id="scenario-theater" class="aw-live-proof" aria-label="Interactive Agentweaver scenario runs">
     <ClientOnly>
       <WorkflowProof />
       <template #fallback>
@@ -103,7 +106,7 @@ import { withBase } from 'vitepress'
       </li>
       <li>
         <span>3</span>
-        <div><strong>Follow the graph</strong><p>Watch dependencies, owners, models, and live status in one place.</p></div>
+        <div><strong>Follow the graph</strong><p>See dependencies, owners, models, and live status as the run moves.</p></div>
       </li>
       <li>
         <span>4</span>
@@ -115,7 +118,7 @@ import { withBase } from 'vitepress'
   <section class="aw-team-story" aria-labelledby="team-title">
     <div class="aw-team-copy">
       <p class="aw-section-index">A team shaped for the work</p>
-      <h2 id="team-title">Cast specialists, not generic workers.</h2>
+      <h2 id="team-title">Cast the specialists this work needs.</h2>
       <p>
         Start from a blueprint or formulate a team for the scenario. Give each agent a
         role, model, charter, and the project skills it needs. The coordinator assigns
@@ -146,7 +149,7 @@ import { withBase } from 'vitepress'
   <section class="aw-evidence" aria-labelledby="evidence-title">
     <div class="aw-section-heading aw-section-heading-wide">
       <div>
-        <p class="aw-section-index">Operations, not theater</p>
+        <p class="aw-section-index">For running real work</p>
         <h2 id="evidence-title">Every layer remains visible and steerable.</h2>
       </div>
       <p>
@@ -175,7 +178,7 @@ import { withBase } from 'vitepress'
   <section class="aw-observability" aria-labelledby="observability-title">
     <div class="aw-observability-copy">
       <p class="aw-section-index">Know what autonomy costs</p>
-      <h2 id="observability-title">Inspect the run, not just the answer.</h2>
+      <h2 id="observability-title">See how every answer was produced.</h2>
       <p>
         Trace model calls, agent activity, token use, AI credits, latency, and outcomes.
         Reopen a run and follow the same evidence the coordinator used.
@@ -196,10 +199,10 @@ import { withBase } from 'vitepress'
     </figure>
   </section>
 
-  <section class="aw-final-cta">
+  <section class="aw-final-cta" aria-labelledby="final-cta-heading">
     <div>
       <p class="aw-section-index">Agent teams you can account for</p>
-      <h2>Give the agents room to work. Keep the controls that matter.</h2>
+      <h2 id="final-cta-heading">Give the agents room to work. Keep the controls that matter.</h2>
     </div>
     <div class="aw-final-actions">
       <a class="aw-button aw-button-light" href="./guide/getting-started">Get started</a>

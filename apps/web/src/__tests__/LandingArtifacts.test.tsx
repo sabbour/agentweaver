@@ -5,6 +5,7 @@ import { agentweaverLightTheme } from '../theme';
 import { CompetitorEvalArtifact } from '../components/artifacts/CompetitorEvalArtifact';
 import { IncidentTriageArtifact } from '../components/artifacts/IncidentTriageArtifact';
 import { SpaceInvadersArtifact } from '../components/artifacts/SpaceInvadersArtifact';
+import { LumenpathArtifact } from '../components/artifacts/LumenpathArtifact';
 import { SCENARIOS } from '../components/landing/scenarios';
 
 /**
@@ -56,6 +57,39 @@ describe('artifact inert semantics', () => {
     const { container } = renderArtifact(<SpaceInvadersArtifact />);
     expect(container.querySelectorAll('button, a, input')).toHaveLength(0);
     expect(container.querySelector('[tabindex="0"]')).toBeNull();
+  });
+
+  it('lumenpath preview is inert and names its featured tier consistently', () => {
+    const { container } = renderArtifact(<LumenpathArtifact />);
+    // Still preview: no real controls.
+    expect(container.querySelectorAll('button, a, input, textarea, select')).toHaveLength(0);
+    expect(container.querySelector('[tabindex="0"]')).toBeNull();
+    // Featured tier shows a real tier name AND the badge (not the badge as its name),
+    // and the CTA matches the tier name.
+    expect(screen.getByText('Trail')).toBeTruthy();
+    expect(screen.getByText('Most popular')).toBeTruthy();
+    expect(screen.getByText('Choose Trail')).toBeTruthy();
+    // AI landing-page tells that were removed must stay gone.
+    const text = container.textContent ?? '';
+    expect(text).not.toContain('3.2M');
+    expect(text).not.toContain('not the next thing on the list');
+    expect(text).not.toContain('Watch the 2-min tour');
+    expect(text).not.toContain('Answers, not dashboards');
+    expect(text).not.toContain('◆');
+  });
+
+  it('lumenpath journey map is accessible as a named image with no hidden ancestor', () => {
+    const { container } = renderArtifact(<LumenpathArtifact />);
+    // The authored route-map SVG must be exposed as a single named image.
+    const svg = container.querySelector('svg[role="img"][aria-label="Journey route map"]');
+    expect(svg).not.toBeNull();
+    // No ancestor between the SVG and the container root may carry aria-hidden="true";
+    // doing so would suppress the image from the accessibility tree.
+    let node: Element | null = svg?.parentElement ?? null;
+    while (node && node !== container) {
+      expect(node.getAttribute('aria-hidden')).not.toBe('true');
+      node = node.parentElement;
+    }
   });
 });
 
