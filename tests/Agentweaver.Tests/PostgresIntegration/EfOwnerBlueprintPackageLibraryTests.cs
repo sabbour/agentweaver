@@ -196,6 +196,21 @@ public sealed class EfOwnerBlueprintPackageLibraryTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task Persist_MaximumLengthVersion_UsesBoundedPostgresIndexKey()
+    {
+        var store = new EfOwnerBlueprintPackageLibrary(pg.Factory, new Owner("owner-max-version"));
+        var version = new string('9', BlueprintPackageLibraryLimits.MaximumVersionLength - 4) + ".0.0";
+        var package = Package("max-version-" + Guid.NewGuid().ToString("N"), version, payload: [7, 8, 9]);
+
+        var persisted = await store.PersistAsync(package);
+        var loaded = await store.GetVersionAsync(package.PackageId, version);
+
+        persisted.Disposition.Should().Be(BlueprintPackagePersistDisposition.Created);
+        loaded.Should().NotBeNull();
+        loaded!.CanonicalVersion.Should().Be(version);
+    }
+
+    [PostgresFact]
     public async Task Migration_CreatesAllOwnerLibraryTables()
     {
         var expected = new[]

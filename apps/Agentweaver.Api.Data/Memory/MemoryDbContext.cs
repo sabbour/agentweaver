@@ -267,9 +267,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         });
         model.Entity<BlueprintPackageVersionRecord>(e =>
         {
-            e.ToTable("blueprint_package_versions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersion });
+            e.ToTable("blueprint_package_versions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersionKey });
             e.Property(x => x.OwnerId).HasColumnName("owner_id");
             e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersionKey).HasColumnName("canonical_version_key").HasMaxLength(64);
             e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
             e.Property(x => x.ContentDigest).HasColumnName("content_digest");
             e.Property(x => x.PayloadSetDigest).HasColumnName("payload_set_digest");
@@ -280,18 +281,20 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         });
         model.Entity<BlueprintPackagePayloadRecord>(e =>
         {
-            e.ToTable("blueprint_package_payloads").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersion, x.Path });
+            e.ToTable("blueprint_package_payloads").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersionKey, x.Path });
             e.Property(x => x.OwnerId).HasColumnName("owner_id");
             e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersionKey).HasColumnName("canonical_version_key").HasMaxLength(64);
             e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
             e.Property(x => x.Path).HasColumnName("path");
             e.Property(x => x.Bytes).HasColumnName("bytes");
         });
         model.Entity<BlueprintPackageAcquisitionRecord>(e =>
         {
-            e.ToTable("blueprint_package_acquisitions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersion, x.Ordinal });
+            e.ToTable("blueprint_package_acquisitions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersionKey, x.Ordinal });
             e.Property(x => x.OwnerId).HasColumnName("owner_id");
             e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersionKey).HasColumnName("canonical_version_key").HasMaxLength(64);
             e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
             e.Property(x => x.Ordinal).HasColumnName("ordinal");
             e.Property(x => x.Source).HasColumnName("source");

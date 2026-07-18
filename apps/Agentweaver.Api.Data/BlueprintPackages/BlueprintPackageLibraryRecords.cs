@@ -12,6 +12,7 @@ public sealed class BlueprintPackageVersionRecord
 {
     public string OwnerId { get; set; } = "";
     public string PackageId { get; set; } = "";
+    public string CanonicalVersionKey { get; set; } = "";
     public string CanonicalVersion { get; set; } = "";
     public string ContentDigest { get; set; } = "";
     public string PayloadSetDigest { get; set; } = "";
@@ -25,6 +26,7 @@ public sealed class BlueprintPackagePayloadRecord
 {
     public string OwnerId { get; set; } = "";
     public string PackageId { get; set; } = "";
+    public string CanonicalVersionKey { get; set; } = "";
     public string CanonicalVersion { get; set; } = "";
     public string Path { get; set; } = "";
     public byte[] Bytes { get; set; } = [];
@@ -34,6 +36,7 @@ public sealed class BlueprintPackageAcquisitionRecord
 {
     public string OwnerId { get; set; } = "";
     public string PackageId { get; set; } = "";
+    public string CanonicalVersionKey { get; set; } = "";
     public string CanonicalVersion { get; set; } = "";
     public int Ordinal { get; set; }
     public string Source { get; set; } = "";

@@ -3,6 +3,8 @@ using Agentweaver.Domain.BlueprintPackages;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Agentweaver.Api.Infrastructure.Ef;
 
@@ -34,6 +36,7 @@ public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibra
     {
         BlueprintPackageLibraryLimits.Validate(package);
         var version = BlueprintPackageLibraryLimits.CanonicalSemanticVersion.Normalize(package.CanonicalVersion);
+        var versionKey = VersionKey(version);
         var owner = Owner();
         var existing = await ReadVersionConsistentlyAsync(owner, package.PackageId, version, ct).ConfigureAwait(false);
         if (existing is not null)
@@ -53,7 +56,8 @@ public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibra
                 ct).ConfigureAwait(false);
             db.BlueprintPackageVersions.Add(new BlueprintPackageVersionRecord
             {
-                OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version,
+                OwnerId = owner, PackageId = package.PackageId, CanonicalVersionKey = versionKey,
+                CanonicalVersion = version,
                 ContentDigest = package.ContentDigest, PayloadSetDigest = package.PayloadSetDigest,
                 RawManifestSha256 = package.RawManifestSha256, ContainerSha256 = package.ContainerSha256,
                 RawManifest = package.RawManifest.ToArray(), CreatedAt = created,
@@ -61,11 +65,13 @@ public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibra
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             db.BlueprintPackagePayloads.AddRange(package.Payloads.Select(x => new BlueprintPackagePayloadRecord
             {
-                OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version, Path = x.Path, Bytes = x.Bytes.ToArray(),
+                OwnerId = owner, PackageId = package.PackageId, CanonicalVersionKey = versionKey,
+                CanonicalVersion = version, Path = x.Path, Bytes = x.Bytes.ToArray(),
             }));
             db.BlueprintPackageAcquisitions.AddRange(package.Acquisitions.Select((x, index) => new BlueprintPackageAcquisitionRecord
             {
-                OwnerId = owner, PackageId = package.PackageId, CanonicalVersion = version, Ordinal = index,
+                OwnerId = owner, PackageId = package.PackageId, CanonicalVersionKey = versionKey,
+                CanonicalVersion = version, Ordinal = index,
                 Source = x.Source, Producer = x.Producer, Repository = x.Repository, Revision = x.Revision,
                 AcquiredAt = x.AcquiredAt, RequestedRef = x.RequestedRef,
             }));
@@ -139,15 +145,19 @@ public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibra
 
     private async Task<OwnerBlueprintPackageVersion?> ReadVersionAsync(MemoryDbContext db, string owner, string packageId, string version, CancellationToken ct)
     {
+        var versionKey = VersionKey(version);
         var record = await db.BlueprintPackageVersions.AsNoTracking().FirstOrDefaultAsync(x =>
-            x.OwnerId == owner && x.PackageId == packageId && x.CanonicalVersion == version, ct).ConfigureAwait(false);
+            x.OwnerId == owner && x.PackageId == packageId &&
+            x.CanonicalVersionKey == versionKey && x.CanonicalVersion == version, ct).ConfigureAwait(false);
         if (record is null) return null;
         if (_afterVersionRead is not null)
             await _afterVersionRead(ct).ConfigureAwait(false);
         var payloads = await db.BlueprintPackagePayloads.AsNoTracking().Where(x =>
-            x.OwnerId == owner && x.PackageId == packageId && x.CanonicalVersion == version).OrderBy(x => x.Path).ToListAsync(ct).ConfigureAwait(false);
+            x.OwnerId == owner && x.PackageId == packageId &&
+            x.CanonicalVersionKey == versionKey && x.CanonicalVersion == version).OrderBy(x => x.Path).ToListAsync(ct).ConfigureAwait(false);
         var acquisitions = await db.BlueprintPackageAcquisitions.AsNoTracking().Where(x =>
-            x.OwnerId == owner && x.PackageId == packageId && x.CanonicalVersion == version).OrderBy(x => x.Ordinal).ToListAsync(ct).ConfigureAwait(false);
+            x.OwnerId == owner && x.PackageId == packageId &&
+            x.CanonicalVersionKey == versionKey && x.CanonicalVersion == version).OrderBy(x => x.Ordinal).ToListAsync(ct).ConfigureAwait(false);
         return new(packageId, version, record.RawManifest.ToArray(),
             payloads.Select(x => new BlueprintPackagePayload(x.Path, x.Bytes.ToArray())).ToArray(),
             record.ContentDigest, record.PayloadSetDigest, record.RawManifestSha256, record.ContainerSha256,
@@ -161,6 +171,9 @@ public sealed class EfOwnerBlueprintPackageLibrary : IOwnerBlueprintPackageLibra
     private static bool SameIdentity(OwnerBlueprintPackageVersion existing, BlueprintPackageWrite incoming) =>
         existing.ContentDigest == incoming.ContentDigest && existing.PayloadSetDigest == incoming.PayloadSetDigest &&
         existing.RawManifestSha256 == incoming.RawManifestSha256 && existing.ContainerSha256 == incoming.ContainerSha256;
+
+    private static string VersionKey(string version) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(version))).ToLowerInvariant();
 
     private static OwnerBlueprintPackageVersion ToVersion(BlueprintPackageWrite write, string version, DateTimeOffset created) =>
         new(write.PackageId, version, write.RawManifest.ToArray(), write.Payloads.Select(x => new BlueprintPackagePayload(x.Path, x.Bytes.ToArray())).ToArray(),

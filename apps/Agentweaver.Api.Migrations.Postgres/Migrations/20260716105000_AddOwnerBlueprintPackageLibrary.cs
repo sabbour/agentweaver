@@ -27,6 +27,7 @@ public partial class AddOwnerBlueprintPackageLibrary : Migration
             {
                 owner_id = table.Column<string>(nullable: false),
                 package_id = table.Column<string>(nullable: false),
+                canonical_version_key = table.Column<string>(maxLength: 64, nullable: false),
                 canonical_version = table.Column<string>(nullable: false),
                 content_digest = table.Column<string>(nullable: false),
                 payload_set_digest = table.Column<string>(nullable: false),
@@ -37,7 +38,7 @@ public partial class AddOwnerBlueprintPackageLibrary : Migration
             },
             constraints: table =>
             {
-                table.PrimaryKey("PK_blueprint_package_versions", x => new { x.owner_id, x.package_id, x.canonical_version });
+                table.PrimaryKey("PK_blueprint_package_versions", x => new { x.owner_id, x.package_id, x.canonical_version_key });
                 table.ForeignKey("FK_blueprint_package_versions_blueprint_package_library_owner_id_package_id",
                     x => new { x.owner_id, x.package_id }, "blueprint_package_library",
                     new[] { "owner_id", "package_id" }, onDelete: ReferentialAction.Cascade);
@@ -48,16 +49,17 @@ public partial class AddOwnerBlueprintPackageLibrary : Migration
             {
                 owner_id = table.Column<string>(nullable: false),
                 package_id = table.Column<string>(nullable: false),
+                canonical_version_key = table.Column<string>(maxLength: 64, nullable: false),
                 canonical_version = table.Column<string>(nullable: false),
                 path = table.Column<string>(nullable: false),
                 bytes = table.Column<byte[]>(nullable: false),
             },
             constraints: table =>
             {
-                table.PrimaryKey("PK_blueprint_package_payloads", x => new { x.owner_id, x.package_id, x.canonical_version, x.path });
-                table.ForeignKey("FK_blueprint_package_payloads_blueprint_package_versions_owner_id_package_id_canonical_version",
-                    x => new { x.owner_id, x.package_id, x.canonical_version }, "blueprint_package_versions",
-                    new[] { "owner_id", "package_id", "canonical_version" }, onDelete: ReferentialAction.Cascade);
+                table.PrimaryKey("PK_blueprint_package_payloads", x => new { x.owner_id, x.package_id, x.canonical_version_key, x.path });
+                table.ForeignKey("FK_blueprint_package_payloads_blueprint_package_versions_owner_id_package_id_canonical_version_key",
+                    x => new { x.owner_id, x.package_id, x.canonical_version_key }, "blueprint_package_versions",
+                    new[] { "owner_id", "package_id", "canonical_version_key" }, onDelete: ReferentialAction.Cascade);
             });
         migrationBuilder.CreateTable(
             name: "blueprint_package_acquisitions",
@@ -65,6 +67,7 @@ public partial class AddOwnerBlueprintPackageLibrary : Migration
             {
                 owner_id = table.Column<string>(nullable: false),
                 package_id = table.Column<string>(nullable: false),
+                canonical_version_key = table.Column<string>(maxLength: 64, nullable: false),
                 canonical_version = table.Column<string>(nullable: false),
                 ordinal = table.Column<int>(nullable: false),
                 source = table.Column<string>(nullable: false),
@@ -75,10 +78,10 @@ public partial class AddOwnerBlueprintPackageLibrary : Migration
             },
             constraints: table =>
             {
-                table.PrimaryKey("PK_blueprint_package_acquisitions", x => new { x.owner_id, x.package_id, x.canonical_version, x.ordinal });
-                table.ForeignKey("FK_blueprint_package_acquisitions_blueprint_package_versions_owner_id_package_id_canonical_version",
-                    x => new { x.owner_id, x.package_id, x.canonical_version }, "blueprint_package_versions",
-                    new[] { "owner_id", "package_id", "canonical_version" }, onDelete: ReferentialAction.Cascade);
+                table.PrimaryKey("PK_blueprint_package_acquisitions", x => new { x.owner_id, x.package_id, x.canonical_version_key, x.ordinal });
+                table.ForeignKey("FK_blueprint_package_acquisitions_blueprint_package_versions_owner_id_package_id_canonical_version_key",
+                    x => new { x.owner_id, x.package_id, x.canonical_version_key }, "blueprint_package_versions",
+                    new[] { "owner_id", "package_id", "canonical_version_key" }, onDelete: ReferentialAction.Cascade);
             });
         migrationBuilder.Sql(
             """
