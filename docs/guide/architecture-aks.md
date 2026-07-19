@@ -409,7 +409,7 @@ The MCP server (`agentweaver-mcp`) accepts inbound connections with a Bearer tok
 
 ### PostgreSQL (primary data store)
 
-The API uses **Azure Database for PostgreSQL Flexible Server** for all application state. The connection string is provisioned by `scripts/aks/17-provision-postgres.sh`, stored in the `agentweaver-postgres` Kubernetes Secret, and injected as environment variables at pod startup.
+The API uses **Azure Database for PostgreSQL Flexible Server** for all application state. The connection string is provisioned by `scripts/azure/steps/17-provision-postgres.mjs`, stored in the `agentweaver-postgres` Kubernetes Secret, and injected as environment variables at pod startup.
 
 Both the `SqliteDb` (projects, runs, backlog, revisions) and the `MemoryDbContext` (decisions, agent memory, OAuth state, checkpoints) are wired to the same Postgres instance in production via `Database__Provider=Postgres`:
 

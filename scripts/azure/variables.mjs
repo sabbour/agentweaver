@@ -1,0 +1,218 @@
+// variables.mjs -- Faithful Node port of scripts/aks/00-variables.sh (cross-
+// checked against 00-variables.ps1). Read both before changing this file;
+// they must stay in lockstep with this port's behavior.
+//
+// Behavior replicated:
+//   - Every input has an env-var override with a hardcoded default (see
+//     DEFAULTS below), exactly matching `${VAR:-default}` in the bash script.
+//   - TENANT_ID, IDENTITY_CLIENT_ID, APPINSIGHTS_WORKSPACE_ID are resolved
+//     LIVE from `az` only if not already supplied via env, and failures are
+//     swallowed to '' (the bash script's `... || true` tolerance) rather than
+//     aborting resolution.
+//   - IMAGE_TAG: prefer IMAGE_TAG env var; else VERSION file (repo root) as
+//     `v<semver>`; else git short SHA; `latest`/`latest-release` are always
+//     rejected. AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG when not set.
+//
+// Live `az` resolution is LAZY and OPTIONAL: pass `{ resolveLive: false }` to
+// skip it entirely (fields resolve to ''), and/or inject stub
+// az/git implementations via `{ az: {...}, git: {...} }` -- this is what lets
+// scripts/azure/tests/* run without any real Azure CLI or git present.
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { capture } from "./lib/exec.mjs";
+import * as azDefault from "./lib/az.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// scripts/azure/variables.mjs -> repo root is two levels up (mirrors the bash
+// script's VARIABLES_DIR=scripts/aks -> REPO_ROOT=VARIABLES_DIR/../..).
+export const DEFAULT_REPO_ROOT = path.resolve(__dirname, "..", "..");
+
+export const IDENTITY_NAME = "agentweaver-api-identity";
+export const LOG_ANALYTICS_WORKSPACE_NAME = "agentweaver-logs";
+
+export const DEFAULTS = Object.freeze({
+  RESOURCE_GROUP: "agentweaver-rg",
+  CLUSTER_NAME: "agentweaver-aks-2",
+  ACR_NAME: "agentweaverregistry",
+  LOCATION: "westus2",
+  KEYVAULT_NAME: "agentweaver-kv",
+  NAMESPACE: "agentweaver",
+  KATA_POOL_NAME: "katapool",
+  APP_POOL_NAME: "apppool",
+});
+
+/** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
+const SHORT_SHA_RE = /^[0-9a-f]{7,40}$/;
+const SEMVER_TAG_RE = /^v\d+\.\d+\.\d+/;
+
+export class InvalidImageTagError extends Error {}
+
+/**
+ * Validates an image tag exactly like `_validate_image_tag` in 00-variables.sh:
+ * rejects 'latest'/'latest-release', then requires either a short git SHA or
+ * a `vMAJOR.MINOR.PATCH[-prerelease][+build]` semver tag.
+ * @param {string} tag
+ * @param {string} name field name, used only in the error message.
+ */
+export function validateImageTag(tag, name) {
+  if (tag === "latest" || tag === "latest-release") {
+    throw new InvalidImageTagError(`${name} must be immutable; do not use '${tag}'.`);
+  }
+  if (SHORT_SHA_RE.test(tag) || SEMVER_TAG_RE.test(tag)) {
+    return true;
+  }
+  throw new InvalidImageTagError(`${name}='${tag}' is not a valid tag (expected git SHA or vX.Y.Z semver).`);
+}
+
+async function defaultGitShortSha(repoRoot) {
+  try {
+    const { stdout } = await capture("git", ["-C", repoRoot, "rev-parse", "--short", "HEAD"], { allowFailure: true });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
+function readVersionFile(repoRoot, readFile) {
+  try {
+    const raw = readFile(path.join(repoRoot, "VERSION"), "utf8");
+    const trimmed = raw.replace(/\s+/g, "");
+    return trimmed ? `v${trimmed}` : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Derives IMAGE_TAG per 00-variables.sh: env override, else VERSION file,
+ * else git short SHA. Throws InvalidImageTagError if nothing resolves or the
+ * resolved value fails validation.
+ */
+export async function deriveImageTag({
+  env = process.env,
+  repoRoot = DEFAULT_REPO_ROOT,
+  readFile = fs.readFileSync,
+  gitShortSha = defaultGitShortSha,
+} = {}) {
+  let tag = env.IMAGE_TAG;
+  if (!tag) {
+    tag = readVersionFile(repoRoot, readFile);
+  }
+  if (!tag) {
+    tag = await gitShortSha(repoRoot);
+  }
+  if (!tag) {
+    throw new InvalidImageTagError("IMAGE_TAG is not set and no VERSION file or git context found.");
+  }
+  validateImageTag(tag, "IMAGE_TAG");
+  return tag;
+}
+
+/**
+ * Resolves the full Agentweaver AKS variable set, matching 00-variables.sh /
+ * .ps1 field-for-field.
+ *
+ * @param {object} [options]
+ * @param {Record<string,string>} [options.env] Defaults to process.env.
+ * @param {string} [options.repoRoot] Defaults to the real repo root.
+ * @param {boolean} [options.resolveLive] When false, TENANT_ID/
+ *   IDENTITY_CLIENT_ID/APPINSIGHTS_WORKSPACE_ID resolve to '' instead of
+ *   shelling out to `az` (default: true).
+ * @param {typeof import('./lib/az.mjs')} [options.az] Injectable az.mjs
+ *   module (or a stub with the same function names) for testing.
+ * @param {(repoRoot: string) => Promise<string>} [options.gitShortSha]
+ *   Injectable git short-SHA resolver for testing.
+ * @param {typeof fs.readFileSync} [options.readFile] Injectable VERSION file
+ *   reader for testing.
+ * @returns {Promise<Record<string, string>>}
+ */
+export async function resolveVariables(options = {}) {
+  const {
+    env = process.env,
+    repoRoot = DEFAULT_REPO_ROOT,
+    resolveLive = true,
+    az = azDefault,
+    gitShortSha = defaultGitShortSha,
+    readFile = fs.readFileSync,
+  } = options;
+
+  const pick = (name) => env[name] || DEFAULTS[name];
+
+  const RESOURCE_GROUP = pick("RESOURCE_GROUP");
+  const CLUSTER_NAME = pick("CLUSTER_NAME");
+  const ACR_NAME = pick("ACR_NAME");
+  const LOCATION = pick("LOCATION");
+  const NAMESPACE = pick("NAMESPACE");
+  const KATA_POOL_NAME = pick("KATA_POOL_NAME");
+  const APP_POOL_NAME = pick("APP_POOL_NAME");
+
+  const KEYVAULT_NAME = env.KEYVAULT_NAME || DEFAULTS.KEYVAULT_NAME;
+  const AGENTHOST_KEYVAULT_URI =
+    env.AGENTHOST_KEYVAULT_URI || `https://${KEYVAULT_NAME}.vault.azure.net/`;
+
+  let TENANT_ID = env.TENANT_ID || "";
+  if (!TENANT_ID && resolveLive) {
+    TENANT_ID = await az.getTenantId();
+  }
+
+  let IDENTITY_CLIENT_ID = env.IDENTITY_CLIENT_ID || "";
+  if (!IDENTITY_CLIENT_ID && resolveLive) {
+    IDENTITY_CLIENT_ID = await az.getIdentityClientId(RESOURCE_GROUP, IDENTITY_NAME);
+  }
+
+  let APPINSIGHTS_WORKSPACE_ID = env.APPINSIGHTS_WORKSPACE_ID || "";
+  if (!APPINSIGHTS_WORKSPACE_ID && resolveLive) {
+    APPINSIGHTS_WORKSPACE_ID = await az.getLogAnalyticsWorkspaceCustomerId(
+      RESOURCE_GROUP,
+      LOG_ANALYTICS_WORKSPACE_NAME,
+    );
+  }
+
+  const IMAGE_TAG = await deriveImageTag({ env, repoRoot, readFile, gitShortSha });
+
+  let AGENTHOST_IMAGE_TAG = env.AGENTHOST_IMAGE_TAG || IMAGE_TAG;
+  if (env.AGENTHOST_IMAGE_TAG) {
+    validateImageTag(AGENTHOST_IMAGE_TAG, "AGENTHOST_IMAGE_TAG");
+  }
+
+  const ACR_LOGIN_SERVER = `${ACR_NAME}.azurecr.io`;
+
+  return {
+    RESOURCE_GROUP,
+    CLUSTER_NAME,
+    ACR_NAME,
+    LOCATION,
+    NAMESPACE,
+    KATA_POOL_NAME,
+    APP_POOL_NAME,
+    IMAGE_TAG,
+    AGENTHOST_IMAGE_TAG,
+    ACR_LOGIN_SERVER,
+    KEYVAULT_NAME,
+    AGENTHOST_KEYVAULT_URI,
+    TENANT_ID,
+    IDENTITY_CLIENT_ID,
+    APPINSIGHTS_WORKSPACE_ID,
+  };
+}
+
+/** Prints the "=== Agentweaver AKS variables ===" summary block, matching 00-variables.sh's echo output. */
+export function printSummary(vars, log) {
+  log.section("Agentweaver AKS variables");
+  log.field("Resource Group", vars.RESOURCE_GROUP);
+  log.field("Cluster", vars.CLUSTER_NAME);
+  log.field("ACR", vars.ACR_LOGIN_SERVER);
+  log.field("Location", vars.LOCATION);
+  log.field("Namespace", vars.NAMESPACE);
+  log.field("Kata pool", vars.KATA_POOL_NAME);
+  log.field("App pool", vars.APP_POOL_NAME);
+  log.field("Image tag", vars.IMAGE_TAG);
+  log.field("AgentHost tag", vars.AGENTHOST_IMAGE_TAG);
+  log.field("Key Vault", vars.KEYVAULT_NAME);
+  log.field("AgentHost KV", vars.AGENTHOST_KEYVAULT_URI);
+  log.field("Tenant ID", vars.TENANT_ID || "<not set>");
+  log.field("Identity client", vars.IDENTITY_CLIENT_ID || "<not set>");
+  log.field("AppInsights workspace", vars.APPINSIGHTS_WORKSPACE_ID || "<not set>");
+}

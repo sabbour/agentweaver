@@ -1,0 +1,140 @@
+// verify-step.test.mjs -- Tests for steps/40-verify.mjs: pod-count tallying,
+// gateway/httproute checks, the authenticated HTTP feature probe (fetch
+// stubbed), SecretProviderClass/RBAC/sandbox/storage checks, and the overall
+// pass/fail summary. All kubectl/fetch calls are injected fakes -- no real
+// cluster or network access.
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  run,
+  runningPodCount,
+  kubectlOk,
+  httpStatus,
+  httpJson,
+  firstProjectId,
+} from "../steps/40-verify.mjs";
+
+const CFG = Object.freeze({ NAMESPACE: "agentweaver" });
+
+function noopLog() {
+  const rec = () => () => {};
+  return { info: rec(), section: rec(), field: rec(), ok: rec(), skip: rec(), warn: rec(), error: rec(), debug: rec(), command: rec() };
+}
+
+function fakeExec(captureImpl) {
+  return {
+    async capture(cmd, args, opts) {
+      return captureImpl(cmd, args, opts) ?? { stdout: "", stderr: "", code: 0 };
+    },
+    async run() {
+      return { code: 0 };
+    },
+  };
+}
+
+test("runningPodCount: counts non-empty lines", async () => {
+  const exec = fakeExec(() => ({ stdout: "pod-a\npod-b\n", stderr: "", code: 0 }));
+  assert.equal(await runningPodCount("agentweaver", "app=agentweaver-api", { exec }), 2);
+});
+
+test("runningPodCount: 0 when kubectl fails", async () => {
+  const exec = fakeExec(() => ({ stdout: "", stderr: "err", code: 1 }));
+  assert.equal(await runningPodCount("agentweaver", "app=agentweaver-api", { exec }), 0);
+});
+
+test("kubectlOk: true/false on exit code", async () => {
+  const execOk = fakeExec(() => ({ stdout: "", stderr: "", code: 0 }));
+  const execFail = fakeExec(() => ({ stdout: "", stderr: "", code: 1 }));
+  assert.equal(await kubectlOk(["get", "x"], { exec: execOk }), true);
+  assert.equal(await kubectlOk(["get", "x"], { exec: execFail }), false);
+});
+
+test("httpStatus: returns numeric status", async () => {
+  const fetchImpl = async () => ({ status: 401 });
+  assert.equal(await httpStatus("https://example.test/api/projects", { fetchImpl }), 401);
+});
+
+test("httpStatus: returns '000' on network failure", async () => {
+  const fetchImpl = async () => {
+    throw new Error("network down");
+  };
+  assert.equal(await httpStatus("https://example.test/api/projects", { fetchImpl }), "000");
+});
+
+test("httpJson: returns [] on non-ok response", async () => {
+  const fetchImpl = async () => ({ ok: false, status: 500 });
+  assert.deepEqual(await httpJson("https://example.test/api/projects", "tok", { fetchImpl }), []);
+});
+
+test("firstProjectId: handles array/projects/items shapes and id/projectId keys", () => {
+  assert.equal(firstProjectId([{ id: "p1" }]), "p1");
+  assert.equal(firstProjectId({ projects: [{ projectId: "p2" }] }), "p2");
+  assert.equal(firstProjectId({ items: [{ id: "p3" }] }), "p3");
+  assert.equal(firstProjectId({}), "");
+  assert.equal(firstProjectId([]), "");
+});
+
+test("run: all-pass scenario reports ok:true with no HOST-dependent checks skipped incorrectly", async () => {
+  const captureImpl = (cmd, args) => {
+    const joined = args.join(" ");
+    if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "pod-1\n", stderr: "", code: 0 };
+    if (joined.includes('gateway agentweaver-gateway') && joined.includes("Programmed")) return { stdout: "True", stderr: "", code: 0 };
+    if (joined.includes("gateway agentweaver-gateway") && joined.includes("addresses")) return { stdout: "1.2.3.4", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-preview-gateway")) return { stdout: "True", stderr: "", code: 0 };
+    if (joined.includes("httproute")) return { stdout: "True", stderr: "", code: 0 };
+    if (joined.includes("defaultdomaincertificate")) return { stdout: "", stderr: "", code: 0 }; // no domain -> skip HTTP checks
+    if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
+    if (joined.includes("secretproviderclass")) return { stdout: "", stderr: "", code: 0 };
+    if (joined.includes("auth can-i")) return { stdout: "yes", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 }; // legacy template/warmpool: absent
+    return { stdout: "", stderr: "", code: 0 }; // every other `get X` check: exists (exit 0)
+  };
+  const exec = fakeExec(captureImpl);
+  const result = await run(CFG, { exec, log: noopLog(), env: {} });
+  assert.equal(result.fail, 0);
+  assert.equal(result.ok, true);
+  assert.ok(result.pass > 0);
+});
+
+test("run: reports failures for missing pods and unprogrammed gateway", async () => {
+  const captureImpl = (cmd, args) => {
+    const joined = args.join(" ");
+    if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "", stderr: "", code: 0 }; // no running pods
+    if (joined.includes("Programmed")) return { stdout: "False", stderr: "", code: 0 };
+    if (joined.includes("addresses")) return { stdout: "", stderr: "", code: 0 };
+    if (joined.includes("Accepted") || joined.includes("ResolvedRefs")) return { stdout: "False", stderr: "", code: 0 };
+    if (joined.includes("defaultdomaincertificate")) return { stdout: "", stderr: "", code: 0 };
+    return { stdout: "", stderr: "", code: 1 }; // every other `get X` check: missing
+  };
+  const exec = fakeExec(captureImpl);
+  const result = await run(CFG, { exec, log: noopLog(), env: {} });
+  assert.equal(result.ok, false);
+  assert.ok(result.fail > 0);
+});
+
+test("run: performs authenticated feature checks when HOST resolves and a token is supplied", async () => {
+  const captureImpl = (cmd, args) => {
+    const joined = args.join(" ");
+    if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "pod-1\n", stderr: "", code: 0 };
+    if (joined.includes("Programmed") || joined.includes("Accepted") || joined.includes("ResolvedRefs")) return { stdout: "True", stderr: "", code: 0 };
+    if (joined.includes("addresses")) return { stdout: "1.2.3.4", stderr: "", code: 0 };
+    if (joined.includes("defaultdomaincertificate")) return { stdout: "*.westus2.cloudapp.azure.com", stderr: "", code: 0 };
+    if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
+    if (joined.includes("auth can-i")) return { stdout: "yes", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 }; // legacy template/warmpool: absent
+    return { stdout: "", stderr: "", code: 0 };
+  };
+  const exec = fakeExec(captureImpl);
+  const calledUrls = [];
+  const fetchImpl = async (url, init) => {
+    calledUrls.push(url);
+    if (url.endsWith("/api/projects") && !init.headers?.Authorization) return { status: 401, ok: false, json: async () => [] };
+    if (url.endsWith("/api/auth/github")) return { status: 200, ok: true, json: async () => ({}) };
+    if (url.endsWith("/api/projects")) return { status: 200, ok: true, json: async () => [{ id: "proj-1" }] };
+    return { status: 200, ok: true, json: async () => ({}) };
+  };
+  const result = await run(CFG, { exec, log: noopLog(), env: { AGENTWEAVER_VALIDATION_TOKEN: "tok" }, fetchImpl });
+  assert.ok(calledUrls.some((u) => u.includes("/api/projects/proj-1/memory")));
+  assert.equal(result.ok, true);
+});

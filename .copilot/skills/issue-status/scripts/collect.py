@@ -84,13 +84,13 @@ def get_deployed_sha(deployed_tag_arg):
     """Try to determine the currently deployed commit SHA."""
     if deployed_tag_arg:
         return deployed_tag_arg
-    # Try reading from variables file
+    # Try reading the semver from the VERSION file (scripts/azure/variables.mjs
+    # derives the default IMAGE_TAG as v<VERSION> when no explicit tag/env is set).
     try:
-        with open("scripts/aks/00-variables.sh") as f:
-            for line in f:
-                m = re.search(r'IMAGE_TAG[=:]+"?([a-f0-9]{7,40})"?', line)
-                if m:
-                    return m.group(1)
+        with open("VERSION") as f:
+            version = f.read().strip()
+            if re.match(r'^\d+\.\d+\.\d+', version):
+                return f"v{version}"
     except Exception:
         pass
     return None

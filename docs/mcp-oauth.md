@@ -139,10 +139,9 @@ Signed JWT (RS256). Claims:
 | `Auth:OAuth:Audience` | Optional audience override. Defaults to `{issuer}/mcp`. |
 | `Auth:GitHub:ClientId` / `ClientSecret` / `CallbackUrl` / `Scopes` | Existing confidential GitHub OAuth app (reused for the broker leg). |
 
-For AKS production, run `pnpm run infra:deploy` before the first release
+For AKS production, run `npm run azure:deploy` before the first release
 deployment; it provisions the signing key together with the required cluster
-identity and secrets. Use `npm run infra:deploy` if npm is your selected
-package runner. The installer's `--skip-oauth-key` flag is only safe when that
+identity and secrets. The installer's `--skip-oauth-key` flag is only safe when that
 Key Vault secret already exists; otherwise cluster diagnostics report
 `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 | `Auth:GitHub:AllowedOrg` | Organization enforced at token issuance (`microsoft`). |

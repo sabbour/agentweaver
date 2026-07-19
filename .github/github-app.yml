@@ -1,6 +1,6 @@
 scripts:
   - name: start
-    command: pwsh -NoProfile -ExecutionPolicy Bypass -File .\start-dev.ps1 -NoBrowser
+    command: node scripts/azure/cli.mjs dev --no-browser
 automation:
   auto_issue_session: true
   remote_control: false

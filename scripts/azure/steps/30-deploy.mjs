@@ -1,0 +1,487 @@
+// steps/30-deploy.mjs -- Faithful Node port of scripts/aks/30-deploy.sh's
+// APPLY phase (cross-checked against 30-deploy.ps1). Read both before
+// changing this file; they must stay in lockstep with this port's behavior.
+//
+// SCOPE (Phase 2, per specs/006-memory-and-decision-inbox/plan.md P2): only
+// the apply-only deploy path is ported here.
+//
+//   - Image-provenance verification (25-verify-image-provenance.sh/.ps1) is
+//     explicitly OUT of scope for this file -- that is a separate Phase 3
+//     port. 30-deploy.sh calls it as the very last step, after all rollouts
+//     complete; this port intentionally stops before that call (see the
+//     comment near the bottom of run() marking exactly where it would go).
+//   - 40-verify.sh/.ps1 is a separate script/phase, not called from here
+//     either (30-deploy.sh only *mentions* it in the final "next step" text).
+//
+// cfg is the resolved variables/config object produced by variables.mjs's
+// resolveVariables(): RESOURCE_GROUP, CLUSTER_NAME, ACR_NAME, LOCATION,
+// NAMESPACE, KATA_POOL_NAME, APP_POOL_NAME, IMAGE_TAG, AGENTHOST_IMAGE_TAG,
+// ACR_LOGIN_SERVER, KEYVAULT_NAME, AGENTHOST_KEYVAULT_URI, TENANT_ID,
+// IDENTITY_CLIENT_ID, APPINSIGHTS_WORKSPACE_ID.
+//
+// HOST / PREVIEW_HOSTNAME / PREVIEW_TLS_SECRET / SANDBOX_PREVIEW_ENABLED /
+// SANDBOX_PREVIEW_ZONE_SUFFIX are deliberately NOT part of variables.mjs's
+// output -- exactly like the bash/PowerShell scripts, they are derived LIVE
+// from the cluster's DefaultDomainCertificate status inside run() below, not
+// resolved ahead of time. Only pass a fixed value for these in tests.
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import * as execDefault from "../lib/exec.mjs";
+import * as logDefault from "../lib/log.mjs";
+import * as azDefault from "../lib/az.mjs";
+import { renderTemplate } from "../lib/render.mjs";
+import * as provisionMonitoringDefault from "./15-provision-monitoring.mjs";
+import * as genA2aMtlsCertsDefault from "./gen-a2a-mtls-certs.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// scripts/azure/steps/30-deploy.mjs -> repo root is three levels up.
+export const DEFAULT_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+
+/**
+ * envsubst allow-list, verified against the exact string 30-deploy.sh passes
+ * to `envsubst '...'` and the $SubstVars array in 30-deploy.ps1. Order here
+ * matches the source for readability only -- render.mjs treats it as a set.
+ */
+export const ALLOW_LIST = [
+  "HOST",
+  "ACR_LOGIN_SERVER",
+  "IMAGE_TAG",
+  "AGENTHOST_IMAGE_TAG",
+  "IDENTITY_CLIENT_ID",
+  "KEYVAULT_NAME",
+  "AGENTHOST_KEYVAULT_URI",
+  "TENANT_ID",
+  "PREVIEW_HOSTNAME",
+  "PREVIEW_TLS_SECRET",
+  "SANDBOX_PREVIEW_ENABLED",
+  "SANDBOX_PREVIEW_ZONE_SUFFIX",
+  "APPINSIGHTS_WORKSPACE_ID",
+];
+
+// Apply order groups, exactly as in 30-deploy.sh/.ps1. Kept as named,
+// exported arrays (rather than one flat inline list) so tests can assert on
+// ordering/grouping without needing a live kubectl.
+export const IDENTITY_RBAC_QUOTA_PVC_MANIFESTS = [
+  "serviceaccount-api.yaml",
+  "serviceaccount-agenthost.yaml",
+  // (kubectl wait on serviceaccount/agentweaver-api happens between these two groups -- see run())
+  "secret-provider-class.yaml",
+  "rbac-api.yaml",
+  "quota.yaml",
+  "storageclass-workspace.yaml",
+  "pvc-data.yaml",
+  "pvc-workspace.yaml",
+];
+
+export const NETWORK_POLICY_MANIFESTS = [
+  "networkpolicy-default-deny.yaml",
+  "networkpolicy-mcp.yaml",
+  "networkpolicy-sandbox.yaml",
+  // H2 (spec-018): A2A ingress -- worker -> agenthost on port 8088 only; no egress change.
+  "networkpolicy-agenthost.yaml",
+  "networkpolicy-agenthost-api-egress.yaml",
+  "networkpolicy-agenthost-egress.yaml",
+  "cilium-network-policy-sandbox.yaml",
+  "serviceentry-telemetry.yaml",
+  // spec-018 P2: Allow API pods to reach PostgreSQL Flexible Server on port 5432.
+  "networkpolicy-postgres-egress.yaml",
+  // spec-018 P3: Worker-tier egress policies (DNS, HTTPS, internal, Postgres, OTEL).
+  "networkpolicy-worker.yaml",
+];
+
+export const SERVICES_GATEWAY_ROUTE_MANIFESTS = [
+  // H4/H3 (spec-018): AgentHost Kestrel + card-authz config.
+  "configmap-agenthost.yaml",
+  "api-service.yaml",
+  "frontend-service.yaml",
+  "mcp-service.yaml",
+  "gateway.yaml",
+  "gateway-preview.yaml",
+  "httproute-api.yaml",
+  "httproute-frontend.yaml",
+  "mcp-httproute.yaml",
+];
+
+// spec-018 pod-per-run: the template MUST be applied before the warm pool
+// (the pool's sandboxTemplateRef points at it), and the warm pool MUST exist
+// before AgentHost claims (which bind via spec.warmPoolRef.name). Only
+// applied if the agent-sandbox CRD (SandboxTemplate) is installed.
+export const SANDBOX_MANIFESTS = ["sandbox-template-agenthost.yaml", "sandbox-warmpool-agenthost.yaml"];
+
+export const DEPLOYMENT_MANIFESTS = ["api-deployment.yaml", "frontend-deployment.yaml", "mcp-deployment.yaml"];
+
+// ORDERING NOTE: apply worker AFTER api-deployment so the agentweaver-api
+// service (Agentweaver__ApiBaseUrl target) is already present.
+export const WORKER_MANIFESTS = ["worker-deployment.yaml", "worker-hpa.yaml"];
+
+const INLINE_DEFAULT_DOMAIN_CERTIFICATE = (namespace) => `apiVersion: approuting.kubernetes.azure.com/v1alpha1
+kind: DefaultDomainCertificate
+metadata:
+  name: cert
+  namespace: ${namespace}
+spec:
+  target:
+    secret: agentweaver-tls
+`;
+
+/** Strips a leading `*.` prefix, matching bash's `${DOMAIN#\*.}` / PowerShell's `-replace '^\*\.', ''`. */
+export function stripWildcardPrefix(domain) {
+  return domain.replace(/^\*\./, "");
+}
+
+/**
+ * Renders every k8s/*.yaml template with the allow-listed variables, matching
+ * 30-deploy.sh's `envsubst` loop / 30-deploy.ps1's Invoke-EnvSubstWhitelist
+ * loop. Returns a Map<filename, renderedContent>; does not write to disk --
+ * callers decide where (or whether) to persist rendered output.
+ *
+ * @param {Record<string, unknown>} vars Full variable set (cfg plus the
+ *   live-derived HOST / PREVIEW_* / SANDBOX_PREVIEW_* fields).
+ * @param {{ repoRoot?: string, fs?: typeof fs }} [opts]
+ * @returns {Map<string, string>}
+ */
+export function renderManifests(vars, opts = {}) {
+  const { repoRoot = DEFAULT_REPO_ROOT, fs: fsImpl = fs } = opts;
+  const k8sDir = path.join(repoRoot, "k8s");
+  const rendered = new Map();
+  const filenames = fsImpl
+    .readdirSync(k8sDir)
+    .filter((name) => name.endsWith(".yaml"))
+    .sort();
+  for (const fname of filenames) {
+    const template = fsImpl.readFileSync(path.join(k8sDir, fname), "utf8");
+    rendered.set(fname, renderTemplate(template, vars, ALLOW_LIST));
+  }
+  return rendered;
+}
+
+/**
+ * Deploys Agentweaver to AKS: faithful port of 30-deploy.sh's apply phase.
+ *
+ * @param {Record<string, unknown>} cfg Resolved variables from variables.mjs.
+ * @param {object} [opts] Injectable collaborators, primarily for testing.
+ * @param {typeof execDefault.run} [opts.run]
+ * @param {typeof execDefault.capture} [opts.capture]
+ * @param {typeof logDefault} [opts.log]
+ * @param {typeof azDefault} [opts.az]
+ * @param {string} [opts.repoRoot]
+ * @param {typeof fs} [opts.fs]
+ */
+export async function run(cfg, opts = {}) {
+  const {
+    run: execRun = execDefault.run,
+    capture: execCapture = execDefault.capture,
+    log = logDefault,
+    az = azDefault,
+    repoRoot = DEFAULT_REPO_ROOT,
+    fs: fsImpl = fs,
+    provisionMonitoring = provisionMonitoringDefault,
+    genA2aMtlsCerts = genA2aMtlsCertsDefault,
+  } = opts;
+
+  const NAMESPACE = cfg.NAMESPACE;
+  const RENDERED_DIR = path.join(__dirname, ".rendered");
+
+  const cleanupRenderedDir = () => {
+    fsImpl.rmSync(RENDERED_DIR, { recursive: true, force: true });
+  };
+
+  try {
+    const { stdout: context } = await execCapture("kubectl", ["config", "current-context"]);
+    log.info("");
+    log.section("Agentweaver AKS deployment");
+    log.field("kubectl context", context);
+    log.field("Namespace", NAMESPACE);
+    log.field("ACR", cfg.ACR_LOGIN_SERVER);
+    log.field("Image tag", cfg.IMAGE_TAG);
+    log.info("");
+
+    // Required-variable check (matches 30-deploy.sh's `missing=()` block /
+    // 30-deploy.ps1's `$missing` block).
+    const missing = [];
+    if (!cfg.IDENTITY_CLIENT_ID) missing.push("IDENTITY_CLIENT_ID");
+    if (!cfg.KEYVAULT_NAME) missing.push("KEYVAULT_NAME");
+    if (!cfg.TENANT_ID) missing.push("TENANT_ID");
+    if (missing.length > 0) {
+      throw new Error(`The following required variables are not set:\n  ${missing.join("\n  ")}`);
+    }
+
+    // Derive compound variables from primitives so templates can reference them directly.
+    const AGENTHOST_KEYVAULT_URI = cfg.AGENTHOST_KEYVAULT_URI || `https://${cfg.KEYVAULT_NAME}.vault.azure.net/`;
+
+    log.info("Applying namespace...");
+    await execRun("kubectl", ["apply", "-f", path.join(repoRoot, "k8s", "namespace.yaml")]);
+
+    // Provision monitoring if not already done.
+    const insightsCheck = await execCapture(
+      "az",
+      ["monitor", "app-insights", "component", "show", "--app", "agentweaver-insights", "-g", cfg.RESOURCE_GROUP],
+      { allowFailure: true },
+    );
+    if (insightsCheck.code !== 0) {
+      log.info("");
+      log.info("Provisioning monitoring (Application Insights + Managed Prometheus)...");
+      await provisionMonitoring.run(cfg, { exec: { run: execRun, capture: execCapture }, log });
+    }
+
+    let APPINSIGHTS_WORKSPACE_ID = await az.getLogAnalyticsWorkspaceCustomerId(cfg.RESOURCE_GROUP, "agentweaver-logs", {
+      allowFailure: true,
+    });
+    APPINSIGHTS_WORKSPACE_ID = APPINSIGHTS_WORKSPACE_ID || "";
+
+    log.info("");
+    log.info(`Checking DefaultDomainCertificate 'cert' in namespace '${NAMESPACE}'...`);
+    const ddcCheck = await execCapture(
+      "kubectl",
+      ["get", "defaultdomaincertificate", "cert", "--namespace", NAMESPACE],
+      { allowFailure: true },
+    );
+    if (ddcCheck.code === 0) {
+      log.ok("DefaultDomainCertificate 'cert' already exists.");
+    } else {
+      fsImpl.mkdirSync(RENDERED_DIR, { recursive: true });
+      const inlineDdcPath = path.join(RENDERED_DIR, "_defaultdomaincertificate-cert.yaml");
+      fsImpl.writeFileSync(inlineDdcPath, INLINE_DEFAULT_DOMAIN_CERTIFICATE(NAMESPACE));
+      await execRun("kubectl", ["apply", "-f", inlineDdcPath]);
+    }
+
+    await execRun("kubectl", [
+      "wait",
+      "--for=condition=Available",
+      "defaultdomaincertificate/cert",
+      "--namespace",
+      NAMESPACE,
+      "--timeout=300s",
+    ]);
+
+    const { stdout: DOMAIN } = await execCapture("kubectl", [
+      "get",
+      "defaultdomaincertificate",
+      "cert",
+      "--namespace",
+      NAMESPACE,
+      "--output",
+      "jsonpath={.status.domain}",
+    ]);
+    const HOST = `agentweaver.${stripWildcardPrefix(DOMAIN)}`;
+
+    log.info(`  Managed domain: ${DOMAIN}`);
+    log.info(`  Ingress host:   ${HOST}`);
+
+    // --- Preview gateway cert path (CONFIRMED 2026-06-28 by live spike) ---
+    // AKS App Routing DefaultDomainCertificate does NOT support nested wildcards;
+    // status.domain is always *.{zone}. We always take the single-label fallback
+    // path and reuse agentweaver-tls. See 30-deploy.sh for full spike evidence.
+    log.info("");
+    log.info("Setting preview gateway hostname (single-label fallback -- AKS nested DDC not supported)...");
+    const ZONE_SUFFIX = stripWildcardPrefix(DOMAIN);
+    const PREVIEW_TLS_SECRET = "agentweaver-tls";
+    const PREVIEW_HOSTNAME = `*.${ZONE_SUFFIX}`;
+    const SANDBOX_PREVIEW_ENABLED = "true";
+    const SANDBOX_PREVIEW_ZONE_SUFFIX = ZONE_SUFFIX;
+
+    log.info(`  Preview hostname:    ${PREVIEW_HOSTNAME}`);
+    log.info(`  Preview TLS secret:  ${PREVIEW_TLS_SECRET}`);
+    log.info(`  ZoneSuffix (API):    ${ZONE_SUFFIX}`);
+
+    const renderVars = {
+      ...cfg,
+      AGENTHOST_KEYVAULT_URI,
+      APPINSIGHTS_WORKSPACE_ID,
+      HOST,
+      PREVIEW_HOSTNAME,
+      PREVIEW_TLS_SECRET,
+      SANDBOX_PREVIEW_ENABLED,
+      SANDBOX_PREVIEW_ZONE_SUFFIX,
+    };
+
+    cleanupRenderedDir();
+    fsImpl.mkdirSync(RENDERED_DIR, { recursive: true });
+
+    log.info("");
+    log.info("Rendering manifests...");
+    const rendered = renderManifests(renderVars, { repoRoot, fs: fsImpl });
+    for (const [fname, content] of rendered) {
+      fsImpl.writeFileSync(path.join(RENDERED_DIR, fname), content);
+      log.info(`  rendered: ${fname}`);
+    }
+
+    const applyRendered = async (fname) => {
+      await execRun("kubectl", ["apply", "-f", path.join(RENDERED_DIR, fname)]);
+      log.info(`  [applied] ${fname}`);
+    };
+
+    log.info("");
+    log.info("Applying identity, secrets, RBAC, quotas, and PVCs...");
+    await applyRendered("serviceaccount-api.yaml");
+    await applyRendered("serviceaccount-agenthost.yaml");
+    await execRun("kubectl", [
+      "wait",
+      `--for=jsonpath={.metadata.annotations.azure\\.workload\\.identity/client-id}=${cfg.IDENTITY_CLIENT_ID}`,
+      "serviceaccount/agentweaver-api",
+      "--namespace",
+      NAMESPACE,
+      "--timeout=60s",
+    ]);
+    await applyRendered("secret-provider-class.yaml");
+    log.info(
+      "  [note] secret-provider-class.yaml is static only: agentweaver-user-tokens contains ghtok-installation; " +
+        "per-run user-token SPCs are created/deleted by the API at AgentHost launch/release.",
+    );
+    for (const fname of IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(3)) {
+      await applyRendered(fname);
+    }
+
+    log.info("");
+    log.info("Applying network policies and egress allowlists...");
+    for (const fname of NETWORK_POLICY_MANIFESTS) {
+      await applyRendered(fname);
+    }
+
+    log.info("");
+    log.info("Applying services, gateway, and routes...");
+    // H1 (spec-018): generate A2A mTLS certs (idempotent -- skips if secrets exist).
+    log.info("Ensuring A2A mTLS certificates are present (H1)...");
+    await genA2aMtlsCerts.run(cfg, { exec: { run: execRun, capture: execCapture }, log, fs: fsImpl, repoRoot });
+    for (const fname of SERVICES_GATEWAY_ROUTE_MANIFESTS) {
+      await applyRendered(fname);
+    }
+
+    log.info("");
+    log.info("Applying AgentHost sandbox template and warm pool (if CRD is available)...");
+    const crdCheck = await execCapture("kubectl", ["api-resources", "--api-group=extensions.agents.x-k8s.io"], {
+      allowFailure: true,
+    });
+    const hasSandboxCrd = crdCheck.stdout.includes("SandboxTemplate");
+    if (hasSandboxCrd) {
+      for (const fname of SANDBOX_MANIFESTS) {
+        await applyRendered(fname);
+      }
+    } else {
+      log.skip("agent-sandbox CRD not installed -- AgentHost sandbox template skipped.");
+    }
+
+    log.info("");
+    log.info("Waiting for gateway/agentweaver-gateway to become Programmed (up to 3 min)...");
+    await execRun("kubectl", [
+      "wait",
+      "--for=condition=Programmed",
+      "gateway/agentweaver-gateway",
+      "--namespace",
+      NAMESPACE,
+      "--timeout=180s",
+    ]);
+
+    log.info("Waiting for gateway/agentweaver-preview-gateway to become Programmed (up to 3 min)...");
+    await execRun("kubectl", [
+      "wait",
+      "--for=condition=Programmed",
+      "gateway/agentweaver-preview-gateway",
+      "--namespace",
+      NAMESPACE,
+      "--timeout=180s",
+    ]);
+
+    const { stdout: GATEWAY_IP } = await execCapture("kubectl", [
+      "get",
+      "gateway",
+      "agentweaver-gateway",
+      "--namespace",
+      NAMESPACE,
+      "--output",
+      "jsonpath={.status.addresses[0].value}",
+    ]);
+
+    log.info("");
+    log.info("Applying deployments after workload identity prerequisites are ready...");
+    for (const fname of DEPLOYMENT_MANIFESTS) {
+      await applyRendered(fname);
+    }
+
+    log.info("");
+    // spec-018 P3: Worker Deployment + autoscaling. ORDERING NOTE: apply
+    // worker AFTER api-deployment (see WORKER_MANIFESTS comment above).
+    log.info("Applying worker deployment and HPA (spec-018 P3)...");
+    for (const fname of WORKER_MANIFESTS) {
+      await applyRendered(fname);
+    }
+
+    log.info("");
+    log.info("Waiting for API deployment rollout...");
+    await execRun("kubectl", ["rollout", "status", "deployment/agentweaver-api", "--namespace", NAMESPACE, "--timeout=180s"]);
+
+    log.info("Waiting for Frontend deployment rollout...");
+    await execRun("kubectl", [
+      "rollout",
+      "status",
+      "deployment/agentweaver-frontend",
+      "--namespace",
+      NAMESPACE,
+      "--timeout=120s",
+    ]);
+
+    log.info("Waiting for MCP deployment rollout...");
+    await execRun("kubectl", ["rollout", "status", "deployment/agentweaver-mcp", "--namespace", NAMESPACE, "--timeout=120s"]);
+
+    log.info("Waiting for Worker deployment rollout...");
+    // Worker init container runs EF Postgres migrations -- allow extra time.
+    // Non-fatal: matches bash's `... || echo WARNING` / PowerShell's non-throwing
+    // branch -- web tier is healthy regardless; worker comes up once migrations apply.
+    try {
+      await execRun("kubectl", [
+        "rollout",
+        "status",
+        "deployment/agentweaver-worker",
+        "--namespace",
+        NAMESPACE,
+        "--timeout=300s",
+      ]);
+    } catch {
+      log.warn(
+        `Worker rollout did not complete within 300s. Check: kubectl logs -n ${NAMESPACE} -l app=agentweaver-worker --all-containers`,
+      );
+    }
+
+    // Image-provenance verification (post-deploy safety net for #251) is
+    // deliberately NOT ported here -- it is Phase 3 scope (a separate step
+    // module wrapping 25-verify-image-provenance.sh/.ps1's logic). 30-deploy.sh
+    // calls it here, as the very last step before the completion summary; do
+    // not duplicate that logic in this file.
+
+    log.info("");
+    log.info("===================================================");
+    log.info(" DEPLOYMENT COMPLETE");
+    log.info("===================================================");
+    log.info("");
+    log.info(`  Frontend URL:        https://${HOST}/`);
+    log.info(`  API URL:             https://${HOST}/api/`);
+    log.info(`  MCP URL:             https://${HOST}/mcp/`);
+    log.info(`  Gateway IP:          ${GATEWAY_IP}`);
+    log.info("");
+    log.info(`  Preview gateway:     ${PREVIEW_HOSTNAME} (TLS: ${PREVIEW_TLS_SECRET})`);
+    log.info(`  Preview zone suffix: ${ZONE_SUFFIX}`);
+    log.info("  Sandbox__Preview__Enabled:          true");
+    log.info(`  Sandbox__Preview__ZoneSuffix:       ${ZONE_SUFFIX}`);
+    log.info("  Sandbox__Preview__GatewayName:      agentweaver-preview-gateway");
+    log.info("  Sandbox__Preview__GatewayNamespace: agentweaver");
+    log.info("");
+    log.info("  Next step:");
+    log.info("    node scripts/azure/cli.mjs verify   (or: bash scripts/aks/40-verify.sh)");
+    log.info("");
+    log.info("  To check status:");
+    log.info(`    kubectl get gateway,httproute,pod,svc -n ${NAMESPACE}`);
+
+    return {
+      HOST,
+      GATEWAY_IP,
+      PREVIEW_HOSTNAME,
+      PREVIEW_TLS_SECRET,
+      ZONE_SUFFIX,
+      APPINSIGHTS_WORKSPACE_ID,
+    };
+  } finally {
+    cleanupRenderedDir();
+  }
+}

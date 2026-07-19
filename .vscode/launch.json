@@ -5,7 +5,7 @@
       "name": "Start Agentweaver",
       "type": "node-terminal",
       "request": "launch",
-      "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\start-dev.ps1 -NoBrowser",
+      "command": "node scripts/azure/cli.mjs dev --no-browser",
       "cwd": "${workspaceFolder}"
     }
   ]

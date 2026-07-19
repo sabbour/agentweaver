@@ -18,76 +18,135 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 - **Sandbox browser preview** — open a live in-browser preview of the app running inside a run's sandbox (port-forward)
 - **MCP server** — expose Agentweaver runs and outcomes as MCP tools for Claude Desktop and compatible clients
 
+## Prerequisites
+
+| Tool | Needed for |
+| --- | --- |
+| [git](https://git-scm.com/) | cloning the repo; the default image tag is the short git SHA |
+| [Node.js 20+](https://nodejs.org/) (LTS) | running every script in this repo, including the Azure toolchain (`scripts/azure/`) |
+| `npm` (bundled with Node) or `pnpm` | installing dependencies and running package scripts |
+| [.NET SDK 10](https://dot.net/download) | building/running the API and MCP server locally |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in via `az login` | everything under `npm run azure:*` |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during `azure:deploy`/`azure:upgrade`/`azure:verify` |
+| [`gh` CLI](https://cli.github.com/), authenticated via `gh auth status` | `npm run azure:release` only (changelog generation + creating the GitHub Release) |
+
+Docker is **not** required locally — image builds run remotely via `az acr build`
+(see `scripts/azure/steps/20-build-push-images.mjs`), not a local Docker daemon.
+
 ## Quick start
 
-**Local dev — one command:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash
-```
-```powershell
-irm https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1 | iex
-```
+git clone https://github.com/sabbour/agentweaver.git
+cd agentweaver
 
-**Installer alternative: deploy to AKS in one command** (requires `az login` + `kubectl` + `envsubst` + `openssl`):
-```bash
-curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
-```
-```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1'))) -Aks
+# Bootstrap: checks git/dotnet/node versions, installs apps/web's npm deps,
+# and restores .NET packages (replaces the old install.sh/.ps1 local mode).
+npm run azure:deploy -- --local
+
+# Start the API (http://localhost:5000) and the Web UI (http://localhost:5173).
+npm run azure:dev
 ```
 
-> **AKS flags:** `--skip-postgres` / `-SkipPostgres` and `--skip-oauth-key` / `-SkipOauthKey`
-> skip optional provisioning steps if those resources already exist.
+Use `pnpm run <script>` in place of `npm run <script>` if you use pnpm.
 
-<details>
-<summary>Installer alternative from a cloned checkout</summary>
+## Deploy to Azure
 
-**Windows (PowerShell):**
-```powershell
-.\install.ps1            # local dev — checks prereqs, installs deps, launches start-dev.ps1
-.\install.ps1 -Aks       # AKS deploy (requires WSL2 + az login + kubectl)
-```
-
-**macOS / Linux (bash):**
-```bash
-bash install.sh          # local dev — checks prereqs, installs deps, prints start commands
-bash install.sh --aks    # AKS deploy (requires az login + kubectl + envsubst + openssl)
-```
-</details>
-
-## Build & deploy
-
-### AKS deployment
-
-From a cloned checkout, run these commands. Examples use `pnpm`; `npm run <script>`
-is equivalent.
+From a cloned checkout:
 
 ```bash
-# First deployment: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be exported.
-pnpm run infra:deploy
-
-# Every release or redeploy
-pnpm run release:images
-pnpm run release:deploy
+# Interactive smart installer (run with no flags, in a terminal / TTY):
+npm run azure:deploy
 ```
 
-See the [AKS deployment runbook](docs/guide/deployment-aks.md) for
-prerequisites, environment variables, and individual steps.
+With no arguments, `azure:deploy` launches an interactive installer that prompts
+for: the Azure subscription (defaulting to your current `az` default), a
+resource group (pick an existing one or create a new one), a location, the
+AKS cluster / ACR / Key Vault names (prefilled with sensible defaults,
+editable), and a GitHub OAuth client ID + secret (the secret is entered with
+no echo). It then provisions the cluster, identity, monitoring, the MCP OAuth
+signing key, PostgreSQL, builds and pushes images, verifies image provenance,
+and deploys and verifies the release. At the end it prints an **outputs
+summary** (resource group, cluster, ACR, namespace, image tags, gateway
+host/IP, verification pass/fail counts) — it never prints the OAuth client
+secret or any other credential.
+
+**Non-interactive usage** — via flags, environment variables, and/or a params
+file (precedence: flags > env > params file > detected defaults > prompt; a
+non-interactive run — no TTY, or any flags passed — never blocks on a prompt
+and fails fast naming any missing required field):
+
+```bash
+npm run azure:deploy -- \
+  --resource-group agentweaver-rg \
+  --cluster-name agentweaver-aks-2 \
+  --acr-name agentweaverregistry \
+  --location westus2 \
+  --keyvault-name agentweaver-kv \
+  --github-client-id "$GITHUB_CLIENT_ID" \
+  --github-client-secret "$GITHUB_CLIENT_SECRET"
+```
+
+Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/params.example.json)):
+
+```json
+{
+  "RESOURCE_GROUP": "agentweaver-rg",
+  "CLUSTER_NAME": "agentweaver-aks-2",
+  "ACR_NAME": "agentweaverregistry",
+  "LOCATION": "westus2",
+  "KEYVAULT_NAME": "agentweaver-kv",
+  "NAMESPACE": "agentweaver",
+  "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
+  "GITHUB_CLIENT_SECRET": "",
+  "IMAGE_TAG": "",
+  "SKIP_POSTGRES": false,
+  "SKIP_OAUTH_KEY": false
+}
+```
+
+```bash
+npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
+```
+
+> Never commit a params file containing a real `GITHUB_CLIENT_SECRET` — prefer
+> the `GITHUB_CLIENT_SECRET` environment variable or the interactive secret
+> prompt; the params file field exists only for unattended CI use against
+> disposable/test environments.
+
+**Upgrading an existing deployment:**
+
+```bash
+npm run azure:upgrade
+```
+
+`azure:upgrade` is for updating an *existing* deployment to newer code,
+distinct from `azure:deploy` (initial/full setup). It mints a new immutable
+image tag from `HEAD` (the short git SHA; it refuses to run against a dirty
+working tree), builds and pushes the images, verifies image provenance,
+redeploys, and cycles the AgentHost warm-pool sandboxes (reapplies the
+SandboxTemplate/SandboxWarmPool and waits for the pool to become ready —
+never by deleting pods).
+
+**Related commands** (see the [operations guide](docs/guide/operations.md) and
+[AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
+
+- `npm run azure:release` — bumps the semver `VERSION`, tags and pushes the release, generates a changelog and GitHub Release, then builds/deploys/verifies it.
+- `npm run azure:verify` — runs the post-deploy health verification checks on their own.
 
 ### Local development
 
 ```bash
-# Full development environment
-pnpm run dev
+# Full development environment (API + Web UI)
+npm run azure:dev
 
 # Frontend only (builds, then starts Vite)
-pnpm run dev:web
+npm run dev:web
 
 # API only (builds, then starts the API)
-pnpm run dev:api
+npm run dev:api
 ```
 
-Use `npm run` with the same script name if you use npm.
+Use `pnpm run` with the same script name if you use pnpm.
 
 ### Run components manually
 
@@ -113,34 +172,19 @@ dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secre
 
 ### Package scripts
 
-From the repository root, run these with `pnpm run <script>` (preferred) or
-`npm run <script>`:
+From the repository root, run these with `npm run <script>` (or `pnpm run <script>`):
 
 | Script | Purpose |
 | --- | --- |
-| `infra:deploy` | Provision the AKS cluster, identity, monitoring, OAuth key, and PostgreSQL. |
-| `release:images` | Build, push, and verify image provenance. |
-| `release:deploy` | Deploy the current release to AKS and verify it. |
+| `azure:deploy` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
+| `azure:upgrade` | Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool. |
+| `azure:release` | Semver bump/tag/GitHub release, then build/deploy/verify. |
+| `azure:verify` | Post-deploy health verification checks. |
+| `azure:dev` | Start the local API + Web UI dev environment. |
 | `dev:web` | Build the web frontend, then start Vite. |
 | `dev:api` | Build the API in Release mode, then run it without rebuilding. |
-| `dev` / `start` | Start the existing full Windows/WSL development environment. |
 
-### Installer alternative: deploy / redeploy to AKS
-
-**First deploy:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash -s -- --aks
-```
-
-**Redeploy with a new image tag** (build, push, and redeploy in one command):
-```bash
-bash install.sh --aks --image-tag <git-sha>
-```
-```powershell
-.\install.ps1 -Aks -ImageTag <git-sha>
-```
-
-> **Never use `:latest`.** The default tag is the short git SHA (`git rev-parse --short HEAD`). Always pin to a specific SHA for reproducible deployments. Image tags are immutable per build.
+> **Never use `:latest`.** The default image tag is the short git SHA (`git rev-parse --short HEAD`). Always pin to a specific SHA for reproducible deployments — image tags are immutable per build.
 
 ## AKS architecture
 

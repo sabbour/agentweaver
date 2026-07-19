@@ -201,7 +201,7 @@ Each phase is reversible via a flag defaulting to today's behavior:
 
 ## 8. Rollout sequencing
 
-The phases map onto a flag-reversible AKS rollout. Each step lands as reviewed YAML and `scripts/aks` edits applied through the existing render-and-apply pipeline — never an ad-hoc live patch. Cross-reference the [scaling deep dive's phased rollout](../deep-dive/distributed-execution-scaling.md#the-phased-rollout).
+The phases map onto a flag-reversible AKS rollout. Each step lands as reviewed YAML and `scripts/azure` edits applied through the existing render-and-apply pipeline — never an ad-hoc live patch. Cross-reference the [scaling deep dive's phased rollout](../deep-dive/distributed-execution-scaling.md#the-phased-rollout).
 
 1. **Provision Postgres** (no app cutover) — VNet subnet delegation, Flexible Server with zone-redundant HA, Private DNS zone link, Entra admin + UAMI DB role. App still on SQLite. *Rollback: none needed.*
 2. **Identity wiring** — add the worker SA federated credential (and a sandbox-runner SA if pods authenticate to the model with a projected token) and the DB role grant. *Rollback: drop the federated credentials.*

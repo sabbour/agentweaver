@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+// cli.mjs -- Single Node entry point for the Agentweaver Azure toolchain.
+// Routes `deploy | upgrade | release | verify | dev` subcommands to their
+// respective module's run(). This is what the root package.json's
+// azure:deploy/azure:upgrade/azure:release/azure:verify (and, optionally,
+// azure:dev) scripts invoke.
+
+import { pathToFileURL } from "node:url";
+import * as logDefault from "./lib/log.mjs";
+
+const SUBCOMMANDS = Object.freeze(["deploy", "upgrade", "release", "verify", "dev"]);
+
+export const HELP_TEXT = `Agentweaver Azure toolchain
+
+Usage:
+  node scripts/azure/cli.mjs <command> [args...]
+
+Commands:
+  deploy    Interactive/non-interactive installer (replaces install.sh/.ps1).
+  upgrade   Build a new image tag, redeploy, and cycle the AgentHost warm pool.
+  release   Semver bump/tag/GitHub release, delegating to the shared build/deploy engine.
+  verify    Post-deploy health verification (port of 40-verify.sh/.ps1).
+  dev       Local dev orchestration (port of start-dev.ps1).
+
+Run 'node scripts/azure/cli.mjs <command> --help' for command-specific options.
+`;
+
+/**
+ * Routes a parsed command + remaining argv to the matching module's run().
+ * Modules are lazily imported (dynamic import) so `cli.mjs --help` and
+ * unknown-command errors do not pay the cost of loading every module, and so
+ * tests can inject fakes without triggering real module side effects.
+ *
+ * @param {string[]} argv Full argv following the script name (e.g. process.argv.slice(2)).
+ * @param {object} [opts]
+ * @param {typeof logDefault} [opts.log]
+ * @param {Record<string, {run: (opts: object) => Promise<unknown>}>} [opts.modules] Injectable command modules for testing, keyed by subcommand name.
+ * @param {(specifier: string) => Promise<unknown>} [opts.importFn] Injectable dynamic import, for testing.
+ */
+export async function run(argv = [], opts = {}) {
+  const { log = logDefault, modules = {}, importFn = (specifier) => import(specifier) } = opts;
+
+  const [command, ...rest] = argv;
+
+  if (!command || command === "-h" || command === "--help" || command === "help") {
+    log.info(HELP_TEXT);
+    return { ok: true, help: true };
+  }
+
+  if (!SUBCOMMANDS.includes(command)) {
+    log.error(`Unknown command: '${command}'.`);
+    log.info(HELP_TEXT);
+    throw new Error(`Unknown command: '${command}'. Valid commands: ${SUBCOMMANDS.join(", ")}.`);
+  }
+
+  const moduleForCommand = async () => {
+    if (modules[command]) return modules[command];
+    switch (command) {
+      case "deploy":
+        return importFn("./deploy.mjs");
+      case "upgrade":
+        return importFn("./upgrade.mjs");
+      case "release":
+        return importFn("./release.mjs");
+      case "verify":
+        return importFn("./steps/40-verify.mjs");
+      case "dev":
+        return importFn("./dev.mjs");
+      default:
+        throw new Error(`Unknown command: '${command}'.`);
+    }
+  };
+
+  const mod = await moduleForCommand();
+
+  if (command === "verify") {
+    // steps/40-verify.mjs's run(cfg, opts) takes a resolved config, not argv
+    // -- resolve variables here so `cli.mjs verify` works standalone.
+    if (rest.includes("-h") || rest.includes("--help")) {
+      log.info(
+        mod.HELP_TEXT ??
+          "verify -- Post-deploy health verification (port of 40-verify.sh/.ps1)\n\n" +
+            "Usage:\n  node scripts/azure/cli.mjs verify\n",
+      );
+      return { ok: true, help: true };
+    }
+    const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
+    const cfg = await resolveVariables();
+    return mod.run(cfg, { log });
+  }
+
+  if (command === "upgrade") {
+    // upgrade.mjs's run(cfg, opts) also takes a resolved config (unlike
+    // deploy/release/dev's run({argv, log})) -- resolve variables here and
+    // parse the one upgrade-specific flag (--allow-dirty) from argv so
+    // `cli.mjs upgrade` works standalone, matching how `verify` is handled.
+    if (rest.includes("-h") || rest.includes("--help")) {
+      log.info(mod.HELP_TEXT ?? HELP_TEXT);
+      return { ok: true, help: true };
+    }
+    const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
+    const cfg = await resolveVariables();
+    const allowDirty = rest.includes("--allow-dirty");
+    return mod.run(cfg, { log, allowDirty });
+  }
+
+  return mod.run({ argv: rest, log });
+}
+
+/* c8 ignore start -- process.argv entry point, not exercised by unit tests */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run(process.argv.slice(2)).catch((err) => {
+    logDefault.error(err?.stack || err?.message || String(err));
+    process.exitCode = 1;
+  });
+}
+/* c8 ignore stop */

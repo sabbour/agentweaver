@@ -17,7 +17,7 @@
              pre-downloads the linux-x64 binary once and manually places it in the publish output.
              The EF bundle's temp project lives at /tmp/ and does NOT inherit this file, so it
              downloads exactly one copy on its own (no /src/ duplicates to collide with).
-           - Build / run (local dev, e.g. start-dev.ps1 in WSL): do NOT skip, so the SDK downloads
+           - Build / run (local dev, e.g. `npm run azure:dev` in WSL): do NOT skip, so the SDK downloads
              and copies the binary for the build host RID (e.g. linux-arm64) into
              bin/<config>/net10.0/runtimes/<rid>/native/copilot. Without this, the SDK's runtime
              auto-resolution fails at runtime with "Copilot runtime not found". -->

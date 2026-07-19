@@ -52,7 +52,7 @@ flowchart TD
 
 If rebuilding this from scratch, create the platform first, then identity and secrets, then images, then Kubernetes primitives in dependency order. The application deployments are deliberately last because they depend on identity, persistent volumes, routes, and secrets being ready.
 
-Where this lives: `scripts/aks`, `k8s`.
+Where this lives: `scripts/azure`, `k8s`.
 
 ## AKS platform choices
 
@@ -97,7 +97,7 @@ The sandbox controller adds higher-level objects such as sandbox templates and w
 
 The trade-off is platform maturity and availability: the deploy script only applies sandbox resources when the CRDs are installed. A rebuild can run the core web/API/MCP stack without the sandbox CRDs, but agent execution that depends on Kubernetes sandboxes will not behave the same.
 
-Where this lives: `scripts/aks/10-create-cluster.sh`, `scripts/aks/15-setup-identity.sh`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`.
+Where this lives: `scripts/azure/steps/10-create-cluster.mjs`, `scripts/azure/steps/15-setup-identity.mjs`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`.
 
 ## Workloads and their responsibilities
 
@@ -212,9 +212,9 @@ AgentHost user tokens are fetched at runtime, not mounted through per-run Secret
 
 Rotation constraint: the CSI driver can refresh mounted API files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
-OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `pnpm run infra:deploy` before the first `pnpm run release:deploy`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
+OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `npm run azure:deploy` before the first `npm run azure:upgrade`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
-Where this lives: `scripts/aks/15-setup-identity.sh`, `scripts/aks/16-provision-oauth-signing-key.sh`, `k8s/serviceaccount-api.yaml`, `k8s/serviceaccount-agenthost.yaml`, `k8s/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
+Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `scripts/azure/steps/16-provision-oauth-signing-key.mjs`, `k8s/serviceaccount-api.yaml`, `k8s/serviceaccount-agenthost.yaml`, `k8s/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
 
 ## Storage and persistence
 
@@ -222,7 +222,7 @@ Agentweaver separates storage by access pattern.
 
 ### PostgreSQL: primary application state
 
-All application state — runs, projects, backlog tasks, revisions, memory, decisions, OAuth state, and run events — is stored in **Azure Database for PostgreSQL Flexible Server**, provisioned by `scripts/aks/17-provision-postgres.sh`. The connection string is stored in the `agentweaver-postgres` Kubernetes Secret and injected as environment variables at pod startup. Use Azure's built-in automated backups and point-in-time restore for data protection.
+All application state — runs, projects, backlog tasks, revisions, memory, decisions, OAuth state, and run events — is stored in **Azure Database for PostgreSQL Flexible Server**, provisioned by `scripts/azure/steps/17-provision-postgres.mjs`. The connection string is stored in the `agentweaver-postgres` Kubernetes Secret and injected as environment variables at pod startup. Use Azure's built-in automated backups and point-in-time restore for data protection.
 
 ### Workspace PVC: shared worktrees and sandbox files
 
@@ -331,7 +331,7 @@ Rollout waits confirm that Kubernetes accepted and started the API, frontend, an
 
 The important distinction: rollout success means pods became ready; it does not prove all external protocol flows work. OAuth discovery, MCP metadata, JWKS validation, and docs routing each deserve smoke tests because they cross multiple components.
 
-Where this lives: `scripts/aks/00-variables.sh`, `scripts/aks/20-build-push-images.sh`, `scripts/aks/30-deploy.sh`, `scripts/aks/40-verify.sh`, `.dockerignore`.
+Where this lives: `scripts/azure/variables.mjs`, `scripts/azure/steps/20-build-push-images.mjs`, `scripts/azure/steps/30-deploy.mjs`, `scripts/azure/steps/40-verify.mjs`, `.dockerignore`.
 
 ## Rebuild checklist
 
@@ -339,7 +339,7 @@ To stand up an equivalent deployment:
 
 1. Create an AKS cluster with Cilium/ACNS, app routing Istio, Gateway API, managed default domain, Key Vault CSI, OIDC issuer, workload identity, and ACR attachment.
 2. Install sandbox CRDs/controller if Kubernetes-backed agent sandboxes are required.
-3. Run `pnpm run infra:deploy` to create Key Vault secrets, the user-assigned managed identity, and the required `mcp-oauth-signing-key` before first deploy.
+3. Run `npm run azure:deploy` to create Key Vault secrets, the user-assigned managed identity, and the required `mcp-oauth-signing-key` before first deploy.
 4. Federate the `agentweaver-api` service account subject to that managed identity.
 5. Build or retag all required images so API, frontend, MCP, sandbox, and AgentHost exist for one release tag.
 6. Render manifests with the environment-specific host, ACR, tag, identity, Key Vault, and tenant values.
@@ -355,7 +355,7 @@ To stand up an equivalent deployment:
 - **Pods fail to start after secret rotation:** CSI files updated, but process environment variables did not; restart pods or change the app to re-read files.
 - **Workspace writes fail with permission errors:** Azure Files mounted with root ownership or wrong mount options; use a uid/gid-aware StorageClass and recreate affected PVCs if needed.
 - **Docs changes are not visible:** docs are baked into the frontend image; rebuild and roll out frontend.
-- **Cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`:** the required OAuth signing-key provisioning step was skipped; run `pnpm run infra:deploy`, then `pnpm run release:deploy`.
+- **Cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`:** the required OAuth signing-key provisioning step was skipped; run `npm run azure:deploy`, then `npm run azure:upgrade`.
 - **AgentHost pod crashes with missing Copilot runtime:** rebuild the AgentHost image with the Dockerfile's `dotnet publish --runtime linux-x64 --self-contained false` so the `GitHub.Copilot.SDK` native binary is copied to `/app/runtimes/linux-x64/native/copilot`.
 - **API rollout hangs on volume attach:** RWO disk is still attached to the old pod/node; Recreate reduces this risk, but node/storage delays can still happen.
 - **Sandbox cannot reach package/model endpoints:** Cilium FQDN policy or DNS allowance is missing, stale, or not supported by the cluster dataplane.
@@ -365,7 +365,7 @@ To stand up an equivalent deployment:
 
 Use these paths for implementation details only after the concepts above are clear:
 
-- Platform and pipeline: `scripts/aks`.
+- Platform and pipeline: `scripts/azure`.
 - Kubernetes objects: `k8s`.
 - Frontend/docs image and static host: `apps/web/Dockerfile`, `apps/Agentweaver.Web`.
 - API image/runtime: `apps/Agentweaver.Api`.

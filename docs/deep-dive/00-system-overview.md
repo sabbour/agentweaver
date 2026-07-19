@@ -405,7 +405,7 @@ flowchart TB
 
 This deployment is optimized for correctness and isolation before scale-out. The most obvious scaling pressure points are API single-writer persistence, workspace PVC throughput, sandbox pool capacity, and model-provider rate limits.
 
-Where this lives: `k8s`, `scripts/aks`, `apps/Agentweaver.AgentHost`.
+Where this lives: `k8s`, `scripts/azure`, `apps/Agentweaver.AgentHost`.
 
 ## Tech Stack Rationale
 

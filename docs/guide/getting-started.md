@@ -4,18 +4,13 @@ Use this guide to stand up the API, submit a run, watch it live, and approve the
 
 ## Install (one command)
 
-The installer checks prerequisites, installs web and .NET dependencies, and launches the dev environment:
+From a cloned checkout, the installer checks prerequisites, installs web and .NET dependencies, and launches the dev environment:
 
 ```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/sabbour/agentweaver/main/install.sh | bash
+git clone https://github.com/sabbour/agentweaver.git
+cd agentweaver
+npm run azure:deploy -- --local
 ```
-```powershell
-# Windows PowerShell
-irm https://raw.githubusercontent.com/sabbour/agentweaver/main/install.ps1 | iex
-```
-
-Both commands will clone the repo to `~/agentweaver` if you don't already have a local checkout. If you have already cloned the repo, run `bash install.sh` (or `.\install.ps1`) from the repo root instead.
 
 After the installer completes, skip to [Configure the API](#1-configure-the-api) below.
 

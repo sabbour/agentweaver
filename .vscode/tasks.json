@@ -4,14 +4,11 @@
     {
       "label": "Start Agentweaver",
       "type": "shell",
-      "command": "pwsh",
+      "command": "node",
       "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        ".\\start-dev.ps1",
-        "-NoBrowser"
+        "scripts/azure/cli.mjs",
+        "dev",
+        "--no-browser"
       ],
       "options": {
         "cwd": "${workspaceFolder}"

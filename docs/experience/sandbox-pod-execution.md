@@ -208,7 +208,7 @@ back when it's waiting."** Concretely:
   command-isolation backend at run start and announces it with a `sandbox.selected` event (`backend`,
   `isRealIsolation`, `reason`). In-cluster that backend is the Kata-isolated `kubernetes-sandbox-claim`,
   whose pods are provisioned by the upstream **agent-sandbox controller** (installed by
-  `scripts/aks/10-create-cluster.sh`); local dev gets `processcontainer` (**MXC**, a different
+  `scripts/azure/steps/10-create-cluster.mjs`); local dev gets `processcontainer` (**MXC**, a different
   local-host runtime) on Windows or `linux-bwrap` on Linux, falling back to `direct`
   (no isolation, shell still runs) only when nothing else is available. The deep dive's
   [executor seam](../deep-dive/sandbox-pod-execution.md#the-executor-seam-how-commands-are-actually-isolated)

@@ -1,0 +1,34 @@
+// scripts/azure/params.example.json -- Example params file for `azure:deploy`.
+//
+// Usage:
+//   node scripts/azure/cli.mjs deploy --params-file scripts/azure/params.my-env.json
+//
+// Precedence: CLI flags > environment variables > this params file >
+// detected defaults (scripts/azure/variables.mjs's DEFAULTS) > interactive
+// prompt (TTY only). Copy this file, remove the comments if you want strict
+// JSON, and fill in your own values -- JSONC (// and /* */ comments, trailing
+// commas) is tolerated on a best-effort basis by lib/config.mjs's parseJsonc().
+//
+// NEVER commit a params file containing a real GITHUB_CLIENT_SECRET. Prefer
+// the GITHUB_CLIENT_SECRET environment variable or the interactive secret
+// prompt for that field; it is accepted here only for fully unattended CI use
+// against disposable/test environments.
+{
+  // Azure resource names (all optional -- fall back to variables.mjs's DEFAULTS).
+  "RESOURCE_GROUP": "agentweaver-rg",
+  "CLUSTER_NAME": "agentweaver-aks-2",
+  "ACR_NAME": "agentweaverregistry",
+  "LOCATION": "westus2",
+  "KEYVAULT_NAME": "agentweaver-kv",
+  "NAMESPACE": "agentweaver",
+
+  // Required for AKS deploy mode (no default; must come from a flag, env var,
+  // this params file, or an interactive prompt).
+  "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
+  "GITHUB_CLIENT_SECRET": "",
+
+  // Optional overrides.
+  "IMAGE_TAG": "",
+  "SKIP_POSTGRES": false,
+  "SKIP_OAUTH_KEY": false
+}

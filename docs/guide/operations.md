@@ -15,9 +15,9 @@ Agentweaver uses [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH
 
 | Change type | Command |
 |---|---|
-| Bug fix | `bash scripts/release.sh patch` |
-| New feature (backward-compatible) | `bash scripts/release.sh minor` |
-| Breaking change | `bash scripts/release.sh major` |
+| Bug fix | `npm run azure:release -- patch` |
+| New feature (backward-compatible) | `npm run azure:release -- minor` |
+| Breaking change | `npm run azure:release -- major` |
 
 ### Prerequisites
 
@@ -31,36 +31,37 @@ Agentweaver uses [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH
 
 ```bash
 # Patch release (e.g. 0.6.0 -> 0.6.1)
-bash scripts/release.sh patch
+npm run azure:release -- patch
 
 # Minor release (e.g. 0.6.0 -> 0.7.0)
-bash scripts/release.sh minor
+npm run azure:release -- minor
 
 # Major release (e.g. 0.6.0 -> 1.0.0)
-bash scripts/release.sh major
+npm run azure:release -- major
 ```
 
 To preview actions without making changes:
 
 ```bash
-DRY_RUN=true bash scripts/release.sh patch
+npm run azure:release -- patch --dry-run
 ```
 
-### What the release script does
+### What `azure:release` does
 
-The [`scripts/release.sh`](../../scripts/release.sh) script automates the full release cycle:
+[`scripts/azure/release.mjs`](../../scripts/azure/release.mjs) (invoked via `node scripts/azure/cli.mjs release`) automates the full release cycle, delegating build/deploy/verify to the same step modules `azure:deploy` and `azure:upgrade` use:
 
 1. **Validates clean working tree** — aborts if there are uncommitted changes.
 2. **Bumps the version** — reads `VERSION`, increments the appropriate component, writes the new value.
 3. **Commits the version bump** — `chore(release): bump version to vX.Y.Z`.
 4. **Creates an annotated git tag** — `vX.Y.Z`.
 5. **Generates a changelog** — queries merged pull requests since the last release using `gh pr list`.
-6. **Creates a GitHub Release** — publishes the changelog to the GitHub Releases page.
+6. **Creates a GitHub Release** — publishes the changelog to the GitHub Releases page via `gh release create`.
 7. **Identifies changed images** — compares file paths against the previous tag using `git diff`.
 8. **Builds changed images** — uses `az acr build` (no local Docker daemon required).
 9. **Retags unchanged images** — uses `az acr import` for a server-side copy (fast, no rebuild).
 10. **Deploys** — applies the release with its selected immutable image tag.
-11. **Pushes** — pushes the commit and tag to `origin`.
+11. **Verifies** — runs the post-deploy verification checks.
+12. **Pushes** — pushes the commit and tag to `origin`.
 
 ### Image tags
 
@@ -109,29 +110,25 @@ Each image is built with the following OCI labels:
 
 ## Rolling back a release
 
-To roll back to a previous version, re-run the canonical deployment workflow
-with the old tag:
+To roll back to a previous version, redeploy with the old tag using
+`azure:deploy`'s `--image-tag` flag (the deploy pipeline is idempotent, so
+re-running it against an existing environment just redeploys/verifies rather
+than re-provisioning from scratch):
 
 ```bash
-IMAGE_TAG=v0.6.0 pnpm run release:deploy
+npm run azure:deploy -- --image-tag v0.6.0
 ```
 
-All previous semver tags remain in ACR and are not deleted by the release script.
+All previous semver tags remain in ACR and are not deleted by the release process.
 
 ## Manual image builds (development)
 
 To build and push images without cutting a release (e.g. for a staging
-environment), use the canonical image workflow:
+environment), use `azure:upgrade`, which builds using the current git SHA as
+the tag and then redeploys:
 
 ```bash
-# Builds using the current git SHA as the tag
-pnpm run release:images
-```
-
-To force a rebuild of all images (ignore changed-path optimisation):
-
-```bash
-FORCE_REBUILD=true pnpm run release:images
+npm run azure:upgrade
 ```
 
 ## Observability notes
@@ -145,12 +142,12 @@ FORCE_REBUILD=true pnpm run release:images
 
 | Command | Purpose |
 |---|---|
-| `scripts/release.sh` | Full semver release (see above) |
-| `pnpm run infra:deploy` | Provision AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
-| `pnpm run release:images` | Build, push, and verify images in ACR |
-| `pnpm run release:deploy` | Deploy to AKS and verify the result |
+| `npm run azure:release` | Full semver release (see above) |
+| `npm run azure:deploy` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
+| `npm run azure:upgrade` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
+| `npm run azure:verify` | Verify the current deployment |
 
-Use `npm run` in place of `pnpm run` if npm is your selected package runner.
+Use `pnpm run` in place of `npm run` if pnpm is your selected package runner.
 The runbook's [individual-step section](./deployment-aks.md#running-an-individual-step)
 shows how to rerun one step.
 
@@ -160,12 +157,9 @@ Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry 
 
 ### Provisioning monitoring resources
 
-Monitoring is provisioned as part of `pnpm run infra:deploy`. To rerun only
-that step:
-
-```bash
-node scripts/run-os-script.mjs 15-provision-monitoring
-```
+Monitoring is provisioned as part of `npm run azure:deploy`. To rerun only
+that step, see the runbook's [individual-step section](./deployment-aks.md#running-an-individual-step)
+(`scripts/azure/steps/15-provision-monitoring.mjs`).
 
 This creates:
 - A **Log Analytics workspace** (`agentweaver-logs`)
@@ -255,7 +249,7 @@ equivalent single-series selector), not `sum(...)`.
 The HPA itself has **not yet been switched over** — wiring an `external` metric type into a plain
 `HorizontalPodAutoscaler` requires a Kubernetes External Metrics API adapter capable of serving
 Azure Monitor managed-Prometheus-backed queries, and no such adapter is currently provisioned in
-`scripts/aks/`. The two realistic paths forward (tracked against #108 — see
+`scripts/azure/`. The two realistic paths forward (tracked against #108 — see
 `decisions/inbox/niobe-108-hpa-investigation.md` for the full analysis) are:
 
 1. **KEDA with a Prometheus scaler** (Microsoft's supported pattern for scaling on Azure Monitor

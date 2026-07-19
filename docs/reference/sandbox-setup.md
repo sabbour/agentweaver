@@ -6,7 +6,7 @@ This reference covers the AKS setup used by the deployment scripts. The live in-
 
 | Component | Source | Purpose |
 |---|---|---|
-| `agent-sandbox` controller | `scripts/aks/10-create-cluster.sh` | Installs CRDs in API group `extensions.agents.x-k8s.io`. |
+| `agent-sandbox` controller | `scripts/azure/steps/10-create-cluster.mjs` | Installs CRDs in API group `extensions.agents.x-k8s.io`. |
 | `SandboxTemplate/agentweaver-agent-host` | `k8s/sandbox-template-agenthost.yaml` | Defines the Kata-isolated AgentHost pod: image, service account, workspace PVC, config, A2A port `8088`. |
 | `SandboxWarmPool/agentweaver-agent-host` | `k8s/sandbox-warmpool-agenthost.yaml` | Keeps AgentHost pods pre-warmed for fast run startup. |
 | `SandboxClaim` | created per run by the API/worker | Binds one warm AgentHost pod for a run, then releases it on completion/suspend. |
@@ -14,15 +14,15 @@ This reference covers the AKS setup used by the deployment scripts. The live in-
 ## Install order
 
 The canonical workflow provisions and deploys the sandbox pieces through the
-root package scripts (`pnpm run` shown; `npm run` is equivalent):
+root package scripts (`npm run` shown; `pnpm run` is equivalent):
 
 ```bash
-pnpm run infra:deploy      # installs the controller + CRDs
-pnpm run release:images    # publishes agentweaver-agent-host
-pnpm run release:deploy    # applies the template/warm pool and verifies it
+npm run azure:deploy      # installs the controller + CRDs, builds/pushes images, applies the template/warm pool, and verifies it
 ```
 
-`release:deploy` applies `sandbox-template-agenthost.yaml` before
+For an existing cluster, `npm run azure:upgrade` builds/pushes images, redeploys, and
+cycles the warm pool without re-provisioning the cluster. `azure:deploy`/`azure:upgrade`
+apply `sandbox-template-agenthost.yaml` before
 `sandbox-warmpool-agenthost.yaml`; the warm pool depends on the template by
 name. For targeted recovery, the [AKS deployment runbook](../guide/deployment-aks.md#running-an-individual-step)
 shows how to run individual steps, including `gen-a2a-mtls-certs`.
@@ -49,7 +49,7 @@ Per-run context is not injected through `SandboxClaim.spec.env`; doing so bypass
 | Key Vault URI | `https://${KEYVAULT_NAME}.vault.azure.net/` |
 | Workspace | PVC `agentweaver-workspace`, mounted at `/workspace` |
 
-The AgentHost image is built by `pnpm run release:images` from
+The AgentHost image is built by `npm run azure:upgrade` (or `azure:deploy`) from
 `apps/Agentweaver.AgentHost/Dockerfile`. It must publish with `--runtime
 linux-x64 --self-contained false` so the Copilot native runtime is included.
 
@@ -60,7 +60,7 @@ kubectl api-resources --api-group=extensions.agents.x-k8s.io
 kubectl get runtimeclass kata-vm-isolation
 kubectl get sandboxtemplate,sandboxwarmpool -n agentweaver
 kubectl get pods -n agentweaver -l app.kubernetes.io/component=agent-host
-node scripts/run-os-script.mjs 40-verify
+npm run azure:verify
 ```
 
 Expected resources:
@@ -77,5 +77,5 @@ sandboxwarmpool.extensions.agents.x-k8s.io/agentweaver-agent-host
 | Warm pods do not appear | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` |
 | Pods stay Pending | `kubectl get runtimeclass`, `kubectl describe node`, and `katapool` capacity |
 | Image pull failure | image tag matches `AGENTHOST_IMAGE_TAG` and ACR is attached to AKS |
-| `/configure` or A2A fails | NetworkPolicies allow API/worker to AgentHost TCP `8088`; run `node scripts/run-os-script.mjs 40-verify` |
+| `/configure` or A2A fails | NetworkPolicies allow API/worker to AgentHost TCP `8088`; run `npm run azure:verify` |
 | Token fetch fails | service account `agentweaver-agent-host` has workload identity federation and Key Vault access |

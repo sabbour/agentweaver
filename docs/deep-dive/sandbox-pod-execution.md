@@ -217,7 +217,7 @@ disposable per-run Kata VM is the primary isolation boundary.
 
 In-cluster, the sandbox pod a run executes in is not created by Agentweaver directly and is **not** MXC.
 It is provisioned by the upstream **agent-sandbox controller** ([`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox)),
-which Agentweaver installs in `scripts/aks/10-create-cluster.sh` (default `v0.4.6`). The naming overlap
+which Agentweaver installs in `scripts/azure/steps/10-create-cluster.mjs` (default `v0.4.6`). The naming overlap
 trips people up, so pin it down:
 
 - **MXC** = `Sabbour.Mxc.Sdk` / `wxc-exec.exe`, the **local-host** command-isolation runtime behind the
