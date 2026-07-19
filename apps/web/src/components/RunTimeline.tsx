@@ -1,5 +1,8 @@
-import { ChainOfThought, ChainOfThoughtItem } from '@1js/fluentai';
 import {
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
   Button,
   makeStyles,
   mergeClasses,
@@ -24,7 +27,6 @@ import {
 import { SafeMarkdown } from './SafeMarkdown';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AgentweaverCopilotProvider } from './ui/copilot/AgentweaverCopilotProvider';
 import { Body, EmptyState, Label } from './ui';
 import type {
   RunTimelineMessage,
@@ -44,24 +46,10 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
     minHeight: 0,
-    // Strip the embedded @1js ChainOfThought's own bordered/scrolling Card chrome so the thread
-    // grows naturally and the parent scroll region (AgentSessionPanel's tabBody) is the ONLY
-    // scroller. Without this the messages are squeezed into a short inner card (~208px max-height)
-    // with its own scrollbar and dead space below.
-    '& .fai-ChainOfThought__card': {
-      border: 'none',
-      boxShadow: 'none',
-      backgroundColor: 'transparent',
-      padding: 0,
-    },
-    '& .fai-ChainOfThought__card::after': {
-      display: 'none',
-    },
-    '& .fai-ChainOfThought__activitiesPanel': {
-      maxHeight: 'none',
-      overflow: 'visible',
-      padding: 0,
-    },
+  },
+  cotToggle: {
+    justifyContent: 'flex-start',
+    minWidth: 'auto',
   },
   cotHeaderText: {
     display: 'inline-flex',
@@ -71,6 +59,14 @@ const useStyles = makeStyles({
   cotHeaderSub: {
     color: tokens.colorNeutralForeground3,
     fontWeight: tokens.fontWeightRegular,
+  },
+  cotProgressSpinner: {
+    marginLeft: tokens.spacingHorizontalXS,
+  },
+  cotItemHeader: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
   },
   statusIndicator: {
     display: 'inline-flex',
@@ -93,10 +89,10 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
   },
-  // Overrides the library's ChainOfThoughtItem headerText, which hard-codes
-  // `white-space: nowrap; text-overflow: ellipsis` for a single-line clamp — fine for short
-  // reported intents, but long ones (a full sentence summarizing what happened) get silently
-  // cut off with no way to read the rest. Let it wrap across lines instead.
+  // AccordionHeader's default button label clamps to a single line
+  // (`white-space: nowrap; text-overflow: ellipsis`) — fine for short reported intents, but
+  // long ones (a full sentence summarizing what happened) get silently cut off with no way to
+  // read the rest. Let it wrap across lines instead.
   stepHeaderText: {
     whiteSpace: 'normal',
     overflow: 'visible',
@@ -668,12 +664,12 @@ export interface RunTimelineProps {
   emptyHint?: string;
   /**
    * When embedded inside another surface (e.g. the session Messages panel that already
-   * has its own scope header), the ChainOfThought toggle shows only the step count —
+   * has its own scope header), the activity toggle shows only the step count —
    * the "Messages" word lives once in the tab, not repeated here.
    */
   embedded?: boolean;
   /**
-   * Skip the ChainOfThought/step accordion entirely and render every step's children
+   * Skip the step accordion entirely and render every step's children
    * (messages + inline "Used N tools" tool-group disclosures) as a flat, concatenated
    * list — no outer "N step(s)" header, no per-step status icon, no accordion toggle.
    *
@@ -712,79 +708,82 @@ export function RunTimeline({
     setOpenItems((prev) => [...prev, ...newIds]);
   }
 
+  // Mirrors the old `defaultExpanded` behavior: the "Messages · N steps" toggle starts open
+  // and the user can collapse the whole activities list independently of individual steps.
+  const [sectionExpanded, setSectionExpanded] = useState(true);
+
   return (
-    <AgentweaverCopilotProvider>
-      <div className={styles.root} data-testid="run-timeline">
-        {steps.length === 0 ? (
-          <EmptyState
-            title="No steps yet"
-            description={emptyHint ?? 'Reported intents, tool calls, and messages will appear here as the run progresses.'}
-          />
-        ) : flat ? (
-          // No ChainOfThought/accordion wrapper — just each step's messages and inline
-          // "Used N tools" disclosures, concatenated in order. See the `flat` prop doc above.
-          <div className={styles.content} data-testid="run-timeline-flat">
-            {steps.map((step) => <StepBody key={step.id} step={step} />)}
-          </div>
-        ) : (
-          <ChainOfThought
-            // The library's own `cardHeader` slot defaults to a hard-coded "Activity" label
-            // rendered ABOVE the accordion, entirely separate from our `headerText` toggle
-            // below it — the two together read as two competing, unexplained headers
-            // ("1 step" then "Activity" on the next line). We fold that word into our own
-            // single headerText line instead and suppress the library's duplicate.
-            cardHeader={null}
-            headerText={
-              embedded ? (
-                <span className={styles.cotHeaderSub}>{stepLabel}</span>
-              ) : (
-                <span className={styles.cotHeaderText}>
-                  {TIMELINE_LABEL}
-                  <span className={styles.cotHeaderSub}>{`\u00b7 ${stepLabel}`}</span>
-                </span>
-              )
-            }
-            defaultExpanded
-            progressState={running ? 'loading' : 'finished'}
-            progressMessage={running ? 'Run in progress' : 'Run finished'}
-            activitiesAccordion={{
-              multiple: true,
-              collapsible: true,
-              openItems,
-              onToggle: (_event, data) => setOpenItems(data.openItems as string[]),
-            }}
+    <div className={styles.root} data-testid="run-timeline">
+      {steps.length === 0 ? (
+        <EmptyState
+          title="No steps yet"
+          description={emptyHint ?? 'Reported intents, tool calls, and messages will appear here as the run progresses.'}
+        />
+      ) : flat ? (
+        // No accordion wrapper — just each step's messages and inline "Used N tools"
+        // disclosures, concatenated in order. See the `flat` prop doc above.
+        <div className={styles.content} data-testid="run-timeline-flat">
+          {steps.map((step) => <StepBody key={step.id} step={step} />)}
+        </div>
+      ) : (
+        <div data-testid="run-timeline-chain-of-thought">
+          <Button
+            appearance="transparent"
+            size="small"
+            className={styles.cotToggle}
+            icon={sectionExpanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
+            onClick={() => setSectionExpanded((v) => !v)}
+            aria-expanded={sectionExpanded}
+            data-testid="run-timeline-toggle"
           >
-            {steps.map((step, index) => (
-              <ChainOfThoughtItem
-                key={step.id}
-                value={step.id}
-                active={step.status === 'running'}
-                statusIndicator={{
-                  children: (
-                    <span className={styles.statusIndicator}>
-                      <StepStatusIcon status={step.status} />
+            {embedded ? (
+              <span className={styles.cotHeaderSub}>{stepLabel}</span>
+            ) : (
+              <span className={styles.cotHeaderText}>
+                {TIMELINE_LABEL}
+                <span className={styles.cotHeaderSub}>{`\u00b7 ${stepLabel}`}</span>
+              </span>
+            )}
+            {running && (
+              <Spinner
+                size="extra-tiny"
+                aria-label="Run in progress"
+                className={styles.cotProgressSpinner}
+              />
+            )}
+          </Button>
+          {sectionExpanded && (
+            <Accordion
+              multiple
+              collapsible
+              openItems={openItems}
+              onToggle={(_event, data) => setOpenItems(data.openItems as string[])}
+            >
+              {steps.map((step, index) => (
+                <AccordionItem key={step.id} value={step.id}>
+                  <AccordionHeader expandIconPosition="end" className={styles.stepHeaderText}>
+                    <span className={styles.cotItemHeader}>
+                      <span className={styles.statusIndicator}>
+                        <StepStatusIcon status={step.status} />
+                      </span>
+                      {/* Prefix with the step's ordinal so a lone status word like "Working" or
+                          "Complete" reads as "Step 1 · Working" instead of floating with no
+                          context between the section header above and the transcript below. */}
+                      <Body>
+                        <span className={styles.cotHeaderSub}>{`Step ${index + 1} \u00b7 `}</span>
+                        {step.intent}
+                      </Body>
                     </span>
-                  ),
-                }}
-                // Prefix with the step's ordinal so a lone status word like "Working" or
-                // "Complete" reads as "Step 1 · Working" instead of floating with no context
-                // between the section header above and the transcript below.
-                headerText={{
-                  className: styles.stepHeaderText,
-                  children: (
-                    <Body>
-                      <span className={styles.cotHeaderSub}>{`Step ${index + 1} \u00b7 `}</span>
-                      {step.intent}
-                    </Body>
-                  ),
-                }}
-              >
-                <StepBody step={step} />
-              </ChainOfThoughtItem>
-            ))}
-          </ChainOfThought>
-        )}
-      </div>
-    </AgentweaverCopilotProvider>
+                  </AccordionHeader>
+                  <AccordionPanel>
+                    <StepBody step={step} />
+                  </AccordionPanel>
+                </AccordionItem>
+              ))}
+            </Accordion>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

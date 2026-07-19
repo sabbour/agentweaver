@@ -212,7 +212,7 @@ Import all controls from `@fluentui/react-components`; the theme styles them. Ap
 
 ### Agentic chat surfaces — native FluentUI, Copilot-styled (no private deps)
 
-Agentweaver is open-source, so it takes **no private dependencies**. Agentic chat surfaces (the operator dock / Console, the CoordinatorRunPage composer + transcript, any future assistant) are **hand-rolled on native FluentUI**, styled to the copilot.com Day look via `agentweaverLightTheme`. Do not add `@1js/fluentai` or any private-feed package as a shipped dependency. You may study the Microsoft Fluent AI (`@1js/fluentai`, `@1js/fai-react-chat-input`) component **type definitions as a design reference** to mirror the real Copilot chat anatomy natively — reference only, never imported in shipped code.
+Agentweaver is open-source, so it takes **no private dependencies**. Agentic chat surfaces (the operator dock / Console, the CoordinatorRunPage composer + transcript, the RunTimeline activity accordion, any future assistant) are **hand-rolled on native FluentUI**, styled to the copilot.com Day look via `agentweaverLightTheme`. `@1js/fluentai` and `@1js/fai-react-chat-input` are not shipped dependencies — the last runtime usage (RunTimeline's activity accordion) was replaced with a native FluentUI `Accordion` implementation. Their component **type definitions remain useful only as historical design reference** for mirroring the real Copilot chat anatomy natively — never imported in shipped code.
 
 Build chat from the shared native components under `apps/web/src/components/ui/copilot/`:
 - **Composer** — Fluent `Textarea` (auto-grow) in a rounded (~24px) warm-white card with a send button and optional attach / mode-dropdown slots (echoes copilot's composer). Transparent, calm, no blue.
@@ -238,14 +238,14 @@ Use this for the CoordinatorRunPage timeline, orchestration/run detail, and any 
 - Do use near-black for primary actions, links, selection, and focus.
 - Do reserve saturated color for status only, and always pair it with a label or icon.
 - Do prefer rich lists and tonal layering; keep toolbars transparent.
-- Do build every agentic chat surface on `@1js/fluentai` (`CopilotProvider`, `ChatInput`, `OutputCard`, the FAI suite) wrapped inside our `FluentProvider`.
+- Do build every agentic chat surface natively on `@fluentui/react-components`, styled through `agentweaverLightTheme` — no private-feed dependency.
 - Do model run activity, tool calls, and approvals on the Agentic Progress step vocabulary (status / needsInput / riskText / artifacts) with inline, plainly-worded human approvals.
 - Do keep body text at `#272320`/`#635c57` on the warm canvas; verify ≥4.5:1.
 - Do honor `prefers-reduced-motion` on every transition.
 
 **Don't**
 - Don't introduce blue (Communication Blue or any accent blue) anywhere.
-- Don't hand-roll a chat composer, message list, chain-of-thought, streamed output, or citation UI — use `@1js/fluentai` instead.
+- Don't add `@1js/fluentai`, `@1js/fai-react-chat-input`, or any private-feed package as a shipped dependency — hand-roll the composer, message list, chain-of-thought, streamed output, and citation UI natively instead.
 - Don't rebuild the retired `copilot-fluent-system` kit or import from it in new code; use native FluentUI + the theme. (Its `examples/agentic-*` files stay as a design *reference* for the run/approval vocabulary only.)
 - Don't use Azure portal chrome: resource/blade subtitles, command-bar-over-dense-grid defaults, or enterprise grid density.
 - Don't put uppercase tracked eyebrows above sections; use faint dividers.

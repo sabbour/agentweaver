@@ -64,9 +64,6 @@ Provision the cluster, identity, monitoring, OAuth key, and PostgreSQL.
 pnpm run release:images
 ```
 
-For unattended frontend builds, set `AZURE_ARTIFACTS_NPM_PAT` (preferred) or
-`AZURE_ARTIFACTS_NPM_PASSWORD_B64`.
-
 ### 3. Deploy and verify the release
 
 ```bash
