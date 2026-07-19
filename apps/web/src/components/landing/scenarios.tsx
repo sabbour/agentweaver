@@ -9,11 +9,11 @@ import { SpaceInvadersArtifact } from '../artifacts/SpaceInvadersArtifact';
 import type { Scenario } from './types';
 
 /**
- * The eight authored scenarios that drive the landing scenario theater.
+ * The eight authored scenarios that drive the landing demo player.
  *
  * Everything here is static and hand-written. Node graphs deliberately omit
  * `startedAt` (see types.ts) so the reused WorkflowGraphPanel renderer never
- * spins an ElapsedTimer interval — the player's run-token scheduler owns all time
+ * spins an ElapsedTimer interval. The player's run-token scheduler owns all time
  * and each node shows a static authored `duration` string instead.
  */
 export const SCENARIOS: Scenario[] = [
@@ -36,7 +36,7 @@ export const SCENARIOS: Scenario[] = [
         'Default remains unlimited when the value is null',
         'Limits are per-project, not per-key, for this iteration',
       ],
-      review: ['Human review before merge — nothing is deployed automatically'],
+      review: ['Human review before merge. Nothing is deployed automatically'],
     },
     plan: [
       { id: 'p1', title: 'Design the setting & contract', owner: 'Morpheus', detail: 'Data shape, API surface, and enforcement semantics.' },
@@ -65,7 +65,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-dr', 'docs', 'review'],
     ],
     artifactLabel: 'Pull request preview',
-    artifactCaption: 'Authored example of the diff and checks a run like this would open.',
+    artifactCaption: 'The diff and checks a run like this opens.',
     Artifact: PrDiffArtifact,
   },
   {
@@ -74,7 +74,7 @@ export const SCENARIOS: Scenario[] = [
     tabHint: 'Growth',
     title: 'Design a marketing launch page',
     subtitle: 'Brand & web · supervised orchestration',
-    goal: 'Design a bold launch landing page for Lumenpath, a fictional AI wayfinding product.',
+    goal: 'Design a bold launch landing page for Lumenpath, an AI wayfinding product.',
     credits: '22.7 AI credits',
     outcome: {
       goal: 'Produce a striking, on-brand single-page launch site for Lumenpath with hero, features, pricing, and CTA.',
@@ -84,7 +84,7 @@ export const SCENARIOS: Scenario[] = [
         'Responsive composition built from CSS and inline SVG',
       ],
       assumptions: [
-        'Lumenpath is fictional; all copy and pricing are illustrative',
+        'Copy and pricing are placeholder inputs',
         'Distinct visual language from the Agentweaver frame is intended',
       ],
       review: ['Human review before anything is published'],
@@ -116,7 +116,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-cr', 'copy', 'review'],
     ],
     artifactLabel: 'Landing page preview',
-    artifactCaption: 'Authored Lumenpath launch page — a fictional brand with its own art direction.',
+    artifactCaption: 'A bold launch page in its own art direction.',
     Artifact: LumenpathArtifact,
   },
   {
@@ -128,14 +128,14 @@ export const SCENARIOS: Scenario[] = [
     goal: 'Write a standalone blog post on why supervised agent orchestration beats autonomous swarms.',
     credits: '11.2 AI credits',
     outcome: {
-      goal: 'Deliver one polished, standalone article — no release notes, docs, or social bundle attached.',
+      goal: 'Deliver one polished, standalone article, with no release notes, docs, or social bundle attached.',
       scope: [
         'A single well-structured long-form article',
         'Clear thesis, three supporting sections, and a close',
         'Editorial formatting: kicker, dropcap, pull-quote, tags',
       ],
       assumptions: [
-        'Just the article is requested — no companion assets',
+        'Just the article is requested, with no companion assets',
         'Voice is opinionated but grounded',
       ],
       review: ['Human review before publishing'],
@@ -163,7 +163,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-er', 'edit', 'review'],
     ],
     artifactLabel: 'Article preview',
-    artifactCaption: 'Authored standalone article page — just the post, nothing bundled.',
+    artifactCaption: 'A standalone article page. Just the post, nothing bundled.',
     Artifact: BlogPostArtifact,
   },
   {
@@ -179,7 +179,7 @@ export const SCENARIOS: Scenario[] = [
       scope: [
         'Correlate metrics, deploys, and traces into a timeline',
         'State a suspected cause with a confidence level',
-        'Offer ranked remediation options — none auto-applied',
+        'Offer ranked remediation options, none auto-applied',
       ],
       assumptions: [
         'This is analysis only; no change is executed by the run',
@@ -210,7 +210,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-rr', 'remediation', 'review'],
     ],
     artifactLabel: 'Triage draft preview',
-    artifactCaption: 'Authored triage draft — remediation options for review, never auto-applied.',
+    artifactCaption: 'A triage draft with remediation options for review, never auto-applied.',
     Artifact: IncidentTriageArtifact,
   },
   {
@@ -222,21 +222,21 @@ export const SCENARIOS: Scenario[] = [
     goal: 'Compare GitHub Copilot, Cursor, Claude Code, and OpenAI Codex for a 60-engineer TS/.NET org.',
     credits: '16.1 AI credits',
     outcome: {
-      goal: 'Build a weighted evaluation framework across four criteria with illustrative, clearly-sourced ratings.',
+      goal: 'Build a weighted evaluation framework across four criteria with clearly sourced ratings.',
       scope: [
         'Criteria: repo understanding, enterprise controls, workflow fit, cost',
         'Transparent weights and a weighted-total per vendor',
-        'Illustrative source notes — no fabricated vendor benchmarks',
+        'Source notes with no fabricated vendor benchmarks',
       ],
       assumptions: [
-        'Ratings are illustrative; teams validate against their own pilot',
+        'Teams validate the ratings against their own pilot',
         'Scope is a 60-engineer TypeScript + .NET organization',
       ],
       review: ['Human review before this informs any purchasing decision'],
     },
     plan: [
       { id: 'p1', title: 'Define criteria & weights', owner: 'Oracle', detail: 'The four axes and how much each counts.' },
-      { id: 'p2', title: 'Assemble illustrative notes', owner: 'Sentinel', detail: 'Structured, clearly-illustrative source notes.' },
+      { id: 'p2', title: 'Assemble source notes', owner: 'Sentinel', detail: 'Structured, clearly sourced notes.' },
       { id: 'p3', title: 'Score & synthesize', owner: 'Morpheus', detail: 'Apply weights and surface the trade-offs.' },
     ],
     nodes: [
@@ -244,7 +244,7 @@ export const SCENARIOS: Scenario[] = [
       { id: 'outcome', label: 'Outcome plan', role: 'outcome_plan', agentRoleTitle: 'Planning gate', col: 1, row: 1.5, duration: '8s' },
       { id: 'work-plan', label: 'Work plan', role: 'work_plan', agentRoleTitle: 'Work planning', col: 2, row: 1.5, duration: '6s' },
       { id: 'criteria', label: 'Define criteria & weights', role: 'agent', agentName: 'Oracle', agentRoleTitle: 'Strategy Lead', modelId: 'claude-opus-4.8', col: 3, row: 0.4, duration: '44s' },
-      { id: 'notes', label: 'Assemble illustrative notes', role: 'agent', agentName: 'Sentinel', agentRoleTitle: 'Research Analyst', modelId: 'claude-sonnet-5', col: 4, row: 0.9, duration: '1m 26s' },
+      { id: 'notes', label: 'Assemble source notes', role: 'agent', agentName: 'Sentinel', agentRoleTitle: 'Research Analyst', modelId: 'claude-sonnet-5', col: 4, row: 0.9, duration: '1m 26s' },
       { id: 'score', label: 'Score & synthesize', role: 'agent', agentName: 'Morpheus', agentRoleTitle: 'Lead Architect', modelId: 'claude-opus-4.8', col: 4, row: 2.1, duration: '51s' },
       { id: 'review', label: 'Human review', role: 'review', agentRoleTitle: 'Human Review', col: 5, row: 1.5, isReviewGate: true },
     ],
@@ -257,7 +257,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-sr2', 'score', 'review'],
     ],
     artifactLabel: 'Evaluation preview',
-    artifactCaption: 'Authored weighted framework with illustrative source notes.',
+    artifactCaption: 'A weighted framework with sourced vendor ratings.',
     Artifact: CompetitorEvalArtifact,
   },
   {
@@ -276,7 +276,7 @@ export const SCENARIOS: Scenario[] = [
         'Submission checklist with an outstanding-items flag',
       ],
       assumptions: [
-        'Requirements and figures are illustrative sample data',
+        'Requirements and figures are placeholder inputs',
         'A human owns the final submission decision',
       ],
       review: ['Human review before the response is submitted'],
@@ -308,7 +308,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-chr', 'checklist', 'review'],
     ],
     artifactLabel: 'Proposal preview',
-    artifactCaption: 'Authored RFP response with compliance matrix and submission checklist.',
+    artifactCaption: 'An RFP response with a compliance matrix and submission checklist.',
     Artifact: RfpProposalArtifact,
   },
   {
@@ -327,7 +327,7 @@ export const SCENARIOS: Scenario[] = [
         'Marching invaders and in-flight projectiles animated in CSS',
       ],
       assumptions: [
-        'Visual demo only — no game loop or input handling',
+        'Visual demo only, with no game loop or input handling',
         'No focusable or interactive controls are included',
       ],
       review: ['Human review before it ships anywhere'],
@@ -356,7 +356,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-pr2', 'palette', 'review'],
     ],
     artifactLabel: 'Game scene preview',
-    artifactCaption: 'Authored splash scene — an animated, non-playable demo.',
+    artifactCaption: 'An animated, non-playable splash scene.',
     Artifact: SpaceInvadersArtifact,
   },
   {
@@ -375,7 +375,7 @@ export const SCENARIOS: Scenario[] = [
         'A visual design prototype tying it together',
       ],
       assumptions: [
-        'Figures and research are illustrative sample data',
+        'Figures and research are placeholder inputs',
         'The recommendation is advisory input for a human decision',
       ],
       review: ['Human review before any pricing change is committed'],
@@ -407,7 +407,7 @@ export const SCENARIOS: Scenario[] = [
       ['e-prr', 'proto', 'review'],
     ],
     artifactLabel: 'Decision pack preview',
-    artifactCaption: 'Authored decision package synthesizing PM, PMM, pricing, journeys, and a prototype.',
+    artifactCaption: 'A decision package that pulls together PM, PMM, pricing, journeys, and a prototype.',
     Artifact: ProductDecisionArtifact,
   },
 ];

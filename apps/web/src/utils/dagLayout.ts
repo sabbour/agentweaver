@@ -799,3 +799,152 @@ export function layoutDag(
     return { ...n, position: { x: pos.x - w / 2, y: pos.y - h / 2 }, initialWidth: w, initialHeight: h };
   });
 }
+
+/**
+ * Rendered footprint of a laid-out grid node: measured size wins, then the layout
+ * helper's `initialWidth`/`initialHeight` hint, then the compact-pill default.
+ */
+export function graphNodeSize(node: Node): { width: number; height: number } {
+  return {
+    width: node.measured?.width ?? node.initialWidth ?? COMPACT_NODE_W,
+    height: node.measured?.height ?? node.initialHeight ?? COMPACT_NODE_H,
+  };
+}
+
+/**
+ * Stepped-edge routing for a grid/staircase layout.
+ *
+ * Chooses the source/target handle (of the eight GRID handles rendered by
+ * WorkflowNode) and a `flowDirection` for every `spine` / `loopback` edge so the
+ * connector leaves and enters on the correct side and bows AROUND any node that
+ * sits in its straight corridor. Non-spine/loopback edges pass through untouched.
+ * Shared by the Coordinator run graph and the landing scenario demo so both use
+ * the exact same production routing (never a reimplementation).
+ */
+export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const center = (node: Node) => {
+    const size = graphNodeSize(node);
+    return {
+      x: node.position.x + size.width / 2,
+      y: node.position.y + size.height / 2,
+    };
+  };
+  return edges.map((edge) => {
+    const source = byId.get(edge.source);
+    const target = byId.get(edge.target);
+    if (!source || !target) return edge;
+    const sourceCenter = center(source);
+    const targetCenter = center(target);
+    if (edge.type === 'loopback') {
+      const rowPeers = (node: Node, nodeCenter: { x: number; y: number }) =>
+        nodes
+          .filter((peer) => peer.id !== node.id)
+          .map((peer) => center(peer))
+          .filter((peerCenter) => Math.abs(peerCenter.y - nodeCenter.y) <= 1);
+      const rightCrossings = [
+        ...rowPeers(source, sourceCenter).filter((peer) => peer.x > sourceCenter.x),
+        ...rowPeers(target, targetCenter).filter((peer) => peer.x > targetCenter.x),
+      ].length;
+      const leftCrossings = [
+        ...rowPeers(source, sourceCenter).filter((peer) => peer.x < sourceCenter.x),
+        ...rowPeers(target, targetCenter).filter((peer) => peer.x < targetCenter.x),
+      ].length;
+      const side = leftCrossings < rightCrossings ? 'left' : 'right';
+      return {
+        ...edge,
+        sourceHandle: `source-${side}`,
+        targetHandle: `target-${side}`,
+        data: { ...(edge.data ?? {}), returnSide: side },
+      };
+    }
+    if (edge.type !== 'spine') return edge;
+    // Pick the dominant axis so the connector leaves/enters on the correct side in BOTH the
+    // horizontal (LR) and vertical (TB) layouts. Horizontal-dominant → left/right handles;
+    // vertical-dominant → top/bottom handles.
+    const dx = targetCenter.x - sourceCenter.x;
+    const dy = targetCenter.y - sourceCenter.y;
+
+    // A spine edge that skips over a rank (e.g. an upper sibling → a shared fan-in target two rows
+    // below) is normally drawn as a straight bottom→top (or right→left) segment. When another,
+    // UNRELATED node happens to sit in that straight corridor — as when same-rank siblings are
+    // stacked in one column above their common downstream target — the segment is drawn directly
+    // through that intermediate card, making a real edge look like a dependency on the occluded
+    // node. Detect that occlusion and route the edge out to a perpendicular side handle so React
+    // Flow bows it AROUND the stack instead of through it. Non-occluded edges keep their handles.
+    const corridorObstacles = (axis: 'vertical' | 'horizontal') => {
+      const result: Array<{ cx: number; cy: number }> = [];
+      for (const peer of nodes) {
+        if (peer.id === edge.source || peer.id === edge.target) continue;
+        const size = graphNodeSize(peer);
+        const x0 = peer.position.x;
+        const x1 = peer.position.x + size.width;
+        const y0 = peer.position.y;
+        const y1 = peer.position.y + size.height;
+        if (axis === 'vertical') {
+          const loY = Math.min(sourceCenter.y, targetCenter.y);
+          const hiY = Math.max(sourceCenter.y, targetCenter.y);
+          const corridorX = (sourceCenter.x + targetCenter.x) / 2;
+          const peerCy = (y0 + y1) / 2;
+          if (corridorX >= x0 && corridorX <= x1 && peerCy > loY && peerCy < hiY) {
+            result.push({ cx: (x0 + x1) / 2, cy: peerCy });
+          }
+        } else {
+          const loX = Math.min(sourceCenter.x, targetCenter.x);
+          const hiX = Math.max(sourceCenter.x, targetCenter.x);
+          const corridorY = (sourceCenter.y + targetCenter.y) / 2;
+          const peerCx = (x0 + x1) / 2;
+          if (corridorY >= y0 && corridorY <= y1 && peerCx > loX && peerCx < hiX) {
+            result.push({ cx: peerCx, cy: (y0 + y1) / 2 });
+          }
+        }
+      }
+      return result;
+    };
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      const forward = dx >= 0;
+      // Horizontal-dominant edge blocked by a node in the horizontal corridor → bow vertically.
+      const blockers = corridorObstacles('horizontal');
+      if (blockers.length > 0) {
+        const corridorY = (sourceCenter.y + targetCenter.y) / 2;
+        const above = blockers.filter((b) => b.cy < corridorY).length;
+        const below = blockers.length - above;
+        const side = below <= above ? 'bottom' : 'top';
+        return {
+          ...edge,
+          sourceHandle: `source-${side}`,
+          targetHandle: `target-${side}`,
+          data: { ...(edge.data ?? {}), flowDirection: 'horizontal', reroutedAround: side },
+        };
+      }
+      return {
+        ...edge,
+        sourceHandle: forward ? 'source-right' : 'source-left',
+        targetHandle: forward ? 'target-left' : 'target-right',
+        data: { ...(edge.data ?? {}), flowDirection: 'horizontal' },
+      };
+    }
+    const down = dy >= 0;
+    // Vertical-dominant edge blocked by a node in the vertical corridor → bow horizontally.
+    const blockers = corridorObstacles('vertical');
+    if (blockers.length > 0) {
+      const corridorX = (sourceCenter.x + targetCenter.x) / 2;
+      const left = blockers.filter((b) => b.cx < corridorX).length;
+      const right = blockers.length - left;
+      const side = right <= left ? 'right' : 'left';
+      return {
+        ...edge,
+        sourceHandle: `source-${side}`,
+        targetHandle: `target-${side}`,
+        data: { ...(edge.data ?? {}), flowDirection: 'vertical', reroutedAround: side },
+      };
+    }
+    return {
+      ...edge,
+      sourceHandle: down ? 'source-bottom' : 'source-top',
+      targetHandle: down ? 'target-top' : 'target-bottom',
+      data: { ...(edge.data ?? {}), flowDirection: 'vertical' },
+    };
+  });
+}

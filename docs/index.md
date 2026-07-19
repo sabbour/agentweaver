@@ -1,7 +1,7 @@
 ---
 layout: page
 title: Agentweaver
-description: Run AI agent teams without surrendering control.
+description: Put a team of AI agents on real work. You approve the plan and review the result.
 pageClass: agentweaver-home
 ---
 
@@ -13,34 +13,28 @@ import { withBase } from 'vitepress'
   <section class="aw-hero" aria-labelledby="hero-heading">
     <div class="aw-hero-copy">
       <p class="aw-hero-kicker">Open-source agent orchestration</p>
-      <h1 id="hero-heading">Turn a goal into a reviewed, finished outcome.</h1>
+      <h1 id="hero-heading">Put a team of agents on the job.</h1>
       <p class="aw-hero-lede">
-        You approve the plan before any specialist runs, watch the team work on a live run
-        tree, and get one artifact back to review — nothing ships on its own.
+        The coordinator writes a plan and assigns each task to the agent that fits it.
+        You approve the plan before any agent starts, then follow the run tree as the
+        team works. When the work is done, it comes back to you for review.
       </p>
       <div class="aw-hero-actions">
-        <a class="aw-button aw-button-primary" href="#scenario-theater">See it run</a>
+        <a class="aw-button aw-button-primary" href="#see-it-run">See it run</a>
         <a class="aw-button aw-button-secondary" href="./guide/getting-started">Run your first team</a>
         <a class="aw-button aw-button-secondary" href="https://github.com/sabbour/agentweaver">View on GitHub</a>
       </div>
-      <ol class="aw-hero-proof" aria-label="Agentweaver goal-to-artifact flow">
-        <li>Goal</li>
-        <li>OutcomeSpec</li>
-        <li>Work plan</li>
-        <li>Dispatch</li>
-        <li>Artifact</li>
-      </ol>
     </div>
   </section>
 
-  <section id="scenario-theater" class="aw-live-proof" aria-label="Interactive Agentweaver scenario runs">
+  <section id="see-it-run" class="aw-live-proof" aria-label="Interactive Agentweaver scenario runs">
     <ClientOnly>
       <WorkflowProof />
       <template #fallback>
         <img
           class="aw-proof-fallback"
           :src="withBase('/screenshots/workflow-run-graph.png')"
-          alt="Still frame of an authored, simulated Agentweaver scenario run — the interactive scenario theater needs JavaScript"
+          alt="A still frame of an Agentweaver run. Turn on JavaScript to watch it play."
         />
       </template>
     </ClientOnly>
@@ -48,12 +42,11 @@ import { withBase } from 'vitepress'
 
   <section class="aw-control-sequence" aria-labelledby="control-title">
     <div class="aw-section-heading">
-      <p class="aw-section-index">Control starts before execution</p>
-      <h2 id="control-title">Agree on the outcome. Then let the team move.</h2>
+      <h2 id="control-title">Agree on the plan before anyone starts.</h2>
       <p>
-        Agentweaver does not turn a prompt loose on a repository. The coordinator writes
-        an OutcomeSpec with goal, scope, assumptions, and review criteria. Dispatch stays
-        blocked until a human confirms it.
+        The coordinator writes an OutcomeSpec that states what success
+        looks like, what's in scope, what it assumes, and how you'll review the result.
+        Agents start after you confirm the plan.
       </p>
     </div>
     <figure class="aw-proof-frame aw-proof-frame-outcome">
@@ -63,8 +56,7 @@ import { withBase } from 'vitepress'
         loading="lazy"
       />
       <figcaption>
-        <strong>A contract before code.</strong>
-        <span>The confirmed outcome becomes the source of truth for every downstream agent.</span>
+        <span>The plan you confirmed, beside the run tree it produced.</span>
       </figcaption>
     </figure>
     <ol class="aw-sequence-list">
@@ -74,27 +66,26 @@ import { withBase } from 'vitepress'
       </li>
       <li>
         <span>2</span>
-        <div><strong>Confirm the plan</strong><p>Keep dispatch behind an intentional human gate.</p></div>
+        <div><strong>Confirm the plan</strong><p>Your confirmation starts the run.</p></div>
       </li>
       <li>
         <span>3</span>
-        <div><strong>Follow the graph</strong><p>See dependencies, owners, models, and live status as the run moves.</p></div>
+        <div><strong>Follow the graph</strong><p>Watch dependencies, owners, models, and live status as the run moves.</p></div>
       </li>
       <li>
         <span>4</span>
-        <div><strong>Review once</strong><p>Inspect assembled work before merge and memory capture.</p></div>
+        <div><strong>Review the result</strong><p>Review the team's work as one assembled result.</p></div>
       </li>
     </ol>
   </section>
 
   <section class="aw-team-story" aria-labelledby="team-title">
     <div class="aw-team-copy">
-      <p class="aw-section-index">A team shaped for the work</p>
-      <h2 id="team-title">Cast the specialists this work needs.</h2>
+      <h2 id="team-title">Cast a team for the job.</h2>
       <p>
-        Start from a blueprint or formulate a team for the scenario. Give each agent a
-        role, model, charter, and the project skills it needs. The coordinator assigns
-        the work; every node still has a visible owner.
+        Start from a blueprint or build your own team. Each agent gets a role, a
+        model, a charter, and the project skills it needs to do its part. The coordinator
+        hands out the tasks, and you can always see which agent owns each one.
       </p>
       <a class="aw-text-link" href="./experience/team-casting-memory">Explore team casting <span aria-hidden="true">→</span></a>
     </div>
@@ -105,7 +96,7 @@ import { withBase } from 'vitepress'
           alt="Agentweaver specialist roster with the selected architect's model and skills"
           loading="lazy"
         />
-        <figcaption><strong>Named specialists.</strong><span>Roles and capabilities stay inspectable.</span></figcaption>
+        <figcaption><span>Each agent shows its role, model, and skills.</span></figcaption>
       </figure>
       <figure class="aw-proof-frame aw-team-cast">
         <img
@@ -113,7 +104,7 @@ import { withBase } from 'vitepress'
           alt="Agentweaver team casting proposal ready for review"
           loading="lazy"
         />
-        <figcaption><strong>Review the cast.</strong><span>Confirm the team before it becomes project state.</span></figcaption>
+        <figcaption><span>Check the proposed team before you save it.</span></figcaption>
       </figure>
     </div>
   </section>
@@ -121,27 +112,26 @@ import { withBase } from 'vitepress'
   <section class="aw-evidence" aria-labelledby="evidence-title">
     <div class="aw-section-heading aw-section-heading-wide">
       <div>
-        <p class="aw-section-index">For running real work</p>
-        <h2 id="evidence-title">Every layer remains visible and steerable.</h2>
+        <h2 id="evidence-title">Every run keeps its work in one place.</h2>
       </div>
       <p>
-        The graph is the spine. Board state, skills, memory, artifacts, telemetry, and
-        cost stay connected to the same project and run.
+        Open a project and its board, runs, and results are already linked. Skills,
+        memory, artifacts, telemetry, and cost all attach to the same run.
       </p>
     </div>
     <div class="aw-evidence-stage">
       <figure class="aw-proof-frame aw-evidence-board">
         <img :src="withBase('/screenshots/project-board.png')" alt="Northstar agent task board" loading="lazy" />
-        <figcaption><strong>Work stays legible.</strong><span>Intake, active runs, review, and recovery share one board.</span></figcaption>
+        <figcaption><span>Intake, active runs, review, and recovery on one board.</span></figcaption>
       </figure>
       <div class="aw-evidence-stack">
         <figure class="aw-proof-frame">
           <img :src="withBase('/screenshots/skills-catalog.png')" alt="Project skills catalog with agent assignments" loading="lazy" />
-          <figcaption><strong>Capabilities are explicit.</strong><span>Reusable skills are assigned to the agents that need them.</span></figcaption>
+          <figcaption><span>Assign reusable skills to the agents that use them.</span></figcaption>
         </figure>
         <figure class="aw-proof-frame">
           <img :src="withBase('/screenshots/memories-decisions.png')" alt="Team memory with accepted decisions and pending proposals" loading="lazy" />
-          <figcaption><strong>Decisions survive the run.</strong><span>Accepted context and pending proposals remain reviewable.</span></figcaption>
+          <figcaption><span>Accepted decisions and open proposals stay with the project.</span></figcaption>
         </figure>
       </div>
     </div>
@@ -149,11 +139,9 @@ import { withBase } from 'vitepress'
 
   <section class="aw-observability" aria-labelledby="observability-title">
     <div class="aw-observability-copy">
-      <p class="aw-section-index">Know what autonomy costs</p>
-      <h2 id="observability-title">See how every answer was produced.</h2>
+      <h2 id="observability-title">Trace every answer back to its model calls.</h2>
       <p>
-        Trace model calls, agent activity, token use, AI credits, latency, and outcomes.
-        Reopen a run and follow the same evidence the coordinator used.
+        Reopen any run to see the evidence the coordinator used.
       </p>
       <ul>
         <li>Live coordinator and child-agent streams</li>
@@ -173,8 +161,7 @@ import { withBase } from 'vitepress'
 
   <section class="aw-final-cta" aria-labelledby="final-cta-heading">
     <div>
-      <p class="aw-section-index">Agent teams you can account for</p>
-      <h2 id="final-cta-heading">Give the agents room to work. Keep the controls that matter.</h2>
+      <h2 id="final-cta-heading">Ready to run your first team?</h2>
     </div>
     <div class="aw-final-actions">
       <a class="aw-button aw-button-light" href="./guide/getting-started">Get started</a>
@@ -184,7 +171,7 @@ import { withBase } from 'vitepress'
 
   <aside class="aw-alpha-note">
     <strong>Alpha software.</strong>
-    Agentweaver is under active development. Expect breaking changes and rough edges;
-    do not rely on it for production workloads yet.
+    Agentweaver is under active development, so expect breaking changes and rough
+    edges. Don't use it for production work yet.
   </aside>
 </div>

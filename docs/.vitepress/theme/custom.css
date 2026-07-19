@@ -270,8 +270,8 @@ html.dark .mermaid .sequenceNumber {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: clamp(48px, 6vw, 80px) max(24px, calc((100vw - var(--aw-max)) / 2))
-    clamp(40px, 4.5vw, 60px);
+  padding: clamp(32px, 4vw, 52px) max(24px, calc((100vw - var(--aw-max)) / 2))
+    clamp(28px, 3vw, 40px);
   color: #faf6f2;
   background: var(--aw-ink);
   isolation: isolate;
@@ -309,7 +309,7 @@ html.dark .mermaid .sequenceNumber {
 
 .aw-hero h1 {
   max-width: 22ch;
-  font-size: clamp(2.65rem, 5.2vw, 4.35rem);
+  font-size: clamp(2.35rem, 4.4vw, 3.6rem);
   font-weight: 620;
   line-height: 1;
   letter-spacing: -0.035em;
@@ -317,10 +317,10 @@ html.dark .mermaid .sequenceNumber {
 
 .aw-hero-lede {
   max-width: 58ch;
-  margin-top: 22px !important;
+  margin-top: 18px !important;
   color: rgba(250, 246, 242, 0.78);
-  font-size: clamp(1.02rem, 1.35vw, 1.2rem);
-  line-height: 1.55;
+  font-size: clamp(1rem, 1.2vw, 1.12rem);
+  line-height: 1.5;
 }
 
 .aw-hero-actions,
@@ -332,7 +332,7 @@ html.dark .mermaid .sequenceNumber {
 }
 
 .aw-hero-actions {
-  margin-top: 30px;
+  margin-top: 24px;
 }
 
 .aw-button {
@@ -386,33 +386,6 @@ html.dark .mermaid .sequenceNumber {
 .aw-button-light {
   color: var(--aw-ink) !important;
   background: #faf6f2;
-}
-
-.aw-hero-proof {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0;
-  margin: 34px 0 0;
-  padding: 0;
-  list-style: none;
-  color: rgba(250, 246, 242, 0.62);
-  font-size: 0.82rem;
-  font-weight: 560;
-  letter-spacing: 0.005em;
-}
-
-.aw-hero-proof li {
-  display: inline-flex;
-  align-items: center;
-}
-
-.aw-hero-proof li:not(:last-child)::after {
-  width: 22px;
-  height: 1px;
-  margin: 0 12px;
-  background: rgba(250, 246, 242, 0.3);
-  content: "";
 }
 
 .aw-live-proof,
@@ -477,7 +450,7 @@ html.dark .mermaid .sequenceNumber {
 .aw-workflow-proof,
 .aw-proof-fallback {
   width: 100%;
-  min-height: 680px;
+  min-height: 760px;
   border-radius: 16px;
 }
 
@@ -818,19 +791,7 @@ html.dark .mermaid .sequenceNumber {
   }
 
   .aw-hero h1 {
-    font-size: clamp(2.5rem, 11vw, 3.8rem);
-  }
-
-  .aw-hero-proof {
-    row-gap: 9px;
-  }
-
-  .aw-hero-proof li:not(:last-child)::after {
-    display: none;
-  }
-
-  .aw-hero-proof li:not(:last-child) {
-    margin-right: 14px;
+    font-size: clamp(2.2rem, 9.5vw, 3.2rem);
   }
 
   .aw-live-proof,

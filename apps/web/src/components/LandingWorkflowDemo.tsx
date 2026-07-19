@@ -13,19 +13,18 @@ import {
   CircleRegular,
   LockClosedRegular,
 } from '@fluentui/react-icons';
-import { MiniMap, Panel, ReactFlow, type Edge, type Node } from '@xyflow/react';
+import { ReactFlow, type Edge, type Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { createRoot } from 'react-dom/client';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { agentweaverLightTheme } from '../theme';
 import { ArtifactFrame } from './artifacts/ArtifactFrame';
-import { GraphControls } from './CoordinatorTopologyGraph';
 import { SCENARIOS } from './landing/scenarios';
 import { STAGE, type Scenario, type ScenarioNode, type StageIndex } from './landing/types';
 import { computeDispatchWaves, maxDispatchWave, planItemWave } from './landing/waves';
-import { layoutScenarioGraph } from './landing/layout';
+import { buildScenarioGraph } from './landing/graph';
+import { runAutoScroll } from './landing/autoScroll';
 import {
-  forwardEdge,
   iconForRole,
   roleDescForRole,
   workflowEdgeTypes,
@@ -35,7 +34,8 @@ import {
 } from './WorkflowGraphPanel';
 
 // ---------------------------------------------------------------------------
-// Timing — every value below is consumed only by the single run-token scheduler.
+// Timing. Every value below is consumed only by the single run-token scheduler,
+// EXCEPT the two artifact-scroll values, which drive a separate rAF animator.
 // ---------------------------------------------------------------------------
 const TYPE_STEP = 2; // characters revealed per typing tick
 const TYPE_MS = 34;
@@ -43,41 +43,43 @@ const STAGE_MS = 620;
 const OUTCOME_MS = 1050;
 const PLAN_MS = 950;
 const DISPATCH_MS = 640;
-const ARTIFACT_MS = 520;
+/** How long the artifact holds (auto-scrolling) before the carousel advances. */
+export const ARTIFACT_HOLD_MS = 5200;
+/** Quiet beat before simulated scrolling begins, so the top of the result reads first. */
+const ARTIFACT_SCROLL_START_MS = 500;
+/** Travel time for the simulated scroll, comfortably inside ARTIFACT_HOLD_MS. */
+const ARTIFACT_SCROLL_DURATION_MS = 3600;
 
-// Node positions come from the deterministic layered-DAG layout helper
-// (see landing/layout.ts). Nothing here multiplies hand-authored grid indices.
-
-const DISCLAIMER =
-  'Illustrative simulated runs. Outputs are authored examples, not professional advice or real actions.';
+// Node positions come from the SHARED production staircase layout via
+// buildScenarioGraph (utils/dagLayout.layoutDagStaircase + routeGridEdges).
+// Nothing here reimplements a landing-only graph algorithm.
 
 // ---------------------------------------------------------------------------
 // Run-token state machine
 // ---------------------------------------------------------------------------
-type Phase = 'idle' | 'running' | 'paused' | 'complete';
+export type Phase = 'idle' | 'running';
 
-interface RunState {
+export interface RunState {
   activeId: string;
   stage: StageIndex;
   typedLen: number;
   dispatchStep: number;
   phase: Phase;
-  /** Monotonic token; every restart/selection/pause bumps it so any in-flight
+  /** Monotonic token; every restart/selection/advance bumps it so any in-flight
    *  timeout that still fires is ignored by the double-guard. */
   token: number;
 }
 
-type RunAction =
+export type RunAction =
   | { type: 'SELECT'; id: string }
   | { type: 'REPLAY' }
+  | { type: 'ADVANCE_SCENARIO' }
   | { type: 'PLAY_IF_IDLE' }
-  | { type: 'PAUSE' }
   | { type: 'TYPE_TICK'; goalLen: number }
   | { type: 'ADVANCE' }
-  | { type: 'DISPATCH_TICK' }
-  | { type: 'COMPLETE' };
+  | { type: 'DISPATCH_TICK' };
 
-function initialState(): RunState {
+export function initialRunState(): RunState {
   return {
     activeId: SCENARIOS[0].id,
     stage: STAGE.TYPING,
@@ -92,32 +94,39 @@ function freshRun(activeId: string, phase: Phase, token: number): RunState {
   return { activeId, stage: STAGE.TYPING, typedLen: 0, dispatchStep: 0, phase, token };
 }
 
-function runReducer(state: RunState, action: RunAction): RunState {
+/** Id of the scenario after `id`, wrapping from the last back to the first. */
+export function nextScenarioId(id: string): string {
+  const index = SCENARIOS.findIndex((s) => s.id === id);
+  const next = (index + 1 + SCENARIOS.length) % SCENARIOS.length;
+  return SCENARIOS[next].id;
+}
+
+export function runReducer(state: RunState, action: RunAction): RunState {
   switch (action.type) {
     case 'SELECT':
-      if (action.id === state.activeId) return state;
-      return freshRun(action.id, 'idle', state.token + 1);
+      // Selecting a tab ALWAYS starts that scenario immediately (running), even
+      // if it is the current one (re-runs it). There is no idle/paused waiting.
+      return freshRun(action.id, 'running', state.token + 1);
     case 'REPLAY':
       return freshRun(state.activeId, 'running', state.token + 1);
+    case 'ADVANCE_SCENARIO':
+      // Carousel step: advance to the next scenario (wrapping 8 → 1) and start it.
+      return freshRun(nextScenarioId(state.activeId), 'running', state.token + 1);
     case 'PLAY_IF_IDLE':
       return state.phase === 'idle' ? { ...state, phase: 'running', token: state.token + 1 } : state;
-    case 'PAUSE':
-      return state.phase === 'running' ? { ...state, phase: 'paused', token: state.token + 1 } : state;
     case 'TYPE_TICK':
       return { ...state, typedLen: Math.min(action.goalLen, state.typedLen + TYPE_STEP) };
     case 'ADVANCE':
       return { ...state, stage: Math.min(STAGE.ARTIFACT, state.stage + 1) as StageIndex };
     case 'DISPATCH_TICK':
       return { ...state, dispatchStep: state.dispatchStep + 1 };
-    case 'COMPLETE':
-      return { ...state, phase: 'complete' };
     default:
       return state;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Node status derivation (pure — no timers)
+// Node status derivation (pure, no timers)
 // ---------------------------------------------------------------------------
 function nodeStatus(
   node: ScenarioNode,
@@ -146,7 +155,7 @@ function nodeStatus(
     return { status: 'pending', statusLabel: 'Queued' };
   }
   // Specialist agents dispatch during the DISPATCH stage by dependency wave.
-  // Every specialist in the same wave transitions together — the scheduler steps
+  // Every specialist in the same wave transitions together. The scheduler steps
   // one wave per tick, so concurrent nodes light up (and complete) as a group.
   const wave = waves.get(node.id) ?? Number.POSITIVE_INFINITY;
   // Show the authored duration as subtext on completed agent nodes (replaces generic "Finished").
@@ -167,24 +176,6 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
     minWidth: 0,
-  },
-  disclaimer: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: '18px',
-    margin: 0,
-  },
-  disclaimerMark: {
-    flexShrink: 0,
-    marginTop: '1px',
-    color: tokens.colorNeutralForeground3,
   },
   tablist: {
     display: 'flex',
@@ -241,6 +232,8 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     overflow: 'hidden',
     boxShadow: '0 24px 70px rgba(15, 13, 12, 0.16)',
+    display: 'flex',
+    flexDirection: 'column',
   },
   header: {
     display: 'flex',
@@ -260,208 +253,83 @@ const useStyles = makeStyles({
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase500 },
   subtitle: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   headerMeta: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexShrink: 0, flexWrap: 'wrap' },
-  stepper: {
+  // The full-height run body. During Goal/Outcome/Plan/Dispatch it is a desktop
+  // split (OutcomeSpec + Work Plan on the left, the stepped graph on the right).
+  // At the artifact beat the whole body is replaced by the result. On mobile the
+  // panes stack (left first) with no horizontal overflow.
+  body: {
     display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
+    minWidth: 0,
+    height: 'clamp(468px, 64vh, 648px)',
     backgroundColor: tokens.colorNeutralBackground1,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    overflowX: 'auto',
-    scrollbarWidth: 'none',
+    '@media (max-width: 720px)': {
+      flexDirection: 'column',
+      height: 'auto',
+    },
   },
-  step: { display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0 },
-  stepDot: {
-    width: '16px',
-    height: '16px',
-    borderRadius: '50%',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '11px',
-    color: tokens.colorNeutralForeground3,
+  leftPane: {
+    display: 'flex',
+    flexDirection: 'column',
+    flexShrink: 0,
+    minWidth: 0,
+    width: 'clamp(300px, 34%, 400px)',
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    '@media (max-width: 720px)': {
+      width: 'auto',
+      maxHeight: '46%',
+      borderRight: 'none',
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
   },
-  stepDotActive: { color: tokens.colorNeutralForeground1 },
-  stepDotDone: { color: tokens.colorPaletteGreenForeground1 },
-  stepLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
-  stepLabelActive: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
-  stepArrow: { color: tokens.colorNeutralStroke1, fontSize: '11px', flexShrink: 0 },
-  // The run surface: one stage that frames the graph as a centred horizontal
-  // band. A compact goal strip caps the top and a compact plan panel anchors the
-  // bottom-left, so the space around a wide-short DAG reads as intentional
-  // composition rather than blank quadrants. The artifact floats over this in a
-  // bounded window at the final beat — the graph never unmounts.
-  stage: {
+  leftScroll: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalL,
+    overflowY: 'auto',
+    minHeight: 0,
+    flex: 1,
+    '@media (max-width: 720px)': { padding: tokens.spacingHorizontalM },
+  },
+  graphPane: {
     position: 'relative',
+    flex: 1,
     minWidth: 0,
-    height: 'clamp(420px, 50vh, 512px)',
     backgroundColor: tokens.colorNeutralBackground1,
-    overflow: 'hidden',
-    '@media (max-width: 720px)': { height: '540px' },
-    '@media (max-width: 380px)': { height: '516px' },
-  },
-  // The graph layer fills the stage and dims to settled context under the
-  // artifact window (still visible, no longer the focus).
-  graphLayer: {
-    position: 'absolute',
-    inset: 0,
-    minWidth: 0,
-    transitionProperty: 'opacity, filter',
-    transitionDuration: '360ms',
-    transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
-    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
-  },
-  graphSettled: {
-    opacity: 0.42,
-    filter: 'saturate(0.72)',
+    '@media (max-width: 720px)': { minHeight: '324px', height: '324px' },
   },
   graph: {
     width: '100%',
     height: '100%',
-    '& .react-flow__pane': { cursor: 'grab' },
-    '& .react-flow__pane:active': { cursor: 'grabbing' },
+    // Non-interactive canvas: never present a pan/grab affordance.
+    '& .react-flow__pane': { cursor: 'default' },
   },
-  graphHint: {
-    position: 'absolute',
-    zIndex: 6,
-    right: tokens.spacingHorizontalM,
-    bottom: tokens.spacingVerticalS,
-    maxWidth: '220px',
-    textAlign: 'right',
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase100,
-    lineHeight: '15px',
-    pointerEvents: 'none',
-    '@media (max-width: 900px)': { display: 'none' },
-  },
-  // Compact, integrated goal typing surface pinned to the top of the stage.
-  goalStrip: {
-    position: 'absolute',
-    zIndex: 7,
-    top: 0,
-    left: 0,
-    right: 0,
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`,
-    backgroundColor: 'color-mix(in srgb, var(--colorNeutralBackground1) 88%, transparent)',
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    transitionProperty: 'opacity, transform',
-    transitionDuration: '280ms',
-    transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
-    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
-    '@media (max-width: 720px)': { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}` },
-  },
-  goalTag: {
-    flexShrink: 0,
-    fontSize: tokens.fontSizeBase100,
-    textTransform: 'uppercase',
-    letterSpacing: '0.07em',
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground3,
-  },
-  goalText: {
-    minWidth: 0,
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: '18px',
-    color: tokens.colorNeutralForeground1,
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
-  },
-  // Compact, non-modal plan panel docked to the lower-left. Never more than a
-  // corner of the stage — the graph stays visually dominant.
-  planPanel: {
-    position: 'absolute',
-    zIndex: 7,
-    left: tokens.spacingHorizontalM,
-    bottom: tokens.spacingVerticalM,
-    width: 'clamp(226px, 27%, 296px)',
-    maxHeight: '42%',
+  // Full-body artifact takeover, replaces BOTH panes at the final beat.
+  takeover: {
     display: 'flex',
     flexDirection: 'column',
+    flex: 1,
+    minWidth: 0,
+    padding: tokens.spacingHorizontalL,
+    backgroundColor: tokens.colorNeutralBackground1,
+    animationName: {
+      from: { opacity: 0, transform: 'translateY(6px)' },
+      to: { opacity: 1, transform: 'translateY(0)' },
+    },
+    animationDuration: '320ms',
+    animationTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none' },
+    '@media (max-width: 720px)': { padding: tokens.spacingHorizontalM, minHeight: '520px' },
+  },
+  // The goal composer that caps the left pane.
+  goalBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: '0 10px 28px rgba(39, 35, 32, 0.16)',
-    overflow: 'hidden',
-    transitionProperty: 'opacity, transform',
-    transitionDuration: '300ms',
-    transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
-    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '1ms' },
-    '@media (max-width: 720px)': {
-      left: tokens.spacingHorizontalM,
-      right: tokens.spacingHorizontalM,
-      bottom: tokens.spacingVerticalM,
-      width: 'auto',
-      maxHeight: '46%',
-    },
-  },
-  overlayHidden: {
-    opacity: 0,
-    transform: 'translateY(8px)',
-    pointerEvents: 'none',
-    visibility: 'hidden',
-  },
-  // Scrim behind the bounded artifact window — a soft focus cue, NOT a modal
-  // trap. It is inert (aria-hidden, pointer-events none) so the graph, tabs and
-  // replay stay reachable.
-  artifactScrim: {
-    position: 'absolute',
-    inset: 0,
-    zIndex: 8,
-    backgroundColor: 'rgba(39, 35, 32, 0.28)',
-    pointerEvents: 'none',
-    animationName: { from: { opacity: 0 }, to: { opacity: 1 } },
-    animationDuration: '360ms',
-    animationTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
-    '@media (prefers-reduced-motion: reduce)': { animationName: 'none' },
-  },
-  // Bounded artifact window floating over the settled graph. Authored to ~66%w
-  // / 74%h on desktop, near-full width on mobile with a visible stage edge.
-  artifactWindow: {
-    position: 'absolute',
-    zIndex: 9,
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: '66%',
-    height: '74%',
-    maxWidth: '760px',
-    display: 'flex',
-    flexDirection: 'column',
-    borderRadius: tokens.borderRadiusXLarge,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    boxShadow: '0 24px 60px rgba(39, 35, 32, 0.30)',
-    overflow: 'hidden',
-    animationName: {
-      from: { opacity: 0, transform: 'translate(-50%, -46%) scale(0.985)' },
-      to: { opacity: 1, transform: 'translate(-50%, -50%) scale(1)' },
-    },
-    animationDuration: '380ms',
-    animationTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
-    '@media (prefers-reduced-motion: reduce)': { animationName: 'none' },
-    '@media (max-width: 900px)': { width: '78%', height: '76%' },
-    '@media (max-width: 720px)': { width: '92%', height: '80%', maxWidth: 'none' },
-  },
-  artifactWindowBody: {
-    display: 'flex',
-    flexDirection: 'column',
-    minHeight: 0,
-    flex: 1,
-    overflow: 'hidden',
-  },
-  planScroll: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingHorizontalM,
-    overflowY: 'auto',
-    minHeight: 0,
   },
   composerLabel: {
     fontSize: tokens.fontSizeBase100,
@@ -495,10 +363,11 @@ const useStyles = makeStyles({
     animationIterationCount: 'infinite',
     '@media (prefers-reduced-motion: reduce)': { animationName: 'none', opacity: 1 },
   },
-  consoleBlock: {
-    paddingTop: tokens.spacingVerticalS,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    minWidth: 0,
+  reveal: {
+    animationName: { from: { opacity: 0, transform: 'translateY(6px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
+    animationDuration: '260ms',
+    animationTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': { animationName: 'none' },
   },
   cardTitle: {
     display: 'flex',
@@ -557,23 +426,7 @@ const useStyles = makeStyles({
   },
 });
 
-const STEP_LABELS = ['Goal', 'Outcome spec', 'Work plan', 'Dispatch', 'Artifact'];
-
-function phaseBadge(phase: Phase): { label: string; color: 'informative' | 'success' | 'warning' | 'subtle' } {
-  switch (phase) {
-    case 'running':
-      return { label: 'Simulated playback', color: 'informative' };
-    case 'paused':
-      return { label: 'Paused', color: 'warning' };
-    case 'complete':
-      return { label: 'Complete', color: 'success' };
-    default:
-      return { label: 'Ready', color: 'subtle' };
-  }
-}
-
-function stageAnnouncement(scenario: Scenario, stage: StageIndex, phase: Phase): string {
-  if (phase === 'paused') return 'Simulated playback paused. Use Replay to run it again.';
+function stageAnnouncement(scenario: Scenario, stage: StageIndex): string {
   switch (stage) {
     case STAGE.TYPING:
       return 'Typing the goal into the composer.';
@@ -584,7 +437,7 @@ function stageAnnouncement(scenario: Scenario, stage: StageIndex, phase: Phase):
     case STAGE.DISPATCH:
       return 'Dispatching specialists on the run tree.';
     case STAGE.ARTIFACT:
-      return `Illustrative output ready: ${scenario.artifactLabel}.`;
+      return `${scenario.artifactLabel} ready.`;
     default:
       return '';
   }
@@ -595,27 +448,34 @@ function stageAnnouncement(scenario: Scenario, stage: StageIndex, phase: Phase):
 // ---------------------------------------------------------------------------
 export function ScenarioTheater() {
   const styles = useStyles();
-  const [state, dispatch] = useReducer(runReducer, undefined, initialState);
+  const [state, dispatch] = useReducer(runReducer, undefined, initialRunState);
   const [inView, setInView] = useState(false);
-  const [compact, setCompact] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
 
   const scenario = useMemo(
     () => SCENARIOS.find((s) => s.id === state.activeId) ?? SCENARIOS[0],
     [state.activeId],
   );
 
-  // Latest token/phase for the scheduler's double-guard.
+  // Latest token/phase/visibility for the scheduler's double-guard.
   const tokenRef = useRef(state.token);
   const phaseRef = useRef(state.phase);
+  const inViewRef = useRef(inView);
   tokenRef.current = state.token;
   phaseRef.current = state.phase;
+  inViewRef.current = inView;
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const artifactScrollRef = useRef<HTMLDivElement | null>(null);
 
   // ---- Single run-token scheduler: owns EVERY timeout in the player. --------
+  // Gated on `inView`: leaving the viewport silently suspends scheduling (no
+  // visible "paused" state) and re-entry resumes the SAME beat because the effect
+  // re-runs from the unchanged run state.
   useEffect(() => {
     if (state.phase !== 'running') return;
+    if (!inView) return;
     const goalLen = scenario.goal.length;
     const waveCount = maxDispatchWave(scenario);
     const scheduledToken = state.token;
@@ -647,25 +507,27 @@ export function ScenarioTheater() {
         action = { type: 'ADVANCE' };
       }
     } else {
-      // ARTIFACT stage: settle into the terminal complete phase.
-      delay = ARTIFACT_MS;
-      action = { type: 'COMPLETE' };
+      // ARTIFACT stage: hold the result long enough to inspect / auto-scroll,
+      // then advance the carousel to the next scenario (wrapping 8 → 1).
+      delay = ARTIFACT_HOLD_MS;
+      action = { type: 'ADVANCE_SCENARIO' };
     }
 
     // Use the global timer (not window.*) so a single owner schedules every
     // tick and fake-timer test harnesses can drive it deterministically.
     const id = setTimeout(() => {
-      // Double-guard: ignore this tick if a newer token superseded it or the
-      // run is no longer running (paused / out of view / unmounted / remounted).
+      // Double-guard: ignore this tick if a newer token superseded it, the run
+      // is no longer running, or it drifted out of view since it was scheduled.
       if (tokenRef.current !== scheduledToken) return;
       if (phaseRef.current !== 'running') return;
+      if (!inViewRef.current) return;
       dispatch(action);
     }, delay);
 
     return () => clearTimeout(id);
-  }, [state.phase, state.stage, state.typedLen, state.dispatchStep, state.token, scenario]);
+  }, [state.phase, state.stage, state.typedLen, state.dispatchStep, state.token, scenario, inView]);
 
-  // ---- Lazy autoplay + out-of-view pause via IntersectionObserver ----------
+  // ---- Lazy autoplay + out-of-view IntersectionObserver --------------------
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') {
@@ -684,22 +546,20 @@ export function ScenarioTheater() {
     return () => observer.disconnect();
   }, []);
 
+  // First time it scrolls into view, kick the idle run into motion. Leaving the
+  // viewport does NOT dispatch anything. Scheduling simply suspends (see above).
   useEffect(() => {
     if (inView && state.phase === 'idle') {
       dispatch({ type: 'PLAY_IF_IDLE' });
-    } else if (!inView && state.phase === 'running') {
-      dispatch({ type: 'PAUSE' });
     }
   }, [inView, state.phase]);
 
-  // Track the compact breakpoint so the planning console can switch from a left
-  // rail to a bottom sheet and fitView can reserve the right region of padding.
+  // Track prefers-reduced-motion so the artifact takeover uses a static result.
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mq = window.matchMedia('(max-width: 720px)');
-    const sync = () => setCompact(mq.matches);
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setReducedMotion(mq.matches);
     sync();
-    // addEventListener is the modern API; fall back for older Safari engines.
     if (typeof mq.addEventListener === 'function') {
       mq.addEventListener('change', sync);
       return () => mq.removeEventListener('change', sync);
@@ -707,6 +567,27 @@ export function ScenarioTheater() {
     mq.addListener(sync);
     return () => mq.removeListener(sync);
   }, []);
+
+  const showArtifact = state.stage >= STAGE.ARTIFACT;
+
+  // ---- Simulated artifact scroll (separate rAF owner, fully cancellable) ----
+  // Runs only while the artifact is on-screen and in view. Robustly cancelled on
+  // scenario change, replay, out-of-view, reduced-motion and unmount via the
+  // effect's dependency list + cleanup. Reduced motion → instant static result.
+  useEffect(() => {
+    if (!showArtifact || !inView) return;
+    const el = artifactScrollRef.current;
+    if (!el) return;
+    if (reducedMotion) {
+      el.scrollTop = 0;
+      return;
+    }
+    const handle = runAutoScroll(el, {
+      durationMs: ARTIFACT_SCROLL_DURATION_MS,
+      startDelayMs: ARTIFACT_SCROLL_START_MS,
+    });
+    return () => handle.cancel();
+  }, [showArtifact, inView, reducedMotion, state.activeId, state.token]);
 
   // ---- Tab keyboard handling (roving tabindex) -----------------------------
   const selectByIndex = useCallback((index: number) => {
@@ -746,11 +627,7 @@ export function ScenarioTheater() {
     [activeIndex, selectByIndex],
   );
 
-  const pauseFromInteraction = useCallback(() => {
-    if (phaseRef.current === 'running') dispatch({ type: 'PAUSE' });
-  }, []);
-
-  // Dependency waves are derived once per scenario from its edges — the single
+  // Dependency waves are derived once per scenario from its edges. The single
   // source of truth for which specialists run concurrently.
   const waves = useMemo(() => computeDispatchWaves(scenario), [scenario]);
 
@@ -760,19 +637,23 @@ export function ScenarioTheater() {
     [scenario],
   );
 
-  // ---- Derived graph nodes/edges -------------------------------------------
-  // Deterministic layered-DAG positions derived from roles + dependency waves.
-  const layout = useMemo(() => layoutScenarioGraph(scenario), [scenario]);
+  // ---- Derived graph nodes/edges (SHARED production staircase layout) -------
+  // Deterministic geometry from utils/dagLayout via buildScenarioGraph. Positions
+  // + routed edges are static per scenario; only runtime status/animation change.
+  const graph = useMemo(() => buildScenarioGraph(scenario), [scenario]);
 
   const nodes = useMemo<Node<WorkflowNodeData>[]>(
     () =>
       scenario.nodes.map((node) => {
         const runtime = nodeStatus(node, state.stage, state.dispatchStep, waves);
-        const pos = layout.positions.get(node.id) ?? { x: 0, y: 0 };
+        const pos = graph.positions.get(node.id) ?? { x: 0, y: 0 };
+        const hint = graph.sizeHints[node.id];
         return {
           id: node.id,
           type: 'workflow',
           position: { x: pos.x, y: pos.y },
+          initialWidth: hint?.width,
+          initialHeight: hint?.height,
           data: {
             def: {
               key: node.role,
@@ -788,11 +669,13 @@ export function ScenarioTheater() {
             modelId: node.modelId,
             executionId: node.id,
             executionPodName: node.pod,
-            dir: 'LR',
+            // GRID renders all eight handles so the shared routeGridEdges handle
+            // selection (left/right/top/bottom bows) always has a target.
+            dir: 'GRID',
           },
         };
       }),
-    [scenario, state.stage, state.dispatchStep, waves, layout],
+    [scenario, state.stage, state.dispatchStep, waves, graph],
   );
 
   const edges = useMemo<Edge[]>(() => {
@@ -801,38 +684,26 @@ export function ScenarioTheater() {
         .filter((n) => nodeStatus(n, state.stage, state.dispatchStep, waves).status === 'started')
         .map((n) => n.id),
     );
-    return scenario.edges.map(([id, source, target]) =>
-      forwardEdge(id, source, target, startedIds.has(target)),
-    );
-  }, [scenario, state.stage, state.dispatchStep, waves]);
+    // Reuse the SHARED routed edges (handles + stepped flowDirection); only flip
+    // the animated flow to the currently-executing targets.
+    return graph.routedEdges.map((edge) => ({
+      ...edge,
+      animated: startedIds.has(edge.target),
+    }));
+  }, [graph, scenario, state.stage, state.dispatchStep, waves]);
 
-  const badge = phaseBadge(state.phase);
   const typed = scenario.goal.slice(0, state.typedLen);
   const showCaret = state.stage === STAGE.TYPING;
   const panelId = 'aw-theater-panel';
-  // At the final beat the artifact floats in a bounded window over the graph,
-  // which stays mounted and dims back as settled context — never a full-stage
-  // takeover and never a modal focus trap.
-  const showArtifact = state.stage >= STAGE.ARTIFACT;
-  const showPlanPanel = state.stage >= STAGE.OUTCOME && !showArtifact;
-  // The graph is framed as a horizontal band: the goal strip caps the top and
-  // the plan panel + hint anchor the bottom, so fitView keeps the run tree in
-  // the centre of the stage rather than letting it drift into a corner.
-  const fitPadding = compact
-    ? ({ top: '13%', right: '5%', bottom: '42%', left: '5%' } as const)
-    : ({ top: '11%', right: '5%', bottom: '30%', left: '6%' } as const);
+  const showOutcome = state.stage >= STAGE.OUTCOME;
+  const showPlan = state.stage >= STAGE.PLAN;
 
   return (
     <FluentProvider theme={agentweaverLightTheme}>
       <div className={styles.root} ref={rootRef}>
-        <p className={styles.disclaimer}>
-          <CircleRegular className={styles.disclaimerMark} aria-hidden="true" fontSize={14} />
-          <span>{DISCLAIMER}</span>
-        </p>
-
         <div
           role="tablist"
-          aria-label="Scenario theater"
+          aria-label="Example runs"
           aria-orientation="horizontal"
           className={styles.tablist}
           onKeyDown={onTabKeyDown}
@@ -872,9 +743,6 @@ export function ScenarioTheater() {
             <div className={styles.headingGroup}>
               <div className={styles.titleRow}>
                 <span className={styles.title}>{scenario.title}</span>
-                <Badge appearance="tint" color={badge.color}>
-                  {badge.label}
-                </Badge>
               </div>
               <Text className={styles.subtitle}>{scenario.subtitle}</Text>
             </div>
@@ -892,154 +760,99 @@ export function ScenarioTheater() {
             </div>
           </div>
 
-          <div className={styles.stepper} aria-hidden="true">
-            {STEP_LABELS.map((label, index) => {
-              const done =
-                state.stage > index ||
-                (index === STAGE.ARTIFACT && state.stage === STAGE.ARTIFACT && state.phase === 'complete');
-              const active = state.stage === index;
-              return (
-                <div className={styles.step} key={label}>
-                  {index > 0 && <span className={styles.stepArrow}>›</span>}
-                  <span
-                    className={mergeClasses(
-                      styles.stepDot,
-                      active && styles.stepDotActive,
-                      done && styles.stepDotDone,
-                    )}
-                  >
-                    {done ? <CheckmarkCircleFilled /> : <CircleRegular />}
-                  </span>
-                  <span className={mergeClasses(styles.stepLabel, active && styles.stepLabelActive)}>{label}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className={styles.stage} aria-label="Run surface">
-            <section
-              className={mergeClasses(styles.graphLayer, showArtifact && styles.graphSettled)}
-              aria-label="Run tree"
-              aria-hidden={showArtifact}
-              onPointerDownCapture={pauseFromInteraction}
-              onWheelCapture={pauseFromInteraction}
-            >
-              <ReactFlow
-                key={`${scenario.id}:${compact ? 'c' : 'w'}`}
-                className={styles.graph}
-                nodes={nodes}
-                edges={edges}
-                nodeTypes={workflowNodeTypes}
-                edgeTypes={workflowEdgeTypes}
-                fitView
-                fitViewOptions={{ padding: fitPadding, maxZoom: 1.15 }}
-                minZoom={0.3}
-                maxZoom={1.5}
-                nodesDraggable={false}
-                nodesConnectable={false}
-                panOnDrag
-                panOnScroll
-                zoomOnPinch
-                zoomOnScroll={false}
-                proOptions={{ hideAttribution: true }}
-              >
-                <Panel position="top-right">
-                  <GraphControls orderedNodeIds={scenario.nodes.map((n) => n.id)} />
-                </Panel>
-                <MiniMap
-                  pannable
-                  zoomable
-                  nodeStrokeWidth={0}
-                  nodeColor={(node) =>
-                    (node.data as WorkflowNodeData).state.status === 'completed'
-                      ? '#16a149'
-                      : (node.data as WorkflowNodeData).state.status === 'started'
-                        ? '#8a4b01'
-                        : '#b8afa8'
-                  }
-                  style={{
-                    width: 92,
-                    height: 58,
-                    border: '1px solid var(--colorNeutralStroke2)',
-                    borderRadius: 8,
-                  }}
-                />
-              </ReactFlow>
-              <Text className={styles.graphHint}>
-                Drag to pan · zoom with the controls. Interacting pauses playback.
-              </Text>
-            </section>
-
-            <div
-              className={mergeClasses(styles.goalStrip, showArtifact && styles.overlayHidden)}
-              aria-hidden={showArtifact}
-            >
-              <span className={styles.goalTag}>Goal</span>
-              <span className={styles.goalText}>
-                {typed}
-                {showCaret && <span className={styles.caret} aria-hidden="true" />}
-              </span>
-            </div>
-
-            <aside
-              className={mergeClasses(styles.planPanel, !showPlanPanel && styles.overlayHidden)}
-              aria-label="Run plan"
-              aria-hidden={!showPlanPanel}
-            >
-              <div className={styles.planScroll}>
-                {state.stage >= STAGE.OUTCOME && state.stage < STAGE.PLAN && (
-                  <div>
-                    <div className={styles.cardTitle}>Outcome spec</div>
-                    <div className={styles.outcomeGoal}>{scenario.outcome.goal}</div>
-                    <div className={styles.metaLabel}>Scope</div>
-                    <ul className={styles.list}>
-                      {scenario.outcome.scope.map((item) => (
-                        <li className={styles.listItem} key={item}>{item}</li>
-                      ))}
-                    </ul>
-                    {scenario.outcome.review.map((item) => (
-                      <div className={styles.reviewLine} key={item}>
-                        <LockClosedRegular aria-hidden="true" fontSize={13} />
-                        <span>{item}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {state.stage >= STAGE.PLAN && (
-                  <div>
-                    <div className={styles.cardTitle}>Work plan</div>
-                    {scenario.plan.map((item, index) => {
-                      const wave = planItemWave(waves, agentNodeIds, index);
-                      const done =
-                        state.stage > STAGE.DISPATCH ||
-                        (state.stage === STAGE.DISPATCH && wave <= state.dispatchStep);
-                      return (
-                        <div className={styles.planItem} key={item.id}>
-                          <span className={mergeClasses(styles.planIcon, done && styles.planIconDone)}>
-                            {done ? <CheckmarkCircleFilled /> : <CircleRegular />}
-                          </span>
-                          <span className={styles.planCopy}>
-                            <span className={styles.planTitle}>{item.title}</span>
-                            <span className={styles.planOwner}>Owner · {item.owner}</span>
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+          <div className={styles.body} aria-label="Run surface">
+            {showArtifact ? (
+              <div className={styles.takeover} aria-label="Run artifact">
+                <ArtifactFrame
+                  label={scenario.artifactLabel}
+                  caption={scenario.artifactCaption}
+                  fill
+                  scrollRef={artifactScrollRef}
+                >
+                  <scenario.Artifact />
+                </ArtifactFrame>
               </div>
-            </aside>
-
-            {showArtifact && (
+            ) : (
               <>
-                <div className={styles.artifactScrim} aria-hidden="true" />
-                <div className={styles.artifactWindow} aria-label="Run artifact">
-                  <div className={styles.artifactWindowBody}>
-                    <ArtifactFrame label={scenario.artifactLabel} caption={scenario.artifactCaption}>
-                      <scenario.Artifact />
-                    </ArtifactFrame>
+                <div className={styles.leftPane}>
+                  <div className={styles.leftScroll}>
+                    <div className={styles.goalBlock}>
+                      <span className={styles.composerLabel}>Goal</span>
+                      <div className={styles.composerText}>
+                        {typed}
+                        {showCaret && <span className={styles.caret} aria-hidden="true" />}
+                      </div>
+                    </div>
+
+                    {showOutcome && (
+                      <div className={styles.reveal}>
+                        <div className={styles.cardTitle}>Outcome spec</div>
+                        <div className={styles.outcomeGoal}>{scenario.outcome.goal}</div>
+                        <div className={styles.metaLabel}>Scope</div>
+                        <ul className={styles.list}>
+                          {scenario.outcome.scope.map((item) => (
+                            <li className={styles.listItem} key={item}>{item}</li>
+                          ))}
+                        </ul>
+                        {scenario.outcome.review.map((item) => (
+                          <div className={styles.reviewLine} key={item}>
+                            <LockClosedRegular aria-hidden="true" fontSize={13} />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {showPlan && (
+                      <div className={styles.reveal}>
+                        <div className={styles.cardTitle}>Work plan</div>
+                        {scenario.plan.map((item, index) => {
+                          const wave = planItemWave(waves, agentNodeIds, index);
+                          const done =
+                            state.stage > STAGE.DISPATCH ||
+                            (state.stage === STAGE.DISPATCH && wave <= state.dispatchStep);
+                          return (
+                            <div className={styles.planItem} key={item.id}>
+                              <span className={mergeClasses(styles.planIcon, done && styles.planIconDone)}>
+                                {done ? <CheckmarkCircleFilled /> : <CircleRegular />}
+                              </span>
+                              <span className={styles.planCopy}>
+                                <span className={styles.planTitle}>{item.title}</span>
+                                <span className={styles.planOwner}>Owner · {item.owner}</span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
+                </div>
+
+                <div className={styles.graphPane} aria-label="Run tree">
+                  <ReactFlow
+                    key={scenario.id}
+                    className={styles.graph}
+                    nodes={nodes}
+                    edges={edges}
+                    nodeTypes={workflowNodeTypes}
+                    edgeTypes={workflowEdgeTypes}
+                    fitView
+                    fitViewOptions={{ padding: 0.14, maxZoom: 1.15 }}
+                    minZoom={0.2}
+                    maxZoom={1.5}
+                    nodesDraggable={false}
+                    nodesConnectable={false}
+                    nodesFocusable={false}
+                    edgesFocusable={false}
+                    elementsSelectable={false}
+                    panOnDrag={false}
+                    panOnScroll={false}
+                    zoomOnScroll={false}
+                    zoomOnPinch={false}
+                    zoomOnDoubleClick={false}
+                    preventScrolling={false}
+                    proOptions={{ hideAttribution: true }}
+                  />
                 </div>
               </>
             )}
@@ -1047,7 +860,7 @@ export function ScenarioTheater() {
         </div>
 
         <div className={styles.srOnly} role="status" aria-live="polite">
-          {stageAnnouncement(scenario, state.stage, state.phase)}
+          {stageAnnouncement(scenario, state.stage)}
         </div>
       </div>
     </FluentProvider>

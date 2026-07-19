@@ -50,7 +50,7 @@ describe('ScenarioTheater playback', () => {
     disableIO();
     render(<ScenarioTheater />);
 
-    await waitForText('Illustrative output');
+    await waitForText('Pull request preview');
     expect(screen.getByText('Pull request preview')).toBeTruthy();
     // The artifact reveals inside the primary run surface (crossfading with the
     // graph) rather than being appended below the fold.
