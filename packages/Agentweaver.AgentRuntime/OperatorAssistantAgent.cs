@@ -31,6 +31,22 @@ public sealed record OperatorAssistantRequest(
 public sealed record OperatorAssistantResponse(string Message, IReadOnlyList<string> ToolNamesInvoked);
 
 /// <summary>
+/// Wire envelope for a single operator turn forwarded to the sandbox AgentHost pod (narrow AgentHost
+/// cutover, #346/#347). The A2A transport's <c>AgentSetupParams</c> already carries
+/// <c>ModelId</c>/<c>ProjectId</c>/<c>UserId</c> plus a single free-text task string — the remaining
+/// <see cref="OperatorAssistantRequest"/> fields specific to the operator chat loop (the message
+/// itself, replay history, the assembled agent definition, the caller's GitHub login, and the
+/// optional cross-referenced run id) are packed into that task string as JSON using this envelope,
+/// so no shared workflow contract needs to grow an operator-specific field.
+/// </summary>
+public sealed record OperatorAssistantTurnEnvelope(
+    string Message,
+    string AgentDefinition,
+    string? GitHubLogin,
+    string? ContextRunId,
+    IReadOnlyList<ConsoleFacadeHistoryMessage> History);
+
+/// <summary>
 /// Real-time sink for a single operator turn. The assistant invokes these callbacks as the turn
 /// streams so a caller (e.g. AssistantRunService) can project each assistant/tool step onto the run
 /// event stream in order. All members are optional to implement; a null sink disables streaming

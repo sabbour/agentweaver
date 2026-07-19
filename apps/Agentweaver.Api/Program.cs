@@ -181,21 +181,14 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClas
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
-// Operator assistant (#346): MCP-driven chat modeled as a lightweight "operator run". The MCP tool
-// provider connects to the AgentweaverMCP /mcp endpoint per caller (bearer passed through per call);
-// the assistant agent is the in-API Copilot loop seeded with agentweaver.agent.md; AssistantRunService
-// persists the conversation as a run and streams turns onto the existing run event stream.
-builder.Services.AddSingleton<IAgentweaverMcpToolProvider>(sp =>
-{
-    var cfg = sp.GetRequiredService<IConfiguration>();
-    var endpoint = cfg["Assistant:McpEndpoint"];
-    if (string.IsNullOrWhiteSpace(endpoint))
-        throw new InvalidOperationException(
-            "Assistant:McpEndpoint must be configured (the in-cluster AgentweaverMCP /mcp URL) to use the operator assistant.");
-    var options = new AgentweaverMcpConnectionOptions { Endpoint = new Uri(endpoint) };
-    return new AgentweaverMcpToolProvider(options, sp.GetService<ILoggerFactory>());
-});
-builder.Services.AddSingleton<IOperatorAssistantAgent, OperatorAssistantAgent>();
+// Operator assistant (#346, narrow AgentHost cutover #347): MCP-driven chat modeled as a lightweight
+// "operator run". Model/SDK/MCP execution now runs on a sandbox AgentHost pod, dispatched through the
+// SAME warm-pool claim + /configure + A2A streaming mechanism Coordinator subtasks use
+// (RemoteOperatorAssistantAgent) — the in-API Copilot/MCP loop (OperatorAssistantAgent) and its MCP
+// tool-provider registration are no longer wired here; that class now runs ONLY inside the AgentHost
+// pod under AgentHostPurpose.OperatorAssistant. AssistantRunService persists the conversation as a run
+// and streams turns onto the existing run event stream, unchanged.
+builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant.RemoteOperatorAssistantAgent>();
 builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
 builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
 

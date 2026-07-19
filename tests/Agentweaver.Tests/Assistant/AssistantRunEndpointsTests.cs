@@ -837,9 +837,6 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["RunBounds:MaxSteps"] = "50",
                 ["RunBounds:MaxMinutes"] = "10",
                 ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
-                // Present so DI validation is happy; the fake agent replaces the real path that would
-                // connect here, so no MCP connection is ever attempted in tests.
-                ["Assistant:McpEndpoint"] = "http://127.0.0.1:59999/mcp",
             });
         });
 
