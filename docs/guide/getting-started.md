@@ -42,6 +42,22 @@ and pushes images, and deploys and verifies the release. It prints an
 outputs summary at the end (cluster, ACR, gateway host, verification
 pass/fail counts) and never prints the OAuth client secret.
 
+> **GitHub OAuth App callback URL — local vs. Azure.** The callback URL you
+> register on the GitHub OAuth App must match where the app is actually
+> running:
+> - **Local dev** → `http://localhost:5000/auth/github/callback`
+> - **Azure deployment** → `https://<gateway-host>/auth/github/callback`,
+>   where `<gateway-host>` is the **Gateway host** printed in the outputs
+>   summary above (it's only known *after* the AKS App Routing managed
+>   certificate is provisioned on your first deploy — there's no way to know
+>   it beforehand). So: deploy first with any placeholder callback URL, then
+>   go back to the [OAuth App
+>   settings](https://github.com/settings/developers) and update
+>   **Authorization callback URL** to the real gateway host. GitHub OAuth
+>   Apps only support one callback URL each — if you also do local dev,
+>   create a second OAuth App dedicated to `localhost`, or swap the callback
+>   URL each time you switch between local and Azure.
+
 For non-interactive deploys (flags, environment variables, or a
 `--params-file`), upgrading an existing deployment (`npm run azure:upgrade`),
 and the full flag reference, see the [README's Deploy to Azure
@@ -140,7 +156,7 @@ Also needed, not installable via a package manager:
 
 - An existing local Git repository that the agent can target
 - A GitHub account with an active GitHub Copilot subscription — the web UI signs you in via OAuth.
-- A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback`.
+- A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback` for local dev. **Deploying to Azure instead?** The callback URL must match the Gateway's public host, not localhost — see the [callback URL note](#deploy-to-azure-one-command) above.
 
 ## npm script reference
 

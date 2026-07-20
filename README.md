@@ -159,6 +159,20 @@ summary** (resource group, cluster, ACR, namespace, image tags, gateway
 host/IP, verification pass/fail counts) — it never prints the OAuth client
 secret or any other credential.
 
+> **GitHub OAuth App callback URL — local vs. Azure.** The registered
+> callback URL must match where the app is actually running:
+> - **Local dev** → `http://localhost:5000/auth/github/callback`
+> - **Azure deployment** → `https://<gateway-host>/auth/github/callback`,
+>   where `<gateway-host>` is the **Gateway host** printed in the outputs
+>   summary above. It's only known *after* AKS App Routing provisions the
+>   managed certificate on your first deploy, so there's no way to know it
+>   in advance — deploy first with any placeholder callback URL, then update
+>   the **Authorization callback URL** on the [OAuth App
+>   settings](https://github.com/settings/developers) to the real gateway
+>   host. GitHub OAuth Apps only support one callback URL each — if you also
+>   do local dev, create a second OAuth App for `localhost`, or swap the
+>   callback URL each time you switch between local and Azure.
+
 **Non-interactive usage** — via flags, environment variables, and/or a params
 file (precedence: flags > env > params file > detected defaults > prompt; a
 non-interactive run — no TTY, or any flags passed — never blocks on a prompt
