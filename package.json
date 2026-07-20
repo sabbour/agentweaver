@@ -25,7 +25,8 @@
     "release:stable": "node scripts/azure/cli.mjs release"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.0"
+    "@changesets/cli": "^2.31.0",
+    "@types/node": "^26.1.1"
   },
   "version": "0.9.70"
 }
