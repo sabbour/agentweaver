@@ -155,11 +155,10 @@ flip it to blocking once the backlog is cleared. Until then, **do not add new li
 violations** — run `npm --prefix apps/web run lint` locally and keep your own changes clean.
 
 The repository policy requires these four blocking jobs on a branch that is
-up to date with `dev`. Ahmed must activate the GitHub ruleset described in
-[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) to
-make admission mechanical. Until activation, follow the same PR and strict
-update/retest policy manually and never direct-push or merge around a failing
-blocking job.
+up to date with `dev`. The GitHub ruleset described in
+[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) is **active**,
+so admission is mechanical: direct pushes to `dev` are rejected and merges are blocked
+until the branch is current and the required checks are green.
 
 GitHub Merge Queue is unavailable while this repository is owned by the
 personal `sabbour` account. Strict up-to-date protection causes more

@@ -52,15 +52,13 @@ Promotion PRs use **squash merge** so the promoted stable change is one auditabl
 commit on `main`; tag that exact resulting SHA. A release branch is deleted after
 promotion.
 
-## Rollout
+## Activation status
 
-Ahmed (repo admin) must enable this ruleset and the repository merge settings through
-GitHub Settings or an audited admin API call. Before activation, confirm the four exact
-check names on a pull-request run and fix any persistently red or flaky blocking check;
-do not create a bypass to normalize red CI.
-
-No live ruleset mutation was made during this migration. The companion
-[`dev` ruleset](dev-branch-protection.md) must also be activated manually so the default
+**Active** as of 2026-07-21, ruleset `main-ruleset` (id `18399757`), applied via an
+audited `gh api` call at Ahmed's explicit direction — targeting `refs/heads/main`
+explicitly (not `~DEFAULT_BRANCH`, since `dev` is now the default branch). Repository
+merge settings (squash-only, auto-delete head branches) were applied at the same time.
+The companion [`dev` ruleset](dev-branch-protection.md) is active too, so the default
 integration branch is never an unprotected dumping ground.
 
 ## Future organization-owned option
