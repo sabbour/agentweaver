@@ -37,7 +37,88 @@ platform if one is missing.
 Docker is **not** required locally — image builds run remotely via `az acr build`
 (see `scripts/azure/steps/20-build-push-images.mjs`), not a local Docker daemon.
 
+### Installing prerequisites
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+Install `winget` first if it isn't already available (it ships with Windows 11
+and recent Windows 10 updates):
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+Repair-WinGetPackageManager -AllUsers
+```
+
+Then install git, Node.js, and the .NET SDK:
+
+```powershell
+winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
+winget install --id OpenJS.NodeJS.22 --exact --accept-source-agreements --accept-package-agreements
+winget install --id Microsoft.DotNet.SDK.10 --accept-source-agreements --accept-package-agreements
+```
+
+`npm` ships bundled with Node.js — no separate install needed. Refresh `PATH`
+in your **current** shell so the newly installed tools are found without
+reopening the terminal:
+
+```powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+            [Environment]::GetEnvironmentVariable('Path', 'User')
+```
+
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+Install [Homebrew](https://brew.sh/) first if it isn't already available:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Then install git, Node.js, and the .NET SDK:
+
+```bash
+brew install git
+brew install node@20
+brew install --cask dotnet-sdk
+```
+
+`npm` ships bundled with Node.js — no separate install needed.
+
+</details>
+
+<details>
+<summary><strong>Linux (Debian/Ubuntu)</strong></summary>
+
+```bash
+# git
+sudo apt-get update && sudo apt-get install -y git
+
+# Node.js 20.x + npm (via NodeSource -- distro repos are usually outdated)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# .NET SDK 10 (via the official install script -- apt package availability
+# varies by distro/version)
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0
+export PATH="$HOME/.dotnet:$PATH"
+```
+
+</details>
+
+`npm run setup` re-checks all of the above itself after you install them, and
+prints the matching command again if anything is still missing or out of
+date. Full step-by-step guide: [sabbour.me/agentweaver/guide/getting-started](https://sabbour.me/agentweaver/guide/getting-started).
+
 ## Quick start
+
+📖 New to Agentweaver? See [Prerequisites](#prerequisites) above if you don't
+have git/Node/.NET installed yet, or follow the [full getting started
+guide](https://sabbour.me/agentweaver/guide/getting-started).
 
 ```bash
 git clone https://github.com/sabbour/agentweaver.git
@@ -54,6 +135,10 @@ npm run azure:dev
 Use `pnpm run <script>` in place of `npm run <script>` if you use pnpm.
 
 ## Deploy to Azure
+
+📖 See [Prerequisites](#prerequisites) above (you'll also need the Azure CLI
+logged in via `az login`), or the [full Azure deploy
+guide](https://sabbour.me/agentweaver/guide/getting-started#deploy-to-azure-one-command).
 
 From a cloned checkout:
 

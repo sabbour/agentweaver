@@ -4,6 +4,11 @@ Use this guide to stand up the API, submit a run, watch it live, and approve the
 
 ## Install (one command)
 
+📖 See [Prerequisites](#prerequisites) below if you don't have git/Node/.NET
+installed yet — or the [README's Prerequisites
+section](https://github.com/sabbour/agentweaver#prerequisites) for full
+per-platform install commands.
+
 From a cloned checkout, the installer checks prerequisites, installs web and .NET dependencies, and launches the dev environment:
 
 ```bash
@@ -17,6 +22,9 @@ After the installer completes, skip to [Configure the API](#1-configure-the-api)
 ---
 
 ## Deploy to Azure (one command)
+
+📖 See [Prerequisites](#prerequisites) below (you'll also need the Azure CLI
+logged in via `az login`).
 
 Prefer a live Azure deployment over local dev? Skip local setup entirely and run the smart installer instead:
 
@@ -54,6 +62,79 @@ You need these tools before you start:
 
 `npm run setup` (`dev --setup`) checks these itself and prints the matching
 install command above for your platform if one is missing.
+
+### Installing prerequisites
+
+::: details Windows
+
+Install `winget` first if it isn't already available (it ships with Windows 11
+and recent Windows 10 updates):
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+Repair-WinGetPackageManager -AllUsers
+```
+
+Then install git, Node.js, and the .NET SDK:
+
+```powershell
+winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
+winget install --id OpenJS.NodeJS.22 --exact --accept-source-agreements --accept-package-agreements
+winget install --id Microsoft.DotNet.SDK.10 --accept-source-agreements --accept-package-agreements
+```
+
+`npm` ships bundled with Node.js — no separate install needed. Refresh `PATH`
+in your **current** shell so the newly installed tools are found without
+reopening the terminal:
+
+```powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+            [Environment]::GetEnvironmentVariable('Path', 'User')
+```
+
+:::
+
+::: details macOS
+
+Install [Homebrew](https://brew.sh/) first if it isn't already available:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Then install git, Node.js, and the .NET SDK:
+
+```bash
+brew install git
+brew install node@20
+brew install --cask dotnet-sdk
+```
+
+`npm` ships bundled with Node.js — no separate install needed.
+
+:::
+
+::: details Linux (Debian/Ubuntu)
+
+```bash
+# git
+sudo apt-get update && sudo apt-get install -y git
+
+# Node.js 20.x + npm (via NodeSource -- distro repos are usually outdated)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# .NET SDK 10 (via the official install script -- apt package availability
+# varies by distro/version)
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0
+export PATH="$HOME/.dotnet:$PATH"
+```
+
+:::
+
+`npm run setup` re-checks all of the above itself after you install them, and
+prints the matching command again if anything is still missing or out of date.
 
 Also needed, not installable via a package manager:
 
