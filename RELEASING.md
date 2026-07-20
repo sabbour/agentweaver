@@ -218,6 +218,17 @@ activated except under an explicit, audited owner-approved emergency bypass.
 current implementation; it performs no git, GitHub, Azure, or Kubernetes
 mutation.
 
+### Cutting a patch release from a maintenance branch
+
+1. If it does not already exist, create `release/X.Y` from the last supported tag.
+   Apply a maintenance-branch-scoped copy of the `main` ruleset described in
+   [`.github/main-branch-protection.md`](.github/main-branch-protection.md).
+2. Land the fix through a PR into `release/X.Y`, following the same protection,
+   review, and required-check rules as `main`.
+3. From that branch's merged fix SHA, cut the patch tag and run
+   `npm run azure:release` to publish it. Then forward-port the fix to `main` through
+   a normal PR.
+
 ## If a release fails partway through
 
 The current release script creates and pushes the version-bump commit and annotated tag, then

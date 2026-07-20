@@ -108,6 +108,11 @@ is growing. Instead, use this **Branch Topology Activation Plan**:
   source must advance independently of the stable/published branch for at least one
   release cycle.
 
+**Checking triggers is manual today.** For Trigger A, spot-check GitHub Actions run
+history and PR merge timestamps over the prior 14 days; for Trigger B, record the
+explicit support commitment and the incompatible newer minor on `main`. No metrics
+automation exists yet; a lightweight measurement tool may be considered later.
+
 For rationale and the migration playbook, see
 [Niobe's branching growth review](.squad/decisions/inbox/niobe-branching-growth-review.md).
 
@@ -182,6 +187,19 @@ fallback. Revisit Merge Queue only if the repository moves to an organization.
   GitHub marks yours out of date. Update from `origin/main`, resolve conflicts,
   rerun relevant tests/CI, and merge only after all required checks are green
   on the updated branch.
+
+### Contributing from a fork
+
+Fork the repository on GitHub, clone **your fork**, add the canonical repository as
+the `upstream` remote, and create your short-lived branch from an up-to-date
+`upstream/main`. Open the PR from that branch to `main`; it follows the same CI,
+up-to-date, review, and squash-merge rules as every other contribution.
+
+Fork PRs do not receive repository secrets: CI uses the `pull_request` trigger (not
+`pull_request_target`) and its jobs do not use `secrets.*`. `CODEOWNERS` and a required
+approval for non-owner PRs are **not active today**. On the first real external fork
+PR, audit the fork workflow again, then add/activate those controls as a checklist
+item; do not assume they already exist.
 
 ## Labels
 
