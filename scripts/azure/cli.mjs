@@ -18,7 +18,7 @@ Usage:
 Commands:
   deploy    Interactive/non-interactive installer (replaces install.sh/.ps1).
   upgrade   Build a new image tag, redeploy, and cycle the AgentHost warm pool.
-  release   Semver bump/tag/GitHub release, delegating to the shared build/deploy engine.
+  release   Validate prepared version, tag/publish/deploy through the shared build/deploy engine.
   verify    Post-deploy health verification (port of 40-verify.sh/.ps1).
   dev       Local dev orchestration (port of start-dev.ps1).
 

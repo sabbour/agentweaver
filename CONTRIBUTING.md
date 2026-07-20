@@ -73,9 +73,9 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 5. **Run the relevant test suite(s) locally before you push.** CI re-runs the full suite
    on every pull request and push to `dev` or `main`, but running the affected suite
    locally first keeps the feedback loop short and avoids red PRs.
-6. **Verify live for anything with runtime/deploy impact**, not just via unit tests.
+6. **Add a changeset for shipped user-facing behavior** before opening the PR: run `npm run changeset`, use `patch` for compatible fixes and `minor` for features or breaking changes while Agentweaver is at `0.x`, and write prose for users rather than restating a commit title. Do not edit `VERSION`, package versions, or `CHANGELOG.md`. Docs/tests/CI-only changes normally need no changeset; use the `changeset:not-required` label only with a `Changeset exemption:` rationale in the PR body. `azure:deploy` and `azure:upgrade` never consume changesets.\n7. **Verify live for anything with runtime/deploy impact**, not just via unit tests.
 
-## Branch Topology
+### Writing a changeset\n\nGood: “Add exportable workflow bundles so operators can move a workflow between installations.”\n\nBad: “feat: add export.” It repeats a commit title without explaining the user impact.\n\n## Branch Topology
 
 The active topology is `dev → release/vX.Y.Z → main`:
 
@@ -118,7 +118,7 @@ Run only the suite(s) relevant to what you changed:
 dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 
 # Node.js build/deploy/upgrade/release toolchain
-node --test scripts/azure/tests/*.test.mjs
+node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 
 # Web frontend (Vitest)
 npm --prefix apps/web run test
@@ -141,7 +141,7 @@ crowded onto a single runner):
 | Job | What it runs | Gating |
 |---|---|---|
 | `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass |
-| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs` | Blocking — must pass |
+| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs` | Blocking — must pass |
 | `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass |
 | `Web lint` | `npm --prefix apps/web run lint` | **Advisory** — visible but non-blocking |
 | `Docs build` | `npm run docs:build` | Blocking — must pass |
@@ -204,7 +204,7 @@ existing issues are not being mass-relabelled.
 
 ## Commit messages
 
-`CHANGELOG.md` is generated from commit history, bucketed by prefix. Please use a
+Changesets generates new `CHANGELOG.md` sections from reviewed release-note fragments. Please use a
 conventional-commit-style prefix:
 
 - `feat: ...` — new functionality
@@ -228,7 +228,7 @@ conventional-commit-style prefix:
 
 ## Where NOT to make changes
 
-- Do not hand-edit `CHANGELOG.md` — it's generated (`python scripts/gen-changelog.py`).
+- Do not hand-edit generated `CHANGELOG.md` release sections; add or correct the source changeset instead.
 - Do not add build/deploy logic outside `scripts/azure/` — bash/PowerShell scripts were
   fully removed in favor of the Node.js toolchain; don't reintroduce a second toolchain.
 - Do not commit secrets (API keys, GitHub OAuth client secrets, connection strings) —
@@ -361,10 +361,7 @@ up: it **hard-fails** a PR when a committed generated reference (e.g.
 doc-relevant paths (API endpoints, workflows, blueprints, MCP tools) changes without any
 `docs/**` update.
 
-Do **not** hand-edit `CHANGELOG.md` — it is derived from git history by
-`scripts/gen-changelog.py` (bucketed by conventional-commit prefix), so a well-formed commit
-message is what feeds it; the GitHub Release notes are generated separately from merged PRs at
-release time (see [Releasing](RELEASING.md)). Finally, keep decision records and docs
+Do **not** hand-edit generated `CHANGELOG.md` release sections. Add or correct the source changeset instead; the matching GitHub Release notes project that same section (see [Releasing](RELEASING.md)). Finally, keep decision records and docs
 distinct: a `.squad/decisions/inbox/` entry captures *why* a choice was made (an internal
 audit trail) and never substitutes for updating `docs/guide/` / `README.md`, which tell users
 *how* to use the feature.
