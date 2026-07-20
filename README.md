@@ -175,16 +175,16 @@ Local and Azure testing do not require a staging branch:
 feature worktree
   ├─ npm run dev ───────────────────────> local test (no GitHub interaction)
   ├─ azure:deploy / azure:upgrade ─────> Azure dev/test environment (any branch)
-  └─ PR CI ─> update to latest main ─> CI rerun ─> squash-merge to protected main
-                                                        └─ release PR ─> tag/release/deploy
+  └─ PR CI ─> update to latest dev ─> CI rerun ─> squash-merge to protected dev
+                                                        └─ green SHA ─> release/vX.Y.Z soak ─> promotion to main ─> tag/release/deploy
 ```
 
 `npm run dev` uses whatever is checked out locally. Azure dev/test commands
 can deploy an unmerged feature branch to a real cluster for integration
 testing. The cluster is the staging/integration **environment**; protected
-`main` plus required up-to-date PR checks is the git integration path. GitHub
+`dev` plus required up-to-date PR checks is the git integration path. GitHub
 Merge Queue is unavailable while the repo is owned by the personal `sabbour`
-account. The [Branch Topology Activation Plan](CONTRIBUTING.md#branch-topology--room-for-growth)
+account. The [Branch Topology Activation Plan](CONTRIBUTING.md#branch-topology)
 defines the measurable conditions for enabling it or adding another branch tier.
 See the [full explanation](https://sabbour.me/agentweaver/guide/getting-started#how-local-and-azure-testing-fit-the-branch-flow).
 
@@ -208,7 +208,7 @@ unmerged feature branch/worktree — during normal development, and
 `npm run azure:verify` to rerun live checks. Only the release workflow changes
 `VERSION`, creates a `vX.Y.Z` tag, and publishes a GitHub Release. Its current
 script still needs the documented protected-release-PR split before
-protected-main enforcement. See the
+protected-branch enforcement. See the
 [deploy/upgrade/release decision table](RELEASING.md#deploying-to-azure-is-not-the-same-as-cutting-a-release).
 
 With no arguments, `azure:deploy` launches an interactive installer that prompts
@@ -298,7 +298,7 @@ never by deleting pods).
 **Related commands** (see the [operations guide](docs/guide/operations.md) and
 [AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
 
-- `npm run azure:release` — current semver publication command; it still commits/tags/pushes directly and must be split into protected release-PR preparation plus exact-SHA publication before protected-main enforcement (see `RELEASING.md`).
+- `npm run azure:release` — current semver publication command; it still commits/tags/pushes directly and must be split into protected release-PR preparation plus exact-SHA publication before protected-branch enforcement (see `RELEASING.md`).
 - `npm run azure:verify` — runs the post-deploy health verification checks on their own.
 
 ### Local development

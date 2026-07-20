@@ -1,21 +1,17 @@
 ---
 name: "git-workflow"
-description: "Agentweaver trunk-based Git workflow for issue branches, worktrees, and PRs"
+description: "Agentweaver Git workflow for protected dev integration, worktrees, and PRs"
 domain: "version-control"
 confidence: "high"
 source: "CONTRIBUTING.md"
 ---
 
-## Trunk-Based Workflow
+## Integration Workflow
 
-`main` is the only long-lived branch and must remain releasable. This repository
-does not use `dev`, preview, or insiders integration branches. Reviewed changes use
-a short-lived branch and a PR targeting `main`; PRs are squash-merged so `main`
-has one commit per logical change.
-
-For the conditions that could change this topology, see
-[CONTRIBUTING.md's Branch Topology Activation Plan](../../../CONTRIBUTING.md#branch-topology--room-for-growth);
-do not introduce a branch tier before one applies.
+`dev` is the default protected integration branch. Use a short-lived issue branch and a
+PR targeting `dev`; PRs are squash-merged so `dev` has one commit per logical change.
+`main` is stable/published-only and accepts only soaked release promotions or audited
+emergency hotfixes.
 
 Issue branches use:
 
@@ -25,50 +21,38 @@ squad/{issue-number}-{kebab-case-slug}
 
 ## Issue Work
 
-1. Start from current `main`:
+1. Start from current `dev`:
    ```bash
-   git checkout main
-   git pull origin main
+   git checkout dev
+   git pull origin dev
    ```
 2. Choose the workspace appropriate to the contributor:
    - **Locally run Squad/Copilot CLI agent:** create or reuse the required dedicated
      worktree at `.worktrees/{branch-slug}`:
      ```bash
      git worktree add ".worktrees/{branch-slug}" \
-       -b "squad/{issue-number}-{slug}" main
+       -b "squad/{issue-number}-{slug}" dev
      cd ".worktrees/{branch-slug}"
      ```
    - **Hosted agent** (such as GitHub `@copilot`): use the platform-provided isolated
      branch and environment; do not create a local worktree.
-   - **Human contributor:** a worktree is optional; a normal branch in the main
+   - **Human contributor:** a worktree is optional; a normal branch in the primary
      checkout is fine:
      ```bash
-     git checkout -b "squad/{issue-number}-{slug}" main
+     git checkout -b "squad/{issue-number}-{slug}" dev
      ```
 3. Make focused changes, run the relevant tests, and commit with the issue reference.
-   Stage only intended files.
-4. Push and open a draft or ready PR against `main`:
+4. Push and open a draft or ready PR against `dev`:
    ```bash
    git push -u origin "squad/{issue-number}-{slug}"
-   gh pr create --base main --title "{description}" --body "Closes #{issue-number}" --draft
+   gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
    ```
-5. After approval and green blocking CI, squash-merge:
-   ```bash
-   gh pr merge {pr-number} --squash --delete-branch
-   ```
-6. Remove a local agent worktree after merge:
-   ```bash
-   git worktree remove ".worktrees/{branch-slug}"
-   git worktree prune
-   ```
-
-Use the real issue labels (`squad`, `squad:{member}`, `go:*`, `priority:*`, and
-`release:*`) as appropriate. There is no `status:in-progress` label.
+5. After approval and green blocking CI, squash-merge.
+6. Remove a local agent worktree after merge.
 
 ## Anti-Patterns
 
-- ❌ Branching from or opening a PR to `dev`
+- ❌ Branching from or opening a normal PR to `main`
 - ❌ Merge-committing a PR instead of squash-merging it
-- ❌ Letting a locally run agent work an issue in the shared main checkout
+- ❌ Letting a locally run agent work an issue in the shared primary checkout
 - ❌ Creating a local worktree for a hosted agent
-- ❌ Assuming human contributors must use worktrees

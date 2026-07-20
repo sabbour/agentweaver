@@ -13,8 +13,8 @@ lifecycle (issue → branch → PR → review → merge), the label-based Squad 
 reviewer-rejection protocol, rubber-ducking, the auditable decisions inbox
 (`.squad/decisions/inbox/`), and docs-as-you-go (docs are part of the definition of done,
 not a follow-up). This file is a pointer, not a replacement — don't skip the source.
-For the protected-`main` model and the conditions for adding any branch tier, see
-**[CONTRIBUTING.md → "Branch Topology — room for growth"](CONTRIBUTING.md#branch-topology--room-for-growth)**.
+For the `dev → release → main` model and release/maintenance branching, see
+**[CONTRIBUTING.md → "Branch Topology"](CONTRIBUTING.md#branch-topology)**.
 
 ## Build & test
 

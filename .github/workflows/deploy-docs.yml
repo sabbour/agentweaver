@@ -2,6 +2,9 @@ name: Deploy Docs to GitHub Pages
 
 on:
   push:
+    # Published GitHub Pages docs track main only (the stable/published
+    # boundary) -- not dev. dev is the integration branch; docs built from
+    # in-progress dev content would misrepresent what's actually released.
     branches: [main]
     paths:
       - 'docs/**'

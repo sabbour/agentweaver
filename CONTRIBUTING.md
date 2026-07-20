@@ -50,70 +50,62 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 
 ## Making a change
 
-1. **Use a short-lived branch and PR for every change.** This repo does not use a
-   `dev`/`preview` staging branch flow — protected `main` is the only long-lived branch.
-   Branch from current `origin/main` with a descriptive conventional prefix, e.g.
-   `fix/123-short-desc`, `feat/short-desc`, `docs/short-desc`.
-   - **Direct pushes to `main` are not allowed**, including tiny and docs-only changes.
-   - Before merge, the branch must be current with `main` and all blocking CI
-     must rerun successfully. GitHub enforces this through “require branches
-     to be up to date before merging.”
-   - **Squash-merge** so `main` keeps **one commit per logical change**.
-     GitHub automatically deletes the source branch after merge. That single commit
-     subject is what feeds the generated `CHANGELOG.md` (and matches the PR title used for the
-     GitHub Release notes), so a clean one-commit-per-change history keeps both in sync. See
-     [Releasing](RELEASING.md#branching-model).
-   - Do **not** create a long-lived local `integration`/`staging` branch as a
-     private promotion pipeline. A disposable merge-test branch or worktree is
-     fine, but delete it after validation; see
-     [No local integration branch](RELEASING.md#no-local-integration-branch).
+1. **Use a short-lived branch and PR for every change.** `dev` is the default,
+   protected integration branch. Branch from current `origin/dev` with a descriptive
+   conventional prefix, e.g. `fix/123-short-desc`, `feat/short-desc`, or
+   `docs/short-desc`.
+   - **Direct pushes to `dev` are not allowed**, including tiny and docs-only changes.
+   - Before merge, the branch must be current with `dev` and all blocking CI must rerun
+     successfully. GitHub enforces this through “require branches to be up to date
+     before merging.”
+   - **Squash-merge** so `dev` keeps **one commit per logical change**. GitHub
+     automatically deletes the source branch after merge.
+   - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
+     soaked release promotion or an audited emergency hotfix only.
+   - Do **not** create a long-lived local `integration`/`staging` branch as a private
+     promotion pipeline. A disposable merge-test branch or worktree is fine, but delete
+     it after validation.
 2. **Keep changes focused.** Scope one change to one concern — it's easier to review and
    to revert if something goes wrong.
 3. **Add or update tests** for any behavior change (see Testing below).
 4. **Update docs** if you changed user-facing behavior, npm scripts, or configuration —
    `README.md` and `docs/guide/` are the two places most likely to need updates.
-5. **Run the relevant test suite(s) locally before you push.** CI (see
-   [Continuous integration](#continuous-integration) below) re-runs the full suite on
-   every pull request and push to `main`, but running the
-   affected suite locally first keeps the feedback loop short and avoids red PRs.
-6. **Verify live for anything with runtime/deploy impact**, not just via unit tests —
-   e.g. after a change to `scripts/azure/`, run the affected command for real (with
-   `--dry-run` where supported) against an actual environment before considering the
-   change done. Peer review or a passing unit test alone does not mean a fix is verified
-   or deployed — only confirming it live, after a real deploy, does.
+5. **Run the relevant test suite(s) locally before you push.** CI re-runs the full suite
+   on every pull request and push to `dev` or `main`, but running the affected suite
+   locally first keeps the feedback loop short and avoids red PRs.
+6. **Verify live for anything with runtime/deploy impact**, not just via unit tests.
 
-## Branch Topology — room for growth
+## Branch Topology
 
-Today's model is a protected `main`-only trunk: `main` is the sole long-lived
-integration branch. Do not add a permanent `dev` tier merely because the repository
-is growing. Instead, use this **Branch Topology Activation Plan**:
+The active topology is `dev → release/vX.Y.Z → main`:
 
-- **Trigger A — Merge Queue:** activate when the repository is organization-owned and
-  either at least **5 PRs in a rolling 14-day period** must rerun blocking CI solely
-  because another PR merged first, or the median time from “all review/check
-  requirements satisfied” to merge exceeds **one business day for two consecutive
-  weeks** because of update/retest serialization. Enable Merge Queue with
-  `merge_group` CI while keeping `main` as the sole integration branch.
-- **Trigger B — protected maintenance branch:** activate when the project makes its
-  **first explicit commitment to ship a fix for an older minor line after an
-  incompatible newer minor has landed on `main`**. Create and protect `release/X.Y`
-  from the last supported tag; publish patch tags from it and forward-port applicable
-  fixes to `main`.
-- **Trigger C — full `dev → release/vX.Y.Z → main` promotion tier:** adopt it only
-  when either **two consecutive releases** each require a combined release-candidate
-  soak of at least **3 business days**, while at least **two independent next-version
-  changes** must continue integrating during each soak and cannot reasonably be hidden
-  behind feature flags or isolated on short-lived branches; or the project formally
-  commits to a **durable externally consumed prerelease/next channel** whose supported
-  source must advance independently of the stable/published branch for at least one
-  release cycle.
+- **`dev`** is the default, protected integration branch. Normal PRs target it and use
+  required PRs, blocking CI, up-to-date-before-merge, squash merge, and automatic source
+  branch deletion.
+- **`release/vX.Y.Z`** is an ephemeral release-candidate/soak branch cut from a green
+  `dev` SHA. Stabilization fixes land there by PR and are immediately forward-ported to
+  `dev`.
+- **`main`** is stable/published-only. It receives only a promotion PR from a soaked
+  release branch or an audited emergency hotfix, which must be forward-ported to `dev`.
+  Release tags are cut from the exact resulting `main` promotion SHA.
 
-**Checking triggers is manual today.** For Trigger A, spot-check GitHub Actions run
-history and PR merge timestamps over the prior 14 days; for Trigger B, record the
-explicit support commitment and the incompatible newer minor on `main`. No metrics
-automation exists yet; a lightweight measurement tool may be considered later.
+This topology was deliberately activated on 2026-07-20 for room to grow; it was not the
+result of the prior automatic metrics threshold. The complete operating flow is in
+[RELEASING.md](RELEASING.md).
 
-For rationale and the migration playbook, see
+Two further-growth triggers remain forward-looking and un-fired:
+
+- **Trigger A — Merge Queue:** when the repository is organization-owned and either at
+  least **5 PRs in a rolling 14-day period** rerun blocking CI solely because another PR
+  merged first, or median ready-to-merge time exceeds **one business day for two
+  consecutive weeks** because of update/retest serialization. Add `merge_group` CI and
+  enable Merge Queue for protected integration admission.
+- **Trigger B — protected maintenance branch:** when the project explicitly commits to
+  ship a fix for an older minor after an incompatible newer minor has landed. Create and
+  protect `release/X.Y` from the last supported tag; publish patch tags from it and
+  forward-port applicable fixes to `dev`.
+
+For the retained rationale and original activation plan, see
 [Niobe's branching growth review](.squad/decisions/inbox/niobe-branching-growth-review.md).
 
 ## Testing
@@ -140,7 +132,7 @@ npm run docs:build
 
 ## Continuous integration
 
-Pull requests and pushes to `main` are verified by the
+Pull requests and pushes to `dev` and `main` are verified by the
 [`CI` workflow](.github/workflows/ci.yml). It runs the same commands documented under
 [Testing](#testing) above, split into one job per area so each gets a dedicated runner
 (several .NET and web tests are timing-sensitive and flake under CPU contention if
@@ -163,8 +155,8 @@ flip it to blocking once the backlog is cleared. Until then, **do not add new li
 violations** — run `npm --prefix apps/web run lint` locally and keep your own changes clean.
 
 The repository policy requires these four blocking jobs on a branch that is
-up to date with `main`. Ahmed must activate the GitHub ruleset described in
-[`.github/main-branch-protection.md`](.github/main-branch-protection.md) to
+up to date with `dev`. Ahmed must activate the GitHub ruleset described in
+[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) to
 make admission mechanical. Until activation, follow the same PR and strict
 update/retest policy manually and never direct-push or merge around a failing
 blocking job.
@@ -183,8 +175,8 @@ fallback. Revisit Merge Queue only if the repository moves to an organization.
   any live/deploy verification for runtime changes).
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
-- **Update, retest, then squash-merge.** If another PR reaches `main` first,
-  GitHub marks yours out of date. Update from `origin/main`, resolve conflicts,
+- **Update, retest, then squash-merge.** If another PR reaches `dev` first,
+  GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts,
   rerun relevant tests/CI, and merge only after all required checks are green
   on the updated branch.
 
@@ -192,7 +184,7 @@ fallback. Revisit Merge Queue only if the repository moves to an organization.
 
 Fork the repository on GitHub, clone **your fork**, add the canonical repository as
 the `upstream` remote, and create your short-lived branch from an up-to-date
-`upstream/main`. Open the PR from that branch to `main`; it follows the same CI,
+`upstream/dev`. Open the PR from that branch to `dev`; it follows the same CI,
 up-to-date, review, and squash-merge rules as every other contribution.
 
 Fork PRs do not receive repository secrets: CI uses the `pull_request` trigger (not
@@ -279,7 +271,7 @@ business days.
 The assigned agent branches as `squad/{issue-number}-{slug}`, commits with a
 conventional-commit message that references the issue (`Closes #{number}`, including the
 `Co-authored-by: Copilot` trailer), pushes, and opens a PR with `gh pr create` against
-`main`. The full lifecycle, spawn context, and merge commands live in
+`dev`. The full lifecycle, spawn context, and merge commands live in
 [`.squad/templates/issue-lifecycle.md`](.squad/templates/issue-lifecycle.md); the
 orchestration rules live in [`.github/agents/squad.agent.md`](.github/agents/squad.agent.md).
 Agent PRs are gated by the same [CI](#continuous-integration) as everyone else's.

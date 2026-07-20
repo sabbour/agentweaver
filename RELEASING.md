@@ -2,8 +2,7 @@
 
 This describes how Agentweaver ships changes: versioning, cutting a semver release, and
 the difference between a **release** and an **upgrade**. Everything here is driven by the
-Node.js toolchain in `scripts/azure/` — there is no separate branch-promotion pipeline;
-work reaches protected `main` through up-to-date, CI-gated PRs. Azure dev/test
+Node.js toolchain in `scripts/azure/` — the release path uses an explicit branch-promotion pipeline: normal work reaches protected `dev` through up-to-date, CI-gated PRs; stable releases are promoted to `main`. Azure dev/test
 deployments may come from any branch; official releases come from an exact
 protected-`main` commit.
 
@@ -69,12 +68,12 @@ different sources**. They are *not* redundant and never write to the same place:
 
 | Artifact | Populated by | Source | Scope |
 |---|---|---|---|
-| **`CHANGELOG.md`** (in-repo, durable history) | `python scripts/gen-changelog.py` | Conventional-commit **subjects** on `main` | Every annotated `vX.Y.Z` tag range, newest first |
+| **`CHANGELOG.md`** (in-repo, durable history) | `python scripts/gen-changelog.py` | Conventional-commit **subjects** on promoted `main` history | Every annotated `vX.Y.Z` tag range, newest first |
 | **GitHub Release notes** (Releases UI, per tag) | `scripts/azure/release.mjs` (the `azure:release` step) | Merged **PR titles** since the previous tag (via `gh pr list`) | The one release being cut |
 
 Both anchor on the annotated `vX.Y.Z` tag as the definition of a release, so they describe the
 *same* set of releases — just from two angles (commit subjects vs. PR titles). With
-**squash-merge** (one commit on `main` per merged PR — the recommended merge mode, see
+**squash-merge** (one commit on `dev` per normal merged PR — the recommended merge mode, see
 [CONTRIBUTING.md](CONTRIBUTING.md#making-a-change)) the commit subject and the PR title are the
 same string, so the two artifacts stay in agreement automatically.
 
@@ -89,145 +88,65 @@ same string, so the two artifacts stay in agreement automatically.
 
 ## Before you cut a release
 
-A release starts with a short-lived release branch from current `origin/main`.
-The release PR contains the `VERSION` bump and any required release metadata;
-it must be current with `main` and pass all required PR checks. Record the
-exact squash-merged `main` SHA: that SHA, not a
-maintainer's mutable checkout, is the release source.
-
-- All four blocking checks must be green after the release branch is updated
-  to current `main`.
-- The release PR is the release cutoff; no separate freeze or release branch
-  is required.
-- The checkout used for publication must be clean and exactly at the recorded SHA.
+Select a green `dev` SHA and decide the next semver version. The release candidate is
+cut from that exact integration commit; `main` stays stable while normal work continues
+on `dev`. Keep the checkout used for publication clean and exactly at the tagged SHA.
 
 ## Branching model
 
-Agentweaver is **trunk-based**: `main` is the only long-lived branch and must always be in a
-releasable state (see the full contributor convention in
-[CONTRIBUTING.md → Making a change](CONTRIBUTING.md#making-a-change)). In short:
+- **`dev` is the protected default integration branch.** Normal changes reach it through
+  an up-to-date, CI-gated, squash-merged PR.
+- **`release/vX.Y.Z` is ephemeral.** Cut it from a green `dev` SHA for release-candidate
+  soak. Stabilization fixes land on it through PRs and are immediately forward-ported to
+  `dev`.
+- **`main` is stable/published-only.** It receives a promotion PR from a soaked release
+  branch, or an audited critical-production hotfix that is forward-ported to `dev`.
+- **Promotion uses squash merge.** This leaves one auditable promotion commit on `main`;
+  the annotated release tag is created on that exact resulting SHA. Delete the release
+  branch after promotion.
 
-- **`main` is always releasable.** Every change, including docs and version
-  bumps, reaches it through a short-lived, up-to-date PR. There is
-  deliberately no `dev`/`staging`/routine `release` promotion branch flow.
-- **PRs are mandatory.** Direct pushes to `main` are prohibited. A PR may
-  merge only while current with `main` and all blocking checks are green.
-- **Squash merge is required** so `main` keeps one commit per logical change,
-  and GitHub automatically deletes the source branch. That single
-  commit subject feeds both `CHANGELOG.md` (commit subjects) and the GitHub Release notes (PR
-  titles) identically — see [Changelog vs. GitHub Release notes](#changelog-vs-github-release-notes).
-- **Routine release branches are not used.** A short-lived release-PR branch
-  exists only long enough to land the version bump. Create a persistent
-  maintenance branch only when Agentweaver must patch an older supported line
-  while incompatible development continues, or needs a deliberate multi-day
-  stabilization window.
-
-The checkable **Branch Topology Activation Plan** (including when to enable
-Merge Queue, create `release/X.Y`, or adopt `dev → release → main`) is maintained
-in [CONTRIBUTING.md](CONTRIBUTING.md#branch-topology--room-for-growth). It governs
-topology changes; this document remains the release-operation reference.
-
-### No local integration branch
-
-There is no supported long-lived local `integration`, `staging`, or
-release-foundation branch. Local development is branch-agnostic:
-`npm run dev` tests whatever is checked out in the current worktree and never
-touches protected `main`. For integration testing before merge,
-deploy that feature branch with `azure:deploy`/`azure:upgrade` to a real Azure
-dev/test environment. The Azure cluster is the integration/staging
-**environment**; required up-to-date PR checks are the git integration
-mechanism.
-
-An audit of the older local-only scratch refs found that all of these have
-**zero commits not already reachable from `main`**, are not pushed to
-`origin`, and are not referenced by repository tooling. They are safe to
-remove with normal (non-force) deletion:
-
-```bash
-git branch -d main-staging integration integration-v0.9.71 release-staging \
-  release/v0.9.71-foundation-integration main-tip localmain/main \
-  merge-docs-landing-main
-```
-
-Git may refuse deletion while a ref is checked out by a worktree; remove that
-obsolete worktree first, then rerun `git branch -d`. Do not use `-D` merely to
-bypass that protection.
-
-### Protected `main`
-
-GitHub Merge Queue is unavailable because this repository is owned by the
-personal account `sabbour`; personal-account repositories cannot enable it,
-regardless of visibility. The enforceable near-term fallback is standard
-branch protection requiring PRs, conversation resolution, linear history,
-branches up to date before merge, and these blocking checks: `.NET tests`,
-`Node toolchain tests`, `Web tests`, and `Docs build`. `Web lint` remains
-advisory.
-
-This fallback creates more update/retest churn under concurrent PRs: after one
-PR merges, every competing PR becomes stale and must update and rerun CI.
-The exact admin configuration is documented in
-[`.github/main-branch-protection.md`](.github/main-branch-protection.md).
-Workflow changes are versioned here, but Ahmed must activate the repository
-ruleset/settings. No live admin mutation was made during this pass.
-
-If the repository is ever transferred to a GitHub organization, revisit
-Merge Queue as a future improvement; it is not a current action item.
+`dev` uses the required-check and merge settings in
+[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md); `main` uses the
+stable-entry rules in [`.github/main-branch-protection.md`](.github/main-branch-protection.md).
+Both rulesets remain a manual GitHub admin activation.
 
 ### Dev/test and release flow
 
 ```text
 feature branch/worktree
-  ├─ npm run dev ───────────────────────> local-only validation
-  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test/staging environment
-  │                                      (available before or after PR creation)
-  └─ PR CI ─> update to latest main ─> CI rerun ─> protected main
-                                                        │
-                                                        └─ release PR
-                                                             └─ exact merged SHA
-                                                                  └─ tag/publish/deploy
+  └─ PR CI ─> protected dev ─> green SHA ─> release/vX.Y.Z soak
+                                                ├─ stabilization PRs
+                                                └─ immediate forward-port to dev
+                                                     │
+                                                     └─ promotion PR ─> protected main
+                                                                              └─ tag/publish/deploy
 ```
-
-This is why rejecting a staging **branch** does not remove staging: Azure
-dev/test clusters provide the staging **environment**, while protected,
-up-to-date PRs test admission to the sole source branch.
 
 ## Cutting a release
 
-The protected-trunk release process is:
-
-1. Create `release/vX.Y.Z` as a short-lived branch from current `origin/main`.
-2. Change only `VERSION` (plus explicitly required release metadata), commit,
-   push, and open a release PR.
-3. Update the release branch to current `main` and pass every required check.
-4. Record and check out the exact squash-merged `main` SHA.
-5. Create annotated tag `vX.Y.Z`, publish the GitHub Release, and deploy that
-   exact SHA through the shared build/provenance/deploy/verify engine.
-6. Regenerate `CHANGELOG.md` after the tag and land it through a separate
-   protected follow-up PR.
-
-**Current automation gap — follow-up required.** `scripts/azure/release.mjs`
-currently combines preparation and publication: it edits `VERSION`, commits,
-tags, and pushes directly before publishing/deploying. That is incompatible
-with mandatory PRs and protected `main`. Do not rush a bypass into the
-script. A follow-up should split it into protected-PR-compatible prepare and
-publish-existing-SHA phases (while preserving the staged `--resume` recovery
-work). Until that lands, do not run the normal bump mode after the ruleset is
-activated except under an explicit, audited owner-approved emergency bypass.
-
-`npm run azure:release -- <bump> --dry-run` remains safe for previewing the
-current implementation; it performs no git, GitHub, Azure, or Kubernetes
-mutation.
+1. From a selected green `origin/dev` SHA, create and push the ephemeral
+   `release/vX.Y.Z` branch.
+2. Run the required release-candidate soak. Land stabilization changes on that branch by
+   PR and immediately forward-port each applicable fix to `dev` by PR.
+3. Open a promotion PR from `release/vX.Y.Z` into `main`. Confirm it is current with
+   `main` and that all required checks pass.
+4. Review and **squash-merge** the promotion PR. Record the exact resulting `main` SHA.
+5. Create annotated tag `vX.Y.Z` at that SHA and run `npm run azure:release` from the
+   tag to publish/deploy that exact release. The current script's normal bump mode still
+   commits and pushes, so use it only after the protected-PR-compatible prepare/publish
+   split is implemented; `--dry-run` and `--resume vX.Y.Z` retain their documented
+   safety semantics.
+6. Regenerate `CHANGELOG.md` after publication and land it through a normal protected
+   PR to `dev`.
 
 ### Cutting a patch release from a maintenance branch
 
-1. If it does not already exist, create `release/X.Y` from the last supported tag.
-   Apply a maintenance-branch-scoped copy of the `main` ruleset described in
-   [`.github/main-branch-protection.md`](.github/main-branch-protection.md).
-2. Land the fix through a PR into `release/X.Y`, following the same protection,
-   review, and required-check rules as `main`.
-3. From that branch's merged fix SHA, cut the patch tag and run
-   `npm run azure:release` to publish it. Then forward-port the fix to `main` through
-   a normal PR.
+1. If it does not already exist, create `release/X.Y` from the last supported tag and
+   apply a maintenance-branch-scoped copy of the required PR/check rules.
+2. Land the fix through a PR into `release/X.Y`.
+3. From that branch's merged fix SHA, cut the patch tag and run `npm run azure:release`
+   to publish it. Forward-port the fix to `dev` through a normal PR (and promote it to
+   `main` through the normal release flow when appropriate).
 
 ## If a release fails partway through
 
@@ -302,7 +221,7 @@ regressions (e.g. the stale-image and warm-pool-teardown issues referenced above
 - **Regenerate the in-repo `CHANGELOG.md` through a separate protected follow-up
   PR.** Once the `vX.Y.Z` tag exists, run `python scripts/gen-changelog.py`
   (which reads annotated tags), commit the result on a short-lived branch,
-  update it to current `main`, pass CI, and squash-merge it. See [Changelog vs. GitHub Release
+  update it to current `dev`, pass CI, and squash-merge it. See [Changelog vs. GitHub Release
   notes](#changelog-vs-github-release-notes).
 - Confirm the new tag/image is actually running in the target environment
   (`npm run azure:verify`, or check via `kubectl`/Application Insights) before

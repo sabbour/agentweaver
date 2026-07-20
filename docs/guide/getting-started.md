@@ -45,7 +45,7 @@ exfiltrate data. The API picks a sandbox backend at startup:
   **without** `bubblewrap` in the distro, there is **no safe fallback**: inside
   the WSL distro (a Linux environment) the sandbox picks its backend from the
   Linux executor chain in
-  [`SandboxExecutorFactory.cs`](https://github.com/sabbour/agentweaver/blob/main/packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs)
+  [`SandboxExecutorFactory.cs`](https://github.com/sabbour/agentweaver/blob/dev/packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs)
   — `LinuxBwrapExecutor` (needs `bwrap`) → `LinuxNativeMxcSandboxExecutor`
   (needs `lxc`) → `PassthroughExecutor`. If neither `bwrap` nor `lxc` is present,
   it falls all the way through to **`PassthroughExecutor`, which runs
@@ -215,7 +215,7 @@ error visible above the failure message instead of waiting silently.
 
 Git branching and the local runtime are independent. `npm run dev` runs
 whatever commit is checked out in the current branch/worktree; it does not
-contact GitHub or update protected `main`. Use it freely for
+contact GitHub or update protected `dev`. Use it freely for
 pure local iteration before a PR exists.
 
 Azure dev/test is also available **before merge**. Run `npm run azure:deploy`
@@ -229,21 +229,21 @@ feature branch/worktree
   ├─ npm run dev                         local-only test, at any time
   ├─ azure:deploy / azure:upgrade ─────> Azure dev/test/staging environment
   │                                      (optional manual verification at any time)
-  └─ PR CI ─> update to latest main ─> required CI rerun ─> protected main
+  └─ PR CI ─> update to latest dev ─> required CI rerun ─> protected dev
                                                                │
-                                                               └─ release PR
-                                                                    └─ exact main SHA
-                                                                         └─ tag/publish/deploy
+                                                               └─ green SHA ─> release/vX.Y.Z soak ─> promotion to main
+                                                                                                      └─ exact main SHA
+                                                                                                           └─ tag/publish/deploy
 ```
 
 GitHub Merge Queue is unavailable while this repository is owned by the
 personal `sabbour` account. The enforceable fallback is standard protection:
-every change uses a PR, the branch must be up to date with `main`, and the four
+every normal change uses a PR, the branch must be up to date with `dev`, and the four
 blocking checks rerun before squash merge. Concurrent PRs may need repeated
 updates/retests when another PR merges first. The
-[Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology--room-for-growth)
-defines the measurable conditions for enabling Merge Queue or adding another
-branch tier. Official releases are cut from an exact protected-`main` commit; see
+[Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology)
+describes retained growth guidance. Official releases are cut from an exact promoted
+`main` commit; see
 [RELEASING.md](../../RELEASING.md).
 
 ---
@@ -272,7 +272,7 @@ shared environment, coordinate ownership and prefer a clean commit;
 > or publish a GitHub Release, and you can run them as often as you like.
 > Cutting an official, versioned release of the project is a *separate* command
 > (`npm run azure:release`) with its own process — see
-> [RELEASING.md](https://github.com/sabbour/agentweaver/blob/main/RELEASING.md).
+> [RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md).
 
 With no flags, in an interactive terminal, this prompts you through Azure
 subscription, resource group, location, cluster/ACR/Key Vault names (smart
@@ -317,7 +317,7 @@ Every build/deploy/upgrade/release/dev workflow runs through one cross-platform 
 | `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
 | `npm run azure:deploy` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:upgrade` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
-| `npm run azure:release` | Current semver publication workflow: bumps `VERSION`, tags, generates a GitHub release, and composes over the shared deploy engine. Its direct commit/push behavior must be split into protected release-PR preparation + exact-SHA publication before protected-main enforcement; see [RELEASING.md](../../RELEASING.md#cutting-a-release). `--dry-run` remains safe. |
+| `npm run azure:release` | Current semver publication workflow: bumps `VERSION`, tags, generates a GitHub release, and composes over the shared deploy engine. Its direct commit/push behavior must be split into protected release-PR preparation + exact-SHA publication before protected-branch enforcement; see [RELEASING.md](../../RELEASING.md#cutting-a-release). `--dry-run` remains safe. |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |
 | `npm run azure:dev` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). |
 | `npm run dev:web` | Builds and starts only the web UI (Vite dev server) against an API you're already running separately. |

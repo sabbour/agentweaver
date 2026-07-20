@@ -149,3 +149,14 @@
   - **Trigger B — protected maintenance branch:** when the project makes its **first commitment to patch an older minor after an incompatible newer minor lands on `main`**. Create and protect `release/X.Y`; patch from it and forward-port applicable fixes to `main`.
   - **Trigger C — full `dev → release → main` promotion tier:** when **two consecutive releases** each require **at least 3 business days** of RC soak while **at least two independent next-version changes** must keep integrating in parallel, **or** the project formally commits to a durably-diverging externally consumed `next` channel.
 - These measurable conditions explicitly prevent the earlier short-sighted reasoning that a topology is unnecessary merely because the repository does not need it today. Full rationale, boundaries, and the migration playbook remain in `decisions/inbox/niobe-branching-growth-review.md`.
+
+
+---
+
+## 2026-07-20T15-05-18-07-00 — Trigger C promotion topology deliberately activated
+
+**Source:** Ahmed (@sabbour) explicit directive in the 2026-07-20 migration conversation.
+
+- Trigger C was activated deliberately as a strategic room-to-grow choice, not because its prior automatic soak/next-channel metrics threshold was measured as met.
+- `dev` is now the default protected integration branch; normal PRs target it. `release/vX.Y.Z` is an ephemeral soak branch cut from green `dev`, and `main` is stable/published-only, receiving only soaked release promotions or audited emergency hotfixes.
+- The migration updates CI, ruleset documentation, contributor/release guidance, and agent workflow instructions. GitHub ruleset activation for `dev` remains an explicit manual owner action.

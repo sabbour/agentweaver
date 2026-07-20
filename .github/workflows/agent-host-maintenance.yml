@@ -9,7 +9,7 @@ on:
     # Every Monday at 03:00 UTC
     - cron: "0 3 * * 1"
   push:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "apps/Agentweaver.AgentHost/Dockerfile"
   pull_request:
@@ -85,11 +85,11 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
-      # ── Push to ACR (schedule, main push, or manual dispatch with push=true) ──
+      # ── Push to ACR (schedule, dev/main push, or manual dispatch with push=true) ──
       - name: Log in to ACR
         if: >
           github.event_name == 'schedule' ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
           (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
         uses: azure/login@v2
         with:
@@ -100,7 +100,7 @@ jobs:
       - name: Push to ACR
         if: >
           github.event_name == 'schedule' ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
           (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
         run: |
           az acr login --name agentweaverregistry

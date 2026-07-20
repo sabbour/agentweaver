@@ -1,7 +1,7 @@
 name: CI
 
 # Runs the repository's real verification suites on every pull request and on
-# pushes to main. Each area runs in its own job so it gets a dedicated runner:
+# pushes to dev and main. Each area runs in its own job so it gets a dedicated runner:
 # the .NET and web test suites contain timing-sensitive tests (heartbeat /
 # deadline / render-timeout budgets) that flake only under CPU contention, so
 # keeping the suites off a single shared runner keeps the signal reliable.
@@ -16,7 +16,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
 
 permissions:
