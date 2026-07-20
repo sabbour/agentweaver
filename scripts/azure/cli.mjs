@@ -110,7 +110,12 @@ export async function run(argv = [], opts = {}) {
 /* c8 ignore start -- process.argv entry point, not exercised by unit tests */
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run(process.argv.slice(2)).catch((err) => {
-    logDefault.error(err?.stack || err?.message || String(err));
+    // Expected failures (missing prereqs, bad args, etc.) should read like a
+    // normal CLI error, not a Node stack trace. Full stack is still
+    // available via DEBUG=1 / AGENTWEAVER_DEBUG=1, matching log.debug()'s
+    // existing gating convention.
+    const showStack = Boolean(process.env.DEBUG || process.env.AGENTWEAVER_DEBUG);
+    logDefault.error((showStack && err?.stack) || err?.message || String(err));
     process.exitCode = 1;
   });
 }

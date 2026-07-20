@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
-import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup, installHint } from "../dev.mjs";
+import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup, installHint, checkPrerequisites } from "../dev.mjs";
 
 function noopLog() {
   const rec = () => () => {};
@@ -188,7 +188,7 @@ test("run: --setup delegates to runLocalSetup and never starts the API/Web dev s
   assert.ok(execCalls.some(([cmd, ...args]) => cmd === "dotnet" && args[0] === "restore"));
 });
 
-test("runLocalSetup: throws a clear error when a prerequisite is missing", async () => {
+test("runLocalSetup: throws a clear error naming every failed prerequisite", async () => {
   const exec = {
     async capture(cmd) {
       if (cmd === "git") return { stdout: "git version 2.40", stderr: "", code: 0 };
@@ -198,12 +198,15 @@ test("runLocalSetup: throws a clear error when a prerequisite is missing", async
       return { code: 0 };
     },
   };
-  await assert.rejects(runLocalSetup({ exec, log: noopLog(), repoRoot: os.tmpdir() }), /dotnet/);
+  await assert.rejects(runLocalSetup({ exec, log: noopLog(), repoRoot: os.tmpdir() }), /dotnet.*node|node.*dotnet/);
 });
 
-test("runLocalSetup: missing-prerequisite error includes a platform-specific install command", async () => {
+test("runLocalSetup: reports every missing prerequisite, not just the first one", async () => {
+  const capturedCalls = [];
   const exec = {
-    async capture(cmd) {
+    async capture(cmd, args) {
+      capturedCalls.push(cmd);
+      // Both dotnet and node are missing; only git succeeds.
       if (cmd === "git") return { stdout: "git version 2.40", stderr: "", code: 0 };
       return { stdout: "", stderr: "not found", code: 1 };
     },
@@ -211,7 +214,46 @@ test("runLocalSetup: missing-prerequisite error includes a platform-specific ins
       return { code: 0 };
     },
   };
-  await assert.rejects(runLocalSetup({ exec, log: noopLog(), repoRoot: os.tmpdir() }), /Install with:|dot\.net\/download/);
+  const errorLines = [];
+  const log = { ...noopLog(), error: (msg) => errorLines.push(msg) };
+  await assert.rejects(runLocalSetup({ exec, log, repoRoot: os.tmpdir() }));
+  // All three checks should have been attempted (not stopped after the first failure).
+  assert.ok(capturedCalls.includes("git"));
+  assert.ok(capturedCalls.includes("dotnet"));
+  assert.ok(capturedCalls.includes("node"));
+  // Both failures should be reported, each with its install hint.
+  assert.ok(errorLines.some((l) => /dotnet/.test(l) && /Install with:|dot\.net\/download/.test(l)));
+  assert.ok(errorLines.some((l) => /node/.test(l) && /Install with:|nodejs\.org/.test(l)));
+});
+
+test("checkPrerequisites: runs all checks concurrently and reports ok:false with per-tool results", async () => {
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "git") return { stdout: "git version 2.40", stderr: "", code: 0 };
+      if (cmd === "dotnet") return { stdout: "9.0.100", stderr: "", code: 0 }; // too old
+      return { stdout: "", stderr: "not found", code: 1 }; // node missing
+    },
+  };
+  const { ok, results } = await checkPrerequisites({ exec });
+  assert.equal(ok, false);
+  const byName = Object.fromEntries(results.map((r) => [r.name, r]));
+  assert.equal(byName.git.ok, true);
+  assert.equal(byName.dotnet.ok, false);
+  assert.match(byName.dotnet.message, /\.NET 10 SDK is required/);
+  assert.equal(byName.node.ok, false);
+  assert.match(byName.node.message, /not found/);
+});
+
+test("checkPrerequisites: reports ok:true when every tool is present and new enough", async () => {
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "dotnet") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      return { stdout: "git version 2.40", stderr: "", code: 0 };
+    },
+  };
+  const { ok } = await checkPrerequisites({ exec });
+  assert.equal(ok, true);
 });
 
 test("installHint: returns winget/brew/apt commands for each known tool on each platform", () => {

@@ -189,6 +189,44 @@ export function installHint(tool, platform = process.platform) {
 }
 
 /**
+ * Checks all prerequisites (git, .NET 10 SDK, Node 20+) concurrently and
+ * reports every failure at once, rather than stopping at the first one --
+ * so a user missing both dotnet and node learns about both in a single run
+ * instead of fixing one, re-running, then discovering the next.
+ *
+ * Returns `{ ok, results }` where `results` is one entry per tool:
+ * `{ name, ok, version }` on success or `{ name, ok: false, message }` on
+ * failure (message already includes the platform-specific install hint).
+ */
+export async function checkPrerequisites({ exec = execDefault } = {}) {
+  const specs = [
+    { name: "git", cmd: "git", args: ["--version"] },
+    { name: "dotnet", cmd: "dotnet", args: ["--version"], minMajor: 10, versionLabel: ".NET 10 SDK" },
+    { name: "node", cmd: "node", args: ["--version"], minMajor: 20, versionLabel: "Node.js 20.19+ or 22.12+" },
+  ];
+
+  const results = await Promise.all(
+    specs.map(async (spec) => {
+      const hint = installHint(spec.name);
+      const result = await exec.capture(spec.cmd, spec.args, { allowFailure: true });
+      if (result.code !== 0) {
+        return { name: spec.name, ok: false, message: `'${spec.cmd}' not found or not working. ${hint}` };
+      }
+      const version = result.stdout.trim();
+      if (spec.minMajor) {
+        const major = Number.parseInt(version.replace(/^v/, "").split(".")[0], 10);
+        if (!(major >= spec.minMajor)) {
+          return { name: spec.name, ok: false, message: `${spec.versionLabel} is required (found ${version}). ${hint}` };
+        }
+      }
+      return { name: spec.name, ok: true, version };
+    }),
+  );
+
+  return { ok: results.every((r) => r.ok), results };
+}
+
+/**
  * Local dev environment setup only: prereq checks (git, .NET 10 SDK, Node
  * 20+) + `apps/web` npm install + `dotnet restore`. No Azure calls at all.
  * Mirrors install.sh/install.ps1's install_local(). Invoked via `dev --setup`
@@ -199,28 +237,22 @@ export function installHint(tool, platform = process.platform) {
 export async function runLocalSetup({ exec = execDefault, log = logDefault, repoRoot = DEFAULT_REPO_ROOT } = {}) {
   log.section("Agentweaver local dev setup");
 
-  const requireCmd = async (cmd, args, hint) => {
-    const result = await exec.capture(cmd, args, { allowFailure: true });
-    if (result.code !== 0) {
-      throw new Error(`'${cmd}' not found or not working.${hint ? ` ${hint}` : ""}`);
-    }
-    return result.stdout.trim();
-  };
-
-  await requireCmd("git", ["--version"], installHint("git"));
-  log.ok("git found");
-  const dotnetVersion = await requireCmd("dotnet", ["--version"], installHint("dotnet"));
-  const dotnetMajor = Number.parseInt(dotnetVersion.split(".")[0], 10);
-  if (!(dotnetMajor >= 10)) {
-    throw new Error(`.NET 10 SDK is required (found ${dotnetVersion}). ${installHint("dotnet")}`);
+  const { ok, results } = await checkPrerequisites({ exec });
+  for (const r of results) {
+    if (r.ok) log.ok(r.name === "git" ? r.version : `${r.name} ${r.version}`);
+    else log.error(r.message);
   }
-  log.ok(`dotnet ${dotnetVersion}`);
-  const nodeVersion = await requireCmd("node", ["--version"], installHint("node"));
-  const nodeMajor = Number.parseInt(nodeVersion.replace(/^v/, "").split(".")[0], 10);
-  if (!(nodeMajor >= 20)) {
-    throw new Error(`Node.js 20.19+ or 22.12+ is required (found ${nodeVersion}). ${installHint("node")}`);
+  if (!ok) {
+    const failures = results.filter((r) => !r.ok);
+    // Message intentionally short -- the per-tool details were already
+    // printed above via log.error(); this is just the thrown signal that
+    // stops setup and sets a non-zero exit code.
+    throw new Error(
+      `${failures.length} prerequisite check${failures.length === 1 ? "" : "s"} failed (${failures
+        .map((f) => f.name)
+        .join(", ")}). See errors above.`,
+    );
   }
-  log.ok(`node ${nodeVersion}`);
 
   log.info("");
   log.info("Installing web dependencies...");
