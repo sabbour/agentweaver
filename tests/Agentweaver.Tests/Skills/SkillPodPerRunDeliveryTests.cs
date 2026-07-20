@@ -140,6 +140,7 @@ public sealed class SkillPodPerRunDeliveryTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _sourceRepoPath);
         const string token = "SKILL-ACTIVE-PODLOCAL-VERIFY";
         var skill = new Skill
         {

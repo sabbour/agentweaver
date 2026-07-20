@@ -312,12 +312,19 @@ public sealed class ProjectService
         RunWorkflowRegistry workflowRegistry,
         CancellationToken ct = default)
     {
-        var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
+        var project = await _store.GetAsync(id, CancellationToken.None).ConfigureAwait(false);
         if (project is null) return;
 
         try
         {
-            await DeleteAsync(id, runStore, workflowRegistry, ct).ConfigureAwait(false);
+            // The project-row delete is the authoritative database boundary: skill state is
+            // removed by cascading foreign keys in the same transaction/statement.
+            await DeleteAsync(id, runStore, workflowRegistry, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to delete project record while rolling back project {ProjectId}", id);
+            throw;
         }
         finally
         {

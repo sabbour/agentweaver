@@ -98,6 +98,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly ICollectiveAssemblyPipeline _pipeline;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IRunEventStream? _eventStream;
     private readonly IProjectStore? _projectStore;
     private readonly WorkflowRegistry? _workflowRegistry;
     private readonly IPodNameRegistry? _podRegistry;
@@ -143,7 +144,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         WorkflowRegistry? workflowRegistry = null,
         Preview.PreviewStep? previewStep = null,
         WorktreeManager? worktreeManager = null,
-        IntegrationBuildLock? integrationBuildLock = null)
+        IntegrationBuildLock? integrationBuildLock = null,
+        IRunEventStream? eventStream = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -152,6 +154,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _pipeline = pipeline;
         _scopeFactory = scopeFactory;
         _serviceProvider = serviceProvider;
+        _eventStream = eventStream;
         _projectStore = projectStore;
         _workflowRegistry = workflowRegistry;
         _podRegistry = podRegistry;
@@ -4104,9 +4107,22 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (events is not { Count: > 0 })
             return;
 
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var stream = _eventStream;
+        if (stream is null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            stream = scope.ServiceProvider.GetService<IRunEventStream>();
+        }
 
+        if (stream is not null)
+        {
+            foreach (var evt in events.OrderBy(e => e.Sequence))
+                _ = await stream.AppendAsync(coordinatorRunId, evt, ct).ConfigureAwait(false);
+            return;
+        }
+
+        using var fallbackScope = _scopeFactory.CreateScope();
+        var db = fallbackScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var existingSeqs = db.RunEvents
             .Where(e => e.RunId == coordinatorRunId)
             .Select(e => e.Sequence)
@@ -4114,13 +4130,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var toInsert = events
             .Where(e => !existingSeqs.Contains(e.Sequence))
+            .OrderBy(e => e.Sequence)
             .Select(e => new RunEventRecord
             {
                 RunId = coordinatorRunId,
                 Sequence = e.Sequence,
                 EventType = e.Type,
                 PayloadJson = JsonSerializer.Serialize(e.Payload),
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = e.TimestampUtc == default ? DateTime.UtcNow : e.TimestampUtc.UtcDateTime,
             })
             .ToList();
 
@@ -4198,13 +4215,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
         var state = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
-        entry.RecordNext(EventTypes.CoordinatorTopology, seq => CoordinatorTopology.BuildSnapshot(
+        var topologySeq = entry.NextSequence();
+        entry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
             coordinatorRunId,
             workPlanId,
             status,
             subtasks,
             edges,
-            seq,
+            topologySeq,
             _podRegistry,
             _k8sEnv?.PodName,
             state?.AssemblyStage,

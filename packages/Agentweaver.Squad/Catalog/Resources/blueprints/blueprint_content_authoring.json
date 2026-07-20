@@ -5,5 +5,10 @@
   "roster": ["lead-researcher", "writer", "editor"],
   "workflows": ["content-authoring"],
   "review_policy": "default",
-  "sandbox_profile": "restricted"
+  "sandbox_profile": "restricted",
+  "skill_bindings": [
+    { "role_id": "lead-researcher", "skills": ["research-source-quality"] },
+    { "role_id": "writer", "skills": ["writing-editing-fact-checking"] },
+    { "role_id": "editor", "skills": ["writing-editing-fact-checking"] }
+  ]
 }

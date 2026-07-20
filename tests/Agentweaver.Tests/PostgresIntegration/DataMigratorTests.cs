@@ -1,6 +1,7 @@
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Tools;
+using Agentweaver.Domain.BlueprintPackages;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -25,6 +26,9 @@ public sealed class DataMigratorTests : IDisposable
     private readonly string _tempDir;
     private readonly string _agentweaverDbPath;
     private readonly string _memoryDbPath;
+    private readonly string _seededProjectId;
+    private readonly string _seededPackageId;
+    private readonly string _seededPackageVersion;
 
     public DataMigratorTests(PostgresFixture pg)
     {
@@ -34,7 +38,7 @@ public sealed class DataMigratorTests : IDisposable
         _agentweaverDbPath = Path.Combine(_tempDir, "agentweaver.db");
         _memoryDbPath = Path.Combine(_tempDir, "memory.db");
 
-        SeedSqliteDb(_agentweaverDbPath);
+        (_seededProjectId, _seededPackageId, _seededPackageVersion) = SeedSqliteDb(_agentweaverDbPath);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -53,6 +57,14 @@ public sealed class DataMigratorTests : IDisposable
         var revisions = await db.RunRevisions.CountAsync();
         var workflowRuns = await db.WorkflowRuns.CountAsync();
         var backlogTasks = await db.BacklogTasks.CountAsync();
+        var seededProject = await db.Projects.SingleAsync(project => project.ProjectId == _seededProjectId);
+        var packageVersions = await db.BlueprintPackageVersions
+            .Where(version => version.PackageId == _seededPackageId)
+            .ToListAsync();
+        var packagePayloads = await db.BlueprintPackagePayloads
+            .CountAsync(payload => payload.PackageId == _seededPackageId);
+        var packageAcquisitions = await db.BlueprintPackageAcquisitions
+            .CountAsync(acquisition => acquisition.PackageId == _seededPackageId);
 
         // We seeded 2 projects, 3 runs, 2 revisions, 1 workflow run, 2 backlog tasks
         projects.Should().BeGreaterThanOrEqualTo(2, "all seeded projects must be migrated");
@@ -60,6 +72,12 @@ public sealed class DataMigratorTests : IDisposable
         revisions.Should().BeGreaterThanOrEqualTo(2, "all seeded run_revisions must be migrated");
         workflowRuns.Should().BeGreaterThanOrEqualTo(1, "all seeded workflow_runs must be migrated");
         backlogTasks.Should().BeGreaterThanOrEqualTo(2, "all seeded backlog_tasks must be migrated");
+        seededProject.TeamRevision.Should().Be(7, "team mutation concurrency state must survive provider migration");
+        packageVersions.Should().ContainSingle();
+        packageVersions.Single().CanonicalVersionKey.Should().Be(
+            BlueprintPackageLibraryLimits.CanonicalVersionKey(packageVersions.Single().CanonicalVersion));
+        packagePayloads.Should().Be(1);
+        packageAcquisitions.Should().Be(1);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -75,17 +93,61 @@ public sealed class DataMigratorTests : IDisposable
         await using var db1 = await _pg.CreateDbContextAsync();
         var projectsAfterFirst = await db1.Projects.CountAsync();
         var runsAfterFirst = await db1.Runs.CountAsync();
+        var packageVersionsAfterFirst = await db1.BlueprintPackageVersions.CountAsync(
+            version => version.PackageId == _seededPackageId);
 
         await migrator.RunAsync(); // second run — must be idempotent
 
         await using var db2 = await _pg.CreateDbContextAsync();
         var projectsAfterSecond = await db2.Projects.CountAsync();
         var runsAfterSecond = await db2.Runs.CountAsync();
+        var packageVersionsAfterSecond = await db2.BlueprintPackageVersions.CountAsync(
+            version => version.PackageId == _seededPackageId);
 
         projectsAfterSecond.Should().Be(projectsAfterFirst,
             "second migration run must not insert duplicate projects");
         runsAfterSecond.Should().Be(runsAfterFirst,
             "second migration run must not insert duplicate runs");
+        packageVersionsAfterSecond.Should().Be(
+            packageVersionsAfterFirst,
+            "second migration run must not insert duplicate package versions");
+    }
+
+    [PostgresFact]
+    public async Task Migrator_ConflictingPackageVersion_AbortsWithoutMergingChildren()
+    {
+        await using (var db = await _pg.CreateDbContextAsync())
+        {
+            db.BlueprintPackageLibrary.Add(new BlueprintPackageLibraryRecord
+            {
+                OwnerId = "alice",
+                PackageId = _seededPackageId,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            db.BlueprintPackageVersions.Add(new BlueprintPackageVersionRecord
+            {
+                OwnerId = "alice",
+                PackageId = _seededPackageId,
+                CanonicalVersionKey = BlueprintPackageLibraryLimits.CanonicalVersionKey(_seededPackageVersion),
+                CanonicalVersion = _seededPackageVersion,
+                ContentDigest = new string('d', 64),
+                PayloadSetDigest = new string('e', 64),
+                RawManifestSha256 = new string('f', 64),
+                RawManifest = "{}"u8.ToArray(),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var migrate = () => BuildMigrator().RunAsync();
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*immutable Blueprint package version conflicts*");
+        await using var verify = await _pg.CreateDbContextAsync();
+        (await verify.BlueprintPackagePayloads.CountAsync(
+            payload => payload.PackageId == _seededPackageId)).Should().Be(0);
+        (await verify.BlueprintPackageAcquisitions.CountAsync(
+            acquisition => acquisition.PackageId == _seededPackageId)).Should().Be(0);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -120,7 +182,7 @@ public sealed class DataMigratorTests : IDisposable
     /// statements below also use explicit column-name lists rather than positional VALUES, so
     /// future nullable/defaulted columns added via migration don't require touching this file.
     /// </summary>
-    private static void SeedSqliteDb(string dbPath)
+    private static (string ProjectId, string PackageId, string PackageVersion) SeedSqliteDb(string dbPath)
     {
         var schemaConfig = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = dbPath })
@@ -140,11 +202,13 @@ public sealed class DataMigratorTests : IDisposable
         var wid1 = "wf-" + Guid.NewGuid().ToString("N")[..8];
         var tid1 = "task-" + Guid.NewGuid().ToString("N")[..8];
         var tid2 = "task-" + Guid.NewGuid().ToString("N")[..8];
+        var packageId = "package-" + Guid.NewGuid().ToString("N")[..8];
+        var packageVersion = new string('9', 300) + ".0.0";
 
         using var data = conn.CreateCommand();
         data.CommandText = $"""
-            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at)
-                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}');
+            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at, team_revision)
+                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}',7);
             INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at)
                 VALUES ('{pid2}','Project B','blank','/b','main','bob','github_copilot','active','{now}','{now}');
 
@@ -167,8 +231,28 @@ public sealed class DataMigratorTests : IDisposable
                 VALUES ('{tid1}','{pid1}','Task A','ready','key-a','alice','{now}','{now}');
             INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at)
                 VALUES ('{tid2}','{pid1}','Task B','backlog','key-b','alice','{now}');
+
+            INSERT INTO blueprint_package_library (owner_id, package_id, created_at)
+                VALUES ('alice','{packageId}','{now}');
+            INSERT INTO blueprint_package_versions (
+                owner_id, package_id, canonical_version, content_digest, payload_set_digest,
+                raw_manifest_sha256, raw_manifest, created_at)
+                VALUES (
+                    'alice','{packageId}','{packageVersion}',
+                    '{new string('a', 64)}','{new string('b', 64)}','{new string('c', 64)}',
+                    X'7B7D','{now}');
+            INSERT INTO blueprint_package_payloads (owner_id, package_id, canonical_version, path, bytes)
+                VALUES ('alice','{packageId}','{packageVersion}','definitions/blueprints/example.json',X'7B7D');
+            INSERT INTO blueprint_package_acquisitions (
+                owner_id, package_id, canonical_version, ordinal, source, producer,
+                repository, revision, acquired_at, requested_ref)
+                VALUES (
+                    'alice','{packageId}','{packageVersion}',0,'github','migration-test',
+                    'https://github.com/octo/migration-test',
+                    '1111111111111111111111111111111111111111','{now}','feature/migrate');
             """;
         data.ExecuteNonQuery();
+        return (pid1, packageId, packageVersion);
     }
 
     public void Dispose()

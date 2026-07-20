@@ -1,0 +1,8 @@
+{
+  "id": "blueprint-malformed-role",
+  "name": "Malformed role fixture",
+  "roster": ["malformed-role"],
+  "workflows": ["default"],
+  "review_policy": "default",
+  "sandbox_profile": "default"
+}

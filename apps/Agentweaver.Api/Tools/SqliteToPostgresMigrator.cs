@@ -1,5 +1,6 @@
 using System.Globalization;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain.BlueprintPackages;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -157,6 +158,18 @@ public sealed class SqliteToPostgresMigrator
         _logger.LogInformation("  BacklogTaskDependencies: {Migrated}/{Total} migrated, {Skipped} skipped.",
             depMigrated, backlogDependencies.Count, backlogDependencies.Count - depMigrated);
 
+        try
+        {
+            await MigrateBlueprintPackagesAsync(conn, db, ct).ConfigureAwait(false);
+        }
+        catch (SqliteException ex) when (
+            ex.SqliteErrorCode == 1 &&
+            ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "Could not migrate owner Blueprint packages because the source database predates the package library.");
+        }
+
         // cast_proposals might not exist on older databases
         try
         {
@@ -181,12 +194,261 @@ public sealed class SqliteToPostgresMigrator
         }
     }
 
-    private static async Task<List<ProjectRecord>> ReadProjectsAsync(SqliteConnection conn, CancellationToken ct)
+    private async Task MigrateBlueprintPackagesAsync(
+        SqliteConnection source,
+        MemoryDbContext db,
+        CancellationToken ct)
     {
-        var results = new List<ProjectRecord>();
+        var libraries = await ReadBlueprintPackageLibrariesAsync(source, ct).ConfigureAwait(false);
+        var versions = await ReadBlueprintPackageVersionsAsync(source, ct).ConfigureAwait(false);
+        var payloads = await ReadBlueprintPackagePayloadsAsync(source, ct).ConfigureAwait(false);
+        var acquisitions = await ReadBlueprintPackageAcquisitionsAsync(source, ct).ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Migrating owner Blueprint packages: {Libraries} libraries, {Versions} versions, {Payloads} payloads, {Acquisitions} acquisitions...",
+            libraries.Count,
+            versions.Count,
+            payloads.Count,
+            acquisitions.Count);
+
+        var migratedLibraries = 0;
+        var migratedVersions = 0;
+        var migratedPayloads = 0;
+        var migratedAcquisitions = 0;
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            foreach (var record in libraries)
+            {
+                if (!await db.BlueprintPackageLibrary.AnyAsync(
+                        row => row.OwnerId == record.OwnerId && row.PackageId == record.PackageId,
+                        ct).ConfigureAwait(false))
+                {
+                    db.BlueprintPackageLibrary.Add(record);
+                    migratedLibraries++;
+                }
+            }
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            foreach (var record in versions)
+            {
+                var existing = await db.BlueprintPackageVersions.AsNoTracking().SingleOrDefaultAsync(
+                    row => row.OwnerId == record.OwnerId &&
+                           row.PackageId == record.PackageId &&
+                           row.CanonicalVersionKey == record.CanonicalVersionKey,
+                    ct).ConfigureAwait(false);
+                if (existing is null)
+                {
+                    db.BlueprintPackageVersions.Add(record);
+                    migratedVersions++;
+                }
+                else if (!SameImmutableIdentity(existing, record))
+                {
+                    throw new InvalidOperationException(
+                        "An immutable Blueprint package version conflicts with the migration source.");
+                }
+            }
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            foreach (var record in payloads)
+            {
+                if (!await db.BlueprintPackagePayloads.AnyAsync(
+                        row => row.OwnerId == record.OwnerId &&
+                               row.PackageId == record.PackageId &&
+                               row.CanonicalVersionKey == record.CanonicalVersionKey &&
+                               row.Path == record.Path,
+                        ct).ConfigureAwait(false))
+                {
+                    db.BlueprintPackagePayloads.Add(record);
+                    migratedPayloads++;
+                }
+            }
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            foreach (var record in acquisitions)
+            {
+                if (!await db.BlueprintPackageAcquisitions.AnyAsync(
+                        row => row.OwnerId == record.OwnerId &&
+                               row.PackageId == record.PackageId &&
+                               row.CanonicalVersionKey == record.CanonicalVersionKey &&
+                               row.Ordinal == record.Ordinal,
+                        ct).ConfigureAwait(false))
+                {
+                    db.BlueprintPackageAcquisitions.Add(record);
+                    migratedAcquisitions++;
+                }
+            }
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        _logger.LogInformation(
+            "  Owner Blueprint packages migrated: {Libraries} libraries, {Versions} versions, {Payloads} payloads, {Acquisitions} acquisitions.",
+            migratedLibraries,
+            migratedVersions,
+            migratedPayloads,
+            migratedAcquisitions);
+    }
+
+    private static bool SameImmutableIdentity(
+        BlueprintPackageVersionRecord existing,
+        BlueprintPackageVersionRecord source) =>
+        string.Equals(existing.CanonicalVersion, source.CanonicalVersion, StringComparison.Ordinal) &&
+        string.Equals(existing.ContentDigest, source.ContentDigest, StringComparison.Ordinal) &&
+        string.Equals(existing.PayloadSetDigest, source.PayloadSetDigest, StringComparison.Ordinal) &&
+        string.Equals(existing.RawManifestSha256, source.RawManifestSha256, StringComparison.Ordinal) &&
+        string.Equals(existing.ContainerSha256, source.ContainerSha256, StringComparison.Ordinal);
+
+    private static async Task<List<BlueprintPackageLibraryRecord>> ReadBlueprintPackageLibrariesAsync(
+        SqliteConnection conn,
+        CancellationToken ct)
+    {
+        var results = new List<BlueprintPackageLibraryRecord>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT owner_id, package_id, created_at FROM blueprint_package_library;";
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            results.Add(new BlueprintPackageLibraryRecord
+            {
+                OwnerId = reader.GetString(0),
+                PackageId = reader.GetString(1),
+                CreatedAt = ParseTs(reader.GetString(2)),
+            });
+        }
+        return results;
+    }
+
+    private static async Task<List<BlueprintPackageVersionRecord>> ReadBlueprintPackageVersionsAsync(
+        SqliteConnection conn,
+        CancellationToken ct)
+    {
+        var results = new List<BlueprintPackageVersionRecord>();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             """
+            SELECT owner_id, package_id, canonical_version, content_digest, payload_set_digest,
+                   raw_manifest_sha256, container_sha256, raw_manifest, created_at
+              FROM blueprint_package_versions;
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var version = reader.GetString(2);
+            results.Add(new BlueprintPackageVersionRecord
+            {
+                OwnerId = reader.GetString(0),
+                PackageId = reader.GetString(1),
+                CanonicalVersionKey = BlueprintPackageLibraryLimits.CanonicalVersionKey(version),
+                CanonicalVersion = version,
+                ContentDigest = reader.GetString(3),
+                PayloadSetDigest = reader.GetString(4),
+                RawManifestSha256 = reader.GetString(5),
+                ContainerSha256 = reader.IsDBNull(6) ? null : reader.GetString(6),
+                RawManifest = reader.GetFieldValue<byte[]>(7).ToArray(),
+                CreatedAt = ParseTs(reader.GetString(8)),
+            });
+        }
+        return results;
+    }
+
+    private static async Task<List<BlueprintPackagePayloadRecord>> ReadBlueprintPackagePayloadsAsync(
+        SqliteConnection conn,
+        CancellationToken ct)
+    {
+        var results = new List<BlueprintPackagePayloadRecord>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            "SELECT owner_id, package_id, canonical_version, path, bytes FROM blueprint_package_payloads;";
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var version = reader.GetString(2);
+            results.Add(new BlueprintPackagePayloadRecord
+            {
+                OwnerId = reader.GetString(0),
+                PackageId = reader.GetString(1),
+                CanonicalVersionKey = BlueprintPackageLibraryLimits.CanonicalVersionKey(version),
+                CanonicalVersion = version,
+                Path = reader.GetString(3),
+                Bytes = reader.GetFieldValue<byte[]>(4).ToArray(),
+            });
+        }
+        return results;
+    }
+
+    private static async Task<List<BlueprintPackageAcquisitionRecord>> ReadBlueprintPackageAcquisitionsAsync(
+        SqliteConnection conn,
+        CancellationToken ct)
+    {
+        var results = new List<BlueprintPackageAcquisitionRecord>();
+        var requestedRef = await HasColumnAsync(
+            conn,
+            "blueprint_package_acquisitions",
+            "requested_ref",
+            ct).ConfigureAwait(false)
+            ? "requested_ref"
+            : "NULL AS requested_ref";
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            $"""
+            SELECT owner_id, package_id, canonical_version, ordinal, source, producer,
+                   repository, revision, acquired_at, {requestedRef}
+              FROM blueprint_package_acquisitions;
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var version = reader.GetString(2);
+            results.Add(new BlueprintPackageAcquisitionRecord
+            {
+                OwnerId = reader.GetString(0),
+                PackageId = reader.GetString(1),
+                CanonicalVersionKey = BlueprintPackageLibraryLimits.CanonicalVersionKey(version),
+                CanonicalVersion = version,
+                Ordinal = reader.GetInt32(3),
+                Source = reader.GetString(4),
+                Producer = reader.IsDBNull(5) ? null : reader.GetString(5),
+                Repository = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Revision = reader.IsDBNull(7) ? null : reader.GetString(7),
+                AcquiredAt = reader.IsDBNull(8) ? null : ParseTs(reader.GetString(8)),
+                RequestedRef = reader.IsDBNull(9) ? null : reader.GetString(9),
+            });
+        }
+        return results;
+    }
+
+    private static async Task<bool> HasColumnAsync(
+        SqliteConnection conn,
+        string table,
+        string column,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info(\"{table.Replace("\"", "\"\"", StringComparison.Ordinal)}\");";
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static async Task<List<ProjectRecord>> ReadProjectsAsync(SqliteConnection conn, CancellationToken ct)
+    {
+        var results = new List<ProjectRecord>();
+        var teamRevision = await HasColumnAsync(conn, "projects", "team_revision", ct)
+            ? "team_revision"
+            : "0 AS team_revision";
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            $"""
             SELECT project_id, name, origin_kind, source_repository, working_directory,
                    COALESCE(default_branch,'main'), owner, default_provider,
                    default_model_copilot, default_model_foundry,
@@ -196,7 +458,7 @@ public sealed class SqliteToPostgresMigrator
                    default_workflow_id, active_review_policy_name, sandbox_profile,
                    source_blueprint_id, source_blueprint_type,
                    blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-                   allowed_workflow_ids
+                   allowed_workflow_ids, {teamRevision}
               FROM projects;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -229,6 +491,7 @@ public sealed class SqliteToPostgresMigrator
                 WorkflowGenerationModel = reader.IsDBNull(22) ? null : reader.GetString(22),
                 OutcomeSpecGenerationModel = reader.IsDBNull(23) ? null : reader.GetString(23),
                 AllowedWorkflowIds = reader.IsDBNull(24) ? null : reader.GetString(24),
+                TeamRevision = reader.GetInt64(25),
             });
         }
         return results;

@@ -30,7 +30,7 @@ public sealed class SqliteProjectStore : IProjectStore
                                   default_workflow_id, active_review_policy_name, sandbox_profile,
                                   source_blueprint_id, source_blueprint_type,
                                   blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-                                  allowed_workflow_ids)
+                                  allowed_workflow_ids, team_revision)
             VALUES ($projectId, $name, $originKind, $sourceRepository,
                     $workingDirectory, $defaultBranch, $owner,
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
@@ -39,7 +39,7 @@ public sealed class SqliteProjectStore : IProjectStore
                     $defaultWorkflowId, $activeReviewPolicyName, $sandboxProfile,
                     $sourceBlueprintId, $sourceBlueprintType,
                     $blueprintGenerationModel, $workflowGenerationModel, $outcomeSpecGenerationModel,
-                    $allowedWorkflowIds);
+                    $allowedWorkflowIds, $teamRevision);
             """;
         command.Parameters.AddWithValue("$projectId", project.Id.ToString());
         command.Parameters.AddWithValue("$name", project.Name);
@@ -66,6 +66,7 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$workflowGenerationModel", (object?)project.WorkflowGenerationModel ?? DBNull.Value);
         command.Parameters.AddWithValue("$outcomeSpecGenerationModel", (object?)project.OutcomeSpecGenerationModel ?? DBNull.Value);
         command.Parameters.AddWithValue("$allowedWorkflowIds", (object?)SerializeWorkflowIds(project.AllowedWorkflowIds) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$teamRevision", project.TeamRevision);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
@@ -278,6 +279,53 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task<IProjectTeamMutationLease?> TryBeginTeamMutationAsync(
+        ProjectId id,
+        long expectedRevision,
+        CancellationToken ct = default)
+    {
+        var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        SqliteTransaction? transaction = null;
+        try
+        {
+            transaction = (SqliteTransaction)await connection
+                .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
+                .ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                UPDATE projects
+                   SET team_revision = team_revision
+                 WHERE project_id = $projectId
+                   AND state = 'active'
+                   AND team_revision = $expectedRevision;
+                """;
+            command.Parameters.AddWithValue("$projectId", id.ToString());
+            command.Parameters.AddWithValue("$expectedRevision", expectedRevision);
+            if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                await transaction.DisposeAsync().ConfigureAwait(false);
+                await connection.DisposeAsync().ConfigureAwait(false);
+                return null;
+            }
+
+            return new SqliteProjectTeamMutationLease(
+                connection,
+                transaction,
+                id,
+                expectedRevision);
+        }
+        catch
+        {
+            if (transaction is not null)
+                await transaction.DisposeAsync().ConfigureAwait(false);
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     // Ordinals: 0=project_id 1=name 2=origin_kind 3=source_repository 4=working_directory
     //           5=default_branch 6=owner 7=default_provider 8=default_model_copilot
     //           9=default_model_foundry 10=state 11=created_at 12=updated_at
@@ -285,7 +333,7 @@ public sealed class SqliteProjectStore : IProjectStore
     //           16=default_workflow_id 17=active_review_policy_name 18=sandbox_profile
     //           19=source_blueprint_id 20=source_blueprint_type
     //           21=blueprint_generation_model 22=workflow_generation_model
-    //           23=outcome_spec_generation_model 24=allowed_workflow_ids
+    //           23=outcome_spec_generation_model 24=allowed_workflow_ids 25=team_revision
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
@@ -295,7 +343,7 @@ public sealed class SqliteProjectStore : IProjectStore
                default_workflow_id, active_review_policy_name, sandbox_profile,
               source_blueprint_id, source_blueprint_type,
               blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-              allowed_workflow_ids
+              allowed_workflow_ids, team_revision
           FROM projects
         """;
 
@@ -335,7 +383,68 @@ public sealed class SqliteProjectStore : IProjectStore
             WorkflowGenerationModel = r.IsDBNull(22) ? null : r.GetString(22),
             OutcomeSpecGenerationModel = r.IsDBNull(23) ? null : r.GetString(23),
             AllowedWorkflowIds     = r.IsDBNull(24) ? null : DeserializeWorkflowIds(r.GetString(24), r.GetString(0)),
+            TeamRevision           = r.GetInt64(25),
         };
+    }
+
+    private sealed class SqliteProjectTeamMutationLease : IProjectTeamMutationLease
+    {
+        private readonly SqliteConnection _connection;
+        private readonly SqliteTransaction _transaction;
+        private readonly ProjectId _projectId;
+        private bool _completed;
+
+        public SqliteProjectTeamMutationLease(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            ProjectId projectId,
+            long expectedRevision)
+        {
+            _connection = connection;
+            _transaction = transaction;
+            _projectId = projectId;
+            ExpectedRevision = expectedRevision;
+        }
+
+        public long ExpectedRevision { get; }
+
+        public async Task CompleteAsync(CancellationToken ct = default)
+        {
+            if (_completed) return;
+
+            await using var command = _connection.CreateCommand();
+            command.Transaction = _transaction;
+            command.CommandText =
+                """
+                UPDATE projects
+                   SET team_revision = team_revision + 1,
+                       updated_at = $updatedAt
+                 WHERE project_id = $projectId
+                   AND team_revision = $expectedRevision;
+                """;
+            command.Parameters.AddWithValue("$updatedAt", Ts(DateTimeOffset.UtcNow));
+            command.Parameters.AddWithValue("$projectId", _projectId.ToString());
+            command.Parameters.AddWithValue("$expectedRevision", ExpectedRevision);
+            if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+                throw new InvalidOperationException("The acquired project team mutation gate was lost.");
+
+            await _transaction.CommitAsync(ct).ConfigureAwait(false);
+            _completed = true;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                if (!_completed)
+                    await CompleteAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                await _transaction.DisposeAsync().ConfigureAwait(false);
+                await _connection.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     private static string StateToString(ProjectState state) => state switch

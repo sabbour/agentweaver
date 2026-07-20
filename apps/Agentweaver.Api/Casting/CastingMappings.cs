@@ -51,6 +51,7 @@ public static class CastingMappings
     public static TeamMemberDto ToDto(CastMember member, DateTimeOffset? createdAt = null, DateTimeOffset? updatedAt = null) => new()
     {
         Name = member.Name,
+        RoleId = member.Role.Id,
         RoleTitle = member.Role.Title,
         CharterPath = member.CharterPath,
         Status = member.Status == CastMemberStatus.Retired ? "retired" : "active",

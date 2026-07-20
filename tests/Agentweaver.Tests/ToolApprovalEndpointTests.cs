@@ -188,6 +188,77 @@ public sealed class ToolApprovalEndpointTests
         (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ApproveAlways_AffectsOnlyPersistedInitiatingOwner()
+    {
+        using var factory = new CoordinatorWebApplicationFactory();
+        using var ownerClient = factory.CreateOwnerClient();
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var source = RunId.New();
+        var ownerFuture = RunId.New();
+        var otherFuture = RunId.New();
+        await InsertRunAsync(
+            runStore, source, RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await InsertRunAsync(
+            runStore, ownerFuture, RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await InsertRunAsync(
+            runStore, otherFuture, RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OtherUser);
+        var pending = approvalGate.WaitForApprovalAsync(
+            source.ToString(), "owner-always", "web_fetch", "https://example.test",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        var response = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = "owner-always", scope = "always" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await pending.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        approvalGate.IsAutoApproved(ownerFuture.ToString(), "web_fetch", "https://owner.test")
+            .Should().BeTrue();
+        approvalGate.IsAutoApproved(otherFuture.ToString(), "web_fetch", "https://other.test")
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Approve_ParentOwnerCannotGrantApprovalOwnedByDifferentPersistedChildOwner()
+    {
+        using var factory = new CoordinatorWebApplicationFactory();
+        using var ownerClient = factory.CreateOwnerClient();
+        using var otherClient = factory.CreateOtherClient();
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var coordinatorId = RunId.New();
+        var childId = RunId.New();
+        await InsertRunAsync(
+            runStore, coordinatorId, RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await InsertRunAsync(
+            runStore, childId, RunStatus.InProgress, coordinatorId.ToString(),
+            CoordinatorWebApplicationFactory.OtherUser);
+        var pending = approvalGate.WaitForApprovalAsync(
+            childId.ToString(), "cross-owner-child", "web_fetch", "https://example.test",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        var unauthorized = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{coordinatorId}/tool-approvals",
+            new { request_id = "cross-owner-child", scope = "always" });
+
+        unauthorized.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        approvalGate.GetRequestState(childId.ToString(), "cross-owner-child")
+            .Should().Be(ToolApprovalRequestState.Pending);
+
+        var authorized = await otherClient.PostAsJsonAsync(
+            $"/api/runs/{childId}/tool-approvals",
+            new { request_id = "cross-owner-child", scope = "once" });
+
+        authorized.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await pending.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+    }
+
     private static HttpClient CreateAuthenticatedClient(AgentweaverWebApplicationFactory factory)
     {
         var client = factory.CreateClient();
@@ -197,7 +268,11 @@ public sealed class ToolApprovalEndpointTests
     }
 
     private static Task InsertRunAsync(
-        IRunStore runStore, RunId id, RunStatus status, string? parentRunId = null) =>
+        IRunStore runStore,
+        RunId id,
+        RunStatus status,
+        string? parentRunId = null,
+        string? submittingUser = null) =>
         runStore.InsertAsync(new Run
         {
             Id = id,
@@ -205,7 +280,7 @@ public sealed class ToolApprovalEndpointTests
             OriginatingBranch = "main",
             ModelSource = ModelSource.GitHubCopilot,
             Task = "tool approval endpoint test",
-            SubmittingUser = AgentweaverWebApplicationFactory.TestUser,
+            SubmittingUser = submittingUser ?? AgentweaverWebApplicationFactory.TestUser,
             Status = status,
             StartedAt = DateTimeOffset.UtcNow,
             ParentRunId = parentRunId,

@@ -62,8 +62,8 @@ public static class BlueprintEndpoints
     /// <response code="200">Returns the catalog blueprints with roster, workflow, and policy defaults.</response>
     public static IResult ListBlueprints(BlueprintService blueprints)
     {
-        var list = blueprints.GetPredefined()
-            .Select(BlueprintDto.FromModel)
+        var list = blueprints.GetPredefinedCatalog()
+            .Select(entry => BlueprintDto.FromModel(entry.Blueprint, entry.Exportability))
             .ToList();
         return Results.Ok(new ListBlueprintsResponse { Blueprints = list });
     }

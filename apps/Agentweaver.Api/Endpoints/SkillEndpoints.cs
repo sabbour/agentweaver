@@ -1,7 +1,10 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json.Serialization;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
+using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 
@@ -16,6 +19,67 @@ public static class SkillEndpoints
 {
     public static void MapSkillEndpoints(this WebApplication app)
     {
+        app.MapPost("/api/projects/{id}/skill-defaults/preview", async (
+            HttpContext http, string id, SkillDefaultsPreviewRequest body,
+            BlueprintService blueprints, SkillDefaultsService defaults,
+            IProjectStore projects, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(id, out var projectId))
+                return Results.BadRequest(new { error = "Invalid project id." });
+            if (string.IsNullOrWhiteSpace(body.BlueprintId))
+                return Results.BadRequest(new { error = "blueprint_id is required." });
+
+            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var project = await projects.GetAsync(projectId, ct);
+            if (project is null || !caller.Owns(project.Owner)) return Results.NotFound();
+            var blueprint = blueprints.GetPredefinedById(body.BlueprintId);
+            if (blueprint is null) return Results.BadRequest(new { error = "Unknown predefined blueprint." });
+
+            var preview = await defaults.PreviewAsync(projectId, blueprint, ct);
+            return preview.CanApply
+                ? Results.Ok(preview)
+                : Results.UnprocessableEntity(preview);
+        })
+        .WithName("PreviewSkillDefaults")
+        .WithTags("Skills")
+        .AddOpenApiOperationTransformer((operation, _, _) =>
+        {
+            operation.Description = "Previews explicit bundled skill defaults for a confirmed project team without writing catalog state.";
+            return Task.CompletedTask;
+        });
+
+        app.MapPost("/api/projects/{id}/skill-defaults/apply", async (
+            HttpContext http, string id, SkillDefaultsApplyRequest body,
+            BlueprintService blueprints, SkillDefaultsService defaults,
+            IProjectStore projects, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(id, out var projectId))
+                return Results.BadRequest(new { error = "Invalid project id." });
+            if (string.IsNullOrWhiteSpace(body.BlueprintId) || string.IsNullOrWhiteSpace(body.Digest))
+                return Results.BadRequest(new { error = "blueprint_id and digest are required." });
+
+            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var project = await projects.GetAsync(projectId, ct);
+            if (project is null || !caller.Owns(project.Owner)) return Results.NotFound();
+            var blueprint = blueprints.GetPredefinedById(body.BlueprintId);
+            if (blueprint is null) return Results.BadRequest(new { error = "Unknown predefined blueprint." });
+
+            var result = await defaults.ApplyAsync(projectId, blueprint, body.Digest, ct);
+            return result.Outcome switch
+            {
+                "applied" => Results.Ok(result),
+                "stale" => Results.Json(result, statusCode: StatusCodes.Status409Conflict),
+                _ => Results.UnprocessableEntity(result),
+            };
+        })
+        .WithName("ApplySkillDefaults")
+        .WithTags("Skills")
+        .AddOpenApiOperationTransformer((operation, _, _) =>
+        {
+            operation.Description = "Atomically applies a matching skill-defaults preview. Stale or incomplete previews are rejected.";
+            return Task.CompletedTask;
+        });
+
         // GET /api/projects/{id}/skills — list catalog skills with assignments.
         app.MapGet("/api/projects/{id}/skills", async (
             HttpContext http, string id, SkillCatalogService svc, CancellationToken ct) =>
@@ -303,4 +367,9 @@ public static class SkillEndpoints
     public sealed record ImportRequest(string? RepoUrl, IReadOnlyList<string>? Locations);
     public sealed record CreateSkillRequest(string? Name, string? DisplayName, string? Description, string? Instructions);
     public sealed record GenerateSkillRequest(string? Description, string? Prompt);
+    public sealed record SkillDefaultsPreviewRequest(
+        [property: JsonPropertyName("blueprint_id")] string? BlueprintId);
+    public sealed record SkillDefaultsApplyRequest(
+        [property: JsonPropertyName("blueprint_id")] string? BlueprintId,
+        [property: JsonPropertyName("digest")] string? Digest);
 }

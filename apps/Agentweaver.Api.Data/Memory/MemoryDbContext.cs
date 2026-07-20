@@ -48,6 +48,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<CastProposalRecord> CastProposals => Set<CastProposalRecord>();
     public DbSet<SkillRecord> Skills => Set<SkillRecord>();
     public DbSet<SkillAssignmentRecord> SkillAssignments => Set<SkillAssignmentRecord>();
+    public DbSet<BlueprintPackageLibraryRecord> BlueprintPackageLibrary => Set<BlueprintPackageLibraryRecord>();
+    public DbSet<BlueprintPackageVersionRecord> BlueprintPackageVersions => Set<BlueprintPackageVersionRecord>();
+    public DbSet<BlueprintPackagePayloadRecord> BlueprintPackagePayloads => Set<BlueprintPackagePayloadRecord>();
+    public DbSet<BlueprintPackageAcquisitionRecord> BlueprintPackageAcquisitions => Set<BlueprintPackageAcquisitionRecord>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -154,6 +158,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<WorkflowCheckpointRecord>();
             model.Ignore<SkillRecord>();
             model.Ignore<SkillAssignmentRecord>();
+            model.Ignore<BlueprintPackageLibraryRecord>();
+            model.Ignore<BlueprintPackageVersionRecord>();
+            model.Ignore<BlueprintPackagePayloadRecord>();
+            model.Ignore<BlueprintPackageAcquisitionRecord>();
             return;
         }
 
@@ -234,6 +242,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.State).HasColumnName("state").HasDefaultValue("active");
             e.Property(p => p.CreatedAt).HasColumnName("created_at");
             e.Property(p => p.UpdatedAt).HasColumnName("updated_at");
+            e.Property(p => p.TeamRevision).HasColumnName("team_revision").HasDefaultValue(0L);
             e.Property(p => p.MaxReadyPerHeartbeat).HasColumnName("max_ready_per_heartbeat").HasDefaultValue(3);
             e.Property(p => p.PickupAutopilot).HasColumnName("pickup_autopilot").HasDefaultValue(true);
             e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(true);
@@ -247,6 +256,53 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.OutcomeSpecGenerationModel).HasColumnName("outcome_spec_generation_model");
             e.Property(p => p.AllowedWorkflowIds).HasColumnName("allowed_workflow_ids");
             e.HasIndex(p => p.State).HasDatabaseName("IX_projects_state");
+        });
+
+        model.Entity<BlueprintPackageLibraryRecord>(e =>
+        {
+            e.ToTable("blueprint_package_library").HasKey(x => new { x.OwnerId, x.PackageId });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+        });
+        model.Entity<BlueprintPackageVersionRecord>(e =>
+        {
+            e.ToTable("blueprint_package_versions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersionKey });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersionKey).HasColumnName("canonical_version_key").HasMaxLength(64);
+            e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
+            e.Property(x => x.ContentDigest).HasColumnName("content_digest");
+            e.Property(x => x.PayloadSetDigest).HasColumnName("payload_set_digest");
+            e.Property(x => x.RawManifestSha256).HasColumnName("raw_manifest_sha256");
+            e.Property(x => x.ContainerSha256).HasColumnName("container_sha256");
+            e.Property(x => x.RawManifest).HasColumnName("raw_manifest");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+        });
+        model.Entity<BlueprintPackagePayloadRecord>(e =>
+        {
+            e.ToTable("blueprint_package_payloads").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersionKey, x.Path });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersionKey).HasColumnName("canonical_version_key").HasMaxLength(64);
+            e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
+            e.Property(x => x.Path).HasColumnName("path");
+            e.Property(x => x.Bytes).HasColumnName("bytes");
+        });
+        model.Entity<BlueprintPackageAcquisitionRecord>(e =>
+        {
+            e.ToTable("blueprint_package_acquisitions").HasKey(x => new { x.OwnerId, x.PackageId, x.CanonicalVersionKey, x.Ordinal });
+            e.Property(x => x.OwnerId).HasColumnName("owner_id");
+            e.Property(x => x.PackageId).HasColumnName("package_id");
+            e.Property(x => x.CanonicalVersionKey).HasColumnName("canonical_version_key").HasMaxLength(64);
+            e.Property(x => x.CanonicalVersion).HasColumnName("canonical_version");
+            e.Property(x => x.Ordinal).HasColumnName("ordinal");
+            e.Property(x => x.Source).HasColumnName("source");
+            e.Property(x => x.Producer).HasColumnName("producer");
+            e.Property(x => x.Repository).HasColumnName("repository");
+            e.Property(x => x.Revision).HasColumnName("revision");
+            e.Property(x => x.AcquiredAt).HasColumnName("acquired_at");
+            e.Property(x => x.RequestedRef).HasColumnName("requested_ref");
         });
 
         model.Entity<BacklogTaskRecord>(e =>
@@ -323,6 +379,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<SkillRecord>(e =>
         {
             e.ToTable("skills").HasKey(s => s.SkillId);
+            e.HasAlternateKey(s => new { s.ProjectId, s.SkillId })
+                .HasName("AK_skills_project_id_skill_id");
             e.Property(s => s.SkillId).HasColumnName("skill_id");
             e.Property(s => s.ProjectId).HasColumnName("project_id");
             e.Property(s => s.Name).HasColumnName("name");
@@ -340,6 +398,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             // in the AddSkillCatalog migration (case-insensitive parity with SQLite's COLLATE NOCASE).
             // EF cannot model a lower() index, so it is intentionally not declared here; case-insensitive
             // lookups (EfSkillStore.GetByNameAsync) translate to WHERE lower(name) = … and use it.
+            e.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(s => s.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_skills_projects_project_id");
         });
 
         model.Entity<SkillAssignmentRecord>(e =>
@@ -352,6 +415,17 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(a => a.CreatedAt).HasColumnName("created_at");
             e.HasIndex(a => new { a.ProjectId, a.AgentName })
                 .HasDatabaseName("IX_skill_assignments_agent");
+            e.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(a => a.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_skill_assignments_projects_project_id");
+            e.HasOne<SkillRecord>()
+                .WithMany()
+                .HasForeignKey(a => new { a.ProjectId, a.SkillId })
+                .HasPrincipalKey(s => new { s.ProjectId, s.SkillId })
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_skill_assignments_skills_project_id_skill_id");
         });
 
         // Shared MAF workflow checkpoints. Each row is an independent, unique-PK checkpoint so the two

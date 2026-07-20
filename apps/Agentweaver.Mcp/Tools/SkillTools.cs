@@ -181,6 +181,35 @@ public sealed class SkillTools(AgentweaverApiClient api)
             ct);
     }
 
+    [McpServerTool(Name = "skill_defaults_preview"), Description("Preview explicit bundled role-skill defaults for a confirmed project team. Returns a digest required by skill_defaults_apply; makes no changes.")]
+    public async Task<string> SkillDefaultsPreviewAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Predefined blueprint ID")] string blueprint_id,
+        CancellationToken ct = default)
+    {
+        return await ExecuteJsonAsync(
+            "skill_defaults_preview",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/skill-defaults/preview",
+                new { blueprint_id }, token),
+            ct);
+    }
+
+    [McpServerTool(Name = "skill_defaults_apply"), Description("Apply a matching skill_defaults_preview atomically. A stale digest is rejected; preview again before retrying.")]
+    public async Task<string> SkillDefaultsApplyAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Predefined blueprint ID")] string blueprint_id,
+        [Description("Digest returned by skill_defaults_preview")] string digest,
+        CancellationToken ct = default)
+    {
+        return await ExecuteJsonAsync(
+            "skill_defaults_apply",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/skill-defaults/apply",
+                new { blueprint_id, digest }, token),
+            ct);
+    }
+
     // ── Assignment ─────────────────────────────────────────────────────────────
 
     [McpServerTool(Name = "skill_assignments_list"), Description("List all skill→agent assignments in a project.")]

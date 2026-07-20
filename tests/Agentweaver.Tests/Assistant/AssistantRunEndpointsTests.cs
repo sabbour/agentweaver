@@ -89,6 +89,39 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
+    public async Task SendMessage_ConcurrentToolCallbacks_PersistWithoutSequenceGaps()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        factory.Agent.ConcurrentToolBurstCount = 10;
+        factory.Agent.ToolName = "project_list";
+        factory.Agent.ReplyText = "Burst complete.";
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "burst tool callbacks" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var events = await GetEventsAsync(client, runId);
+        var burstToolCalls = events.Where(e =>
+            e.Type == EventTypes.ToolCall
+            && e.Payload.TryGetProperty("name", out var name)
+            && name.GetString()!.StartsWith("project_list-", StringComparison.Ordinal))
+            .ToList();
+        var burstToolResults = events.Where(e =>
+            e.Type == EventTypes.ToolResult
+            && e.Payload.TryGetProperty("name", out var name)
+            && name.GetString()!.StartsWith("project_list-", StringComparison.Ordinal))
+            .ToList();
+
+        burstToolCalls.Should().HaveCount(factory.Agent.ConcurrentToolBurstCount);
+        burstToolResults.Should().HaveCount(factory.Agent.ConcurrentToolBurstCount);
+        events.Select(e => e.Sequence).Should().Equal(Enumerable.Range(1, events.Count));
+    }
+
+    [Fact]
     public async Task SendMessage_GatedTool_EmitsApprovalRequired_AndRunsWhenApproved()
     {
         await using var factory = new AssistantWebApplicationFactory();
@@ -768,6 +801,7 @@ public sealed class AssistantRunEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var raw = await response.Content.ReadFromJsonAsync<List<JsonElement>>();
         return raw!.Select(e => new EventRow(
+            e.TryGetProperty("sequence", out var seq) ? seq.GetInt32() : 0,
             e.GetProperty("type").GetString()!,
             e.GetProperty("payload"))).ToList();
     }
@@ -790,7 +824,7 @@ public sealed class AssistantRunEndpointsTests
         return null;
     }
 
-    private sealed record EventRow(string Type, JsonElement Payload);
+    private sealed record EventRow(int Sequence, string Type, JsonElement Payload);
 }
 
 /// <summary>
@@ -837,9 +871,6 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["RunBounds:MaxSteps"] = "50",
                 ["RunBounds:MaxMinutes"] = "10",
                 ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
-                // Present so DI validation is happy; the fake agent replaces the real path that would
-                // connect here, so no MCP connection is ever attempted in tests.
-                ["Assistant:McpEndpoint"] = "http://127.0.0.1:59999/mcp",
             });
         });
 
@@ -877,6 +908,7 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
     public bool EmitTool { get; set; }
     public string ToolName { get; set; } = "tool";
     public IReadOnlyList<string> ToolNamesInvoked { get; set; } = Array.Empty<string>();
+    public int ConcurrentToolBurstCount { get; set; }
 
     /// <summary>When set, the fake drives one approval-gated tool call through the sink before
     /// replying: it emits a tool.call, asks the sink for approval, and emits a tool.result whose
@@ -912,6 +944,18 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
         {
             await sink.OnToolCallAsync(ToolName, "{}", ct);
             await sink.OnToolResultAsync(ToolName, success: true, ct);
+        }
+
+        if (sink is not null && ConcurrentToolBurstCount > 0)
+        {
+            var burst = Enumerable.Range(0, ConcurrentToolBurstCount)
+                .Select(async i =>
+                {
+                    var burstTool = $"{ToolName}-{i}";
+                    await sink.OnToolCallAsync(burstTool, "{}", ct);
+                    await sink.OnToolResultAsync(burstTool, success: true, ct);
+                });
+            await Task.WhenAll(burst);
         }
 
         if (sink is not null)

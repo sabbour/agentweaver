@@ -5,7 +5,9 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
+using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Projects;
@@ -165,6 +167,67 @@ public sealed class ProjectDeleteConcurrencyTests : IAsyncDisposable
             "a reserved run that failed to start must be terminalized to Failed");
     }
 
+    [Fact]
+    public async Task ConcurrentDefaultsApplyAndProjectDelete_LeavesNoSkillState()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projectStore = new SqliteProjectStore(testDb.Db);
+        var skillStore = new SqliteSkillStore(testDb.Db);
+
+        for (var iteration = 0; iteration < 8; iteration++)
+        {
+            var project = new Project
+            {
+                Id = ProjectId.New(),
+                Name = $"Defaults/delete race {iteration}",
+                Origin = ProjectOrigin.Blank(),
+                WorkingDirectory = NewDir(),
+                DefaultBranch = "main",
+                Owner = "test-user",
+                ProviderSettings = new ProjectProviderSettings
+                {
+                    DefaultProvider = ModelSource.GitHubCopilot,
+                },
+                State = ProjectState.Active,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            await projectStore.InsertAsync(project);
+            var skill = BuiltInSkill(project.Id, $"race-default-{iteration}");
+            var plan = new SkillDefaultsStorePlan(
+                project.Id,
+                project.TeamRevision,
+                SkillCatalogStateFingerprint.Compute([], []),
+                [skill],
+                [],
+                [new SkillAssignment
+                {
+                    ProjectId = project.Id,
+                    SkillId = skill.Id,
+                    AgentName = "Tank",
+                    CreatedAt = DateTimeOffset.UtcNow,
+                }]);
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var apply = Task.Run(async () =>
+            {
+                await start.Task;
+                return await skillStore.ApplyDefaultsAsync(plan);
+            });
+            var delete = Task.Run(async () =>
+            {
+                await start.Task;
+                await projectStore.DeleteAsync(project.Id);
+            });
+
+            start.SetResult();
+            await Task.WhenAll(apply, delete);
+
+            (await projectStore.GetAsync(project.Id)).Should().BeNull();
+            (await skillStore.ListByProjectAsync(project.Id)).Should().BeEmpty();
+            (await skillStore.ListAssignmentsByProjectAsync(project.Id)).Should().BeEmpty();
+        }
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -185,5 +248,24 @@ public sealed class ProjectDeleteConcurrencyTests : IAsyncDisposable
             Directory.CreateDirectory(workingDirectory);
             return "main";
         }
+    }
+
+    private static Skill BuiltInSkill(ProjectId projectId, string name)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new Skill
+        {
+            Id = SkillId.New(),
+            ProjectId = projectId,
+            Name = name,
+            Description = name,
+            Instructions = "instructions",
+            Provenance = SkillProvenance.BuiltIn,
+            SourceLocation = $"catalog/skills/{name}",
+            ContentHash = SkillParser.ComputeContentHash(name, name, "instructions", []),
+            Status = SkillStatus.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
     }
 }

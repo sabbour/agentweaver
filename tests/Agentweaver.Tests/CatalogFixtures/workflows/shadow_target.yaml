@@ -1,0 +1,11 @@
+id: shadow-target
+name: Unbound catalog workflow
+start: split
+nodes:
+  - id: split
+    type: fan_out
+  - id: done
+    type: terminal
+edges:
+  - from: split
+    to: done

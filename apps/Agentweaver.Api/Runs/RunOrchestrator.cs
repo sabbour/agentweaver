@@ -6,6 +6,7 @@ using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text;
 
 namespace Agentweaver.Api.Runs;
@@ -26,6 +27,7 @@ public sealed class RunOrchestrator
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly IRunAgentHostContextResolver? _runAgentHostContextResolver;
+    private readonly IRunEventStream? _eventStream;
     private readonly ILogger<RunOrchestrator> _logger;
 
     /// <summary>
@@ -108,7 +110,8 @@ public sealed class RunOrchestrator
         RunWatchLoopService watchLoop,
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
-        ILogger<RunOrchestrator> logger)
+        ILogger<RunOrchestrator> logger,
+        IRunEventStream? eventStream = null)
         : this(
             runStore,
             streamStore,
@@ -119,7 +122,8 @@ public sealed class RunOrchestrator
             scopeFactory,
             configuration,
             logger,
-            runAgentHostContextResolver: null)
+            runAgentHostContextResolver: null,
+            eventStream: eventStream)
     {
     }
 
@@ -133,7 +137,8 @@ public sealed class RunOrchestrator
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
         ILogger<RunOrchestrator> logger,
-        IRunAgentHostContextResolver? runAgentHostContextResolver)
+        IRunAgentHostContextResolver? runAgentHostContextResolver,
+        IRunEventStream? eventStream = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -144,6 +149,7 @@ public sealed class RunOrchestrator
         _scopeFactory = scopeFactory;
         _configuration = configuration;
         _runAgentHostContextResolver = runAgentHostContextResolver;
+        _eventStream = eventStream;
         _logger = logger;
     }
 
@@ -1134,31 +1140,23 @@ public sealed class RunOrchestrator
         if (events.Count == 0)
             return;
 
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var stream = _eventStream;
+        if (stream is null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            stream = scope.ServiceProvider.GetService<IRunEventStream>();
+        }
 
-        var existingSeqs = db.RunEvents
-            .Where(e => e.RunId == runId)
-            .Select(e => e.Sequence)
-            .ToHashSet();
-
-        var toInsert = events
-            .Where(e => !existingSeqs.Contains(e.Sequence))
-            .Select(e => new RunEventRecord
-            {
-                RunId = runId,
-                Sequence = e.Sequence,
-                EventType = e.Type,
-                PayloadJson = System.Text.Json.JsonSerializer.Serialize(e.Payload),
-                CreatedAt = DateTime.UtcNow,
-            })
-            .ToList();
-
-        if (toInsert.Count == 0)
+        if (stream is null)
+        {
+            _logger.LogWarning(
+                "Failed to persist failed run events for {RunId} because no IRunEventStream is available",
+                runId);
             return;
+        }
 
-        db.RunEvents.AddRange(toInsert);
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        foreach (var evt in events.OrderBy(e => e.Sequence))
+            _ = await stream.AppendAsync(runId, evt, ct).ConfigureAwait(false);
     }
 
     /// <summary>

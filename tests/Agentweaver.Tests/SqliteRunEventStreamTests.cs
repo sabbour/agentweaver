@@ -159,6 +159,114 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task AppendAsync_ConcurrentSameRunAcrossInstances_AssignsUniqueContiguousSequences()
+    {
+        var runId = "run-sqlite-concurrency";
+        const int workerCount = 2;
+        const int eventsPerWorker = 4;
+        var streams = Enumerable.Range(0, workerCount)
+            .Select(_ => new SqliteRunEventStream(_config))
+            .ToArray();
+        var start = new Barrier(workerCount);
+
+        var workers = streams.Select((stream, worker) => Task.Run(async () =>
+        {
+            start.SignalAndWait();
+            for (var index = 0; index < eventsPerWorker; index++)
+            {
+                await stream.AppendAsync(runId, new RunEvent(0, EventTypes.ToolCall, new
+                {
+                    worker,
+                    index,
+                }));
+            }
+        })).ToArray();
+
+        await Task.WhenAll(workers);
+
+        var verifier = new SqliteRunEventStream(_config);
+        await verifier.AppendAsync(runId, new RunEvent(0, EventTypes.RunCompleted, new { }));
+
+        var replayed = await ReplayWithTimeoutAsync(verifier, runId);
+        var expectedCount = (workerCount * eventsPerWorker) + 1;
+        replayed.Should().HaveCount(expectedCount);
+        replayed.Select(e => e.Sequence).Should().Equal(Enumerable.Range(1, expectedCount));
+        replayed.Select(e => e.Sequence).Distinct().Should().HaveCount(expectedCount);
+    }
+
+    [Fact]
+    public async Task RecordNext_InterleavedWithDirectSequenceZeroAppend_PersistsBothEventsWithoutCollision()
+    {
+        var runId = "run-sqlite-mixed";
+        const string entryEventType = "coordinator.topology";
+        var inner = new SqliteRunEventStream(_config);
+        var interleaved = new InterleavingRunEventStream(inner, entryEventType);
+        var entry = new RunStreamEntry("owner", runId, interleaved);
+        var start = new Barrier(2);
+
+        var entryWrite = Task.Run(() =>
+        {
+            start.SignalAndWait();
+            return entry.RecordNext(entryEventType, new
+            {
+                writer = "entry",
+                marker = "entry-record-next",
+            });
+        });
+
+        var directWrite = Task.Run(async () =>
+        {
+            start.SignalAndWait();
+            await interleaved.EntryAppendIntercepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            try
+            {
+                return await interleaved.AppendAsync(runId, new RunEvent(0, EventTypes.ToolCall, new
+                {
+                    writer = "direct",
+                    marker = "direct-sequence-zero",
+                }));
+            }
+            finally
+            {
+                interleaved.ReleaseEntryAppend();
+            }
+        });
+
+        var assigned = await Task.WhenAll(entryWrite, directWrite);
+        assigned[0].Should().NotBe(assigned[1]);
+
+        var persisted = await new SqliteRunEventStream(_config).GetPersistedEventsAsync(runId, 0);
+        persisted.Should().HaveCount(2);
+        persisted.Select(e => e.Sequence).Should().Equal(1, 2);
+        persisted.Count(e => e.Type == entryEventType).Should().Be(1);
+        persisted.Count(e => e.Type == EventTypes.ToolCall).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AppendAsync_ExplicitSequence_DuplicateDifferentPayload_Throws()
+    {
+        var runId = "run-explicit-mismatch-sqlite";
+        var stream = new SqliteRunEventStream(_config);
+        await stream.AppendAsync(runId, new RunEvent(7, EventTypes.ToolResult, new
+        {
+            toolName = "project_list",
+            success = true,
+        }));
+
+        Func<Task> act = async () =>
+        {
+            _ = await stream.AppendAsync(runId, new RunEvent(7, EventTypes.ToolResult, new
+            {
+                toolName = "project_list",
+                success = false,
+            }));
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*explicit sequence collision*");
+    }
+
+    [Fact]
     public async Task SubscribeAsync_AfterLateAppendFollowingTerminal_DrainsPersistedDiagnosticsThenCompletes()
     {
         var runId = "run-late-assembly";
@@ -332,5 +440,38 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
             replayed.Add(evt);
         return replayed;
+    }
+
+    private sealed class InterleavingRunEventStream(IRunEventStream inner, string gateOnType) : IRunEventStream
+    {
+        private readonly TaskCompletionSource _entryAppendIntercepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseEntryAppend = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _gateUsed;
+
+        public TaskCompletionSource EntryAppendIntercepted => _entryAppendIntercepted;
+
+        public async ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            if (evt.Sequence == 0
+                && string.Equals(evt.Type, gateOnType, StringComparison.Ordinal)
+                && Interlocked.Exchange(ref _gateUsed, 1) == 0)
+            {
+                _entryAppendIntercepted.TrySetResult();
+                await _releaseEntryAppend.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+
+            return await inner.AppendAsync(runId, evt, ct).ConfigureAwait(false);
+        }
+
+        public IAsyncEnumerable<RunEvent> SubscribeAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.SubscribeAsync(runId, fromSequence, ct);
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            inner.CompleteAsync(runId, ct);
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.GetPersistedEventsAsync(runId, fromSequence, ct);
+
+        public void ReleaseEntryAppend() => _releaseEntryAppend.TrySetResult();
     }
 }

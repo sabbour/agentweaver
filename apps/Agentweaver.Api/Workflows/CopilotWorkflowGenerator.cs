@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Blueprints;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 
@@ -25,6 +26,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 {
     private readonly IAgentRunner _agentRunner;
     private readonly CatalogReader _catalog;
+    private readonly CatalogConformanceSnapshot _catalogSnapshot;
     private readonly ILogger<CopilotWorkflowGenerator> _logger;
     private readonly string? _defaultModel;
 
@@ -33,10 +35,12 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         CatalogReader catalog,
         IConfiguration configuration,
         ILogger<CopilotWorkflowGenerator> logger,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        CatalogConformanceSnapshot? catalogSnapshot = null)
     {
         _agentRunner = agentRunner;
         _catalog = catalog;
+        _catalogSnapshot = catalogSnapshot ?? new CatalogConformanceSnapshot(catalog);
         _logger = logger;
         _defaultModel = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveWorkflowModel();
@@ -297,31 +301,26 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
     /// so it must not be shown as a model to imitate.</summary>
     private string BuildFewShotExamples()
     {
-        var all = _catalog.LoadAllWorkflowYamls();
+        var all = _catalogSnapshot.Workflows
+            .Where(result => result.IsValid && result.Definition is not null &&
+                             !string.Equals(result.Definition.Id, BuiltInWorkflows.DefaultWorkflowId, StringComparison.Ordinal))
+            .ToList();
         if (all.Count == 0) return "(no library examples available)";
 
         bool Preferred(string src) =>
             src.Contains("software_delivery", StringComparison.OrdinalIgnoreCase) ||
             src.Contains("bug_fix", StringComparison.OrdinalIgnoreCase);
 
-        // Never offer fan_out/fan_in/serial/coordinator_composed workflows (e.g. agent-evaluation) as
-        // few-shot examples — they would teach the model to emit unbindable node types.
-        bool Bindable(string src) =>
-            !src.Contains("agent_evaluation", StringComparison.OrdinalIgnoreCase);
-
-        var candidates = all.Where(w => Bindable(w.Source)).ToList();
-        if (candidates.Count == 0) candidates = all.ToList();
-
-        var selected = candidates.Where(w => Preferred(w.Source)).ToList();
-        if (selected.Count == 0) selected = candidates.Take(3).ToList();
+        var selected = all.Where(w => Preferred(w.Source)).ToList();
+        if (selected.Count == 0) selected = all.Take(3).ToList();
         else if (selected.Count > 3) selected = selected.Take(3).ToList();
 
         var sb = new StringBuilder();
         var i = 1;
-        foreach (var (yaml, source) in selected)
+        foreach (var workflow in selected)
         {
-            sb.AppendLine($"--- Example {i} ({source}) ---");
-            sb.AppendLine(yaml.Trim());
+            sb.AppendLine($"--- Example {i} ({workflow.Source}) ---");
+            sb.AppendLine(WorkflowDefinitionYamlSerializer.Serialize(workflow.Definition!).Trim());
             sb.AppendLine();
             i++;
         }

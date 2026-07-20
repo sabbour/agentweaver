@@ -5,5 +5,14 @@
   "roster": ["agent-architect", "prompt-engineer", "agent-evaluator", "ai-safety-reviewer", "backend-engineer", "qa-engineer", "docs-writer"],
   "workflows": ["agent-evaluation", "software-delivery", "bug-fix"],
   "review_policy": "default",
-  "sandbox_profile": "default"
+  "sandbox_profile": "default",
+  "skill_bindings": [
+    { "role_id": "agent-architect", "skills": ["agent-architecture", "agent-tools"] },
+    { "role_id": "prompt-engineer", "skills": ["prompt-engineering"] },
+    { "role_id": "agent-evaluator", "skills": ["agent-evaluation", "agent-regression"] },
+    { "role_id": "ai-safety-reviewer", "skills": ["ai-safety"] },
+    { "role_id": "backend-engineer", "skills": ["api-data-safety"] },
+    { "role_id": "qa-engineer", "skills": ["test-strategy-reproduction"] },
+    { "role_id": "docs-writer", "skills": ["docs-release-notes"] }
+  ]
 }

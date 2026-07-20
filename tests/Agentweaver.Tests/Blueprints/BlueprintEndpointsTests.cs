@@ -39,7 +39,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
-    public async Task GetBlueprints_ReturnsSixPredefined_WithCatalogRosters()
+    public async Task GetBlueprints_ReturnsFivePredefined_WithCatalogRostersAndExportability()
     {
         var response = await _client.GetAsync("/api/blueprints");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -69,6 +69,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             b.GetProperty("workflow").GetString().Should().NotBeNullOrWhiteSpace();
             b.GetProperty("review_policy").GetString().Should().NotBeNullOrWhiteSpace();
             b.GetProperty("sandbox_profile").GetString().Should().NotBeNullOrWhiteSpace();
+            b.GetProperty("exportability").GetProperty("status").GetString().Should().Be("exportable");
+            b.GetProperty("exportability").GetProperty("codes").EnumerateArray().Should().BeEmpty();
         }
     }
 
@@ -164,6 +166,32 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("valid").GetBoolean().Should().BeTrue(
             (await response.Content.ReadAsStringAsync()));
+    }
+
+    [Fact]
+    public async Task ValidateBlueprint_NullSkillBinding_ReturnsValidationError()
+    {
+        var response = await _client.PostAsJsonAsync("/api/blueprints/validate", new
+        {
+            blueprint = new
+            {
+                id = "blueprint-null-binding",
+                name = "Null Binding",
+                description = "Malformed binding fixture",
+                roster = new[] { "qa-engineer" },
+                workflows = new[] { "default" },
+                review_policy = "default",
+                sandbox_profile = "default",
+                skill_bindings = new object?[] { null },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("valid").GetBoolean().Should().BeFalse();
+        body.GetProperty("errors").EnumerateArray()
+            .Select(error => error.GetString())
+            .Should().Contain(error => error!.Contains("role_id", StringComparison.Ordinal));
     }
 
     [Fact]

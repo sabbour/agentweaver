@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/metaschemas/blueprint-package-v1",
+  "$vocabulary": {
+    "https://json-schema.org/draft/2020-12/vocab/core": true,
+    "https://json-schema.org/draft/2020-12/vocab/applicator": true,
+    "https://json-schema.org/draft/2020-12/vocab/unevaluated": true,
+    "https://json-schema.org/draft/2020-12/vocab/validation": true,
+    "https://json-schema.org/draft/2020-12/vocab/meta-data": true,
+    "https://agentweaver.dev/vocab/blueprint-package-v1": true
+  },
+  "$dynamicAnchor": "meta",
+  "allOf": [
+    {
+      "$ref": "https://json-schema.org/draft/2020-12/schema"
+    },
+    {
+      "properties": {
+        "x-agentweaver-canonical-definition-path": {
+          "type": "boolean"
+        },
+        "x-agentweaver-https-repository-uri": {
+          "description": "Requires the Blueprint Package v1 lexical HTTPS repository URI profile.",
+          "type": "boolean"
+        },
+        "x-agentweaver-rfc3339-timestamp": {
+          "type": "boolean"
+        }
+      }
+    }
+  ]
+}

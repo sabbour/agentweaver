@@ -2,6 +2,7 @@ using System.Text.Json;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Agentweaver.Api.Infrastructure.Ef;
 
@@ -159,6 +160,49 @@ public sealed class EfProjectStore : IProjectStore
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
+    public async Task<IProjectTeamMutationLease?> TryBeginTeamMutationAsync(
+        ProjectId id,
+        long expectedRevision,
+        CancellationToken ct = default)
+    {
+        var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        IDbContextTransaction? transaction = null;
+        try
+        {
+            transaction = await db.Database
+                .BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct)
+                .ConfigureAwait(false);
+            var pid = id.ToString();
+            var rows = await db.Projects
+                .Where(project =>
+                    project.ProjectId == pid &&
+                    project.State == "active" &&
+                    project.TeamRevision == expectedRevision)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(
+                        project => project.TeamRevision,
+                        project => project.TeamRevision),
+                    ct)
+                .ConfigureAwait(false);
+            if (rows != 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                await transaction.DisposeAsync().ConfigureAwait(false);
+                await db.DisposeAsync().ConfigureAwait(false);
+                return null;
+            }
+
+            return new EfProjectTeamMutationLease(db, transaction, id, expectedRevision);
+        }
+        catch
+        {
+            if (transaction is not null)
+                await transaction.DisposeAsync().ConfigureAwait(false);
+            await db.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     private static ProjectRecord ToRecord(Project p) => new()
     {
         ProjectId = p.Id.ToString(),
@@ -186,6 +230,7 @@ public sealed class EfProjectStore : IProjectStore
         WorkflowGenerationModel = p.WorkflowGenerationModel,
         OutcomeSpecGenerationModel = p.OutcomeSpecGenerationModel,
         AllowedWorkflowIds = p.AllowedWorkflowIds is { Count: > 0 } ? JsonSerializer.Serialize(p.AllowedWorkflowIds) : null,
+        TeamRevision = p.TeamRevision,
     };
 
     private Project FromRecord(ProjectRecord r)
@@ -231,6 +276,67 @@ public sealed class EfProjectStore : IProjectStore
             WorkflowGenerationModel = r.WorkflowGenerationModel,
             OutcomeSpecGenerationModel = r.OutcomeSpecGenerationModel,
             AllowedWorkflowIds = allowedIds is { Count: > 0 } ? allowedIds : null,
+            TeamRevision = r.TeamRevision,
         };
+    }
+
+    private sealed class EfProjectTeamMutationLease : IProjectTeamMutationLease
+    {
+        private readonly MemoryDbContext _db;
+        private readonly IDbContextTransaction _transaction;
+        private readonly ProjectId _projectId;
+        private bool _completed;
+
+        public EfProjectTeamMutationLease(
+            MemoryDbContext db,
+            IDbContextTransaction transaction,
+            ProjectId projectId,
+            long expectedRevision)
+        {
+            _db = db;
+            _transaction = transaction;
+            _projectId = projectId;
+            ExpectedRevision = expectedRevision;
+        }
+
+        public long ExpectedRevision { get; }
+
+        public async Task CompleteAsync(CancellationToken ct = default)
+        {
+            if (_completed) return;
+
+            var pid = _projectId.ToString();
+            var rows = await _db.Projects
+                .Where(project =>
+                    project.ProjectId == pid &&
+                    project.TeamRevision == ExpectedRevision)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(
+                            project => project.TeamRevision,
+                            project => project.TeamRevision + 1)
+                        .SetProperty(project => project.UpdatedAt, DateTimeOffset.UtcNow),
+                    ct)
+                .ConfigureAwait(false);
+            if (rows != 1)
+                throw new InvalidOperationException("The acquired project team mutation gate was lost.");
+
+            await _transaction.CommitAsync(ct).ConfigureAwait(false);
+            _completed = true;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                if (!_completed)
+                    await CompleteAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                await _transaction.DisposeAsync().ConfigureAwait(false);
+                await _db.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 }

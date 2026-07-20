@@ -121,7 +121,7 @@ builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>();
 // IRunEventStream is registered conditionally in the Database:Provider block below.
-// SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + serializable tx).
+// SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + advisory lock).
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
 
@@ -181,21 +181,14 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClas
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
-// Operator assistant (#346): MCP-driven chat modeled as a lightweight "operator run". The MCP tool
-// provider connects to the AgentweaverMCP /mcp endpoint per caller (bearer passed through per call);
-// the assistant agent is the in-API Copilot loop seeded with agentweaver.agent.md; AssistantRunService
-// persists the conversation as a run and streams turns onto the existing run event stream.
-builder.Services.AddSingleton<IAgentweaverMcpToolProvider>(sp =>
-{
-    var cfg = sp.GetRequiredService<IConfiguration>();
-    var endpoint = cfg["Assistant:McpEndpoint"];
-    if (string.IsNullOrWhiteSpace(endpoint))
-        throw new InvalidOperationException(
-            "Assistant:McpEndpoint must be configured (the in-cluster AgentweaverMCP /mcp URL) to use the operator assistant.");
-    var options = new AgentweaverMcpConnectionOptions { Endpoint = new Uri(endpoint) };
-    return new AgentweaverMcpToolProvider(options, sp.GetService<ILoggerFactory>());
-});
-builder.Services.AddSingleton<IOperatorAssistantAgent, OperatorAssistantAgent>();
+// Operator assistant (#346, narrow AgentHost cutover #347): MCP-driven chat modeled as a lightweight
+// "operator run". Model/SDK/MCP execution now runs on a sandbox AgentHost pod, dispatched through the
+// SAME warm-pool claim + /configure + A2A streaming mechanism Coordinator subtasks use
+// (RemoteOperatorAssistantAgent) — the in-API Copilot/MCP loop (OperatorAssistantAgent) and its MCP
+// tool-provider registration are no longer wired here; that class now runs ONLY inside the AgentHost
+// pod under AgentHostPurpose.OperatorAssistant. AssistantRunService persists the conversation as a run
+// and streams turns onto the existing run event stream, unchanged.
+builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant.RemoteOperatorAssistantAgent>();
 builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
 builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
 
@@ -238,6 +231,12 @@ builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
+    Agentweaver.Api.Blueprints.HttpContextAuthenticatedOwnerContext>();
+builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IGitHubBlueprintPackageClient,
+    Agentweaver.Api.Blueprints.GitHubBlueprintPackageClient>();
+builder.Services.AddScoped<Agentweaver.Api.Blueprints.GitHubBlueprintPackageImportService>();
 
 // MCP OAuth 2.1 Authorization Server (Option C / Seraph design). T1-T3:
 //  - McpTokenService: signs short-lived (15m) audience-bound JWT access tokens; key from
@@ -309,6 +308,25 @@ builder.Services.AddSingleton<IProjectWorkspaceProvider>(sp =>
 builder.Services.AddSingleton<ProjectGitInitializer>();
 builder.Services.AddSingleton<ProjectService>();
 
+// Owner-private Blueprint package library. Owner identity is request-scoped; storage remains
+// provider-aware so SQLite and PostgreSQL exercise the same immutable package contract.
+{
+    var _provider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    var _isPostgres = _provider is "postgres" or "postgresql";
+    if (_isPostgres)
+    {
+        builder.Services.AddScoped<Agentweaver.Api.Infrastructure.Ef.EfOwnerBlueprintPackageLibrary>();
+        builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IOwnerBlueprintPackageLibrary>(
+            sp => sp.GetRequiredService<Agentweaver.Api.Infrastructure.Ef.EfOwnerBlueprintPackageLibrary>());
+    }
+    else
+    {
+        builder.Services.AddScoped<SqliteOwnerBlueprintPackageLibrary>();
+        builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IOwnerBlueprintPackageLibrary>(
+            sp => sp.GetRequiredService<SqliteOwnerBlueprintPackageLibrary>());
+    }
+}
+
 // Backlog & Kanban board (Feature 009)
 // Provider-aware: Postgres uses EfBacklogTaskStore; SQLite uses SqliteBacklogTaskStore.
 {
@@ -346,6 +364,7 @@ builder.Services.AddSingleton<ProjectService>();
 }
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();
@@ -359,6 +378,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.HeartbeatStatusStore>(
 builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbeatService>();
 
 // Workflows (Feature 010) + Diagnostics (Feature 011)
+builder.Services.AddSingleton<Agentweaver.Api.Blueprints.CatalogConformanceSnapshot>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
 // GitHub webhook receiver (issue #53 follow-up): the real external event source wired to the event
@@ -531,6 +551,9 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     // AddAgentRuntime() registers WorkflowAgentFactory; this last-wins override replaces it.
     if (agentMode == AgentExecutionMode.PodPerRun)
     {
+        // Validate before the host starts. Remote execution must never serialize the local
+        // loopback URL into AgentHost setup parameters.
+        _ = RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(builder.Configuration);
         builder.Services.AddSingleton<IWorkflowAgentFactory>(sp =>
             sp.GetRequiredService<RemoteWorkflowAgentFactory>());
     }
@@ -733,7 +756,7 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
         builder.Services.AddSingleton<IWorkflowRunStore>(sp => sp.GetRequiredService<EfWorkflowRunStore>());
         builder.Services.AddSingleton<EfCastProposalStore>();
 
-        // Durable pub/sub event stream backed by EF + Postgres (two-layer: serializable tx + channel)
+        // Durable pub/sub event stream backed by EF + Postgres (per-run advisory lock + bounded retry).
         builder.Services.AddSingleton<IRunEventStream, EfRunEventStream>();
 
         // Data migrator (SQLite → Postgres)

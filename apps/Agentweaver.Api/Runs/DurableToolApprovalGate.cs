@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
@@ -9,9 +11,10 @@ namespace Agentweaver.Api.Runs;
 public sealed class DurableToolApprovalGate(
     DurableRunControlState state,
     RunStreamStore? streams = null,
-    ILogger<DurableToolApprovalGate>? logger = null) : IToolApprovalGate
+    ILogger<DurableToolApprovalGate>? logger = null,
+    IRunStore? runStore = null) : IToolApprovalGate
 {
-    private const string GlobalRunId = "__agentweaver_tool_approvals__";
+    private const string OwnerPolicyBucketPrefix = "__agentweaver_tool_approvals_owner_sha256_v1__";
     private const string RequestContext = "tool.approval_context";
     private const string RequestResolved = "tool.approval_resolved";
     private const string PolicyGranted = "tool.approval_policy_granted";
@@ -56,7 +59,7 @@ public sealed class DurableToolApprovalGate(
         return false;
     }
 
-    public Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope)
+    public async Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope)
     {
         var context = LatestContext(runId, requestId);
         if (context is null || LatestResolution(runId, requestId) is not null)
@@ -65,24 +68,44 @@ public sealed class DurableToolApprovalGate(
             logger?.LogWarning(
                 "GrantAsync rejected: runId={RunId} requestId={DisplayId} reason={Reason}",
                 runId, requestId.Length >= 8 ? requestId[..8] : requestId, reason);
-            return Task.FromResult(false);
+            return false;
         }
 
-        if (scope != ApprovalScope.Once)
+        if (scope != ApprovalScope.Once && !string.IsNullOrWhiteSpace(context.ToolName))
         {
-            // Approval policies apply to the tool rather than one URL, because web_fetch
-            // normally uses a different path or query string for each request.
-            var policy = PolicyKey(context.ToolName, null);
-            var targetRunId = scope == ApprovalScope.Always ? GlobalRunId : runId;
-            _state.Append(targetRunId, PolicyGranted, new PolicyGrant(policy));
+            var owner = await OwnerOfAsync(runId).ConfigureAwait(false);
+            if (owner is not null)
+            {
+                var policy = new PolicyGrant(
+                    owner,
+                    context.ToolName,
+                    ToolApprovalPolicySemantics.RiskFor(context.ToolName));
 
-            if (scope is ApprovalScope.Run or ApprovalScope.Tool && ParentOf(runId) is { } parentId)
-                _state.Append(parentId, PolicyGranted, new PolicyGrant(policy));
+                if (scope == ApprovalScope.Always)
+                {
+                    if (ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
+                        _state.Append(OwnerPolicyBucket(owner), PolicyGranted, policy);
+                }
+                else
+                {
+                    _state.Append(runId, PolicyGranted, policy);
+
+                    if (ParentOf(runId) is { } parentId)
+                    {
+                        var parentOwner = await OwnerOfAsync(parentId).ConfigureAwait(false);
+                        if (parentOwner is not null &&
+                            string.Equals(parentOwner, owner, StringComparison.Ordinal))
+                        {
+                            _state.Append(parentId, PolicyGranted, policy);
+                        }
+                    }
+                }
+            }
         }
 
         _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, true, false));
         EmitResolved(runId, requestId, approved: true, expired: false);
-        return Task.FromResult(true);
+        return true;
     }
 
     public bool Deny(string runId, string requestId)
@@ -103,12 +126,28 @@ public sealed class DurableToolApprovalGate(
 
     public bool IsAutoApproved(string runId, string toolName, string? url)
     {
-        var key = PolicyKey(toolName, url);
-        var toolKey = PolicyKey(toolName, null);
-        if (HasPolicy(GlobalRunId, key, toolKey) || HasPolicy(runId, key, toolKey))
+        if (string.IsNullOrWhiteSpace(toolName))
+            return false;
+
+        var owner = OwnerOf(runId);
+        if (owner is null)
+            return false;
+
+        var risk = ToolApprovalPolicySemantics.RiskFor(toolName);
+        if (ToolApprovalPolicySemantics.IsAlwaysEligible(toolName) &&
+            HasPolicy(OwnerPolicyBucket(owner), owner, toolName, risk))
             return true;
 
-        return ParentOf(runId) is { } parentId && HasPolicy(parentId, key, toolKey);
+        if (HasPolicy(runId, owner, toolName, risk))
+            return true;
+
+        if (ParentOf(runId) is not { } parentId)
+            return false;
+
+        var parentOwner = OwnerOf(parentId);
+        return parentOwner is not null
+            && string.Equals(parentOwner, owner, StringComparison.Ordinal)
+            && HasPolicy(parentId, parentOwner, toolName, risk);
     }
 
     public bool IsKnownRequest(string runId, string requestId) =>
@@ -180,19 +219,77 @@ public sealed class DurableToolApprovalGate(
             .LastOrDefault()
             ?.ParentRunId;
 
-    private bool HasPolicy(string runId, string key, string toolKey) =>
-        _state.Load(runId, PolicyGranted, RunCleared)
-            .TakeLastAfterClear()
-            .Where(e => e.EventType == PolicyGranted)
-            .Select(e => JsonSerializer.Deserialize<PolicyGrant>(e.PayloadJson, JsonDefaults.Options))
-            .Any(p => p?.PolicyKey == key || p?.PolicyKey == toolKey);
+    private bool HasPolicy(string bucketRunId, string owner, string toolName, string risk)
+    {
+        foreach (var record in _state.Load(bucketRunId, PolicyGranted, RunCleared)
+                     .TakeLastAfterClear()
+                     .Where(e => e.EventType == PolicyGranted))
+        {
+            try
+            {
+                var policy = JsonSerializer.Deserialize<PolicyGrant>(
+                    record.PayloadJson,
+                    JsonDefaults.Options);
+                if (policy is not null
+                    && string.Equals(policy.Owner, owner, StringComparison.Ordinal)
+                    && string.Equals(policy.ToolId, toolName, StringComparison.Ordinal)
+                    && string.Equals(policy.RiskSemantics, risk, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // Malformed or legacy payloads fail closed.
+            }
+        }
 
-    private static string PolicyKey(string toolName, string? url) =>
-        $"{toolName}:{url ?? ""}";
+        return false;
+    }
+
+    private async Task<string?> OwnerOfAsync(string runId)
+    {
+        if (runStore is null || !RunId.TryParse(runId, out var id))
+            return null;
+
+        try
+        {
+            var run = await runStore.GetAsync(id).ConfigureAwait(false);
+            return string.IsNullOrWhiteSpace(run?.SubmittingUser) ? null : run.SubmittingUser;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Unable to resolve tool-approval owner for run {RunId}", runId);
+            return null;
+        }
+    }
+
+    private string? OwnerOf(string runId)
+    {
+        if (runStore is null || !RunId.TryParse(runId, out var id))
+            return null;
+
+        try
+        {
+            var run = runStore.GetAsync(id).ConfigureAwait(false).GetAwaiter().GetResult();
+            return string.IsNullOrWhiteSpace(run?.SubmittingUser) ? null : run.SubmittingUser;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Unable to resolve tool-approval owner for run {RunId}", runId);
+            return null;
+        }
+    }
+
+    internal static string OwnerPolicyBucket(string owner)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(owner));
+        return OwnerPolicyBucketPrefix + Convert.ToHexString(hash);
+    }
 
     private sealed record ApprovalContext(string RequestId, string ToolName, string? Url);
     private sealed record ApprovalResolution(string RequestId, bool Approved, bool Expired = false);
-    private sealed record PolicyGrant(string PolicyKey);
+    private sealed record PolicyGrant(string? Owner, string? ToolId, string? RiskSemantics);
     private sealed record ParentRegistration(string ParentRunId);
 }
 

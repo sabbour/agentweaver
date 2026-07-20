@@ -7,6 +7,9 @@ namespace Agentweaver.Squad.Model;
 /// </summary>
 public sealed record BespokeRole(string Id, string Title, string Charter);
 
+/// <summary>Built-in skills to apply to the confirmed agent holding a blueprint roster role.</summary>
+public sealed record BlueprintSkillBinding(string RoleId, IReadOnlyList<string> Skills);
+
 /// <summary>
 /// A team blueprint: a named, reusable starting point for a project that captures a roster of
 /// catalog roles plus a set of workflows, review policy, and sandbox profile to apply on creation.
@@ -23,6 +26,12 @@ public sealed record Blueprint(
     string ReviewPolicy,
     string SandboxProfile)
 {
+    /// <summary>
+    /// Optional defaults keyed by stable role id. They are interpreted only after a team has been
+    /// confirmed, so a display or generated agent name can never change the intended binding.
+    /// </summary>
+    public IReadOnlyList<BlueprintSkillBinding> SkillBindings { get; init; } = [];
+
     /// <summary>
     /// The default workflow id for this blueprint — the first entry in <see cref="Workflows"/>.
     /// Falls back to <c>"default"</c> when the set is empty. Used by the project store and

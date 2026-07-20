@@ -13,6 +13,12 @@ public sealed record Project
     public required DateTimeOffset CreatedAt { get; init; }
     public required DateTimeOffset UpdatedAt { get; init; }
 
+    /// <summary>
+    /// Persisted monotonic revision for confirmed-team/configuration state. Team writers advance it
+    /// under the project mutation gate; defaults apply transactionally verifies the previewed value.
+    /// </summary>
+    public long TeamRevision { get; init; }
+
     /// <summary>Max Ready tasks claimed per heartbeat tick (FR-008a). Valid range [1, 20]. Default 3.</summary>
     public int MaxReadyPerHeartbeat { get; init; } = 3;
 

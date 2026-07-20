@@ -1,3 +1,5 @@
+using System.Net;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Workflow;
@@ -29,19 +31,22 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly RemoteAgentProxyOptions _proxyOptions;
+    private readonly string _remoteApiBaseUrl;
 
     public RemoteWorkflowAgentFactory(
         ISandboxAgentEndpointResolver endpointResolver,
         IAgentHostTurnTokenRegistry turnTokenRegistry,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
-        IOptions<RemoteAgentProxyOptions> proxyOptions)
+        IOptions<RemoteAgentProxyOptions> proxyOptions,
+        IConfiguration configuration)
     {
         _endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         _turnTokenRegistry = turnTokenRegistry ?? throw new ArgumentNullException(nameof(turnTokenRegistry));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _proxyOptions = proxyOptions?.Value ?? throw new ArgumentNullException(nameof(proxyOptions));
+        _remoteApiBaseUrl = ResolveRemoteApiBaseUrl(configuration);
     }
 
     public IWorkflowTurnAgent CreateWorkerAgent() => CreateProxy();
@@ -51,5 +56,53 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
     public IWorkflowTurnAgent CreateScribeAgent() => CreateProxy();
 
     private RemoteAgentProxy CreateProxy() =>
-        new(_endpointResolver, _httpClientFactory, _loggerFactory, _turnTokenRegistry, _proxyOptions);
+        new(
+            _endpointResolver,
+            _httpClientFactory,
+            _loggerFactory,
+            _remoteApiBaseUrl,
+            _turnTokenRegistry,
+            _proxyOptions);
+
+    internal static string ResolveRemoteApiBaseUrl(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var configured = configuration["Agentweaver:RemoteApiBaseUrl"]?.Trim();
+        if (string.IsNullOrEmpty(configured))
+        {
+            throw new InvalidOperationException(
+                "Agentweaver:RemoteApiBaseUrl is required when Sandbox:AgentExecutionMode=pod-per-run.");
+        }
+
+        if (!Uri.TryCreate(configured, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            || string.IsNullOrEmpty(uri.Host)
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || IsLoopbackOrWildcard(uri))
+        {
+            throw new InvalidOperationException(
+                "Agentweaver:RemoteApiBaseUrl must be an absolute HTTP(S) URL with a non-loopback, " +
+                "non-wildcard host and no user information.");
+        }
+
+        return configured;
+    }
+
+    private static bool IsLoopbackOrWildcard(Uri uri)
+    {
+        var host = uri.Host;
+        if (uri.IsLoopback
+            || host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
+            || host is "*" or "+")
+        {
+            return true;
+        }
+
+        return IPAddress.TryParse(host, out var address)
+            && (IPAddress.IsLoopback(address)
+                || address.Equals(IPAddress.Any)
+                || address.Equals(IPAddress.IPv6Any));
+    }
 }

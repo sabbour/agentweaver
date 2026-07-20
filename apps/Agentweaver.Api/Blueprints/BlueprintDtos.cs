@@ -23,10 +23,15 @@ public sealed record BlueprintDto
     [JsonPropertyName("workflows")] public IReadOnlyList<string>? Workflows { get; init; }
     [JsonPropertyName("review_policy")] public string? ReviewPolicy { get; init; }
     [JsonPropertyName("sandbox_profile")] public string? SandboxProfile { get; init; }
+    [JsonPropertyName("skill_bindings")] public IReadOnlyList<BlueprintSkillBindingDto?>? SkillBindings { get; init; }
     /// <summary>Bespoke (non-catalog) roles minted by generation; each id also appears in <see cref="Roster"/>.</summary>
     [JsonPropertyName("bespoke_roles")] public IReadOnlyList<BespokeRoleDto>? BespokeRoles { get; init; }
 
-    public static BlueprintDto FromModel(Blueprint b) => new()
+    [JsonPropertyName("exportability")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BlueprintExportabilityDto? Exportability { get; init; }
+
+    public static BlueprintDto FromModel(Blueprint b, BlueprintExportability? exportability = null) => new()
     {
         Id = b.Id,
         Name = b.Name,
@@ -36,7 +41,9 @@ public sealed record BlueprintDto
         Workflows = b.Workflows,
         ReviewPolicy = b.ReviewPolicy,
         SandboxProfile = b.SandboxProfile,
+        SkillBindings = b.SkillBindings.Select(BlueprintSkillBindingDto.FromModel).ToList(),
         BespokeRoles = b.BespokeRoles.Select(BespokeRoleDto.FromModel).ToList(),
+        Exportability = exportability is null ? null : BlueprintExportabilityDto.FromModel(exportability),
     };
 
     public Blueprint ToModel() => new(
@@ -51,7 +58,39 @@ public sealed record BlueprintDto
         BespokeRoles = BespokeRoles is { Count: > 0 }
             ? BespokeRoles.Select(r => r.ToModel()).ToList()
             : [],
+        SkillBindings = SkillBindings is { Count: > 0 }
+            ? SkillBindings
+                .Select(binding => binding?.ToModel() ?? new BlueprintSkillBinding(string.Empty, []))
+                .ToList()
+            : [],
     };
+}
+
+/// <summary>Stable availability diagnostics for a built-in blueprint.</summary>
+public sealed record BlueprintExportabilityDto
+{
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("codes")] public required IReadOnlyList<string> Codes { get; init; }
+
+    public static BlueprintExportabilityDto FromModel(BlueprintExportability exportability) => new()
+    {
+        Status = exportability.Status,
+        Codes = exportability.Codes,
+    };
+}
+
+public sealed record BlueprintSkillBindingDto
+{
+    [JsonPropertyName("role_id")] public string? RoleId { get; init; }
+    [JsonPropertyName("skills")] public IReadOnlyList<string>? Skills { get; init; }
+
+    public static BlueprintSkillBindingDto FromModel(BlueprintSkillBinding binding) => new()
+    {
+        RoleId = binding.RoleId,
+        Skills = binding.Skills,
+    };
+
+    public BlueprintSkillBinding ToModel() => new(RoleId ?? string.Empty, Skills ?? []);
 }
 
 /// <summary>Wire shape for a <see cref="BespokeRole"/> (snake_case). Mirrors its three fields.</summary>

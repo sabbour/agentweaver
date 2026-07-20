@@ -376,7 +376,7 @@ public sealed record ToolApprovalRequest
     /// How broadly the approval applies.
     /// <c>"once"</c> (default) — this request only.
     /// <c>"run"</c> — auto-approve the same tool+URL for the remainder of this run.
-    /// <c>"always"</c> — permanently allow the same tool+URL across all runs.
+    /// <c>"always"</c> — allow eligible tools on future runs owned by the same persisted user.
     /// </summary>
     [JsonPropertyName("scope")]
     public string Scope { get; init; } = "once";
@@ -735,6 +735,7 @@ public sealed record CastProposalDto
 public sealed record TeamMemberDto
 {
     [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("role_id")] public required string RoleId { get; init; }
     [JsonPropertyName("role_title")] public required string RoleTitle { get; init; }
     [JsonPropertyName("charter_path")] public required string CharterPath { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }

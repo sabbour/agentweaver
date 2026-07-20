@@ -437,10 +437,10 @@ public sealed class CoordinatorSteeringServiceTests : IDisposable
             get { lock (_lock) return _appended.ToList(); }
         }
 
-        public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
         {
             lock (_lock) _appended.Add((runId, evt));
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(evt.Sequence);
         }
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(

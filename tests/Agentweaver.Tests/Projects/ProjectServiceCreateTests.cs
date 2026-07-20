@@ -4,7 +4,10 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
+using Agentweaver.Api.Runs;
+using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
+using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Projects;
@@ -45,7 +48,9 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         IProjectWorkspaceProvider? workspace = null,
         ProjectGitInitializer? gitInit = null,
         IGitHubTokenStore? tokenStore = null,
-        IGitHubTokenScopeProvider? scopeProvider = null)
+        IGitHubTokenScopeProvider? scopeProvider = null,
+        ISkillStore? skillStore = null,
+        SqliteDb? db = null)
     {
         workspace     ??= TestWorkspaceProviders.CreateLocal();
         gitInit       ??= new NoOpGitInitializer();
@@ -65,7 +70,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var service = BuildService(store);
+        var service = BuildService(store, db: testDb.Db);
         var dir     = NewDir();
 
         var project = await service.CreateBlankAsync("My Project", dir, null, null, null, "test-user");
@@ -89,7 +94,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var service = BuildService(store);
+        var service = BuildService(store, db: testDb.Db);
         var dir     = NewDir(create: true);
         File.WriteAllText(Path.Combine(dir, "existing.txt"), "content");
 
@@ -108,7 +113,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store      = new SqliteProjectStore(testDb.Db);
         var tokenStore = new InMemoryGitHubTokenStore(); // NeverSignedIn
-        var service    = BuildService(store, tokenStore: tokenStore);
+        var service    = BuildService(store, tokenStore: tokenStore, db: testDb.Db);
         var dir        = NewDir();
 
         var act = async () =>
@@ -131,7 +136,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         await tokenStore.SetAsync(scope, new GitHubToken(
             "ghp_test_token", null, null, "testuser", null, ["repo", "read:user"]));
 
-        var service = BuildService(store, tokenStore: tokenStore);
+        var service = BuildService(store, tokenStore: tokenStore, db: testDb.Db);
         var dir     = NewDir();
 
         var project = await service.CreateFromGitHubAsync(
@@ -151,7 +156,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var faultyStore = new FaultingProjectStore(new SqliteProjectStore(testDb.Db), throwOnInsert: true);
-        var service     = BuildService(faultyStore);
+        var service     = BuildService(faultyStore, db: testDb.Db);
         var dir         = NewDir();
 
         var act = async () =>
@@ -164,6 +169,87 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         Directory.Exists(dir).Should().BeFalse("rollback must remove app-created directory");
     }
 
+    [Fact]
+    public async Task RollbackCreationAsync_CancelledAfterDefaultsCommit_PurgesOnlyCreatedProject()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projectStore = new SqliteProjectStore(testDb.Db);
+        var skillStore = new SqliteSkillStore(testDb.Db);
+        var runStore = new SqliteRunStore(testDb.Db);
+        var service = BuildService(projectStore, skillStore: skillStore);
+        var project = await service.CreateBlankAsync(
+            "Rollback after defaults",
+            NewDir(),
+            null,
+            null,
+            null,
+            "user");
+        var otherProject = await service.CreateBlankAsync(
+            "Preserved project",
+            NewDir(),
+            null,
+            null,
+            null,
+            "user");
+        var committedDefault = BuiltInSkill(project.Id, "system-design");
+        var preservedSkill = BuiltInSkill(otherProject.Id, "prototype-ux");
+        await skillStore.InsertAsync(committedDefault);
+        await skillStore.AssignAsync(project.Id, committedDefault.Id, "Tank", DateTimeOffset.UtcNow);
+        await skillStore.InsertAsync(preservedSkill);
+        await skillStore.AssignAsync(otherProject.Id, preservedSkill.Id, "Trinity", DateTimeOffset.UtcNow);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await service.RollbackCreationAsync(
+            project.Id,
+            runStore,
+            new RunWorkflowRegistry(),
+            cancelled.Token);
+
+        (await projectStore.GetAsync(project.Id)).Should().BeNull();
+        Directory.Exists(project.WorkingDirectory).Should().BeFalse();
+        (await skillStore.ListByProjectAsync(project.Id)).Should().BeEmpty();
+        (await skillStore.ListAssignmentsByProjectAsync(project.Id)).Should().BeEmpty();
+        (await skillStore.ListByProjectAsync(otherProject.Id))
+            .Should().ContainSingle(skill => skill.Id == preservedSkill.Id);
+        (await skillStore.ListAssignmentsByProjectAsync(otherProject.Id))
+            .Should().ContainSingle(assignment => assignment.SkillId == preservedSkill.Id);
+    }
+
+    [Fact]
+    public async Task RollbackCreationAsync_ProjectDeleteFailure_DoesNotPurgeSkillState()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projectStore = new SqliteProjectStore(testDb.Db);
+        var skillStore = new SqliteSkillStore(testDb.Db);
+        var createService = BuildService(projectStore, db: testDb.Db);
+        var project = await createService.CreateBlankAsync(
+            "Rollback delete failure",
+            NewDir(),
+            null,
+            null,
+            null,
+            "user");
+        var skill = BuiltInSkill(project.Id, "system-design");
+        await skillStore.InsertAsync(skill);
+        await skillStore.AssignAsync(project.Id, skill.Id, "Tank", DateTimeOffset.UtcNow);
+        var faultingStore = new FaultingProjectStore(projectStore, throwOnDelete: true);
+        var rollbackService = BuildService(faultingStore, db: testDb.Db);
+
+        var act = () => rollbackService.RollbackCreationAsync(
+            project.Id,
+            new SqliteRunStore(testDb.Db),
+            new RunWorkflowRegistry());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*delete failure*");
+        (await projectStore.GetAsync(project.Id)).Should().NotBeNull();
+        (await skillStore.ListByProjectAsync(project.Id))
+            .Should().ContainSingle(existing => existing.Id == skill.Id);
+        (await skillStore.ListAssignmentsByProjectAsync(project.Id))
+            .Should().ContainSingle(existing => existing.SkillId == skill.Id);
+    }
+
     // =========================================================================
     // PC-06: RenameAsync updates name and returns true for existing project
     // =========================================================================
@@ -172,7 +258,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var service = BuildService(store);
+        var service = BuildService(store, db: testDb.Db);
         var dir     = NewDir();
         var project = await service.CreateBlankAsync("Original", dir, null, null, null, "user");
 
@@ -191,7 +277,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var service = BuildService(store);
+        var service = BuildService(store, db: testDb.Db);
 
         var result = await service.RenameAsync(ProjectId.New(), "New Name");
 
@@ -212,7 +298,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var service = BuildService(store);
+        var service = BuildService(store, db: testDb.Db);
         var dir     = NewDir();
 
         var project = await service.CreateBlankAsync("Workflow Check", dir, null, null, null, "user");
@@ -231,7 +317,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var service = BuildService(store);
+        var service = BuildService(store, db: testDb.Db);
         var dir     = NewDir();
 
         var project  = await service.CreateBlankAsync("Registry Check", dir, null, null, null, "user");
@@ -253,7 +339,7 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store   = new SqliteProjectStore(testDb.Db);
-        var service = BuildService(store);
+        var service = BuildService(store, db: testDb.Db);
         var dir     = NewDir();
 
         var project = await service.CreateBlankAsync("Agent Def Check", dir, null, null, null, "user");
@@ -285,6 +371,25 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         }
     }
 
+    private static Skill BuiltInSkill(ProjectId projectId, string name)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new Skill
+        {
+            Id = SkillId.New(),
+            ProjectId = projectId,
+            Name = name,
+            Description = name,
+            Instructions = "instructions",
+            Provenance = SkillProvenance.BuiltIn,
+            SourceLocation = $"catalog/skills/{name}",
+            ContentHash = SkillParser.ComputeContentHash(name, name, "instructions", []),
+            Status = SkillStatus.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+    }
+
     /// <summary>
     /// IProjectStore wrapper that faults on InsertAsync to test rollback behavior.
     /// </summary>
@@ -292,11 +397,16 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
     {
         private readonly IProjectStore _inner;
         private readonly bool _throwOnInsert;
+        private readonly bool _throwOnDelete;
 
-        public FaultingProjectStore(IProjectStore inner, bool throwOnInsert)
+        public FaultingProjectStore(
+            IProjectStore inner,
+            bool throwOnInsert = false,
+            bool throwOnDelete = false)
         {
             _inner = inner;
             _throwOnInsert = throwOnInsert;
+            _throwOnDelete = throwOnDelete;
         }
 
         public Task InsertAsync(Project project, CancellationToken ct = default)
@@ -324,8 +434,12 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         public Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default) =>
             _inner.TryBeginDeleteAsync(id, ct);
 
-        public Task DeleteAsync(ProjectId id, CancellationToken ct = default) =>
-            _inner.DeleteAsync(id, ct);
+        public Task DeleteAsync(ProjectId id, CancellationToken ct = default)
+        {
+            if (_throwOnDelete)
+                throw new InvalidOperationException("inject fault: simulated DB delete failure");
+            return _inner.DeleteAsync(id, ct);
+        }
 
         public Task UpdatePickupSettingsAsync(ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdatePickupSettingsAsync(id, maxReadyPerHeartbeat, autopilot, autoApproveTools, updatedAt, ct);
@@ -343,5 +457,8 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
 
         public Task UpdateAllowedWorkflowIdsAsync(ProjectId id, IReadOnlyList<string>? allowedWorkflowIds, DateTimeOffset updatedAt, CancellationToken ct = default) =>
             _inner.UpdateAllowedWorkflowIdsAsync(id, allowedWorkflowIds, updatedAt, ct);
+
+        public Task<IProjectTeamMutationLease?> TryBeginTeamMutationAsync(ProjectId id, long expectedRevision, CancellationToken ct = default) =>
+            _inner.TryBeginTeamMutationAsync(id, expectedRevision, ct);
     }
 }

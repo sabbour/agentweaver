@@ -381,7 +381,9 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                 {
                     var applyResult = await blueprintService.ApplyAsync(
                         project.Id.ToString(), blueprintToApply,
-                        request.GeneratedWorkflowYaml, ct);
+                        request.GeneratedWorkflowYaml,
+                        applySkillDefaults: !string.IsNullOrWhiteSpace(request.BlueprintId),
+                        ct: ct);
                     if (!applyResult.Valid)
                     {
                         await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);

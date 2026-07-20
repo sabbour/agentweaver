@@ -155,6 +155,10 @@ app.MapPut("/api/projects/{id}/team/members/{name}/charter", async (
     {
         return Results.Conflict(new { error = "project_unavailable", code = "project_unavailable" });
     }
+    catch (TeamMutationConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "team_changed" });
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to update charter for {Name} in project {ProjectId}", name, id);
@@ -242,6 +246,10 @@ app.MapPost("/api/projects/{id}/team/members", async (
     {
         return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
     }
+    catch (TeamMutationConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "team_changed" });
+    }
     catch (InvalidOperationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
@@ -289,6 +297,10 @@ app.MapDelete("/api/projects/{id}/team/members/{name}", async (
     catch (SquadLayoutConflictException ex)
     {
         return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (TeamMutationConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "team_changed" });
     }
     catch (Exception ex)
     {
@@ -348,6 +360,10 @@ app.MapMethods("/api/projects/{id}/team/members/{name}", ["PATCH"], async (
     catch (SquadLayoutConflictException ex)
     {
         return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
+    }
+    catch (TeamMutationConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, code = "team_changed" });
     }
     catch (ArgumentException ex)
     {

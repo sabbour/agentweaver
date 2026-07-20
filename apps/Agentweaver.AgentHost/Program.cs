@@ -22,10 +22,6 @@ var builder = WebApplication.CreateBuilder(args);
 // Load AgentHost options (per-run config injected as env vars / config at pod launch).
 builder.Services.Configure<AgentHostOptions>(builder.Configuration.GetSection("AgentHost"));
 
-// Mutable per-run runtime state. Immutable AgentHostOptions carries static config; this holder
-// carries RunId/UserId/TurnBearerToken/KvUserSecretName delivered later via POST /configure
-// (warm pool) or seeded from options at startup (env-var launch).
-builder.Services.AddSingleton<AgentHostRuntimeState>();
 builder.Services.AddSingleton<PodLocalWorkspaceManager>();
 builder.Services.Configure<PreviewRunnerOptions>(builder.Configuration.GetSection("AgentHost:PreviewRunner"));
 
@@ -135,7 +131,7 @@ builder.Services.AddSingleton<PreviewRunner>();
 builder.Services.AddSingleton<IPreviewRunner>(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
-builder.Services.AddAgentRuntime();
+builder.Services.AddAgentHostRuntime();
 
 // The production AgentHost runs inside a per-run Kata VM. Do not nest bubblewrap inside that
 // boundary: the hardened pod cannot mount bwrap's private /proc. This registration intentionally
@@ -158,6 +154,23 @@ if (useKataPassthrough)
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────
 builder.Services.AddSingleton<CopilotAIAgent>();
 
+// ── Operator assistant (narrow AgentHost cutover, #346/#347) ──────────────────
+// Same MCP-driven Copilot chat loop that used to run in the API pod, now hosted here when a pod is
+// configured with AgentHostPurpose.OperatorAssistant. GitHubCopilotClientFactory and the pod's
+// IGitHubTokenScopeProvider (registered above per credential path) are reused as-is — the operator
+// assistant needs no infrastructure this pod doesn't already provision for CopilotAIAgent.
+builder.Services.AddSingleton<IAgentweaverMcpToolProvider>(sp =>
+{
+    var opts = sp.GetRequiredService<IOptions<AgentHostOptions>>().Value;
+    if (string.IsNullOrWhiteSpace(opts.McpEndpoint))
+        throw new InvalidOperationException(
+            "AgentHost:McpEndpoint must be configured (the in-cluster AgentweaverMCP /mcp URL) to run the operator assistant purpose.");
+    var mcpOptions = new AgentweaverMcpConnectionOptions { Endpoint = new Uri(opts.McpEndpoint) };
+    return new AgentweaverMcpToolProvider(mcpOptions, sp.GetService<ILoggerFactory>());
+});
+builder.Services.AddSingleton<IOperatorAssistantAgent, OperatorAssistantAgent>();
+builder.Services.AddSingleton<OperatorPodTurnRunner>();
+
 // ── Startup service calls SetupAsync before the server begins serving requests ──
 // Registered as singleton first so the readiness middleware can resolve it by type.
 builder.Services.AddSingleton<AgentHostStartupService>();
@@ -174,11 +187,25 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentHostStartupSe
 // Preview packages pinned to 1.9.0-preview.260603.1 per spec H7.
 var agentHostedBuilder = builder.AddAIAgent(
     A2ATurnBridgeAgent.AgentName,
-    (sp, _) => new A2ATurnBridgeAgent(
-        sp.GetRequiredService<CopilotAIAgent>(),
-        sp.GetRequiredService<PodLocalWorkspaceManager>(),
-        sp.GetRequiredService<AgentHostRuntimeState>(),
-        sp.GetRequiredService<ILogger<A2ATurnBridgeAgent>>()),
+    (sp, _) =>
+    {
+        var copilotAgent = sp.GetRequiredService<CopilotAIAgent>();
+        var runtimeState = sp.GetRequiredService<AgentHostRuntimeState>();
+        // RoutingPodTurnRunner (narrow AgentHost cutover, #346/#347) picks per-turn between the
+        // sandboxed CopilotAIAgent path (Coordinator/workflow purposes) and the operator assistant's
+        // MCP chat loop, based on the pod's configured AgentHostPurpose — the bridge itself is built
+        // once at startup, before /configure has told the pod which purpose it serves.
+        var runner = new RoutingPodTurnRunner(
+            new CopilotPodTurnRunner(copilotAgent),
+            sp.GetRequiredService<OperatorPodTurnRunner>(),
+            runtimeState);
+        return new A2ATurnBridgeAgent(
+            copilotAgent,
+            runner,
+            sp.GetRequiredService<PodLocalWorkspaceManager>(),
+            runtimeState,
+            sp.GetRequiredService<ILogger<A2ATurnBridgeAgent>>());
+    },
     Microsoft.Extensions.DependencyInjection.ServiceLifetime.Singleton);
 
 agentHostedBuilder.AddA2AServer(options =>

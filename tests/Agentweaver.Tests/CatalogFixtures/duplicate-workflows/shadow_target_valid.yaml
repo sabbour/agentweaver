@@ -1,0 +1,11 @@
+id: shadow-target
+name: Bindable catalog workflow
+start: scribe
+nodes:
+  - id: scribe
+    type: scribe
+  - id: done
+    type: terminal
+edges:
+  - from: scribe
+    to: done

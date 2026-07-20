@@ -1,5 +1,9 @@
 ﻿import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+import {
+  ApiError,
+  isApplyBlueprintSkillDefaultsResponse,
+  isBlueprintSkillDefaultsPreviewResponse,
+} from '../api/client';
 import {
   Badge,
   Button,
@@ -46,7 +50,15 @@ import {
 import { collectFilesFromDataTransfer, supportsEntryApi } from '../utils/skillDrop';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { SkillAcquisitionResponse, SkillCandidateDto, SkillDetailDto, SkillDto, TeamMemberDto } from '../api/types';
+import type {
+  BlueprintSkillDefaultsPreviewResponse,
+  Project,
+  SkillAcquisitionResponse,
+  SkillCandidateDto,
+  SkillDetailDto,
+  SkillDto,
+  TeamMemberDto,
+} from '../api/types';
 import type { DroppedSkillFile } from '../utils/skillDrop';
 
 const useStyles = makeStyles({
@@ -102,12 +114,36 @@ const useStyles = makeStyles({
   drawerContent: { fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', lineHeight: '1.6', fontFamily: tokens.fontFamilyMonospace },
   assignGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS },
   assignRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  defaultsSections: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  defaultsRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  defaultsRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  defaultsMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
   hiddenInput: { display: 'none' },
 });
 
 function formatApiError(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body || 'Request failed'}`;
   return err instanceof Error ? err.message : String(err);
+}
+
+const FALLBACK_DEFAULTS_BLUEPRINT_ID = 'blueprint-software-development';
+
+function structuredBlockedPreview(err: unknown): BlueprintSkillDefaultsPreviewResponse | null {
+  if (err instanceof ApiError
+    && err.status === 422
+    && isBlueprintSkillDefaultsPreviewResponse(err.payload)
+    && !err.payload.can_apply) {
+    return err.payload;
+  }
+  return null;
 }
 
 function statusColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
@@ -130,6 +166,64 @@ function summarizeAcquisition(res: SkillAcquisitionResponse): string {
   return parts.length ? parts.join(', ') : 'No changes.';
 }
 
+function defaultApplyError(err: unknown): {
+  message: string;
+  requiresRepreview: boolean;
+  preview: BlueprintSkillDefaultsPreviewResponse | null;
+} {
+  if (err instanceof ApiError) {
+    if (err.status === 409) {
+      const staleResponse = isApplyBlueprintSkillDefaultsResponse(err.payload)
+        ? err.payload
+        : null;
+      return {
+        message: staleResponse?.errors.length
+          ? `This preview is stale because the project changed. ${staleResponse.errors.join(' ')}`
+          : 'This preview is stale because the project changed. Preview the latest defaults before applying.',
+        requiresRepreview: true,
+        preview: staleResponse?.preview ?? null,
+      };
+    }
+    if (err.status === 422 && isApplyBlueprintSkillDefaultsResponse(err.payload)) {
+      const errors = err.payload.errors;
+      return {
+        message: errors.length
+          ? `Defaults could not be applied: ${errors.join(' ')}`
+          : 'Defaults could not be applied. Resolve the validation errors before trying again.',
+        requiresRepreview: false,
+        preview: err.payload.preview,
+      };
+    }
+    if (err.status === 422) {
+      return {
+        message: 'Defaults could not be applied. Resolve the validation errors before trying again.',
+        requiresRepreview: false,
+        preview: null,
+      };
+    }
+  }
+  return { message: formatApiError(err), requiresRepreview: false, preview: null };
+}
+
+function defaultsBlueprintId(project: Project): string | null {
+  if (project.source_blueprint_type === 'inline'
+    || project.source_blueprint_type === 'custom'
+    || project.source_blueprint_id === 'inline') {
+    return null;
+  }
+  return project.source_blueprint_id ?? FALLBACK_DEFAULTS_BLUEPRINT_ID;
+}
+
+function defaultsUnsupportedReason(project: Project | null): string | null {
+  if (project?.source_blueprint_type === 'inline' || project?.source_blueprint_id === 'inline') {
+    return 'Blueprint skill defaults are unavailable because this project uses an inline blueprint.';
+  }
+  if (project?.source_blueprint_type === 'custom') {
+    return 'Blueprint skill defaults are unavailable because this project uses a custom blueprint.';
+  }
+  return null;
+}
+
 export function SkillsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -139,7 +233,7 @@ export function SkillsPage() {
   const [members, setMembers] = useState<TeamMemberDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ projectId: string; message: string } | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -159,6 +253,25 @@ export function SkillsPage() {
   const [skillDescription, setSkillDescription] = useState('');
   const [skillInstructions, setSkillInstructions] = useState('');
   const [generatePrompt, setGeneratePrompt] = useState('');
+  const [defaultsOpen, setDefaultsOpen] = useState(false);
+  const [defaultsDialogKey, setDefaultsDialogKey] = useState(0);
+  const [defaultsPreview, setDefaultsPreview] = useState<BlueprintSkillDefaultsPreviewResponse | null>(null);
+  const [defaultsError, setDefaultsError] = useState<string | null>(null);
+  const [defaultsRequiresRepreview, setDefaultsRequiresRepreview] = useState(false);
+  const [defaultsProject, setDefaultsProject] = useState<Project | null>(null);
+  const [defaultsProjectResolved, setDefaultsProjectResolved] = useState(false);
+  const defaultsDialogGeneration = useRef(0);
+  const currentProjectId = useRef(projectId);
+  const defaultsPreviewTransports = useRef(new Map<string, number>());
+  const defaultsApplyTransports = useRef(new Map<string, number>());
+  const defaultsApplyPreviews = useRef(new Map<string, BlueprintSkillDefaultsPreviewResponse>());
+  const defaultsTransportSequence = useRef(0);
+  const defaultsBusyProject = useRef<string | null>(null);
+  const defaultsTriggerRef = useRef<HTMLButtonElement>(null);
+  const defaultsCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreDefaultsFocus = useRef(false);
+
+  currentProjectId.current = projectId;
 
   const mdFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -183,12 +296,13 @@ export function SkillsPage() {
 
   const runAcquisition = async (label: string, action: () => Promise<SkillAcquisitionResponse>) => {
     if (!projectId || busy) return;
+    const requestProjectId = projectId;
     setBusy(label);
     setMutationError(null);
     setNotice(null);
     try {
       const res = await action();
-      setNotice(`${label}: ${summarizeAcquisition(res)}`);
+      setNotice({ projectId: requestProjectId, message: `${label}: ${summarizeAcquisition(res)}` });
       reload();
     } catch (err) {
       setMutationError(formatApiError(err));
@@ -198,6 +312,202 @@ export function SkillsPage() {
   };
 
   const onSync = () => void runAcquisition('Sync', () => apiClient.syncSkills(projectId!));
+
+  const closeDefaults = useCallback((restoreFocus = true) => {
+    defaultsDialogGeneration.current += 1;
+    setDefaultsDialogKey((key) => key + 1);
+    const activeProjectId = currentProjectId.current;
+    if (activeProjectId) {
+      const cancellingPreview = defaultsPreviewTransports.current.has(activeProjectId);
+      defaultsPreviewTransports.current.delete(activeProjectId);
+      if (cancellingPreview && defaultsBusyProject.current === activeProjectId) {
+        defaultsBusyProject.current = null;
+        setBusy((current) => current === 'defaults-preview' ? null : current);
+      }
+    }
+    setDefaultsOpen(false);
+    setDefaultsPreview(null);
+    setDefaultsError(null);
+    setDefaultsRequiresRepreview(false);
+    if (restoreFocus) restoreDefaultsFocus.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!defaultsOpen && restoreDefaultsFocus.current) {
+      restoreDefaultsFocus.current = false;
+      setTimeout(() => defaultsTriggerRef.current?.focus(), 0);
+    }
+  }, [defaultsOpen]);
+
+  useEffect(() => {
+    if (defaultsOpen && busy === 'defaults-apply') {
+      defaultsCloseButtonRef.current?.focus();
+    }
+  }, [busy, defaultsOpen]);
+
+  useEffect(() => {
+    closeDefaults(false);
+    setNotice(null);
+    if (projectId && defaultsApplyTransports.current.has(projectId)) {
+      defaultsBusyProject.current = projectId;
+      setDefaultsPreview(defaultsApplyPreviews.current.get(projectId) ?? null);
+      setDefaultsOpen(true);
+      setBusy('defaults-apply');
+    } else if (defaultsBusyProject.current !== null && defaultsBusyProject.current !== projectId) {
+      defaultsBusyProject.current = null;
+      setBusy((current) => current === 'defaults-preview' || current === 'defaults-apply' ? null : current);
+    }
+  }, [closeDefaults, projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let current = true;
+    setDefaultsProject(null);
+    setDefaultsProjectResolved(false);
+    void apiClient.getProject(projectId)
+      .then((project) => {
+        if (current) setDefaultsProject(project);
+      })
+      .catch(() => {
+        // A preview refreshes metadata before it calls the defaults endpoint.
+      })
+      .finally(() => {
+        if (current) setDefaultsProjectResolved(true);
+      });
+    return () => { current = false; };
+  }, [projectId]);
+
+  const previewDefaults = useCallback(async () => {
+    const defaultsBusyForAnotherProject = (busy === 'defaults-preview' || busy === 'defaults-apply')
+      && defaultsBusyProject.current !== projectId;
+    if (!projectId
+      || (busy && !defaultsBusyForAnotherProject)
+      || defaultsPreviewTransports.current.has(projectId)
+      || defaultsApplyTransports.current.has(projectId)) return;
+    const dialogGeneration = defaultsDialogGeneration.current;
+    const transportId = defaultsTransportSequence.current + 1;
+    defaultsTransportSequence.current = transportId;
+    defaultsPreviewTransports.current.set(projectId, transportId);
+    defaultsBusyProject.current = projectId;
+    setBusy('defaults-preview');
+    setDefaultsPreview(null);
+    setDefaultsError(null);
+    setDefaultsRequiresRepreview(false);
+    try {
+      const project = await apiClient.getProject(projectId);
+      if (currentProjectId.current !== projectId
+        || defaultsPreviewTransports.current.get(projectId) !== transportId
+        || defaultsDialogGeneration.current !== dialogGeneration) return;
+      setDefaultsProject(project);
+      const blueprintId = defaultsBlueprintId(project);
+      if (blueprintId === null) {
+        setDefaultsError(defaultsUnsupportedReason(project));
+        return;
+      }
+      const preview = await apiClient.previewBlueprintSkillDefaults(projectId, blueprintId);
+      if (currentProjectId.current === projectId
+        && defaultsPreviewTransports.current.get(projectId) === transportId
+        && defaultsDialogGeneration.current === dialogGeneration) setDefaultsPreview(preview);
+    } catch (err) {
+      if (currentProjectId.current === projectId
+        && defaultsPreviewTransports.current.get(projectId) === transportId
+        && defaultsDialogGeneration.current === dialogGeneration) {
+        const blockedPreview = structuredBlockedPreview(err);
+        if (blockedPreview) {
+          setDefaultsPreview(blockedPreview);
+          setDefaultsError(null);
+        } else {
+          setDefaultsError(formatApiError(err));
+        }
+      }
+    } finally {
+      if (defaultsPreviewTransports.current.get(projectId) === transportId) {
+        defaultsPreviewTransports.current.delete(projectId);
+      }
+      if (currentProjectId.current === projectId
+        && defaultsBusyProject.current === projectId
+        && defaultsDialogGeneration.current === dialogGeneration) {
+        defaultsBusyProject.current = null;
+        setBusy(null);
+      }
+    }
+  }, [busy, projectId]);
+
+  const openDefaults = () => {
+    if (!projectId || defaultsUnsupportedReason(defaultsProject)) return;
+    if (defaultsApplyTransports.current.has(projectId)) {
+      queueMicrotask(() => {
+        if (defaultsApplyTransports.current.has(projectId) && currentProjectId.current === projectId) {
+          setDefaultsPreview(defaultsApplyPreviews.current.get(projectId) ?? null);
+          setDefaultsOpen(true);
+        }
+      });
+      return;
+    }
+    const defaultsBusyForAnotherProject = (busy === 'defaults-preview' || busy === 'defaults-apply')
+      && defaultsBusyProject.current !== projectId;
+    if ((busy && !defaultsBusyForAnotherProject) || defaultsPreviewTransports.current.has(projectId)) return;
+    setDefaultsOpen(true);
+    void previewDefaults();
+  };
+
+  const applyDefaults = async () => {
+    if (!projectId
+      || !defaultsPreview
+      || busy
+      || defaultsRequiresRepreview
+      || defaultsApplyTransports.current.has(projectId)) return;
+    const requestProjectId = projectId;
+    const transportId = defaultsTransportSequence.current + 1;
+    defaultsTransportSequence.current = transportId;
+    defaultsApplyTransports.current.set(requestProjectId, transportId);
+    defaultsApplyPreviews.current.set(requestProjectId, defaultsPreview);
+    defaultsBusyProject.current = requestProjectId;
+    setBusy('defaults-apply');
+    setDefaultsError(null);
+    try {
+      const result = await apiClient.applyBlueprintSkillDefaults(
+        requestProjectId,
+        defaultsPreview.blueprint_id,
+        defaultsPreview.digest,
+      );
+      if (defaultsApplyTransports.current.get(requestProjectId) !== transportId) return;
+      if (result.outcome !== 'applied') {
+        if (currentProjectId.current === requestProjectId) {
+          const stale = result.outcome === 'stale';
+          setDefaultsError(result.errors.join(' ') || (stale
+            ? 'This preview is stale because the project changed. Preview the latest defaults before applying.'
+            : 'Defaults could not be applied. Resolve the validation errors before trying again.'));
+          if (result.preview !== null) setDefaultsPreview(result.preview);
+          setDefaultsRequiresRepreview(stale);
+        }
+        return;
+      }
+      if (currentProjectId.current === requestProjectId) {
+        setNotice({ projectId: requestProjectId, message: 'Blueprint defaults applied.' });
+        reload();
+        closeDefaults();
+      }
+    } catch (err) {
+      if (defaultsApplyTransports.current.get(requestProjectId) === transportId
+        && currentProjectId.current === requestProjectId) {
+        const error = defaultApplyError(err);
+        setDefaultsError(error.message);
+        if (error.preview !== null) setDefaultsPreview(error.preview);
+        setDefaultsRequiresRepreview(error.requiresRepreview);
+      }
+    } finally {
+      if (defaultsApplyTransports.current.get(requestProjectId) === transportId) {
+        defaultsApplyTransports.current.delete(requestProjectId);
+        defaultsApplyPreviews.current.delete(requestProjectId);
+      }
+      if (currentProjectId.current === requestProjectId
+        && defaultsBusyProject.current === requestProjectId) {
+        defaultsBusyProject.current = null;
+        setBusy(null);
+      }
+    }
+  };
 
   const onPreview = async () => {
     if (!projectId || !sourceUrl.trim()) return;
@@ -217,12 +527,13 @@ export function SkillsPage() {
 
   const onImport = async () => {
     if (!projectId || !sourceUrl.trim()) return;
+    const requestProjectId = projectId;
     setBusy('import');
     setMutationError(null);
     try {
       const locs = candidates ? Array.from(selectedLocations) : undefined;
-      const res = await apiClient.importSkills(projectId, sourceUrl.trim(), locs && locs.length ? locs : undefined);
-      setNotice(`Import: ${summarizeAcquisition(res)}`);
+      const res = await apiClient.importSkills(requestProjectId, sourceUrl.trim(), locs && locs.length ? locs : undefined);
+      setNotice({ projectId: requestProjectId, message: `Import: ${summarizeAcquisition(res)}` });
       setImportOpen(false);
       setSourceUrl('');
       setCandidates(null);
@@ -273,17 +584,18 @@ export function SkillsPage() {
 
   const onCreateSkill = async () => {
     if (!projectId) return;
+    const requestProjectId = projectId;
     setBusy('Create skill');
     setMutationError(null);
     setNotice(null);
     try {
-      const res = await apiClient.createSkill(projectId, {
+      const res = await apiClient.createSkill(requestProjectId, {
         name: skillName.trim(),
         displayName: skillDisplayName.trim() || undefined,
         description: skillDescription.trim(),
         instructions: skillInstructions.trim(),
       });
-      setNotice(`Create skill: ${summarizeAcquisition(res)}`);
+      setNotice({ projectId: requestProjectId, message: `Create skill: ${summarizeAcquisition(res)}` });
       setAddOpen(false);
       setGenerateOpen(false);
       resetSkillForm();
@@ -358,6 +670,7 @@ export function SkillsPage() {
   const activeSkillCount = skillRows.filter((s) => s.status === 'active').length;
   const assignedSkillCount = skillRows.filter((s) => s.assigned_agents.length > 0).length;
   const repositorySkillCount = skillRows.filter((s) => s.provenance === 'connected-repo-sync' || s.provenance === 'repo-import').length;
+  const defaultsUnavailableReason = defaultsUnsupportedReason(defaultsProject);
 
   const roleByName = new Map(members.map((m) => [m.name, m.role_title]));
   const labelForAgent = (name: string): string => {
@@ -401,7 +714,21 @@ export function SkillsPage() {
         <Button icon={<ArrowSync24Regular />} disabled={isBusy} onClick={onSync}>
           {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
         </Button>
+        <Button
+          ref={defaultsTriggerRef}
+          icon={<Eye24Regular />}
+          disabled={(isBusy && busy !== 'defaults-apply') || defaultsUnavailableReason !== null}
+          aria-describedby="blueprint-defaults-availability"
+          onClick={openDefaults}
+        >
+          Preview blueprint defaults
+        </Button>
       </div>
+      <Text id="blueprint-defaults-availability" className={styles.syncHint}>
+        {!defaultsProjectResolved
+          ? 'Checking whether blueprint skill defaults are available for this project.'
+          : defaultsUnavailableReason ?? 'Preview bundled defaults for a predefined blueprint, or use the supported fallback for projects without source metadata.'}
+      </Text>
       <Text as="p" className={styles.syncHint}>
         Sync scans the project&apos;s already-connected repo working directory (no separate fetch) for <code>&lt;skill-name&gt;/SKILL.md</code>,
         one level deep, at the repo root or in <code>.github/skills</code>, <code>.copilot/skills</code>, <code>.claude/skills</code>, or <code>.agents/skills</code>.
@@ -419,8 +746,8 @@ export function SkillsPage() {
       <div className={styles.tabContent}>
         {loading && <LoadingState rows={3} />}
         {loadError && <ErrorState message={loadError} onRetry={reload} />}
-        {notice && (
-          <MessageBar intent="success"><MessageBarBody>{notice}</MessageBarBody></MessageBar>
+        {notice && notice.projectId === projectId && (
+          <MessageBar intent="success"><MessageBarBody>{notice.message}</MessageBarBody></MessageBar>
         )}
         {mutationError && (
           <MessageBar intent="error"><MessageBarBody>{mutationError}</MessageBarBody></MessageBar>
@@ -526,6 +853,82 @@ export function SkillsPage() {
             )}
         </DrawerBody>
       </OverlayDrawer>
+
+      <Dialog
+        key={defaultsDialogKey}
+        open={defaultsOpen}
+        modalType="modal"
+        onOpenChange={(_, data) => {
+          if (!data.open && defaultsDialogKey === defaultsDialogGeneration.current) closeDefaults();
+        }}
+      >
+        <DialogSurface aria-describedby="blueprint-defaults-description">
+          <DialogBody>
+            <DialogTitle>Preview blueprint skill defaults</DialogTitle>
+            <DialogContent className={styles.defaultsSections}>
+              <Text id="blueprint-defaults-description">Review the proposed built-in skill changes before they are applied to this existing project.</Text>
+              {busy === 'defaults-preview' && <LoadingState rows={3} />}
+              {busy === 'defaults-apply' && <Text>Applying blueprint defaults. This request will continue if you close this dialog.</Text>}
+              {defaultsError && <MessageBar intent="error"><MessageBarBody>{defaultsError}</MessageBarBody></MessageBar>}
+              {defaultsPreview && (
+                <>
+                  <section aria-label="Blueprint identity">
+                    <Text weight="semibold">{defaultsPreview.blueprint_id}</Text>
+                    <Text className={styles.defaultsMeta}>Version {defaultsPreview.blueprint_version}</Text>
+                    <Text className={styles.defaultsMeta}>Source: predefined blueprint · preview {defaultsPreview.digest}</Text>
+                  </section>
+                  {!defaultsPreview.can_apply && (
+                    <MessageBar intent="error">
+                      <MessageBarBody>Defaults are blocked. Resolve the listed blockers before applying.</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {defaultsPreview.errors.length > 0 && (
+                    <section aria-labelledby="defaults-errors">
+                      <Text id="defaults-errors" weight="semibold">Blockers</Text>
+                      <div className={styles.defaultsRows} role="list">
+                        {defaultsPreview.errors.map((error, index) => (
+                          <MessageBar key={`${index}:${error}`} intent="error" role="listitem">
+                            <MessageBarBody>{error}</MessageBarBody>
+                          </MessageBar>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  <section aria-labelledby="defaults-proposed-actions">
+                    <Text id="defaults-proposed-actions" weight="semibold">Proposed built-in skill actions</Text>
+                    <div className={styles.defaultsRows} role="list">
+                      {defaultsPreview.assignments.length === 0
+                        ? <Text className={styles.defaultsMeta}>No bundled skill defaults are available for this blueprint.</Text>
+                        : defaultsPreview.assignments.map((action, index) => (
+                          <div className={styles.defaultsRow} role="listitem" key={`${action.role_id}:${action.skill_name}:${action.action}:${index}`}>
+                            <Badge appearance="outline">{action.role_id}</Badge>
+                            <Text>{action.skill_name}</Text>
+                            <Badge appearance="tint" color={action.action === 'blocked' ? 'danger' : action.action === 'reactivate' ? 'warning' : 'success'}>{action.action}</Badge>
+                            <Text className={styles.defaultsMeta}>→ {action.agent_name}</Text>
+                            {action.action === 'blocked' && <Text className={styles.defaultsMeta}>A manually managed skill has the same name and will not be changed.</Text>}
+                          </div>
+                        ))}
+                    </div>
+                  </section>
+                </>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button ref={defaultsCloseButtonRef} appearance="secondary" onClick={() => closeDefaults()}>Close</Button>
+              {(defaultsRequiresRepreview || (!defaultsPreview && busy !== 'defaults-preview')) && (
+                <Button appearance="secondary" disabled={isBusy} onClick={() => void previewDefaults()}>Preview latest defaults</Button>
+              )}
+              <Button
+                appearance="primary"
+                disabled={!defaultsPreview || busy === 'defaults-preview' || busy === 'defaults-apply' || !defaultsPreview.can_apply || defaultsRequiresRepreview}
+                onClick={() => void applyDefaults()}
+              >
+                {busy === 'defaults-apply' ? 'Applying…' : 'Apply defaults'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       {/* Add skill dialog */}
       <Dialog open={addOpen} onOpenChange={(_, d) => setAddOpen(d.open)}>

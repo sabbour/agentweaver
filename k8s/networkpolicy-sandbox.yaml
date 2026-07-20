@@ -1,4 +1,4 @@
-# NetworkPolicy for Agentweaver sandbox pods (label: app: agentweaver-sandbox).
+# NetworkPolicy for Agentweaver sandbox pods (label: app: agentweaver-agent-host).
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -10,7 +10,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: agentweaver-sandbox
+      app: agentweaver-agent-host
   policyTypes:
     - Ingress
 ---
@@ -43,7 +43,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: agentweaver-sandbox
+      app: agentweaver-agent-host
   policyTypes:
     - Ingress
   ingress:
@@ -69,7 +69,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: agentweaver-sandbox
+      app: agentweaver-agent-host
   policyTypes:
     - Egress
   egress:

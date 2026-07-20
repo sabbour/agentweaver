@@ -6,6 +6,9 @@ namespace Agentweaver.Domain.Skills;
 /// </summary>
 public enum SkillProvenance
 {
+    /// <summary>Materialized from an Agentweaver bundled catalog asset.</summary>
+    BuiltIn,
+
     /// <summary>Imported from an arbitrary Git repository (clone + checkout).</summary>
     RepoImport,
 
@@ -23,6 +26,7 @@ public static class SkillProvenanceExtensions
 {
     public static string ToApiString(this SkillProvenance p) => p switch
     {
+        SkillProvenance.BuiltIn => "built-in",
         SkillProvenance.RepoImport => "repo-import",
         SkillProvenance.FileUpload => "file-upload",
         SkillProvenance.Manual => "manual",
@@ -32,6 +36,7 @@ public static class SkillProvenanceExtensions
 
     public static SkillProvenance ParseProvenance(string s) => s switch
     {
+        "built-in" => SkillProvenance.BuiltIn,
         "repo-import" => SkillProvenance.RepoImport,
         "file-upload" => SkillProvenance.FileUpload,
         "manual" => SkillProvenance.Manual,

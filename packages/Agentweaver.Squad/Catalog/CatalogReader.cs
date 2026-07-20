@@ -13,15 +13,29 @@ namespace Agentweaver.Squad.Catalog;
 /// </summary>
 public sealed class CatalogReader
 {
-    private static readonly Assembly _asm = typeof(CatalogReader).Assembly;
-    private const string ResourcePrefix = "Agentweaver.Squad.Catalog.Resources";
+    private readonly Assembly _asm;
+    private readonly string _resourcePrefix;
 
     private static readonly JsonSerializerOptions _json = new()
     {
         PropertyNameCaseInsensitive = true,
     };
 
-    private static string Fid(string id) => id.Replace('-', '_');
+    private static string? Fid(string? id) => CatalogIdentifier.ToResourceStem(id);
+
+    public CatalogReader()
+        : this(typeof(CatalogReader).Assembly, "Agentweaver.Squad.Catalog.Resources")
+    {
+    }
+
+    /// <summary>Creates a reader for an embedded catalog resource namespace.</summary>
+    public CatalogReader(Assembly assembly, string resourcePrefix)
+    {
+        _asm = assembly ?? throw new ArgumentNullException(nameof(assembly));
+        _resourcePrefix = string.IsNullOrWhiteSpace(resourcePrefix)
+            ? throw new ArgumentException("A resource prefix is required.", nameof(resourcePrefix))
+            : resourcePrefix;
+    }
 
     private string? ReadResourceText(string resourceName)
     {
@@ -33,7 +47,7 @@ public sealed class CatalogReader
 
     public IReadOnlyList<TeamTemplate> LoadTemplates()
     {
-        var manifestText = ReadResourceText($"{ResourcePrefix}.catalog.manifest.json");
+        var manifestText = ReadResourceText($"{_resourcePrefix}.catalog.manifest.json");
         if (manifestText is null) return [];
 
         var manifest = JsonSerializer.Deserialize<CatalogManifestDto>(manifestText, _json);
@@ -50,7 +64,9 @@ public sealed class CatalogReader
 
     public TeamTemplate? LoadTemplate(string id)
     {
-        var text = ReadResourceText($"{ResourcePrefix}.groupings.{Fid(id)}.json");
+        var stem = Fid(id);
+        if (stem is null) return null;
+        var text = ReadResourceText($"{_resourcePrefix}.groupings.{stem}.json");
         if (text is null) return null;
 
         var dto = JsonSerializer.Deserialize<TemplateDto>(text, _json);
@@ -67,21 +83,39 @@ public sealed class CatalogReader
     }
 
     public Role? LoadRole(string id)
+        => LoadRoleResult(id).Role;
+
+    /// <summary>Loads a role without allowing malformed embedded JSON to escape the catalog boundary.</summary>
+    public CatalogRoleLoadResult LoadRoleResult(string id)
     {
-        var text = ReadResourceText($"{ResourcePrefix}.roles.{Fid(id)}.json");
-        if (text is null) return null;
+        var stem = Fid(id);
+        if (stem is null) return new CatalogRoleLoadResult(id, null, "invalid_id");
+        var source = $"{stem}.json";
+        var text = ReadResourceText($"{_resourcePrefix}.roles.{source}");
+        if (text is null) return new CatalogRoleLoadResult(source, null, "missing");
 
-        var dto = JsonSerializer.Deserialize<RoleDto>(text, _json);
-        if (dto is null) return null;
+        RoleDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<RoleDto>(text, _json);
+        }
+        catch (JsonException)
+        {
+            return new CatalogRoleLoadResult(source, null, "malformed_json");
+        }
+        if (dto is null) return new CatalogRoleLoadResult(source, null, "missing_id");
+        if (!CatalogIdentifier.IsSafe(dto.Id) ||
+            !string.Equals(dto.Id, id, StringComparison.Ordinal))
+            return new CatalogRoleLoadResult(source, null, "invalid_id");
 
-        return new Role(
-            dto.Id ?? id,
+        return new CatalogRoleLoadResult(source, new Role(
+            dto.Id!,
             dto.Title ?? id,
             dto.Summary ?? string.Empty,
             dto.DefaultModel ?? string.Empty,
             dto.Capabilities ?? [],
             dto.Responsibilities ?? [],
-            dto.Boundaries ?? []);
+            dto.Boundaries ?? []), null);
     }
 
     /// <summary>
@@ -93,7 +127,7 @@ public sealed class CatalogReader
     /// </summary>
     public IReadOnlyList<Role> LoadAllRoles()
     {
-        var prefix = $"{ResourcePrefix}.roles.";
+        var prefix = $"{_resourcePrefix}.roles.";
         var roleNames = _asm.GetManifestResourceNames()
             .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal));
 
@@ -101,6 +135,7 @@ public sealed class CatalogReader
         foreach (var resourceName in roleNames)
         {
             var id = resourceName[prefix.Length..^".json".Length].Replace('_', '-');
+            if (!CatalogIdentifier.IsSafe(id)) continue;
             if (ReservedRoles.IsReserved(id)) continue;
             var role = LoadRole(id);
             if (role is not null) byId[role.Id] = role;
@@ -121,18 +156,27 @@ public sealed class CatalogReader
 
     /// <summary>Loads all predefined blueprints embedded under <c>Catalog/Resources/blueprints</c>.</summary>
     public IReadOnlyList<Blueprint> LoadAllBlueprints()
+        => LoadAllBlueprintLoadResults()
+            .Where(result => result.Blueprint is not null)
+            .Select(result => result.Blueprint!)
+            .ToList();
+
+    /// <summary>
+    /// Loads every embedded blueprint with its resource-scoped parse result. Consumers that expose
+    /// catalog diagnostics use this rather than silently dropping malformed assets.
+    /// </summary>
+    public IReadOnlyList<CatalogBlueprintLoadResult> LoadAllBlueprintLoadResults()
     {
-        var prefix = $"{ResourcePrefix}.blueprints.";
+        var prefix = $"{_resourcePrefix}.blueprints.";
         var names = _asm.GetManifestResourceNames()
             .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal))
             .OrderBy(n => n, StringComparer.Ordinal);
 
-        var result = new List<Blueprint>();
+        var result = new List<CatalogBlueprintLoadResult>();
         foreach (var resourceName in names)
         {
             var text = ReadResourceText(resourceName);
-            var blueprint = ParseBlueprint(text);
-            if (blueprint is not null) result.Add(blueprint);
+            result.Add(ParseBlueprint(text, resourceName[prefix.Length..]));
         }
         return result;
     }
@@ -140,15 +184,30 @@ public sealed class CatalogReader
     /// <summary>Loads a single predefined blueprint by id, or null when none is embedded.</summary>
     public Blueprint? LoadBlueprint(string id)
     {
-        var text = ReadResourceText($"{ResourcePrefix}.blueprints.{Fid(id)}.json");
-        return ParseBlueprint(text);
+        var stem = Fid(id);
+        if (stem is null) return null;
+        var text = ReadResourceText($"{_resourcePrefix}.blueprints.{stem}.json");
+        return ParseBlueprint(text, $"{stem}.json").Blueprint;
     }
 
-    private static Blueprint? ParseBlueprint(string? text)
+    private static CatalogBlueprintLoadResult ParseBlueprint(string? text, string source)
     {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        var dto = JsonSerializer.Deserialize<BlueprintDto>(text, _json);
-        if (dto is null || string.IsNullOrWhiteSpace(dto.Id)) return null;
+        if (string.IsNullOrWhiteSpace(text))
+            return new CatalogBlueprintLoadResult(source, null, "missing blueprint resource content");
+        if (text.Length > 262_144)
+            return new CatalogBlueprintLoadResult(source, null, "blueprint resource exceeds the 262144 character limit");
+
+        BlueprintDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<BlueprintDto>(text, _json);
+        }
+        catch (JsonException)
+        {
+            return new CatalogBlueprintLoadResult(source, null, "malformed blueprint JSON");
+        }
+        if (dto is null || string.IsNullOrWhiteSpace(dto.Id))
+            return new CatalogBlueprintLoadResult(source, null, "blueprint id is missing");
 
         // Prefer the explicit workflows array; fall back to wrapping the legacy single workflow string.
         IReadOnlyList<string> workflows = dto.Workflows is { Count: > 0 }
@@ -157,30 +216,41 @@ public sealed class CatalogReader
                 ? (IReadOnlyList<string>)[dto.Workflow]
                 : (IReadOnlyList<string>)["default"];
 
-        return new Blueprint(
+        return new CatalogBlueprintLoadResult(source, new Blueprint(
             dto.Id!,
             dto.Name ?? dto.Id!,
             dto.Description ?? string.Empty,
             dto.Roster ?? [],
             workflows,
             dto.ReviewPolicy ?? "default",
-            dto.SandboxProfile ?? "default");
+            dto.SandboxProfile ?? "default")
+        {
+            SkillBindings = (dto.SkillBindings ?? [])
+                .Where(binding => !string.IsNullOrWhiteSpace(binding.RoleId))
+                .Select(binding => new BlueprintSkillBinding(
+                    binding.RoleId!,
+                    binding.Skills?.Where(skill => !string.IsNullOrWhiteSpace(skill)).ToArray() ?? []))
+                .ToArray(),
+        }, null);
     }
 
     public string? LoadCharterTemplate(string roleId)
-        => ReadResourceText($"{ResourcePrefix}.charters.{Fid(roleId)}.md");
+    {
+        var stem = Fid(roleId);
+        return stem is null ? null : ReadResourceText($"{_resourcePrefix}.charters.{stem}.md");
+    }
 
     /// <summary>
     /// Loads a built-in MAF agent template (<c>.github/agents/{name}.agent.md</c> content)
     /// by agent name. Returns <c>null</c> if no embedded template exists for the agent.
     /// </summary>
     public string? LoadMafAgentTemplate(string agentName)
-        => ReadResourceText($"{ResourcePrefix}.agents.{agentName.ToLowerInvariant()}.agent.md");
+        => ReadResourceText($"{_resourcePrefix}.agents.{agentName.ToLowerInvariant()}.agent.md");
 
     public string? LoadRaiPolicyTemplate()
     {
-        var resourceName = $"{typeof(CatalogReader).Assembly.GetName().Name}.Catalog.Resources.agents.rai_policy.md";
-        using var stream = typeof(CatalogReader).Assembly.GetManifestResourceStream(resourceName);
+        var resourceName = $"{_resourcePrefix}.agents.rai_policy.md";
+        using var stream = _asm.GetManifestResourceStream(resourceName);
         if (stream is null) return null;
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
@@ -198,7 +268,7 @@ public sealed class CatalogReader
     /// </summary>
     public IReadOnlyList<(string Yaml, string Source)> LoadAllWorkflowYamls()
     {
-        var prefix = $"{ResourcePrefix}.workflows.";
+        var prefix = $"{_resourcePrefix}.workflows.";
         var names = _asm.GetManifestResourceNames()
             .Where(n => n.StartsWith(prefix, StringComparison.Ordinal) &&
                         (n.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
@@ -242,5 +312,16 @@ public sealed class CatalogReader
         [property: JsonPropertyName("workflow")] string? Workflow,
         [property: JsonPropertyName("workflows")] IReadOnlyList<string>? Workflows,
         [property: JsonPropertyName("review_policy")] string? ReviewPolicy,
-        [property: JsonPropertyName("sandbox_profile")] string? SandboxProfile);
+        [property: JsonPropertyName("sandbox_profile")] string? SandboxProfile,
+        [property: JsonPropertyName("skill_bindings")] IReadOnlyList<BlueprintSkillBindingDto>? SkillBindings);
+
+    private sealed record BlueprintSkillBindingDto(
+        [property: JsonPropertyName("role_id")] string? RoleId,
+        [property: JsonPropertyName("skills")] IReadOnlyList<string>? Skills);
 }
+
+/// <summary>A blueprint resource and its source-scoped loading outcome.</summary>
+public sealed record CatalogBlueprintLoadResult(string Source, Blueprint? Blueprint, string? Error);
+
+/// <summary>A role resource and its sanitized loading outcome.</summary>
+public sealed record CatalogRoleLoadResult(string Source, Role? Role, string? ErrorCode);

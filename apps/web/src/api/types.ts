@@ -190,6 +190,9 @@ export interface Project {
   state: ProjectState;
   created_at: string;
   updated_at: string;
+  source_blueprint_id?: string | null;
+  source_blueprint_type?: 'predefined' | 'inline' | 'custom' | null;
+  allowed_workflow_ids?: string[] | null;
 }
 
 export interface Blueprint {
@@ -205,6 +208,16 @@ export interface Blueprint {
   workflows: string[];
   review_policy: string;
   sandbox_profile: string;
+  exportability?: {
+    status: 'exportable' | 'unavailable';
+    codes: string[];
+  };
+  skill_bindings?: BlueprintSkillBindingDto[];
+}
+
+export interface BlueprintSkillBindingDto {
+  role_id: string;
+  skills: string[];
 }
 
 export interface ListBlueprintsResponse {
@@ -1488,8 +1501,16 @@ export interface PortForwardSessionDto {
 }
 
 // ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
-export type SkillProvenance = 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync';
+export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync';
 export type SkillStatus = 'active' | 'missing' | 'malformed';
+
+export function isSkillProvenance(value: unknown): value is SkillProvenance {
+  return value === 'built-in'
+    || value === 'repo-import'
+    || value === 'file-upload'
+    || value === 'manual'
+    || value === 'connected-repo-sync';
+}
 
 // GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
 export interface SkillDto {
@@ -1577,4 +1598,38 @@ export interface SkillAssignmentDto {
   skill_id: string;
   skill_name: string;
   agent_name: string;
+}
+
+// Blueprint default skills are deliberately previewed before they alter an
+// existing project's catalog or assignments. `digest` is an optimistic
+// concurrency token and must be returned unchanged by the apply request.
+export type BlueprintSkillDefaultAction = 'create' | 'reactivate' | 'assign' | 'blocked';
+
+export interface BlueprintSkillDefaultAssignmentDto {
+  role_id: string;
+  agent_name: string;
+  skill_name: string;
+  action: BlueprintSkillDefaultAction;
+}
+
+// POST /api/projects/{id}/skill-defaults/preview
+export interface BlueprintSkillDefaultsPreviewResponse {
+  blueprint_id: string;
+  blueprint_version: string;
+  digest: string;
+  can_apply: boolean;
+  errors: string[];
+  assignments: BlueprintSkillDefaultAssignmentDto[];
+}
+
+// POST /api/projects/{id}/skill-defaults/apply
+export interface ApplyBlueprintSkillDefaultsRequest {
+  blueprint_id: string;
+  digest: string;
+}
+
+export interface ApplyBlueprintSkillDefaultsResponse {
+  outcome: 'applied' | 'stale' | 'invalid';
+  errors: string[];
+  preview: BlueprintSkillDefaultsPreviewResponse | null;
 }

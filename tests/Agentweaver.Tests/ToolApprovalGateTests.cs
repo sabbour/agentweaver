@@ -12,7 +12,8 @@ namespace Agentweaver.Tests;
 
 public sealed class ToolApprovalGateTests
 {
-    private static InMemoryToolApprovalGate CreateGate() => new();
+    private static InMemoryToolApprovalGate CreateGate(Func<string, string?>? ownerForRun = null) =>
+        new(new DelegateOwnerResolver(ownerForRun ?? (_ => "test-owner")));
 
     // Helper: registers a pending approval with context atomically, returns the awaitable task.
     private static Task<bool> Register(
@@ -104,6 +105,63 @@ public sealed class ToolApprovalGateTests
         (await firstTask).Should().BeTrue();
 
         gate.IsAutoApproved(runId, "web_fetch", url).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Always_Scope_DifferentOwner_IsNotAutoApproved()
+    {
+        var gate = CreateGate(runId => runId == "run-A" ? "alice" : "bob");
+        var firstTask = Register(gate, "run-A", "req-1");
+
+        await gate.GrantAsync("run-A", "req-1", ApprovalScope.Always);
+
+        (await firstTask).Should().BeTrue();
+        gate.IsAutoApproved("run-A", "web_fetch", "https://same-owner.test").Should().BeTrue();
+        gate.IsAutoApproved("run-B", "web_fetch", "https://different-owner.test").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task Always_Scope_MissingOwner_FailsClosed(string? owner)
+    {
+        var gate = CreateGate(_ => owner);
+        var firstTask = Register(gate, "run-A", "req-1");
+
+        await gate.GrantAsync("run-A", "req-1", ApprovalScope.Always);
+
+        (await firstTask).Should().BeTrue();
+        gate.IsAutoApproved("run-A", "web_fetch", "https://example.test").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Always_Scope_OwnerResolverFailure_FailsClosed()
+    {
+        var gate = CreateGate(_ => throw new InvalidOperationException("owner store unavailable"));
+        var firstTask = Register(gate, "run-A", "req-1");
+
+        await gate.GrantAsync("run-A", "req-1", ApprovalScope.Always);
+
+        (await firstTask).Should().BeTrue();
+        gate.IsAutoApproved("run-A", "web_fetch", "https://example.test").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("start_preview")]
+    [InlineData("write_file")]
+    [InlineData("unknown_tool")]
+    [InlineData("Web_Fetch")]
+    public async Task Always_Scope_NonEligibleTool_RemainsGated(string toolName)
+    {
+        var gate = CreateGate();
+        var firstTask = Register(gate, "run-A", "req-1", toolName);
+
+        await gate.GrantAsync("run-A", "req-1", ApprovalScope.Always);
+
+        (await firstTask).Should().BeTrue();
+        gate.IsAutoApproved("run-A", toolName, null).Should().BeFalse();
+        gate.IsAutoApproved("run-B", toolName, null).Should().BeFalse();
     }
 
     // ── Clear ───────────────────────────────────────────────────────────────────
@@ -364,6 +422,11 @@ public sealed class ToolApprovalGateTests
         (await clearTask).Should().BeFalse();
         gate.HasArmedApproval("run-a3").Should().BeFalse("clearing a run drops its armed approvals");
     }
+
+    private sealed class DelegateOwnerResolver(Func<string, string?> resolve) : IToolApprovalOwnerResolver
+    {
+        public string? GetCanonicalOwner(string runId) => resolve(runId);
+    }
 }
 
 /// <summary>
@@ -617,13 +680,20 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         gate.HasArmedApproval("run-arm2").Should().BeFalse("an expired request must not count as armed");
     }
 
-    private DurableRunControlState NewState() =>
-        new(NewProvider().GetRequiredService<IServiceScopeFactory>());
+    private DurableRunControlState NewState()
+    {
+        var provider = NewProvider();
+        return new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<IRunEventStream>());
+    }
 
     private ServiceProvider NewProvider()
     {
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddDbContextFactory<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddSingleton<IRunEventStream, EfRunEventStream>();
         var provider = services.BuildServiceProvider();
         _providers.Add(provider);
         return provider;

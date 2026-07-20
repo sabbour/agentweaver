@@ -189,6 +189,145 @@ public sealed class SqliteSkillStore : ISkillStore
         return results;
     }
 
+    public async Task<SkillDefaultsStoreApplyResult> ApplyDefaultsAsync(
+        SkillDefaultsStorePlan plan,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
+            .ConfigureAwait(false);
+
+        await using (var guard = connection.CreateCommand())
+        {
+            guard.Transaction = transaction;
+            guard.CommandText =
+                """
+                UPDATE projects
+                   SET team_revision = team_revision
+                 WHERE project_id = $projectId
+                   AND state = 'active'
+                   AND team_revision = $expectedTeamRevision;
+                """;
+            guard.Parameters.AddWithValue("$projectId", plan.ProjectId.ToString());
+            guard.Parameters.AddWithValue("$expectedTeamRevision", plan.ExpectedTeamRevision);
+            if (await guard.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return SkillDefaultsStoreApplyResult.Stale;
+            }
+        }
+
+        var currentSkills = await ReadSkillsAsync(connection, transaction, plan.ProjectId, ct).ConfigureAwait(false);
+        var currentAssignments = await ReadAssignmentsAsync(connection, transaction, plan.ProjectId, ct).ConfigureAwait(false);
+        if (!string.Equals(
+                SkillCatalogStateFingerprint.Compute(currentSkills, currentAssignments),
+                plan.ExpectedStateFingerprint,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            return SkillDefaultsStoreApplyResult.Stale;
+        }
+
+        foreach (var skill in plan.SkillsToInsert)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                INSERT INTO skills (skill_id, project_id, name, description, instructions, resources,
+                                    provenance, source_repository, source_location, content_hash, status,
+                                    created_at, updated_at)
+                VALUES ($skillId, $projectId, $name, $description, $instructions, $resources,
+                        $provenance, $sourceRepository, $sourceLocation, $contentHash, $status,
+                        $createdAt, $updatedAt);
+                """;
+            BindSkill(command, skill);
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        foreach (var skill in plan.SkillsToActivate)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                UPDATE skills
+                   SET status = $status, updated_at = $updatedAt
+                 WHERE project_id = $projectId AND skill_id = $skillId;
+                """;
+            command.Parameters.AddWithValue("$status", skill.Status.ToApiString());
+            command.Parameters.AddWithValue("$updatedAt", Ts(skill.UpdatedAt));
+            command.Parameters.AddWithValue("$projectId", skill.ProjectId.ToString());
+            command.Parameters.AddWithValue("$skillId", skill.Id.ToString());
+            if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+                throw new InvalidOperationException("A guarded built-in skill was not found during apply.");
+        }
+
+        foreach (var assignment in plan.AssignmentsToAdd)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                INSERT INTO skill_assignments (project_id, skill_id, agent_name, created_at)
+                VALUES ($projectId, $skillId, $agentName, $createdAt)
+                ON CONFLICT (project_id, skill_id, agent_name) DO NOTHING;
+                """;
+            command.Parameters.AddWithValue("$projectId", assignment.ProjectId.ToString());
+            command.Parameters.AddWithValue("$skillId", assignment.SkillId.ToString());
+            command.Parameters.AddWithValue("$agentName", assignment.AgentName);
+            command.Parameters.AddWithValue("$createdAt", Ts(assignment.CreatedAt));
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return SkillDefaultsStoreApplyResult.Applied;
+    }
+
+    private static async Task<IReadOnlyList<Skill>> ReadSkillsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ProjectId projectId,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = SelectSql + " WHERE project_id = $projectId ORDER BY name COLLATE NOCASE;";
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        var skills = new List<Skill>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            skills.Add(Map(reader));
+        return skills;
+    }
+
+    private static async Task<IReadOnlyList<SkillAssignment>> ReadAssignmentsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ProjectId projectId,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT project_id, skill_id, agent_name, created_at FROM skill_assignments WHERE project_id = $projectId;";
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        var assignments = new List<SkillAssignment>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            assignments.Add(new SkillAssignment
+            {
+                ProjectId = ProjectId.Parse(reader.GetString(0)),
+                SkillId = SkillId.Parse(reader.GetString(1)),
+                AgentName = reader.GetString(2),
+                CreatedAt = DateTimeOffset.Parse(reader.GetString(3), null, DateTimeStyles.RoundtripKind),
+            });
+        }
+        return assignments;
+    }
+
     private static void BindSkill(SqliteCommand command, Skill skill)
     {
         command.Parameters.AddWithValue("$skillId", skill.Id.ToString());

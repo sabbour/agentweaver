@@ -1,6 +1,7 @@
 using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using Agentweaver.Squad.Catalog;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -21,6 +22,9 @@ public static class WorkflowDefinitionLoader
     /// <summary>Parses+validates a YAML document. Always returns a result (never throws).</summary>
     public static WorkflowLoadResult Load(string yaml, string source, bool isBuiltIn = false)
     {
+        if (yaml.Length > 262_144)
+            return WorkflowLoadResult.Invalid(source, $"{source}: workflow resource exceeds the 262144 character limit.");
+
         WorkflowYamlDto? dto;
         try
         {
@@ -55,12 +59,16 @@ public static class WorkflowDefinitionLoader
 
         if (string.IsNullOrWhiteSpace(dto.Id))
             return Fail(source, "missing required field 'id'.", out error);
+        if (isBuiltIn && CatalogIdentifier.ValidationError(dto.Id, "workflow id") is { } workflowIdError)
+            return Fail(source, workflowIdError, out error);
         if (string.IsNullOrWhiteSpace(dto.Name))
             return Fail(source, "missing required field 'name'.", out error);
 
         // Nodes.
         if (dto.Nodes is null || dto.Nodes.Count == 0)
             return Fail(source, "a workflow must declare at least one node.", out error);
+        if (dto.Nodes.Count > 128)
+            return Fail(source, "a workflow cannot declare more than 128 nodes.", out error);
 
         var nodes = new List<WorkflowNode>(dto.Nodes.Count);
         var nodeIds = new HashSet<string>(StringComparer.Ordinal);
@@ -74,6 +82,10 @@ public static class WorkflowDefinitionLoader
                 return Fail(source, $"node '{n.Id}' is missing its required 'type'.", out error);
             if (!TryParseNodeType(n.Type, out var nodeType))
                 return Fail(source, $"node '{n.Id}' has unknown type '{n.Type}'.", out error);
+            if (n.Prompt?.Length > 16_384)
+                return Fail(source, $"node '{n.Id}' prompt exceeds the 16384 character limit.", out error);
+            if (n.Charter?.Length > 8_192)
+                return Fail(source, $"node '{n.Id}' charter exceeds the 8192 character limit.", out error);
 
             nodes.Add(new WorkflowNode
             {
@@ -109,6 +121,8 @@ public static class WorkflowDefinitionLoader
         var edges = new List<WorkflowEdge>();
         if (dto.Edges is not null)
         {
+            if (dto.Edges.Count > 512)
+                return Fail(source, "a workflow cannot declare more than 512 edges.", out error);
             foreach (var e in dto.Edges)
             {
                 if (string.IsNullOrWhiteSpace(e.From) || string.IsNullOrWhiteSpace(e.To))

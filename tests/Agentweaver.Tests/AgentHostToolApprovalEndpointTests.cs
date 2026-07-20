@@ -5,7 +5,9 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using AgentHostRuntimeState = agenthost::Agentweaver.AgentHost.AgentHostRuntimeState;
+using AgentHostRuntimeServiceCollectionExtensions = agenthost::Agentweaver.AgentHost.AgentHostRuntimeServiceCollectionExtensions;
 using AgentHostToolApprovalRequest = agenthost::AgentHostToolApprovalRequest;
 using ToolApprovalEndpointHandlers = agenthost::ToolApprovalEndpointHandlers;
 
@@ -13,6 +15,52 @@ namespace Agentweaver.Tests;
 
 public sealed class AgentHostToolApprovalEndpointTests
 {
+    [Fact]
+    public async Task ProductionRuntimeWiring_RunGrant_AutoApprovesOnlyConfiguredRun()
+    {
+        var services = new ServiceCollection();
+        AgentHostRuntimeServiceCollectionExtensions.AddAgentHostRuntime(services);
+        await using var provider = services.BuildServiceProvider();
+
+        var state = provider.GetRequiredService<AgentHostRuntimeState>();
+        var gate = provider.GetRequiredService<IToolApprovalGate>();
+        var ownerResolver = provider.GetRequiredService<IToolApprovalOwnerResolver>();
+
+        ownerResolver.GetCanonicalOwner("run-1").Should().BeNull();
+        gate.IsAutoApproved("run-1", "web_fetch", "https://before-configure.test")
+            .Should().BeFalse();
+
+        state.TryConfigure("run-1", "user-1", "", null, null, "pod-credential")
+            .Should().BeTrue();
+        ownerResolver.GetCanonicalOwner("run-1").Should().Be("user-1");
+        ownerResolver.GetCanonicalOwner("different-run").Should().BeNull();
+        var firstFetch = gate.WaitForApprovalAsync(
+            "run-1",
+            "req-run",
+            "web_fetch",
+            "https://first.test",
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        var result = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-run",
+                Scope = "run",
+            },
+            gate,
+            state);
+
+        Status(result).Should().Be(StatusCodes.Status200OK);
+        (await firstFetch).Should().BeTrue();
+        gate.IsAutoApproved("run-1", "web_fetch", "https://second.test")
+            .Should().BeTrue();
+        gate.IsAutoApproved("different-run", "web_fetch", "https://second.test")
+            .Should().BeFalse();
+    }
+
     [Fact]
     public async Task Grant_ResolvesPendingRequest()
     {

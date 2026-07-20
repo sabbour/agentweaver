@@ -1987,6 +1987,11 @@
   }
 }
 
+/* Indeterminate loaders communicate active work, including with reduced motion. */
+.fui-Spinner__spinner {
+  animation-iteration-count: infinite !important;
+}
+
 /* Neutral long loader retained for running rows; tokenized so it does not contradict
    the MCP loader node's neutral/subtle treatment. */
 .azf-copilot-loader-bar {
@@ -2012,7 +2017,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .azf-copilot-loader,
   .azf-copilot-loader-bar,
   .azf-service-menu__item[data-selected='true']::before,
   .azf-copy-button[data-visual-state='copied'] .azf-copy-button__icon {
