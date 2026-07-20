@@ -16,6 +16,32 @@ After the installer completes, skip to [Configure the API](#1-configure-the-api)
 
 ---
 
+## Deploy to Azure (one command)
+
+Prefer a live Azure deployment over local dev? Skip local setup entirely and run the smart installer instead:
+
+```bash
+git clone https://github.com/sabbour/agentweaver.git
+cd agentweaver
+npm run azure:deploy
+```
+
+With no flags, in an interactive terminal, this prompts you through Azure
+subscription, resource group, location, cluster/ACR/Key Vault names (smart
+defaults, all editable), and your GitHub OAuth App client ID + secret — then
+provisions AKS, PostgreSQL, Key Vault, ACR, identity, and monitoring, builds
+and pushes images, and deploys and verifies the release. It prints an
+outputs summary at the end (cluster, ACR, gateway host, verification
+pass/fail counts) and never prints the OAuth client secret.
+
+For non-interactive deploys (flags, environment variables, or a
+`--params-file`), upgrading an existing deployment (`npm run azure:upgrade`),
+and the full flag reference, see the [README's Deploy to Azure
+section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
+[npm script reference](#npm-script-reference) below.
+
+---
+
 ## Prerequisites
 
 You need these tools before you start:
