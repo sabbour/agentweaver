@@ -412,6 +412,10 @@ export async function run(opts = {}) {
   log.field("AgentHost image tag", cfg.AGENTHOST_IMAGE_TAG);
   log.field("Gateway host", deployResult?.HOST ?? "<unknown>");
   log.field("Gateway IP", deployResult?.GATEWAY_IP ?? "<unknown>");
+  log.field(
+    "GitHub OAuth callback URL",
+    deployResult?.HOST ? `https://${deployResult.HOST}/auth/github/callback` : "<unknown -- see Gateway host above>",
+  );
   log.field("Verification", `${verifyResult.pass}/${verifyResult.pass + verifyResult.fail} checks passed`);
   // NEVER print GITHUB_CLIENT_SECRET or any credential value here.
 

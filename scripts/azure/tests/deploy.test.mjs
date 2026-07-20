@@ -154,6 +154,51 @@ test("run: non-interactive path resolves config from flags and env, then delegat
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");
 });
 
+test("run: outputs summary includes the GitHub OAuth callback URL derived from the Gateway host", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls, { IMAGE_TAG: "abc123" }),
+    verifyProvenance: fakeStep("verifyProvenance", calls, { ok: true }),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, { HOST: "agentweaver.example.com", GATEWAY_IP: "1.2.3.4" }),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 10, fail: 0 }),
+  };
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture() {
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  };
+  const resolveVariablesFn = async ({ env: e }) => ({
+    RESOURCE_GROUP: e.RESOURCE_GROUP,
+    IMAGE_TAG: e.IMAGE_TAG ?? "dev",
+    AGENTHOST_IMAGE_TAG: "dev",
+  });
+  const fields = [];
+  const log = { ...noopLog(), field: (label, value) => fields.push([label, value]) };
+
+  await run({
+    argv: ["--resource-group", "my-rg", "--github-client-id", "id-123", "--github-client-secret", "topsecret"],
+    env: { GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" },
+    prompt: { isInteractive: () => false },
+    exec,
+    log,
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  const callbackField = fields.find(([label]) => label === "GitHub OAuth callback URL");
+  assert.ok(callbackField, "expected a 'GitHub OAuth callback URL' field in the outputs summary");
+  assert.equal(callbackField[1], "https://agentweaver.example.com/auth/github/callback");
+});
+
 test("run: --skip-postgres and --skip-oauth-key omit those steps from the call sequence", async () => {
   const calls = [];
   const steps = {

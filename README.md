@@ -10,14 +10,6 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 
 📖 **[Read the docs at sabbour.me/agentweaver](https://sabbour.me/agentweaver/)** — or browse the source in [docs/index.md](docs/index.md)
 
-## Features
-
-- **Sandboxed execution** — every agent run lives in an isolated git worktree with Kata VM isolation on AKS
-- **Live streaming** — watch every agent step, tool call, and file change in real time from any replica
-- **Human-in-the-loop review** — nothing merges until you approve the assembled diff
-- **Sandbox browser preview** — open a live in-browser preview of the app running inside a run's sandbox (port-forward)
-- **MCP server** — expose Agentweaver runs and outcomes as MCP tools for Claude Desktop and compatible clients
-
 ## Prerequisites
 
 | Tool | Needed for | Windows (winget) | macOS (Homebrew) | Linux (Debian/Ubuntu) |
@@ -32,7 +24,8 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 
 `node scripts/azure/cli.mjs dev --setup` (aliased as `npm run setup`) checks
 git/.NET/Node itself and prints the matching install command above for your
-platform if one is missing.
+platform if one is missing. It does not check the Azure CLI, `kubectl`, or
+`gh`, since local dev doesn't need them.
 
 Docker is **not** required locally — image builds run remotely via `az acr build`
 (see `scripts/azure/steps/20-build-push-images.mjs`), not a local Docker daemon.
@@ -57,6 +50,12 @@ Then install git, Node.js, and the .NET SDK:
 winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
 winget install --id OpenJS.NodeJS.22 --exact --accept-source-agreements --accept-package-agreements
 winget install --id Microsoft.DotNet.SDK.10 --accept-source-agreements --accept-package-agreements
+```
+
+Deploying to Azure? Also install the Azure CLI:
+
+```powershell
+winget install Microsoft.AzureCLI --accept-source-agreements --accept-package-agreements
 ```
 
 `npm` ships bundled with Node.js — no separate install needed. Refresh `PATH`
@@ -87,6 +86,12 @@ brew install node@20
 brew install --cask dotnet-sdk
 ```
 
+Deploying to Azure? Also install the Azure CLI:
+
+```bash
+brew install azure-cli
+```
+
 `npm` ships bundled with Node.js — no separate install needed.
 
 </details>
@@ -108,11 +113,25 @@ curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0
 export PATH="$HOME/.dotnet:$PATH"
 ```
 
+Deploying to Azure? Also install the Azure CLI:
+
+```bash
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```
+
 </details>
 
-`npm run setup` re-checks all of the above itself after you install them, and
-prints the matching command again if anything is still missing or out of
+`npm run setup` re-checks the local-dev tools itself after you install them,
+and prints the matching command again if anything is still missing or out of
 date. Full step-by-step guide: [sabbour.me/agentweaver/guide/getting-started](https://sabbour.me/agentweaver/guide/getting-started).
+
+## Features
+
+- **Sandboxed execution** — every agent run lives in an isolated git worktree with Kata VM isolation on AKS
+- **Live streaming** — watch every agent step, tool call, and file change in real time from any replica
+- **Human-in-the-loop review** — nothing merges until you approve the assembled diff
+- **Sandbox browser preview** — open a live in-browser preview of the app running inside a run's sandbox (port-forward)
+- **MCP server** — expose Agentweaver runs and outcomes as MCP tools for Claude Desktop and compatible clients
 
 ## Quick start
 
@@ -156,22 +175,23 @@ no echo). It then provisions the cluster, identity, monitoring, the MCP OAuth
 signing key, PostgreSQL, builds and pushes images, verifies image provenance,
 and deploys and verifies the release. At the end it prints an **outputs
 summary** (resource group, cluster, ACR, namespace, image tags, gateway
-host/IP, verification pass/fail counts) — it never prints the OAuth client
-secret or any other credential.
+host/IP, **GitHub OAuth callback URL**, verification pass/fail counts) — it
+never prints the OAuth client secret or any other credential.
 
 > **GitHub OAuth App callback URL — local vs. Azure.** The registered
 > callback URL must match where the app is actually running:
 > - **Local dev** → `http://localhost:5000/auth/github/callback`
-> - **Azure deployment** → `https://<gateway-host>/auth/github/callback`,
->   where `<gateway-host>` is the **Gateway host** printed in the outputs
->   summary above. It's only known *after* AKS App Routing provisions the
->   managed certificate on your first deploy, so there's no way to know it
->   in advance — deploy first with any placeholder callback URL, then update
->   the **Authorization callback URL** on the [OAuth App
->   settings](https://github.com/settings/developers) to the real gateway
->   host. GitHub OAuth Apps only support one callback URL each — if you also
->   do local dev, create a second OAuth App for `localhost`, or swap the
->   callback URL each time you switch between local and Azure.
+> - **Azure deployment** → `https://<gateway-host>/auth/github/callback` —
+>   printed verbatim as **GitHub OAuth callback URL** in the outputs summary
+>   above once the deploy finishes. It's only known *after* AKS App Routing
+>   provisions the managed certificate on your first deploy, so there's no
+>   way to know it in advance — deploy first with any placeholder callback
+>   URL, then go back to the [OAuth App
+>   settings](https://github.com/settings/developers) and paste in the
+>   printed callback URL. GitHub OAuth Apps only support one callback URL
+>   each — if you also do local dev, create a second OAuth App for
+>   `localhost`, or swap the callback URL each time you switch between local
+>   and Azure.
 
 **Non-interactive usage** — via flags, environment variables, and/or a params
 file (precedence: flags > env > params file > detected defaults > prompt; a

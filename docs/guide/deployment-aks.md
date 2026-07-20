@@ -36,11 +36,11 @@ variables or supply them as flags/params-file values (see below):
 > dev, but the AKS Gateway's public host for an Azure deployment
 > (`https://<gateway-host>/auth/github/callback`). The gateway host isn't
 > known until *after* your first deploy provisions the AKS App Routing
-> managed certificate (it's printed as **Gateway host** in the deploy
-> outputs summary). So: deploy first with a placeholder callback URL, then
-> come back and update it to the real gateway host. GitHub OAuth Apps only
-> support one callback URL each, so if you also run this locally, use a
-> second OAuth App for `localhost`.
+> managed certificate — once it finishes, the deploy's outputs summary
+> prints the exact value to use as **GitHub OAuth callback URL**. So: deploy
+> first with a placeholder callback URL, then come back and paste in the
+> printed one. GitHub OAuth Apps only support one callback URL each, so if
+> you also run this locally, use a second OAuth App for `localhost`.
 
 ```bash
 export GITHUB_CLIENT_ID=<oauth-app-client-id>

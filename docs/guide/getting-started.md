@@ -2,70 +2,6 @@
 
 Use this guide to stand up the API, submit a run, watch it live, and approve the result.
 
-## Install (one command)
-
-📖 See [Prerequisites](#prerequisites) below if you don't have git/Node/.NET
-installed yet — or the [README's Prerequisites
-section](https://github.com/sabbour/agentweaver#prerequisites) for full
-per-platform install commands.
-
-From a cloned checkout, the installer checks prerequisites, installs web and .NET dependencies, and launches the dev environment:
-
-```bash
-git clone https://github.com/sabbour/agentweaver.git
-cd agentweaver
-npm run setup
-```
-
-After the installer completes, skip to [Configure the API](#1-configure-the-api) below.
-
----
-
-## Deploy to Azure (one command)
-
-📖 See [Prerequisites](#prerequisites) below (you'll also need the Azure CLI
-logged in via `az login`).
-
-Prefer a live Azure deployment over local dev? Skip local setup entirely and run the smart installer instead:
-
-```bash
-git clone https://github.com/sabbour/agentweaver.git
-cd agentweaver
-npm run azure:deploy
-```
-
-With no flags, in an interactive terminal, this prompts you through Azure
-subscription, resource group, location, cluster/ACR/Key Vault names (smart
-defaults, all editable), and your GitHub OAuth App client ID + secret — then
-provisions AKS, PostgreSQL, Key Vault, ACR, identity, and monitoring, builds
-and pushes images, and deploys and verifies the release. It prints an
-outputs summary at the end (cluster, ACR, gateway host, verification
-pass/fail counts) and never prints the OAuth client secret.
-
-> **GitHub OAuth App callback URL — local vs. Azure.** The callback URL you
-> register on the GitHub OAuth App must match where the app is actually
-> running:
-> - **Local dev** → `http://localhost:5000/auth/github/callback`
-> - **Azure deployment** → `https://<gateway-host>/auth/github/callback`,
->   where `<gateway-host>` is the **Gateway host** printed in the outputs
->   summary above (it's only known *after* the AKS App Routing managed
->   certificate is provisioned on your first deploy — there's no way to know
->   it beforehand). So: deploy first with any placeholder callback URL, then
->   go back to the [OAuth App
->   settings](https://github.com/settings/developers) and update
->   **Authorization callback URL** to the real gateway host. GitHub OAuth
->   Apps only support one callback URL each — if you also do local dev,
->   create a second OAuth App dedicated to `localhost`, or swap the callback
->   URL each time you switch between local and Azure.
-
-For non-interactive deploys (flags, environment variables, or a
-`--params-file`), upgrading an existing deployment (`npm run azure:upgrade`),
-and the full flag reference, see the [README's Deploy to Azure
-section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
-[npm script reference](#npm-script-reference) below.
-
----
-
 ## Prerequisites
 
 You need these tools before you start:
@@ -75,9 +11,12 @@ You need these tools before you start:
 | .NET 10 SDK (`global.json` pins `10.0.100`) | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
 | Node.js 20.19+ (or 22.12+) — required by Vite 8 | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
 | git | `winget install --id Git.Git -e` | `brew install git` | `sudo apt-get update && sudo apt-get install -y git` |
+| Azure CLI (`az`), logged in via `az login` — only needed for `azure:deploy`/`azure:upgrade`/`azure:verify` (not for local dev) | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
 
-`npm run setup` (`dev --setup`) checks these itself and prints the matching
-install command above for your platform if one is missing.
+`npm run setup` (`dev --setup`) checks the local-dev tools (git/.NET/Node)
+itself and prints the matching install command above for your platform if
+one is missing. It does not check the Azure CLI, since local dev doesn't
+need it.
 
 ### Installing prerequisites
 
@@ -98,6 +37,12 @@ Then install git, Node.js, and the .NET SDK:
 winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
 winget install --id OpenJS.NodeJS.22 --exact --accept-source-agreements --accept-package-agreements
 winget install --id Microsoft.DotNet.SDK.10 --accept-source-agreements --accept-package-agreements
+```
+
+Deploying to Azure? Also install the Azure CLI:
+
+```powershell
+winget install Microsoft.AzureCLI --accept-source-agreements --accept-package-agreements
 ```
 
 `npm` ships bundled with Node.js — no separate install needed. Refresh `PATH`
@@ -127,6 +72,12 @@ brew install node@20
 brew install --cask dotnet-sdk
 ```
 
+Deploying to Azure? Also install the Azure CLI:
+
+```bash
+brew install azure-cli
+```
+
 `npm` ships bundled with Node.js — no separate install needed.
 
 :::
@@ -147,16 +98,82 @@ curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0
 export PATH="$HOME/.dotnet:$PATH"
 ```
 
+Deploying to Azure? Also install the Azure CLI:
+
+```bash
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```
+
 :::
 
-`npm run setup` re-checks all of the above itself after you install them, and
-prints the matching command again if anything is still missing or out of date.
+`npm run setup` re-checks the local-dev tools itself after you install them,
+and prints the matching command again if anything is still missing or out
+of date.
 
 Also needed, not installable via a package manager:
 
 - An existing local Git repository that the agent can target
 - A GitHub account with an active GitHub Copilot subscription — the web UI signs you in via OAuth.
-- A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback` for local dev. **Deploying to Azure instead?** The callback URL must match the Gateway's public host, not localhost — see the [callback URL note](#deploy-to-azure-one-command) above.
+- A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback` for local dev. **Deploying to Azure instead?** The callback URL must match the Gateway's public host, not localhost — see the [callback URL note](#deploy-to-azure-one-command) below.
+
+---
+
+## Install (one command)
+
+From a cloned checkout, the installer checks prerequisites, installs web and .NET dependencies, and launches the dev environment:
+
+```bash
+git clone https://github.com/sabbour/agentweaver.git
+cd agentweaver
+npm run setup
+```
+
+After the installer completes, skip to [Configure the API](#1-configure-the-api) below.
+
+---
+
+## Deploy to Azure (one command)
+
+Prefer a live Azure deployment over local dev? Skip local setup entirely and run the smart installer instead:
+
+```bash
+git clone https://github.com/sabbour/agentweaver.git
+cd agentweaver
+npm run azure:deploy
+```
+
+With no flags, in an interactive terminal, this prompts you through Azure
+subscription, resource group, location, cluster/ACR/Key Vault names (smart
+defaults, all editable), and your GitHub OAuth App client ID + secret — then
+provisions AKS, PostgreSQL, Key Vault, ACR, identity, and monitoring, builds
+and pushes images, and deploys and verifies the release. It prints an
+outputs summary at the end (cluster, ACR, gateway host, **GitHub OAuth
+callback URL**, verification pass/fail counts) and never prints the OAuth
+client secret.
+
+> **GitHub OAuth App callback URL — local vs. Azure.** The callback URL you
+> register on the GitHub OAuth App must match where the app is actually
+> running:
+> - **Local dev** → `http://localhost:5000/auth/github/callback`
+> - **Azure deployment** → `https://<gateway-host>/auth/github/callback` —
+>   printed verbatim as **GitHub OAuth callback URL** in the outputs summary
+>   above once the deploy finishes. It's only known *after* the AKS App
+>   Routing managed certificate is provisioned on your first deploy — there's
+>   no way to know it beforehand. So: deploy first with any placeholder
+>   callback URL, then go back to the [OAuth App
+>   settings](https://github.com/settings/developers) and paste in the
+>   printed callback URL. GitHub OAuth Apps only support one callback URL
+>   each — if you also do local dev, create a second OAuth App dedicated to
+>   `localhost`, or swap the callback URL each time you switch between local
+>   and Azure.
+
+For non-interactive deploys (flags, environment variables, or a
+`--params-file`), upgrading an existing deployment (`npm run azure:upgrade`),
+and the full flag reference, see the [README's Deploy to Azure
+section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
+[npm script reference](#npm-script-reference) below.
+
+---
 
 ## npm script reference
 
