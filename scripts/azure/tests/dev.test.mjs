@@ -5,7 +5,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run } from "../dev.mjs";
+import os from "node:os";
+import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup } from "../dev.mjs";
 
 function noopLog() {
   const rec = () => () => {};
@@ -18,16 +19,21 @@ test("API_URL/WEB_URL: expected local dev ports", () => {
 });
 
 test("parseArgs: --skip-build and --no-browser", () => {
-  assert.deepEqual(parseArgs(["--skip-build", "--no-browser"]), { skipBuild: true, noBrowser: true, help: false });
+  assert.deepEqual(parseArgs(["--skip-build", "--no-browser"]), { skipBuild: true, noBrowser: true, setup: false, help: false });
+});
+
+test("parseArgs: recognizes --setup", () => {
+  assert.deepEqual(parseArgs(["--setup"]), { skipBuild: false, noBrowser: false, setup: true, help: false });
 });
 
 test("parseArgs: throws on unknown argument", () => {
   assert.throws(() => parseArgs(["--bogus"]), /Unknown argument/);
 });
 
-test("HELP_TEXT: mentions both URLs", () => {
+test("HELP_TEXT: mentions both URLs and --setup", () => {
   assert.match(HELP_TEXT, /localhost:5000/);
   assert.match(HELP_TEXT, /localhost:5173/);
+  assert.match(HELP_TEXT, /--setup/);
 });
 
 test("toWslPath: converts a Windows drive path to a WSL mount path", () => {
@@ -154,4 +160,43 @@ test("run: --skip-build does not invoke a build command", async () => {
 
   const buildCalls = execCalls.filter((c) => c.args?.includes("build"));
   assert.equal(buildCalls.length, 0);
+});
+
+test("run: --setup delegates to runLocalSetup and never starts the API/Web dev servers", async () => {
+  const execCalls = [];
+  const exec = {
+    async capture(cmd, args) {
+      execCalls.push([cmd, ...args]);
+      if (cmd === "dotnet" && args[0] === "--version") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node" && args[0] === "--version") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      return { stdout: "git version 2.40", stderr: "", code: 0 };
+    },
+    async run(cmd, args) {
+      execCalls.push([cmd, ...args]);
+      return { code: 0 };
+    },
+  };
+  const spawnCalls = [];
+  const spawn = (...args) => {
+    spawnCalls.push(args);
+    return { pid: 1 };
+  };
+  const result = await run({ argv: ["--setup"], exec, log: noopLog(), repoRoot: os.tmpdir(), spawn });
+  assert.equal(result.ok, true);
+  assert.equal(spawnCalls.length, 0); // no API/Web processes started
+  assert.ok(execCalls.some(([cmd, ...args]) => cmd === "npm" && args.includes("install")));
+  assert.ok(execCalls.some(([cmd, ...args]) => cmd === "dotnet" && args[0] === "restore"));
+});
+
+test("runLocalSetup: throws a clear error when a prerequisite is missing", async () => {
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "git") return { stdout: "git version 2.40", stderr: "", code: 0 };
+      return { stdout: "", stderr: "not found", code: 1 };
+    },
+    async run() {
+      return { code: 0 };
+    },
+  };
+  await assert.rejects(runLocalSetup({ exec, log: noopLog(), repoRoot: os.tmpdir() }), /dotnet/);
 });

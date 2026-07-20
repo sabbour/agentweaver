@@ -37,26 +37,34 @@ export const API_PORT = 5000;
 
 const isWindows = process.platform === "win32";
 
-/** Parses `dev` subcommand argv: --skip-build, --no-browser, -h/--help. */
+/** Parses `dev` subcommand argv: --setup, --skip-build, --no-browser, -h/--help. */
 export function parseArgs(argv = []) {
   let skipBuild = false;
   let noBrowser = false;
+  let setup = false;
   let help = false;
   for (const arg of argv) {
     if (arg === "--skip-build") skipBuild = true;
     else if (arg === "--no-browser") noBrowser = true;
+    else if (arg === "--setup") setup = true;
     else if (arg === "-h" || arg === "--help") help = true;
     else throw new Error(`Unknown argument: ${arg}. Run 'dev --help' for usage.`);
   }
-  return { skipBuild, noBrowser, help };
+  return { skipBuild, noBrowser, setup, help };
 }
 
 export const HELP_TEXT = `dev -- Agentweaver local dev orchestration (port of start-dev.ps1)
 
 Usage:
   node scripts/azure/cli.mjs dev [--skip-build] [--no-browser]
+  node scripts/azure/cli.mjs dev --setup             Local dev environment setup only (no Azure)
 
 Starts the API (http://localhost:5000) and the Web UI (http://localhost:5173).
+
+--setup checks prerequisites (git, .NET 10 SDK, Node 20+), installs apps/web's
+npm dependencies, and restores .NET packages -- then exits without starting
+any servers. Does NOT touch Azure. This replaces install.sh/install.ps1's
+install_local() and is what 'npm run setup' runs.
 `;
 
 /** Polls a URL's status via fetch until it responds 200 or the timeout elapses. Mirrors Invoke-WebRequest polling. */
@@ -151,6 +159,59 @@ export async function openBrowser(url, { exec = execDefault } = {}) {
 }
 
 /**
+ * Local dev environment setup only: prereq checks (git, .NET 10 SDK, Node
+ * 20+) + `apps/web` npm install + `dotnet restore`. No Azure calls at all.
+ * Mirrors install.sh/install.ps1's install_local(). Invoked via `dev --setup`
+ * (moved here from deploy.mjs's old `--local` flag -- dev.mjs is the
+ * canonical "local dev" entry point, so local-only setup belongs here rather
+ * than nested under the Azure-focused `deploy` command).
+ */
+export async function runLocalSetup({ exec = execDefault, log = logDefault, repoRoot = DEFAULT_REPO_ROOT } = {}) {
+  log.section("Agentweaver local dev setup");
+
+  const requireCmd = async (cmd, args, hint) => {
+    const result = await exec.capture(cmd, args, { allowFailure: true });
+    if (result.code !== 0) {
+      throw new Error(`'${cmd}' not found or not working.${hint ? ` ${hint}` : ""}`);
+    }
+    return result.stdout.trim();
+  };
+
+  await requireCmd("git", ["--version"]);
+  log.ok("git found");
+  const dotnetVersion = await requireCmd("dotnet", ["--version"], "Install .NET 10 SDK from https://dot.net/download");
+  const dotnetMajor = Number.parseInt(dotnetVersion.split(".")[0], 10);
+  if (!(dotnetMajor >= 10)) {
+    throw new Error(`.NET 10 SDK is required (found ${dotnetVersion}). Install from https://dot.net/download`);
+  }
+  log.ok(`dotnet ${dotnetVersion}`);
+  const nodeVersion = await requireCmd("node", ["--version"], "Install Node.js from https://nodejs.org/");
+  const nodeMajor = Number.parseInt(nodeVersion.replace(/^v/, "").split(".")[0], 10);
+  if (!(nodeMajor >= 20)) {
+    throw new Error(`Node.js 20.19+ or 22.12+ is required (found ${nodeVersion}). Install from https://nodejs.org/`);
+  }
+  log.ok(`node ${nodeVersion}`);
+
+  log.info("");
+  log.info("Installing web dependencies...");
+  await exec.run("npm", ["--prefix", path.join(repoRoot, "apps", "web"), "install"]);
+  log.ok("Web dependencies installed.");
+
+  log.info("");
+  log.info("Restoring .NET packages...");
+  await exec.run("dotnet", ["restore", path.join(repoRoot, "agentweaver.sln"), "-v", "q", "--nologo"]);
+  log.ok(".NET packages restored.");
+
+  log.info("");
+  log.section("LOCAL DEV READY");
+  log.info("  Start the API:   dotnet run --project apps/Agentweaver.Api");
+  log.info("  Start the Web:   npm --prefix apps/web run dev");
+  log.info("  Or both at once: node scripts/azure/cli.mjs dev");
+
+  return { ok: true };
+}
+
+/**
  * Main entry point for the `dev` subcommand: stops any stale API process,
  * optionally builds, starts API + Web UI, waits for both to become ready,
  * then opens the browser (unless skipped).
@@ -175,11 +236,15 @@ export async function run(opts = {}) {
     sleep = defaultSleep,
   } = opts;
 
-  const { skipBuild, noBrowser, help } = parseArgs(argv);
+  const { skipBuild, noBrowser, setup, help } = parseArgs(argv);
 
   if (help) {
     log.info(HELP_TEXT);
     return { ok: true, help: true };
+  }
+
+  if (setup) {
+    return runLocalSetup({ exec, log, repoRoot });
   }
 
   log.section("Agentweaver dev");

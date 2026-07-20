@@ -264,6 +264,16 @@ export function capture(cmd, args = [], opts = {}) {
       stderr += chunk;
     });
     child.on("error", (err) => {
+      if (opts.allowFailure) {
+        // Matches the non-zero-exit-code allowFailure path below: a missing
+        // binary (ENOENT) is a form of command failure, not a fatal defect
+        // in the caller. Without this, `requireCmd`-style prerequisite
+        // checks (deploy.mjs's --local setup) would crash with a raw
+        // ExecError instead of reporting a friendly "not found" message --
+        // found live when `dotnet` wasn't on PATH in a fresh environment.
+        resolve({ stdout: "", stderr: redact(err.message), code: 127 });
+        return;
+      }
       reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine }));
     });
     child.on("close", (code, signal) => {

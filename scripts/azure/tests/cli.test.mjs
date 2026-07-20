@@ -37,9 +37,9 @@ test("run: unknown command throws and logs an error", async () => {
 test("run: routes 'deploy' to deploy.mjs's run() with argv + log", async () => {
   let received;
   const modules = { deploy: { run: async (opts) => { received = opts; return { ok: true }; } } };
-  const result = await run(["deploy", "--local"], { log: noopLog(), modules });
+  const result = await run(["deploy", "--skip-postgres"], { log: noopLog(), modules });
   assert.equal(result.ok, true);
-  assert.deepEqual(received.argv, ["--local"]);
+  assert.deepEqual(received.argv, ["--skip-postgres"]);
 });
 
 test("run: routes 'upgrade' by resolving variables first, then calling run(cfg, opts) -- NOT run({argv, log})", async () => {

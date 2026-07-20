@@ -1,9 +1,9 @@
 // deploy.test.mjs -- Tests for deploy.mjs: argv parsing, help output, the
 // non-interactive config-resolution path (flags/env/params-file precedence
 // and TTY-fallback error behavior), params-file loading, guided-installer
-// flow with fully stubbed prompt/az, --local mode, and pipeline delegation
-// call order. All az/exec/prompt/step calls are injected fakes -- no real
-// Azure CLI, kubectl, npm, dotnet, or network access, and no live prompting.
+// flow with fully stubbed prompt/az, and pipeline delegation call order.
+// All az/exec/prompt/step calls are injected fakes -- no real Azure CLI,
+// kubectl, npm, dotnet, or network access, and no live prompting.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +15,6 @@ import {
   HELP_TEXT,
   runInteractiveInstaller,
   shouldRunInteractiveInstaller,
-  runLocalSetup,
   run,
 } from "../deploy.mjs";
 import { NonInteractiveError } from "../lib/prompt.mjs";
@@ -34,7 +33,7 @@ function fakeStep(name, calls, result = {}) {
   };
 }
 
-test("parseArgs: recognizes flags, --local, and takes values for valued flags", () => {
+test("parseArgs: recognizes flags and takes values for valued flags", () => {
   const parsed = parseArgs([
     "--skip-postgres",
     "--skip-oauth-key",
@@ -49,11 +48,6 @@ test("parseArgs: recognizes flags, --local, and takes values for valued flags", 
   assert.equal(parsed.flags.IMAGE_TAG, "v1.2.3");
   assert.equal(parsed.flags.RESOURCE_GROUP, "my-rg");
   assert.equal(parsed.flags.GITHUB_CLIENT_SECRET, "shh");
-  assert.equal(parsed.local, false);
-});
-
-test("parseArgs: --local sets local:true", () => {
-  assert.equal(parseArgs(["--local"]).local, true);
 });
 
 test("parseArgs: --params-file / --config both set paramsFile", () => {
@@ -71,14 +65,14 @@ test("parseArgs: -h/--help sets help", () => {
 });
 
 test("HELP_TEXT: mentions key flags", () => {
-  assert.match(HELP_TEXT, /--local/);
   assert.match(HELP_TEXT, /--skip-postgres/);
   assert.match(HELP_TEXT, /--params-file/);
+  assert.match(HELP_TEXT, /dev --setup/);
 });
 
 test("shouldRunInteractiveInstaller: true only with zero argv and a TTY", () => {
   assert.equal(shouldRunInteractiveInstaller([], { prompt: { isInteractive: () => true } }), true);
-  assert.equal(shouldRunInteractiveInstaller(["--local"], { prompt: { isInteractive: () => true } }), false);
+  assert.equal(shouldRunInteractiveInstaller(["--skip-postgres"], { prompt: { isInteractive: () => true } }), false);
   assert.equal(shouldRunInteractiveInstaller([], { prompt: { isInteractive: () => false } }), false);
 });
 
@@ -88,7 +82,7 @@ test("run: --help prints HELP_TEXT and returns without doing work", async () => 
   log.info = (m) => messages.push(m);
   const result = await run({ argv: ["--help"], log });
   assert.equal(result.help, true);
-  assert.ok(messages.some((m) => m.includes("Agentweaver installer")));
+  assert.ok(messages.some((m) => m.includes("Agentweaver Azure installer")));
 });
 
 test("run: non-interactive path throws a clear error when GITHUB_CLIENT_ID/SECRET are missing and no TTY", async () => {
@@ -192,38 +186,8 @@ test("run: --skip-postgres and --skip-oauth-key omit those steps from the call s
   assert.ok(!stepNames.includes("provisionPostgres"));
 });
 
-test("run: --local delegates to runLocalSetup and never touches the Azure pipeline", async () => {
-  const execCalls = [];
-  const exec = {
-    async capture(cmd, args) {
-      execCalls.push([cmd, ...args]);
-      if (cmd === "dotnet" && args[0] === "--version") return { stdout: "10.0.100", stderr: "", code: 0 };
-      if (cmd === "node" && args[0] === "--version") return { stdout: "v22.12.0", stderr: "", code: 0 };
-      return { stdout: "git version 2.40", stderr: "", code: 0 };
-    },
-    async run(cmd, args) {
-      execCalls.push([cmd, ...args]);
-      return { code: 0 };
-    },
-  };
-  const result = await run({ argv: ["--local"], exec, log: noopLog(), repoRoot: os.tmpdir() });
-  assert.equal(result.ok, true);
-  assert.ok(execCalls.some(([cmd, ...args]) => cmd === "npm" && args.includes("install")));
-  assert.ok(execCalls.some(([cmd, ...args]) => cmd === "dotnet" && args[0] === "restore"));
-});
-
-test("runLocalSetup: throws a clear error when a prerequisite is missing", async () => {
-  const exec = {
-    async capture(cmd) {
-      if (cmd === "git") return { stdout: "git version 2.40", stderr: "", code: 0 };
-      return { stdout: "", stderr: "not found", code: 1 };
-    },
-    async run() {
-      return { code: 0 };
-    },
-  };
-  await assert.rejects(runLocalSetup({ exec, log: noopLog(), repoRoot: os.tmpdir() }), /dotnet/);
-});
+// Local dev setup (--local / runLocalSetup) moved to dev.mjs's `--setup` flag
+// -- see tests/dev.test.mjs. deploy.mjs is Azure-only now.
 
 test("run: loads GITHUB_CLIENT_ID/SECRET from a params-file (JSONC) when no flags/env are set", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-test-"));

@@ -3,11 +3,16 @@
 // and their pipeline ordering; the prompt-driven UX itself is new (not a 1:1
 // script port), per specs/006-memory-and-decision-inbox/plan.md's P5 scope.
 //
+// This module ONLY does Azure deploys. Local dev environment setup (prereq
+// checks + npm/dotnet restore, no Azure calls at all) lives in dev.mjs's
+// `--setup` flag (`npm run setup` / `node scripts/azure/cli.mjs dev
+// --setup`) instead -- it was originally a `--local` flag here, but nesting
+// a "skip Azure entirely" mode under the `azure:deploy` command was
+// confusing (deploy.mjs's own name says Azure). dev.mjs is already the
+// canonical "local dev" entry point, so local setup belongs there.
+//
 // MODES:
-//   --local  Mirrors install.sh's install_local(): checks prereqs (git,
-//            dotnet, node/npm), installs apps/web's npm deps, restores .NET
-//            packages. Does NOT touch Azure at all.
-//   (default, no --local) AKS/Azure deploy mode, mirroring install.sh's
+//   AKS/Azure deploy mode, mirroring install.sh's
 //            install_aks() pipeline order, confirmed from install.sh source:
 //              10-create-cluster
 //              -> 15-setup-identity
@@ -48,7 +53,6 @@
 // and via config.mjs's `secret: true` field spec) and is NEVER printed,
 // logged, or included in the OUTPUTS SUMMARY.
 
-import path from "node:path";
 import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
 import * as azDefault from "./lib/az.mjs";
@@ -70,7 +74,7 @@ import * as verifyStepDefault from "./steps/40-verify.mjs";
 
 /**
  * Parses `deploy` subcommand argv into a flags object plus a paramsFile path.
- * Recognizes: --local, --skip-postgres, --skip-oauth-key, --image-tag <tag>
+ * Recognizes: --skip-postgres, --skip-oauth-key, --image-tag <tag>
  * (or --image-tag=<tag>), --params-file/--config <path>, --resource-group,
  * --cluster-name, --acr-name, --location, --keyvault-name, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
@@ -78,7 +82,6 @@ import * as verifyStepDefault from "./steps/40-verify.mjs";
 export function parseArgs(argv = []) {
   const flags = {};
   let paramsFile;
-  let local = false;
   let help = false;
 
   const takeValue = (i, name) => {
@@ -92,9 +95,7 @@ export function parseArgs(argv = []) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--local") {
-      local = true;
-    } else if (arg === "--skip-postgres") {
+    if (arg === "--skip-postgres") {
       flags.SKIP_POSTGRES = true;
     } else if (arg === "--skip-oauth-key") {
       flags.SKIP_OAUTH_KEY = true;
@@ -145,18 +146,19 @@ export function parseArgs(argv = []) {
     }
   }
 
-  return { flags, paramsFile, local, help };
+  return { flags, paramsFile, help };
 }
 
-export const HELP_TEXT = `deploy -- Agentweaver installer (replaces install.sh/install.ps1)
+export const HELP_TEXT = `deploy -- Agentweaver Azure installer (replaces install.sh/install.ps1's install_aks())
 
 Usage:
   node scripts/azure/cli.mjs deploy                 Interactive smart installer (TTY only)
-  node scripts/azure/cli.mjs deploy --local          Local dev environment setup (no Azure)
   node scripts/azure/cli.mjs deploy [flags]          Non-interactive Azure deploy
 
+Local dev environment setup (no Azure) lives under 'dev --setup' instead:
+  node scripts/azure/cli.mjs dev --setup             Checks prereqs, installs deps (no Azure)
+
 Flags:
-  --local                     Local/dev setup only; skips the Azure pipeline entirely.
   --skip-postgres             Skip Postgres provisioning (17-provision-postgres).
   --skip-oauth-key            Skip MCP OAuth signing key provisioning (16-provision-oauth-signing-key).
   --image-tag <tag>           Use this image tag instead of the derived default.
@@ -267,52 +269,6 @@ export function shouldRunInteractiveInstaller(argv, { prompt = promptDefault } =
   return argv.length === 0 && prompt.isInteractive();
 }
 
-/** Mirrors install.sh's install_local(): prereq checks + web npm install + dotnet restore. No Azure calls. */
-export async function runLocalSetup({ exec = execDefault, log = logDefault, repoRoot = DEFAULT_REPO_ROOT } = {}) {
-  log.section("Agentweaver local dev setup");
-
-  const requireCmd = async (cmd, args, hint) => {
-    const result = await exec.capture(cmd, args, { allowFailure: true });
-    if (result.code !== 0) {
-      throw new Error(`'${cmd}' not found or not working.${hint ? ` ${hint}` : ""}`);
-    }
-    return result.stdout.trim();
-  };
-
-  await requireCmd("git", ["--version"]);
-  log.ok("git found");
-  const dotnetVersion = await requireCmd("dotnet", ["--version"], "Install .NET 10 SDK from https://dot.net/download");
-  const dotnetMajor = Number.parseInt(dotnetVersion.split(".")[0], 10);
-  if (!(dotnetMajor >= 10)) {
-    throw new Error(`.NET 10 SDK is required (found ${dotnetVersion}). Install from https://dot.net/download`);
-  }
-  log.ok(`dotnet ${dotnetVersion}`);
-  const nodeVersion = await requireCmd("node", ["--version"], "Install Node.js from https://nodejs.org/");
-  const nodeMajor = Number.parseInt(nodeVersion.replace(/^v/, "").split(".")[0], 10);
-  if (!(nodeMajor >= 20)) {
-    throw new Error(`Node.js 20.19+ or 22.12+ is required (found ${nodeVersion}). Install from https://nodejs.org/`);
-  }
-  log.ok(`node ${nodeVersion}`);
-
-  log.info("");
-  log.info("Installing web dependencies...");
-  await exec.run("npm", ["--prefix", path.join(repoRoot, "apps", "web"), "install"]);
-  log.ok("Web dependencies installed.");
-
-  log.info("");
-  log.info("Restoring .NET packages...");
-  await exec.run("dotnet", ["restore", path.join(repoRoot, "agentweaver.sln"), "-v", "q", "--nologo"]);
-  log.ok(".NET packages restored.");
-
-  log.info("");
-  log.section("LOCAL DEV READY");
-  log.info("  Start the API:   dotnet run --project apps/Agentweaver.Api");
-  log.info("  Start the Web:   npm --prefix apps/web run dev");
-  log.info("  On Windows/WSL2: .\\start-dev.ps1  (or: node scripts/azure/cli.mjs dev)");
-
-  return { ok: true };
-}
-
 /**
  * Main entry point for the `deploy` subcommand.
  *
@@ -351,15 +307,11 @@ export async function run(opts = {}) {
   const deployStep = steps.deployStep ?? deployStepDefault;
   const verifyStep = steps.verifyStep ?? verifyStepDefault;
 
-  const { flags, paramsFile: paramsFilePath, local, help } = parseArgs(argv);
+  const { flags, paramsFile: paramsFilePath, help } = parseArgs(argv);
 
   if (help) {
     log.info(HELP_TEXT);
     return { ok: true, help: true };
-  }
-
-  if (local) {
-    return runLocalSetup({ exec, log, repoRoot });
   }
 
   const paramsFile = loadParamsFile(paramsFilePath);

@@ -41,7 +41,7 @@ cd agentweaver
 
 # Bootstrap: checks git/dotnet/node versions, installs apps/web's npm deps,
 # and restores .NET packages (replaces the old install.sh/.ps1 local mode).
-npm run azure:deploy -- --local
+npm run setup
 
 # Start the API (http://localhost:5000) and the Web UI (http://localhost:5173).
 npm run azure:dev
@@ -176,6 +176,7 @@ From the repository root, run these with `npm run <script>` (or `pnpm run <scrip
 
 | Script | Purpose |
 | --- | --- |
+| `setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages. No Azure calls. |
 | `azure:deploy` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
 | `azure:upgrade` | Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool. |
 | `azure:release` | Semver bump/tag/GitHub release, then build/deploy/verify. |
