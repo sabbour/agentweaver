@@ -28,7 +28,7 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
 {
     private readonly TestSqliteDb _runDb;
     private readonly SqliteRunStore _runStore;
-    private readonly RunStreamStore _streamStore = new();
+    private readonly RunStreamStore _streamStore;
     private readonly SqliteConnection _memoryConn;
     private readonly ServiceProvider _provider;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -44,10 +44,13 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         _memoryConn.Open();
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        services.AddDbContextFactory<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        services.AddSingleton<IRunEventStream, EfRunEventStream>();
         _provider = services.BuildServiceProvider();
         using (var scope = _provider.CreateScope())
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
+        _streamStore = new RunStreamStore(_provider.GetRequiredService<IRunEventStream>());
 
         _orchestrator = new RunOrchestrator(
             _runStore,

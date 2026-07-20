@@ -2,9 +2,11 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Runs;
 
@@ -13,9 +15,13 @@ public sealed class DurableRunControlStateTests : IDisposable
     private readonly SqliteConnection _keepAlive;
     private readonly string _connectionString;
     private readonly List<ServiceProvider> _providers = [];
+    private readonly TestSqliteDb _runDb;
+    private readonly IRunStore _runStore;
 
     public DurableRunControlStateTests()
     {
+        _runDb = TestSqliteDb.CreateAsync().GetAwaiter().GetResult();
+        _runStore = new SqliteRunStore(_runDb.Db);
         _connectionString = $"DataSource=file:run-control-{Guid.NewGuid():N}?mode=memory&cache=shared";
         _keepAlive = new SqliteConnection(_connectionString);
         _keepAlive.Open();
@@ -45,14 +51,16 @@ public sealed class DurableRunControlStateTests : IDisposable
     {
         var owner = NewApprovalGate();
         var secondary = NewApprovalGate();
+        var run = await InsertOwnedRunAsync("owner");
+        var runId = run.Id.ToString();
 
         var wait = owner.WaitForApprovalAsync(
-            "run-2", "req-1", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
+            runId, "req-1", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
 
-        await WaitUntilAsync(() => secondary.GrantAsync("run-2", "req-1", ApprovalScope.Run));
+        await WaitUntilAsync(() => secondary.GrantAsync(runId, "req-1", ApprovalScope.Run));
 
         (await wait).Should().BeTrue();
-        secondary.IsAutoApproved("run-2", "web_fetch", "https://example.test/another-path").Should().BeTrue();
+        secondary.IsAutoApproved(runId, "web_fetch", "https://example.test/another-path").Should().BeTrue();
     }
 
     [Fact]
@@ -60,15 +68,21 @@ public sealed class DurableRunControlStateTests : IDisposable
     {
         var child = NewApprovalGate();
         var sibling = NewApprovalGate();
-        child.RegisterParentRun("child-a", "parent-1");
-        sibling.RegisterParentRun("child-b", "parent-1");
+        var parentRun = await InsertOwnedRunAsync("owner");
+        var childRun = await InsertOwnedRunAsync("owner");
+        var siblingRun = await InsertOwnedRunAsync("owner");
+        var parentId = parentRun.Id.ToString();
+        var childId = childRun.Id.ToString();
+        var siblingId = siblingRun.Id.ToString();
+        child.RegisterParentRun(childId, parentId);
+        sibling.RegisterParentRun(siblingId, parentId);
 
         var wait = child.WaitForApprovalAsync(
-            "child-a", "req-2", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
-        await WaitUntilAsync(() => sibling.GrantAsync("child-a", "req-2", ApprovalScope.Tool));
+            childId, "req-2", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() => sibling.GrantAsync(childId, "req-2", ApprovalScope.Tool));
 
         (await wait).Should().BeTrue();
-        sibling.IsAutoApproved("child-b", "web_fetch", "https://other.test").Should().BeTrue();
+        sibling.IsAutoApproved(siblingId, "web_fetch", "https://other.test").Should().BeTrue();
     }
 
     [Fact]
@@ -99,18 +113,143 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
-    public async Task Clear_DoesNotRemoveAlwaysPolicy()
+    public async Task AlwaysApproval_IsVisibleToFutureRunForSameOwner_AfterSourceClear()
     {
         var owner = NewApprovalGate();
         var secondary = NewApprovalGate();
+        var sourceRun = await InsertOwnedRunAsync("alice");
+        var futureRun = await InsertOwnedRunAsync("alice");
+        var sourceId = sourceRun.Id.ToString();
 
         var wait = owner.WaitForApprovalAsync(
-            "run-5", "req-5", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
-        await WaitUntilAsync(() => secondary.GrantAsync("run-5", "req-5", ApprovalScope.Always));
+            sourceId, "req-5", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() => secondary.GrantAsync(sourceId, "req-5", ApprovalScope.Always));
 
         (await wait).Should().BeTrue();
-        secondary.Clear("run-5");
-        owner.IsAutoApproved("another-run", "web_fetch", "https://example.test/another-path").Should().BeTrue();
+        secondary.Clear(sourceId);
+        owner.IsAutoApproved(
+            futureRun.Id.ToString(), "web_fetch", "https://example.test/another-path").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AlwaysApproval_ByAlice_DoesNotAutoApproveBobsPersistedRun()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        IRunStore runStore = new SqliteRunStore(testDb.Db);
+        var aliceRun = NewOwnedRun("alice");
+        var bobRun = NewOwnedRun("bob");
+        await runStore.InsertAsync(aliceRun);
+        await runStore.InsertAsync(bobRun);
+
+        var gate = NewApprovalGate(runStore);
+        var wait = gate.WaitForApprovalAsync(
+            aliceRun.Id.ToString(), "req-alice", "web_fetch", "https://example.test/alice",
+            TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() =>
+            gate.GrantAsync(aliceRun.Id.ToString(), "req-alice", ApprovalScope.Always));
+
+        (await wait).Should().BeTrue();
+        (await runStore.GetAsync(aliceRun.Id))!.SubmittingUser.Should().Be("alice");
+        (await runStore.GetAsync(bobRun.Id))!.SubmittingUser.Should().Be("bob");
+        gate.IsAutoApproved(bobRun.Id.ToString(), "web_fetch", "https://example.test/bob")
+            .Should().BeFalse("Alice's Always approval must not authorize Bob's persisted run");
+    }
+
+    [Fact]
+    public async Task LegacyGlobalAndUnscopedOwnerBucketGrants_AuthorizeNobody()
+    {
+        var aliceRun = await InsertOwnedRunAsync("alice");
+        var state = NewState();
+        state.Append(
+            "__agentweaver_tool_approvals__",
+            "tool.approval_policy_granted",
+            new { policyKey = "web_fetch:" });
+        state.Append(
+            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "tool.approval_policy_granted",
+            new { policyKey = "web_fetch:" });
+        state.Append(
+            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "tool.approval_policy_granted",
+            new { owner = "alice", toolId = "web_fetch", riskSemantics = "network-write/v1" });
+        state.Append(
+            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "tool.approval_policy_granted",
+            new { owner = "Alice", toolId = "web_fetch", riskSemantics = "network-read/v1" });
+
+        var gate = NewApprovalGate();
+
+        gate.IsAutoApproved(aliceRun.Id.ToString(), "web_fetch", "https://example.test")
+            .Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AlwaysApproval_MissingOrEmptyPersistedOwner_FailsClosed(bool persistEmptyOwner)
+    {
+        var runId = persistEmptyOwner
+            ? (await InsertOwnedRunAsync("")).Id.ToString()
+            : RunId.New().ToString();
+        var gate = NewApprovalGate();
+        var wait = gate.WaitForApprovalAsync(
+            runId, "req-ownerless", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+
+        await WaitUntilAsync(() =>
+            gate.GrantAsync(runId, "req-ownerless", ApprovalScope.Always));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(runId, "web_fetch", "https://example.test/next").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("start_preview")]
+    [InlineData("write_file")]
+    [InlineData("unknown_tool")]
+    [InlineData("Web_Fetch")]
+    public async Task AlwaysApproval_NonEligibleTool_RemainsGatedAcrossRuns(string toolName)
+    {
+        var sourceRun = await InsertOwnedRunAsync("alice");
+        var futureRun = await InsertOwnedRunAsync("alice");
+        var gate = NewApprovalGate();
+        var requestId = $"req-{toolName}";
+        var wait = gate.WaitForApprovalAsync(
+            sourceRun.Id.ToString(), requestId, toolName, null,
+            TimeSpan.FromSeconds(5), default);
+
+        await WaitUntilAsync(() =>
+            gate.GrantAsync(sourceRun.Id.ToString(), requestId, ApprovalScope.Always));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(sourceRun.Id.ToString(), toolName, null).Should().BeFalse();
+        gate.IsAutoApproved(futureRun.Id.ToString(), toolName, null).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ConcurrentAlwaysGrants_AcrossReplicas_AppendAndReadSameOwnerPolicy()
+    {
+        var sourceA = await InsertOwnedRunAsync("alice");
+        var sourceB = await InsertOwnedRunAsync("alice");
+        var future = await InsertOwnedRunAsync("alice");
+        var replicaA = NewApprovalGate();
+        var replicaB = NewApprovalGate();
+        var waitA = replicaA.WaitForApprovalAsync(
+            sourceA.Id.ToString(), "req-a", "web_fetch", "https://a.test",
+            TimeSpan.FromSeconds(5), default);
+        var waitB = replicaB.WaitForApprovalAsync(
+            sourceB.Id.ToString(), "req-b", "web_fetch", "https://b.test",
+            TimeSpan.FromSeconds(5), default);
+
+        var grants = await Task.WhenAll(
+            replicaA.GrantAsync(sourceA.Id.ToString(), "req-a", ApprovalScope.Always),
+            replicaB.GrantAsync(sourceB.Id.ToString(), "req-b", ApprovalScope.Always));
+
+        grants.Should().OnlyContain(granted => granted);
+        (await waitA).Should().BeTrue();
+        (await waitB).Should().BeTrue();
+        replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
+            .Should().BeTrue();
     }
 
     [Fact]
@@ -181,21 +320,50 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     private DurableRunOptionsStore NewOptionsStore() => new(NewState());
-    private DurableToolApprovalGate NewApprovalGate() => new(NewState());
+    private DurableToolApprovalGate NewApprovalGate() => NewApprovalGate(_runStore);
+    private DurableToolApprovalGate NewApprovalGate(IRunStore runStore) =>
+        new(NewState(), runStore: runStore);
+
     private DurableQuestionGate NewQuestionGate() => new(NewState());
     private DurableShellApprovalStore NewShellApprovalStore() => new(NewState());
 
-    private DurableRunControlState NewState() =>
-        new(NewProvider().GetRequiredService<IServiceScopeFactory>());
+    private DurableRunControlState NewState()
+    {
+        var provider = NewProvider();
+        return new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<IRunEventStream>());
+    }
 
     private ServiceProvider NewProvider()
     {
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddDbContextFactory<MemoryDbContext>(o => o.UseSqlite(_connectionString));
+        services.AddSingleton<IRunEventStream, EfRunEventStream>();
         var provider = services.BuildServiceProvider();
         _providers.Add(provider);
         return provider;
     }
+
+    private async Task<Run> InsertOwnedRunAsync(string submittingUser)
+    {
+        var run = NewOwnedRun(submittingUser);
+        await _runStore.InsertAsync(run);
+        return run;
+    }
+
+    private static Run NewOwnedRun(string submittingUser) => new()
+    {
+        Id = RunId.New(),
+        RepositoryPath = "approval-scope-test",
+        OriginatingBranch = "main",
+        ModelSource = ModelSource.GitHubCopilot,
+        Task = "Verify durable tool approval ownership",
+        SubmittingUser = submittingUser,
+        Status = RunStatus.InProgress,
+        StartedAt = DateTimeOffset.UtcNow,
+    };
 
     private static async Task WaitUntilAsync(Func<Task<bool>> action)
     {
@@ -214,5 +382,6 @@ public sealed class DurableRunControlStateTests : IDisposable
         foreach (var provider in _providers)
             provider.Dispose();
         _keepAlive.Dispose();
+        _runDb.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 }

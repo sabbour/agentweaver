@@ -3,6 +3,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Agentweaver.Api.Infrastructure.Ef;
 
@@ -146,6 +147,163 @@ public sealed class EfSkillStore : ISkillStore
             orderby s.Name
             select s).ToListAsync(ct);
         return recs.Select(FromRecord).ToList();
+    }
+
+    public async Task<SkillDefaultsStoreApplyResult> ApplyDefaultsAsync(
+        SkillDefaultsStorePlan plan,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
+            .ConfigureAwait(false);
+        try
+        {
+            var pid = plan.ProjectId.ToString();
+            var guardedProject = await db.Projects
+                .Where(project =>
+                    project.ProjectId == pid &&
+                    project.State == "active" &&
+                    project.TeamRevision == plan.ExpectedTeamRevision)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(
+                        project => project.TeamRevision,
+                        project => project.TeamRevision),
+                    ct)
+                .ConfigureAwait(false);
+            if (guardedProject != 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return SkillDefaultsStoreApplyResult.Stale;
+            }
+
+            var records = await db.Skills
+                .Where(s => s.ProjectId == pid)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+            var assignments = await db.SkillAssignments
+                .Where(a => a.ProjectId == pid)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+            var currentSkills = records.Select(FromRecord).ToList();
+            var currentAssignments = assignments.Select(r => new SkillAssignment
+            {
+                ProjectId = ProjectId.Parse(r.ProjectId),
+                SkillId = SkillId.Parse(r.SkillId),
+                AgentName = r.AgentName,
+                CreatedAt = r.CreatedAt,
+            }).ToList();
+
+            if (!string.Equals(
+                    SkillCatalogStateFingerprint.Compute(currentSkills, currentAssignments),
+                    plan.ExpectedStateFingerprint,
+                    StringComparison.Ordinal))
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return SkillDefaultsStoreApplyResult.Stale;
+            }
+
+            foreach (var skill in plan.SkillsToInsert)
+                db.Skills.Add(ToRecord(skill));
+
+            foreach (var skill in plan.SkillsToActivate)
+            {
+                var record = records.SingleOrDefault(s => s.SkillId == skill.Id.ToString());
+                if (record is null)
+                    throw new InvalidOperationException("A guarded built-in skill was not found during apply.");
+                record.Status = skill.Status.ToApiString();
+                record.UpdatedAt = skill.UpdatedAt;
+            }
+
+            foreach (var assignment in plan.AssignmentsToAdd)
+            {
+                db.SkillAssignments.Add(new SkillAssignmentRecord
+                {
+                    ProjectId = assignment.ProjectId.ToString(),
+                    SkillId = assignment.SkillId.ToString(),
+                    AgentName = assignment.AgentName,
+                    CreatedAt = assignment.CreatedAt,
+                });
+            }
+
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return SkillDefaultsStoreApplyResult.Applied;
+        }
+        catch (Exception ex) when (IsSerializationFailure(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            return SkillDefaultsStoreApplyResult.Stale;
+        }
+        catch (Exception ex) when (IsExpectedDefaultsConcurrencyConstraint(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            // A duplicate on one of these exact constraints can be caused by a concurrent apply
+            // that committed between the guarded read and our write. Re-read outside the aborted
+            // transaction before classifying it as stale; an invalid caller plan with duplicate
+            // names must still surface its normal unique-constraint failure.
+            if (await StateChangedSincePreviewAsync(plan, ct).ConfigureAwait(false))
+                return SkillDefaultsStoreApplyResult.Stale;
+            throw;
+        }
+    }
+
+    internal static bool IsSerializationFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException { SqlState: "40001" })
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsExpectedDefaultsConcurrencyConstraint(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException
+                {
+                    SqlState: PostgresErrorCodes.UniqueViolation,
+                    ConstraintName: "PK_skills" or "PK_skill_assignments" or "IX_skills_project_name",
+                })
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private async Task<bool> StateChangedSincePreviewAsync(
+        SkillDefaultsStorePlan plan,
+        CancellationToken ct)
+    {
+        await using var verify = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var pid = plan.ProjectId.ToString();
+        var teamRevision = await verify.Projects.AsNoTracking()
+            .Where(project => project.ProjectId == pid)
+            .Select(project => (long?)project.TeamRevision)
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (teamRevision != plan.ExpectedTeamRevision)
+            return true;
+
+        var skills = await verify.Skills.AsNoTracking()
+            .Where(skill => skill.ProjectId == pid)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var assignments = await verify.SkillAssignments.AsNoTracking()
+            .Where(assignment => assignment.ProjectId == pid)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var state = SkillCatalogStateFingerprint.Compute(
+            skills.Select(FromRecord),
+            assignments.Select(assignment => new SkillAssignment
+            {
+                ProjectId = ProjectId.Parse(assignment.ProjectId),
+                SkillId = SkillId.Parse(assignment.SkillId),
+                AgentName = assignment.AgentName,
+                CreatedAt = assignment.CreatedAt,
+            }));
+        return !string.Equals(state, plan.ExpectedStateFingerprint, StringComparison.Ordinal);
     }
 
     private static SkillRecord ToRecord(Skill s) => new()

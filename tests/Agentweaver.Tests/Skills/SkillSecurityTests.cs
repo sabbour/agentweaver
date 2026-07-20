@@ -83,6 +83,7 @@ public sealed class SkillSecurityTests : IDisposable
         // proves an assigned active skill produces prompt metadata and a readable on-disk SKILL.md.
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _dir);
         var skill = NewSkill(project, "pr-review");
         await store.InsertAsync(skill);
         await store.AssignAsync(project, skill.Id, "Worker", DateTimeOffset.UtcNow);
@@ -102,6 +103,7 @@ public sealed class SkillSecurityTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _dir);
         await store.InsertAsync(NewSkill(project, "unassigned"));
 
         var block = await NewComposer(store).ComposeAsync(project, "Worker", NewWorktree(), CancellationToken.None);
@@ -139,6 +141,7 @@ public sealed class SkillSecurityTests : IDisposable
         // A malicious bundled resource whose path escapes the skill dir must be dropped, never written.
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _dir);
         var evil = new[]
         {
             new SkillResource { RelativePath = "C:/evil.txt", Content = "owned" },
@@ -226,6 +229,7 @@ public sealed class SkillSecurityTests : IDisposable
     {
         var store = new SqliteSkillStore(_db);
         var project = ProjectId.New();
+        await SkillTestProject.InsertAsync(_db, project, _dir);
         var skill = NewSkill(project, "temporary");
         await store.InsertAsync(skill);
         await store.AssignAsync(project, skill.Id, "Worker", DateTimeOffset.UtcNow);

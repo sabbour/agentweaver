@@ -6,6 +6,7 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Agentweaver.Api.Infrastructure;
 
@@ -23,13 +24,14 @@ namespace Agentweaver.Api.Infrastructure;
 ///   EF (a <c>MemoryDbContext</c> factory-created context per call) before acknowledging.</item>
 /// </list></para>
 ///
-/// <para>Sequence assignment uses a serializable-read transaction so that two concurrent
-/// <see cref="AppendAsync"/> calls targeting the same run cannot collide on the unique
-/// <c>(RunId, Sequence)</c> index. On constraint violation the transaction is retried once.</para>
+/// <para>Sequence assignment is server-authoritative: PostgreSQL appends take a per-run
+/// <c>pg_advisory_xact_lock</c> (hash derived in SQL from runId) and allocate <c>MAX+1</c> inside
+/// that transaction, so concurrent replicas cannot collide on <c>(RunId, Sequence)</c>.</para>
 /// </summary>
 public sealed class EfRunEventStream : IRunEventStream
 {
-    private const int MaxSequenceRetries = 3;
+    private const int MaxWriteAttempts = 4;
+    private const string RunEventSequenceConstraintName = "IX_RunEvents_RunId_Sequence";
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
 
     private static readonly HashSet<string> TerminalTypes = new(StringComparer.Ordinal)
@@ -61,14 +63,14 @@ public sealed class EfRunEventStream : IRunEventStream
     }
 
     /// <inheritdoc />
-    public async ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+    public async ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
         // #239 companion hardening: once a run is completed, drop streaming AgentMessageDelta events —
         // a straggling delta arriving after the terminal must never re-persist and re-drive the run.
         // ONLY agent.message.delta is dropped; every terminal/diagnostic/final-message/tool/usage/
         // subtask/topology event still persists post-terminal (durable audit + gapless replay).
         if (_completedRuns.ContainsKey(runId) && evt.Type == EventTypes.AgentMessageDelta)
-            return;
+            return 0;
 
         var sequence = await WriteThroughAsync(runId, evt, ct).ConfigureAwait(false);
 
@@ -79,7 +81,7 @@ public sealed class EfRunEventStream : IRunEventStream
                 evt.Type, runId);
         }
 
-        _ = sequence;
+        return sequence;
     }
 
     /// <inheritdoc />
@@ -134,9 +136,9 @@ public sealed class EfRunEventStream : IRunEventStream
 
     /// <summary>
     /// Durably writes the event to the <c>RunEvents</c> table and returns the assigned sequence.
-    /// Uses a serializable transaction to atomically compute MAX(Sequence)+1 for the run.
-    /// On unique constraint violation (race between concurrent appends) retries up to
-    /// <see cref="MaxSequenceRetries"/> times.
+    /// PostgreSQL writes acquire a per-run advisory transaction lock on the server and perform
+    /// MAX+1 allocation inside that lock, giving deterministic cross-replica sequence assignment.
+    /// Retries are bounded and restricted to explicit transient/conflict SQLSTATEs.
     /// </summary>
     /// <inheritdoc />
     public async Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default)
@@ -153,25 +155,39 @@ public sealed class EfRunEventStream : IRunEventStream
         // Prefer the event's own TimestampUtc (stamped by RunStreamStore.RecordNext/Record) over
         // DateTime.UtcNow so CreatedAt reflects "when it happened", not "when it was persisted".
         var timestampUtc = evt.TimestampUtc == default ? DateTimeOffset.UtcNow : evt.TimestampUtc;
+        var explicitSequence = evt.Sequence > 0;
 
-        for (var attempt = 0; attempt < MaxSequenceRetries; attempt++)
+        for (var attempt = 1; attempt <= MaxWriteAttempts; attempt++)
         {
             await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
             await using var tx = await db.Database.BeginTransactionAsync(
-                System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+                System.Data.IsolationLevel.ReadCommitted, ct).ConfigureAwait(false);
 
             try
             {
+                await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+
                 int sequence;
 
-                if (evt.Sequence > 0)
+                if (explicitSequence)
                 {
-                    // Caller-assigned: use it; skip on duplicate (idempotent).
-                    var exists = await db.RunEvents
-                        .AnyAsync(e => e.RunId == runId && e.Sequence == evt.Sequence, ct)
+                    var existing = await db.RunEvents.AsNoTracking()
+                        .Where(e => e.RunId == runId && e.Sequence == evt.Sequence)
+                        .Select(e => new ExistingRunEvent(e.EventType, e.PayloadJson))
+                        .SingleOrDefaultAsync(ct)
                         .ConfigureAwait(false);
-                    if (exists)
+
+                    if (existing is not null)
+                    {
+                        EnsureExplicitSequenceMatches(
+                            runId,
+                            evt.Sequence,
+                            evt.Type,
+                            payloadJson,
+                            existing.EventType,
+                            existing.PayloadJson);
                         return evt.Sequence;
+                    }
 
                     sequence = evt.Sequence;
                 }
@@ -199,17 +215,123 @@ public sealed class EfRunEventStream : IRunEventStream
                 await tx.CommitAsync(ct).ConfigureAwait(false);
                 return sequence;
             }
-            catch (DbUpdateException) when (attempt < MaxSequenceRetries - 1)
+            catch (OperationCanceledException)
             {
-                // Unique constraint violation (concurrent appends) — rollback and retry.
+                throw;
+            }
+            catch (Exception ex) when (ShouldRetryWrite(ex, attempt, out var sqlState))
+            {
                 await tx.RollbackAsync(ct).ConfigureAwait(false);
-                _logger?.LogDebug("RunEvent sequence conflict for run {RunId}, attempt {Attempt}", runId, attempt + 1);
+                var delay = ComputeRetryDelay(attempt);
+                _logger?.LogWarning(
+                    "Retrying RunEvent append for run {RunId} after SQLSTATE {SqlState} " +
+                    "(attempt {Attempt}/{MaxAttempts}, delay {DelayMs}ms)",
+                    runId, sqlState, attempt, MaxWriteAttempts, (int)delay.TotalMilliseconds);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
             }
         }
 
         throw new InvalidOperationException(
-            $"Failed to assign a unique RunEvent sequence for run '{runId}' after {MaxSequenceRetries} attempts.");
+            $"Failed to durably append RunEvent for run '{runId}' after {MaxWriteAttempts} attempts.");
     }
+
+    private static async Task AcquireRunWriteLockAsync(MemoryDbContext db, string runId, CancellationToken ct)
+    {
+        if (!db.Database.IsNpgsql())
+            return;
+
+        // Bound lock wait so a stuck writer cannot block appenders indefinitely.
+        await db.Database.ExecuteSqlRawAsync(
+            "SET LOCAL lock_timeout = '2000ms';",
+            ct).ConfigureAwait(false);
+        await db.Database.ExecuteSqlRawAsync(
+            "SELECT pg_advisory_xact_lock(hashtextextended({0}, 0));",
+            new object[] { runId },
+            ct).ConfigureAwait(false);
+    }
+
+    private static bool ShouldRetryWrite(
+        Exception ex,
+        int attempt,
+        out string sqlState)
+    {
+        sqlState = string.Empty;
+        if (attempt >= MaxWriteAttempts)
+            return false;
+
+        var postgres = ExtractPostgresException(ex);
+        if (postgres is null)
+            return false;
+
+        sqlState = postgres.SqlState ?? string.Empty;
+        if (sqlState is PostgresErrorCodes.SerializationFailure
+            or PostgresErrorCodes.DeadlockDetected
+            or PostgresErrorCodes.LockNotAvailable)
+        {
+            return true;
+        }
+
+        if (sqlState == PostgresErrorCodes.UniqueViolation
+            && string.Equals(postgres.ConstraintName, RunEventSequenceConstraintName, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static PostgresException? ExtractPostgresException(Exception ex) =>
+        ex switch
+        {
+            PostgresException pg => pg,
+            DbUpdateException { InnerException: PostgresException pg } => pg,
+            _ => null,
+        };
+
+    private static TimeSpan ComputeRetryDelay(int attempt)
+    {
+        var boundedJitterMs = Random.Shared.Next(5, 30);
+        var baseDelayMs = 20 * attempt;
+        return TimeSpan.FromMilliseconds(baseDelayMs + boundedJitterMs);
+    }
+
+    private static void EnsureExplicitSequenceMatches(
+        string runId,
+        int sequence,
+        string incomingType,
+        string incomingPayloadJson,
+        string persistedType,
+        string persistedPayloadJson)
+    {
+        if (string.Equals(incomingType, persistedType, StringComparison.Ordinal)
+            && PayloadsEquivalent(incomingPayloadJson, persistedPayloadJson))
+        {
+            return;
+        }
+
+        throw new RunEventSequenceCollisionException(
+            $"RunEvent explicit sequence collision detected for run '{runId}' sequence {sequence}: " +
+            "the existing durable event payload/type differs from the incoming event.");
+    }
+
+    private static bool PayloadsEquivalent(string leftJson, string rightJson)
+    {
+        if (string.Equals(leftJson, rightJson, StringComparison.Ordinal))
+            return true;
+
+        try
+        {
+            using var leftDoc = JsonDocument.Parse(leftJson);
+            using var rightDoc = JsonDocument.Parse(rightJson);
+            return JsonElement.DeepEquals(leftDoc.RootElement, rightDoc.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private sealed record ExistingRunEvent(string EventType, string PayloadJson);
 
     private async IAsyncEnumerable<RunEvent> LoadFromSequenceAsync(
         string runId, int fromSequence, [EnumeratorCancellation] CancellationToken ct)

@@ -124,7 +124,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app: agentweaver-sandbox
+              app: agentweaver-agent-host
       ports:
         - protocol: TCP
           port: 8088

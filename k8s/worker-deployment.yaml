@@ -135,6 +135,9 @@ spec:
             # Worker calls API (web tier) for intra-cluster lookups — route via ClusterIP service.
             - name: Agentweaver__ApiBaseUrl
               value: http://agentweaver-api:8080
+            # Serialized to pod-per-run AgentHost turns; use the stable namespace-qualified service.
+            - name: Agentweaver__RemoteApiBaseUrl
+              value: http://agentweaver-api.agentweaver.svc.cluster.local:8080
             # Sandbox dispatch (KubernetesSandboxExecutor path — kube-exec-stdio).
             - name: Sandbox__Backend
               value: kubernetes

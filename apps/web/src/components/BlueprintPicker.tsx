@@ -109,6 +109,10 @@ const useStyles = makeStyles({
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXXS },
   roleRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   roleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  bindingSection: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
+  bindingRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  bindingRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 },
+  bindingRole: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
   roleDot: { width: '14px', height: '14px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorPalettePurpleBackground2, color: tokens.colorPalettePurpleForeground2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', flexShrink: 0 },
   previewCard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM },
   metaRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
@@ -288,8 +292,29 @@ export function BlueprintPreviewCard({ blueprint, generated, reveal }: { bluepri
       </div>
       {blueprint.description && <Text className={styles.cardDescription}>{blueprint.description}</Text>}
       <BlueprintRosterChips roster={blueprint.roster} />
+      <BlueprintSkillBindings bindings={blueprint.skill_bindings} />
       <BlueprintMeta blueprint={blueprint} />
     </Card>
+  );
+}
+
+export function BlueprintSkillBindings({ bindings }: { bindings?: Blueprint['skill_bindings'] }) {
+  const styles = useStyles();
+  if (!bindings?.length) return null;
+
+  return (
+    <section className={styles.bindingSection} aria-label="Role-to-skill defaults">
+      <Text size={200} weight="semibold">Role-to-skill defaults</Text>
+      <div className={styles.bindingRows} role="list">
+        {bindings.map((binding) => (
+          <div className={styles.bindingRow} role="listitem" key={binding.role_id}>
+            <span className={styles.bindingRole}>{binding.role_id}</span>
+            <span aria-hidden="true">→</span>
+            {binding.skills.map((skill) => <Badge key={skill} appearance="tint" size="small">{skill}</Badge>)}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -305,6 +330,7 @@ function TemplateRosterList({ blueprint }: { blueprint: Blueprint }) {
           </div>
         ))}
       </div>
+      <BlueprintSkillBindings bindings={blueprint.skill_bindings} />
       <BlueprintMeta blueprint={blueprint} />
     </div>
   );
@@ -312,6 +338,7 @@ function TemplateRosterList({ blueprint }: { blueprint: Blueprint }) {
 
 function TemplateRow({ blueprint, selected, onSelect }: { blueprint: Blueprint; selected: boolean; onSelect: () => void }) {
   const styles = useStyles();
+  const unavailable = blueprint.exportability?.status === 'unavailable';
   const workflows = workflowList(blueprint);
   const workflowLabel = workflows.length === 1 ? workflows[0] : `${workflows.length} workflows`;
   const workflowAria = workflows.length === 1 ? `Workflow: ${workflows[0]}` : `Workflows: ${workflows.join(', ')}`;
@@ -327,17 +354,21 @@ function TemplateRow({ blueprint, selected, onSelect }: { blueprint: Blueprint; 
     >
       <div
         className={mergeClasses(styles.templateRow, selected && styles.templateRowSelected)}
-        onClick={onSelect}
+        onClick={unavailable ? undefined : onSelect}
         role="radio"
-        aria-checked={selected}
-        aria-label={blueprint.name}
-        tabIndex={0}
-        onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } }}
+        aria-checked={unavailable ? false : selected}
+        aria-disabled={unavailable}
+        aria-label={unavailable ? `${blueprint.name} is unavailable: ${blueprint.exportability?.codes.join(', ')}` : blueprint.name}
+        tabIndex={unavailable ? -1 : 0}
+        onKeyDown={(event) => {
+          if (!unavailable && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(); }
+        }}
       >
         <span className={styles.rowIcon}><SparkleRegular /></span>
         <div className={styles.rowMain}>
           <span className={styles.rowTitle}>{blueprint.name}</span>
           {blueprint.description && <span className={styles.rowDesc}>{blueprint.description}</span>}
+          {unavailable && <span className={styles.rowDesc}>Unavailable: {blueprint.exportability?.codes.join(', ')}</span>}
         </div>
         <div className={styles.rowTrailing}>
           {workflows.length > 0 && (
@@ -385,7 +416,7 @@ export function BlueprintTemplatePicker({
           <TemplateRow
             key={bp.id}
             blueprint={bp}
-            selected={value.kind === 'predefined' && value.blueprint.id === bp.id}
+            selected={bp.exportability?.status !== 'unavailable' && value.kind === 'predefined' && value.blueprint.id === bp.id}
             onSelect={() => onChange({ kind: 'predefined', blueprint: bp })}
           />
         ))}

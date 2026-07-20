@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Casting;
+using Agentweaver.Api.Skills;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using Agentweaver.SandboxFs;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
 
@@ -13,6 +15,17 @@ public sealed record BlueprintValidationResult(bool Valid, IReadOnlyList<string>
 {
     public static BlueprintValidationResult Ok() => new(true, []);
 }
+
+internal enum CharterPathResolutionKind
+{
+    ExistingSafe,
+    MissingOrdinary,
+    InvalidUnsafe,
+}
+
+internal sealed record CharterPathResolution(
+    CharterPathResolutionKind Kind,
+    string? ResolvedPath = null);
 
 /// <summary>
 /// Application service for blueprints (Feature 012): list predefined, validate against the schema
@@ -30,12 +43,14 @@ public sealed class BlueprintService
         new(KnownSandboxProfiles, StringComparer.OrdinalIgnoreCase);
 
     private readonly CatalogReader _catalog;
+    private readonly CatalogConformanceSnapshot _catalogSnapshot;
     private readonly CastingService _casting;
     private readonly IProjectStore _projectStore;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly WorkflowRegistry _workflowRegistry;
     private readonly IBlueprintGenerator _generator;
     private readonly IWorkflowGenerator _workflowGenerator;
+    private readonly SkillDefaultsService _skillDefaults;
     private readonly ILogger<BlueprintService> _logger;
 
     public BlueprintService(
@@ -46,21 +61,34 @@ public sealed class BlueprintService
         WorkflowRegistry workflowRegistry,
         IBlueprintGenerator generator,
         IWorkflowGenerator workflowGenerator,
-        ILogger<BlueprintService> logger)
+        SkillDefaultsService skillDefaults,
+        ILogger<BlueprintService> logger,
+        CatalogConformanceSnapshot? catalogSnapshot = null)
     {
         _catalog = catalog;
+        _catalogSnapshot = catalogSnapshot ?? new CatalogConformanceSnapshot(catalog);
         _casting = casting;
         _projectStore = projectStore;
         _sandboxPolicyStore = sandboxPolicyStore;
         _workflowRegistry = workflowRegistry;
         _generator = generator;
         _workflowGenerator = workflowGenerator;
+        _skillDefaults = skillDefaults;
         _logger = logger;
     }
 
-    public IReadOnlyList<Blueprint> GetPredefined() => _catalog.LoadAllBlueprints();
+    /// <summary>Returns only catalog assets proven exportable by the immutable production snapshot.</summary>
+    public IReadOnlyList<Blueprint> GetPredefined() => _catalogSnapshot.Blueprints
+        .Where(entry => entry.IsExportable)
+        .Select(entry => entry.Blueprint)
+        .ToList();
 
-    public Blueprint? GetPredefinedById(string id) => _catalog.LoadBlueprint(id);
+    /// <summary>Returns all parsed blueprints with availability diagnostics for API/MCP/web display.</summary>
+    public IReadOnlyList<CatalogBlueprintEntry> GetPredefinedCatalog() => _catalogSnapshot.Blueprints;
+
+    public Blueprint? GetPredefinedById(string id) => _catalogSnapshot.FindBlueprint(id) is { IsExportable: true } entry
+        ? entry.Blueprint
+        : null;
 
     /// <summary>
     /// Validates a blueprint against the schema and the role constraint: every roster role id must
@@ -160,8 +188,29 @@ public sealed class BlueprintService
             foreach (var roleId in duplicateRoles)
                 errors.Add($"roster contains duplicate role '{roleId}'.");
 
+            var duplicateWorkflows = blueprint.Workflows
+                .Where(workflow => !string.IsNullOrWhiteSpace(workflow))
+                .GroupBy(workflow => workflow, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key);
+            foreach (var workflowId in duplicateWorkflows)
+                errors.Add($"workflows contains duplicate workflow '{workflowId}'.");
+
             // Validate each bespoke role's shape and that it is actually rostered.
             var rosterSet = new HashSet<string>(blueprint.Roster, StringComparer.OrdinalIgnoreCase);
+            foreach (var binding in blueprint.SkillBindings)
+            {
+                if (string.IsNullOrWhiteSpace(binding.RoleId))
+                {
+                    errors.Add("a skill binding is missing its 'role_id'.");
+                    continue;
+                }
+                if (!rosterSet.Contains(binding.RoleId))
+                    errors.Add($"skill binding role '{binding.RoleId}' is not referenced in the roster.");
+                if (binding.Skills is null || binding.Skills.Count == 0)
+                    errors.Add($"skill binding role '{binding.RoleId}' has no skills.");
+            }
+
             foreach (var b in blueprint.BespokeRoles)
             {
                 if (string.IsNullOrWhiteSpace(b.Id))
@@ -171,6 +220,8 @@ public sealed class BlueprintService
                 }
                 if (string.IsNullOrWhiteSpace(b.Charter))
                     errors.Add($"bespoke role '{b.Id}' is missing its 'charter'.");
+                else if (b.Charter.Length > 8_192)
+                    errors.Add($"bespoke role '{b.Id}' charter exceeds the 8192 character limit.");
                 if (_catalog.HasRole(b.Id))
                     errors.Add($"bespoke role '{b.Id}' collides with an existing catalog role id.");
                 if (ReservedRoles.IsReserved(b.Id) || ReservedRoles.IsReserved(b.Title))
@@ -247,6 +298,7 @@ public sealed class BlueprintService
         string projectId,
         Blueprint blueprint,
         string? generatedWorkflowYaml = null,
+        bool applySkillDefaults = false,
         CancellationToken ct = default)
     {
         var pid = ProjectId.Parse(projectId);
@@ -312,6 +364,21 @@ public sealed class BlueprintService
             .ConfirmProposalAsync(projectId, proposal.ProposalId, intent: "new", ct)
             .ConfigureAwait(false);
 
+        // Defaults are never retrofitted merely because an existing project applies a blueprint.
+        // New predefined-project creation opts in explicitly after team confirmation.
+        if (applySkillDefaults && blueprint.SkillBindings.Count > 0)
+        {
+            var preview = await _skillDefaults.PreviewAsync(pid, blueprint, ct).ConfigureAwait(false);
+            if (!preview.CanApply)
+                throw new InvalidOperationException(
+                    $"Skill defaults could not be applied: {string.Join(" ", preview.Errors)}");
+
+            var applied = await _skillDefaults.ApplyAsync(pid, blueprint, preview.Digest, ct).ConfigureAwait(false);
+            if (!string.Equals(applied.Outcome, "applied", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Skill defaults could not be applied: {string.Join(" ", applied.Errors)}");
+        }
+
         var now = DateTimeOffset.UtcNow;
         await _projectStore.UpdateDefaultWorkflowAsync(pid, blueprint.Workflow, now, ct).ConfigureAwait(false);
         var allowedWorkflowIds = blueprint.Workflows.Count > 0
@@ -369,7 +436,7 @@ public sealed class BlueprintService
         return null;
     }
 
-    private static IReadOnlyList<string> ValidateBespokeCharterReferences(Blueprint blueprint, string projectRoot)
+    internal static IReadOnlyList<string> ValidateBespokeCharterReferences(Blueprint blueprint, string projectRoot)
     {
         var errors = new List<string>();
         foreach (var role in blueprint.BespokeRoles)
@@ -385,11 +452,193 @@ public sealed class BlueprintService
                 path = value;
 
             if (path is null) continue;
-            var fullPath = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(projectRoot, path));
-            if (!File.Exists(fullPath))
+            var resolution = ResolvePathWithinProject(projectRoot, path);
+            if (resolution.Kind == CharterPathResolutionKind.InvalidUnsafe)
+                errors.Add($"bespoke role '{role.Id}' references charter file outside the project root.");
+            else if (resolution.Kind == CharterPathResolutionKind.MissingOrdinary)
                 errors.Add($"bespoke role '{role.Id}' references missing charter file '{path}'.");
         }
         return errors;
+    }
+
+    internal static CharterPathResolution ResolvePathWithinProject(string projectRoot, string path)
+    {
+        const int maxPathLength = 32_768;
+
+        if (string.IsNullOrWhiteSpace(projectRoot) ||
+            string.IsNullOrWhiteSpace(path) ||
+            projectRoot.Length > maxPathLength ||
+            path.Length > maxPathLength)
+            return InvalidPath();
+
+        try
+        {
+            var root = Path.GetFullPath(projectRoot);
+            var candidate = Path.GetFullPath(Path.IsPathRooted(path)
+                ? path
+                : Path.Combine(root, path));
+            if (root.Length > maxPathLength || candidate.Length > maxPathLength)
+                return InvalidPath();
+
+            var relative = Path.GetRelativePath(root, candidate);
+            if (string.IsNullOrWhiteSpace(relative) || relative == "." || Path.IsPathRooted(relative))
+                return InvalidPath();
+
+            var segments = relative
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.None);
+            if (segments.Any(segment => segment is ".." or ""))
+                return InvalidPath();
+
+            if (GetExistingPathStatus(root, out var rootAttributes) != ExistingPathStatus.Exists ||
+                rootAttributes.HasFlag(FileAttributes.ReparsePoint) ||
+                HasLinkTarget(root))
+                return InvalidPath();
+
+            var realRoot = RealPath.Resolve(root);
+            var current = root;
+            for (var index = 0; index < segments.Length; index++)
+            {
+                var segment = segments[index];
+                current = Path.Combine(current, segment);
+                switch (GetExistingPathStatus(current, out var attributes))
+                {
+                    case ExistingPathStatus.MissingOrdinary:
+                        // Every prior component was resolved and proved contained. This is the
+                        // sole path that may receive the normal missing-charter diagnostic.
+                        return new CharterPathResolution(CharterPathResolutionKind.MissingOrdinary);
+                    case ExistingPathStatus.InvalidUnsafe:
+                        return InvalidPath();
+                }
+
+                if (!TryGetSymbolicLinkStatus(current, out var isSymbolicLink))
+                    return InvalidPath();
+
+                if ((attributes.HasFlag(FileAttributes.ReparsePoint) || isSymbolicLink) &&
+                    (OperatingSystem.IsWindows() || !isSymbolicLink))
+                    return InvalidPath();
+
+                var realCurrent = RealPath.Resolve(current);
+                if (!IsPathWithin(realRoot, realCurrent))
+                    return InvalidPath();
+
+                if (index < segments.Length - 1)
+                    continue;
+
+                switch (GetExistingPathStatus(realCurrent, out var resolvedAttributes))
+                {
+                    case ExistingPathStatus.MissingOrdinary:
+                        return new CharterPathResolution(CharterPathResolutionKind.MissingOrdinary);
+                    case ExistingPathStatus.InvalidUnsafe:
+                        return InvalidPath();
+                }
+
+                if (resolvedAttributes.HasFlag(FileAttributes.Directory))
+                    return new CharterPathResolution(CharterPathResolutionKind.MissingOrdinary);
+
+                return new CharterPathResolution(CharterPathResolutionKind.ExistingSafe, realCurrent);
+            }
+
+            return InvalidPath();
+        }
+        catch (ArgumentException)
+        {
+            return InvalidPath();
+        }
+        catch (NotSupportedException)
+        {
+            return InvalidPath();
+        }
+        catch (PathTooLongException)
+        {
+            return InvalidPath();
+        }
+        catch (IOException)
+        {
+            return InvalidPath();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return InvalidPath();
+        }
+    }
+
+    private static CharterPathResolution InvalidPath() =>
+        new(CharterPathResolutionKind.InvalidUnsafe);
+
+    private static bool IsPathWithin(string root, string candidate)
+    {
+        var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedCandidate = candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(normalizedCandidate, normalizedRoot, StringComparison.Ordinal) ||
+               normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    }
+
+    private enum ExistingPathStatus
+    {
+        Exists,
+        MissingOrdinary,
+        InvalidUnsafe,
+    }
+
+    private static ExistingPathStatus GetExistingPathStatus(string path, out FileAttributes attributes)
+    {
+        try
+        {
+            attributes = File.GetAttributes(path);
+            return ExistingPathStatus.Exists;
+        }
+        catch (FileNotFoundException)
+        {
+            attributes = default;
+            return IsOrdinaryMissingPath(path)
+                ? ExistingPathStatus.MissingOrdinary
+                : ExistingPathStatus.InvalidUnsafe;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            attributes = default;
+            return IsOrdinaryMissingPath(path)
+                ? ExistingPathStatus.MissingOrdinary
+                : ExistingPathStatus.InvalidUnsafe;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            attributes = default;
+            return ExistingPathStatus.InvalidUnsafe;
+        }
+        catch (IOException)
+        {
+            attributes = default;
+            return ExistingPathStatus.InvalidUnsafe;
+        }
+    }
+
+    private static bool IsOrdinaryMissingPath(string path) =>
+        TryGetSymbolicLinkStatus(path, out var isSymbolicLink) && !isSymbolicLink;
+
+    private static bool HasLinkTarget(string path)
+    {
+        return !TryGetSymbolicLinkStatus(path, out var isSymbolicLink) || isSymbolicLink;
+    }
+
+    private static bool TryGetSymbolicLinkStatus(string path, out bool isSymbolicLink)
+    {
+        try
+        {
+            isSymbolicLink = new FileInfo(path).LinkTarget is not null ||
+                              new DirectoryInfo(path).LinkTarget is not null;
+            return true;
+        }
+        catch (IOException)
+        {
+            isSymbolicLink = false;
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            isSymbolicLink = false;
+            return false;
+        }
     }
 
     private static void TryDeleteFile(string path)
@@ -540,6 +789,7 @@ public sealed class BlueprintService
                 blueprint.SandboxProfile)
             {
                 BespokeRoles = blueprint.BespokeRoles,
+                SkillBindings = blueprint.SkillBindings,
             };
             var ids = string.Join(", ", autoRostered);
             warnings.Add($"Blueprint generation auto-rostered {autoRostered.Count} bespoke role(s): {ids}.");
@@ -584,6 +834,7 @@ public sealed class BlueprintService
                     blueprint.SandboxProfile)
                 {
                     BespokeRoles = blueprint.BespokeRoles,
+                    SkillBindings = blueprint.SkillBindings,
                 };
 
                 _logger.LogInformation(
@@ -609,6 +860,7 @@ public sealed class BlueprintService
                     blueprint.SandboxProfile)
                 {
                     BespokeRoles = blueprint.BespokeRoles,
+                    SkillBindings = blueprint.SkillBindings,
                 };
             }
         }

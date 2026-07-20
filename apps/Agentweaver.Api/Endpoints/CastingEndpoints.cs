@@ -349,6 +349,10 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", (
         {
             return Results.Conflict(new { error = ex.Message, code = "layout_conflict" });
         }
+        catch (TeamMutationConflictException ex)
+        {
+            return Results.Conflict(new { error = ex.Message, code = "team_changed" });
+        }
         catch (ArgumentException ex)
         {
             return Results.BadRequest(new { error = ex.Message });

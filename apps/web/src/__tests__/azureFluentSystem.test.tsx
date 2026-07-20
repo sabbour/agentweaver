@@ -20,6 +20,7 @@ import {
   ResourceTagEditor,
   ServiceMenu,
 } from '../copilot-fluent-system';
+import { Spinner } from '@fluentui/react-components';
 import {
   AzureFluentShowcaseApp,
   publicShowcaseComponentInventoryEntries,
@@ -401,6 +402,33 @@ describe('copilot-fluent-system hardened components', () => {
 
     expect(screen.getByLabelText('Activity').getAttribute('data-surface')).toBe('flyout');
     expect(screen.getByText('Policy review needed')).toBeDefined();
+  });
+
+  it('keeps loading indicators rotating while reduced motion disables decorative loader bars', () => {
+    const systemRoot = resolve(process.cwd(), 'src', 'copilot-fluent-system');
+    const tokens = readFileSync(resolve(systemRoot, 'tokens.css'), 'utf8');
+    const reducedMotionDecorativeContract = tokens.match(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.azf-copilot-loader-bar,[\s\S]*?animation: none;/,
+    )?.[0];
+
+    expect(tokens).toMatch(/\.fui-Spinner__spinner \{\s*animation-iteration-count: infinite !important;\s*\}/);
+    expect(tokens).toContain('.azf-copilot-loader {\n  display: inline-block;');
+    expect(tokens).toContain('animation: azf-copilot-loader-spin 1.4s linear infinite;');
+    expect(reducedMotionDecorativeContract).toContain('.azf-copilot-loader-bar');
+    expect(reducedMotionDecorativeContract).toContain('animation: none;');
+    expect(reducedMotionDecorativeContract).not.toMatch(/\.azf-copilot-loader\s*\{/);
+
+    const { container } = render(
+      <Wrapper>
+        <Spinner label="Loading" />
+        <span className="azf-copilot-loader" aria-hidden="true" />
+        <span className="azf-copilot-loader-bar" aria-hidden="true" />
+      </Wrapper>,
+    );
+
+    expect(container.querySelector('.fui-Spinner__spinner')).not.toBeNull();
+    expect(container.querySelector('.azf-copilot-loader')).not.toBeNull();
+    expect(container.querySelector('.azf-copilot-loader-bar')).not.toBeNull();
   });
 
   it('renders step and notification primitives from grouped inventory', () => {

@@ -120,6 +120,7 @@ public static class BlueprintGenerationParser
                 Str("sandbox_profile") ?? "default")
             {
                 BespokeRoles = BespokeRoleArray("bespoke_roles"),
+                SkillBindings = SkillBindingArray("skill_bindings"),
             };
 
             return new BlueprintGenerationResult(blueprint, []);
@@ -142,6 +143,31 @@ public static class BlueprintGenerationParser
                     id!.Trim(),
                     string.IsNullOrWhiteSpace(title) ? id!.Trim() : title!.Trim(),
                     charter!.Trim()));
+            }
+            return list;
+        }
+
+        IReadOnlyList<BlueprintSkillBinding> SkillBindingArray(string name)
+        {
+            if (!root.TryGetProperty(name, out var el) || el.ValueKind != JsonValueKind.Array) return [];
+            var list = new List<BlueprintSkillBinding>();
+            foreach (var item in el.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object
+                    || !item.TryGetProperty("role_id", out var role)
+                    || role.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(role.GetString()))
+                    continue;
+
+                var skills = item.TryGetProperty("skills", out var rawSkills)
+                    && rawSkills.ValueKind == JsonValueKind.Array
+                    ? rawSkills.EnumerateArray()
+                        .Where(value => value.ValueKind == JsonValueKind.String)
+                        .Select(value => value.GetString()!)
+                        .Where(value => !string.IsNullOrWhiteSpace(value))
+                        .ToArray()
+                    : [];
+                list.Add(new BlueprintSkillBinding(role.GetString()!, skills));
             }
             return list;
         }

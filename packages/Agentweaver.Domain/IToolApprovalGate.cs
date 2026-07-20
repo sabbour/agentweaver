@@ -9,7 +9,7 @@ public enum ApprovalScope
     /// <summary>Approve all future requests from the same tool+URL combo for this run.</summary>
     Run,
 
-    /// <summary>Persist a permanent allow policy for this tool+URL combo across all runs.</summary>
+    /// <summary>Persist an eligible-tool policy for future runs owned by the same persisted user.</summary>
     Always,
 
     /// <summary>Approve all future requests from this tool (any URL) for this run.</summary>
@@ -24,6 +24,32 @@ public enum ToolApprovalRequestState
     Approved,
     Denied,
     Expired,
+}
+
+/// <summary>Canonical policy semantics shared by durable and in-memory approval gates.</summary>
+public static class ToolApprovalPolicySemantics
+{
+    private static readonly HashSet<string> AlwaysEligibleTools = new(StringComparer.Ordinal)
+    {
+        "web_fetch",
+    };
+
+    public static bool IsAlwaysEligible(string toolName) =>
+        AlwaysEligibleTools.Contains(toolName);
+
+    public static string RiskFor(string toolName) =>
+        toolName switch
+        {
+            "web_fetch" => "network-read/v1",
+            "start_preview" => "preview-process/v1",
+            _ => "approval-gated-tool/v1",
+        };
+}
+
+/// <summary>Resolves a run's canonical owner from server-controlled persisted state.</summary>
+public interface IToolApprovalOwnerResolver
+{
+    string? GetCanonicalOwner(string runId);
 }
 
 /// <summary>
@@ -59,8 +85,8 @@ public interface IToolApprovalGate
     bool Deny(string runId, string requestId);
 
     /// <summary>
-    /// Returns <see langword="true"/> if the tool+URL combo is already covered by a run-scoped
-    /// or always-allowed policy, meaning no HITL card should be shown.
+    /// Returns <see langword="true"/> if the tool is covered by an owner-bound run-scoped policy
+    /// or an eligible owner-bound always policy, meaning no HITL card should be shown.
     /// </summary>
     bool IsAutoApproved(string runId, string toolName, string? url);
 

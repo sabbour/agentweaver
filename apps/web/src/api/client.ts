@@ -1,6 +1,8 @@
 import { getSessionToken } from '../config';
+import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
+  ApplyBlueprintSkillDefaultsResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
   AssemblyReviewDecision,
@@ -11,6 +13,7 @@ import type {
   BacklogSettingsDto,
   BacklogTaskDto,
   Blueprint,
+  BlueprintSkillDefaultsPreviewResponse,
   BoardDto,
   CastProposalDto,
   CharterDto,
@@ -49,6 +52,8 @@ import type {
   RunDetail,
   RuntimeInfo,
   SandboxPolicy,
+  SkillDetailDto,
+  SkillDto,
   ServerInfo,
   StartOrchestrationMode,
   StartOrchestrationResponse,
@@ -93,6 +98,99 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function isOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function isSkillStatus(value: unknown): value is 'active' | 'missing' | 'malformed' {
+  return value === 'active' || value === 'missing' || value === 'malformed';
+}
+
+function isSkillDto(value: unknown): value is SkillDto {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.description === 'string'
+    && isSkillProvenance(value.provenance)
+    && isOptionalString(value.source_repository)
+    && isOptionalString(value.source_location)
+    && isSkillStatus(value.status)
+    && typeof value.content_hash === 'string'
+    && typeof value.resource_count === 'number'
+    && isStringArray(value.assigned_agents)
+    && typeof value.created_at === 'string'
+    && typeof value.updated_at === 'string';
+}
+
+function isSkillDetailDto(value: unknown): value is SkillDetailDto {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.description === 'string'
+    && typeof value.instructions === 'string'
+    && Array.isArray(value.resources)
+    && value.resources.every((resource) => isRecord(resource)
+      && typeof resource.relative_path === 'string'
+      && typeof resource.content === 'string')
+    && isSkillProvenance(value.provenance)
+    && isOptionalString(value.source_repository)
+    && isOptionalString(value.source_location)
+    && isSkillStatus(value.status)
+    && typeof value.content_hash === 'string'
+    && typeof value.created_at === 'string'
+    && typeof value.updated_at === 'string';
+}
+
+export function isBlueprintSkillDefaultsPreviewResponse(value: unknown): value is BlueprintSkillDefaultsPreviewResponse {
+  return isRecord(value)
+    && typeof value.blueprint_id === 'string'
+    && typeof value.blueprint_version === 'string'
+    && typeof value.digest === 'string'
+    && typeof value.can_apply === 'boolean'
+    && isStringArray(value.errors)
+    && Array.isArray(value.assignments)
+    && value.assignments.every((assignment) =>
+      isRecord(assignment)
+      && typeof assignment.role_id === 'string'
+      && typeof assignment.agent_name === 'string'
+      && typeof assignment.skill_name === 'string'
+      && (assignment.action === 'create'
+        || assignment.action === 'reactivate'
+        || assignment.action === 'assign'
+        || assignment.action === 'blocked'));
+}
+
+export function isApplyBlueprintSkillDefaultsResponse(value: unknown): value is ApplyBlueprintSkillDefaultsResponse {
+  return isRecord(value)
+    && (value.outcome === 'applied' || value.outcome === 'stale' || value.outcome === 'invalid')
+    && isStringArray(value.errors)
+    && Object.hasOwn(value, 'preview')
+    && (value.preview === null || isBlueprintSkillDefaultsPreviewResponse(value.preview));
+}
+
+export function parseApplyBlueprintSkillDefaultsResponse(payload: unknown): ApplyBlueprintSkillDefaultsResponse {
+  if (!isApplyBlueprintSkillDefaultsResponse(payload)) {
+    throw new TypeError('Invalid apply blueprint skill defaults response.');
+  }
+  return payload;
+}
+
+function parseSkillList(payload: unknown): SkillDto[] {
+  if (!Array.isArray(payload)) throw new TypeError('Invalid skill list response.');
+
+  const skills: SkillDto[] = [];
+  for (const skill of payload) {
+    if (!isSkillDto(skill)) throw new TypeError('Invalid skill list response.');
+    skills.push(skill);
+  }
+  return skills;
+}
+
+function parseSkillDetail(payload: unknown): SkillDetailDto {
+  if (!isSkillDetailDto(payload)) throw new TypeError('Invalid skill detail response.');
+  return payload;
+}
+
 function isBlueprint(value: unknown): value is Blueprint {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -129,12 +227,18 @@ export function normalizeBlueprintList(payload: unknown): Blueprint[] {
 export class ApiError extends Error {
   readonly status: number;
   readonly body: string;
+  readonly payload: unknown;
 
   constructor(status: number, body: string) {
     super(`API error ${status}: ${body}`);
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+    try {
+      this.payload = JSON.parse(body) as unknown;
+    } catch {
+      this.payload = null;
+    }
   }
 }
 
@@ -518,11 +622,11 @@ export class AgentweaverApiClient {
 
   // Skills (issues #51/#56) — per-project catalog + agent assignments.
   listSkills(projectId: string): Promise<import('./types').SkillDto[]> {
-    return this.request<import('./types').SkillDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skills`);
+    return this.request<unknown>('GET', `/projects/${encodeURIComponent(projectId)}/skills`).then(parseSkillList);
   }
 
   getSkill(projectId: string, skillId: string): Promise<import('./types').SkillDetailDto> {
-    return this.request<import('./types').SkillDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`);
+    return this.request<unknown>('GET', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`).then(parseSkillDetail);
   }
 
   deleteSkill(projectId: string, skillId: string): Promise<void> {
@@ -590,6 +694,30 @@ export class AgentweaverApiClient {
 
   unassignSkill(projectId: string, skillId: string, agentName: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}/assignments/${encodeURIComponent(agentName)}`);
+  }
+
+  previewBlueprintSkillDefaults(
+    projectId: string,
+    blueprintId: string,
+  ): Promise<import('./types').BlueprintSkillDefaultsPreviewResponse> {
+    return this.request<import('./types').BlueprintSkillDefaultsPreviewResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/skill-defaults/preview`,
+      { blueprint_id: blueprintId },
+    );
+  }
+
+  async applyBlueprintSkillDefaults(
+    projectId: string,
+    blueprintId: string,
+    digest: string,
+  ): Promise<ApplyBlueprintSkillDefaultsResponse> {
+    const payload = await this.request<unknown>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/skill-defaults/apply`,
+      { blueprint_id: blueprintId, digest },
+    );
+    return parseApplyBlueprintSkillDefaultsResponse(payload);
   }
 
   // Sync

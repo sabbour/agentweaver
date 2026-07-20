@@ -78,6 +78,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RemoteAgentProxy> _logger;
     private readonly RemoteAgentProxyOptions _options;
+    private readonly string _remoteApiBaseUrl;
 
     // Per-run state — populated by SetupAsync, consumed by RunTurnAsync.
     private string _runId = "";
@@ -101,16 +102,22 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
     private A2AAgentSession? _session;
     private HttpClient? _httpClient;
 
+    internal string RemoteApiBaseUrl => _remoteApiBaseUrl;
+
     public RemoteAgentProxy(
         ISandboxAgentEndpointResolver endpointResolver,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
+        string remoteApiBaseUrl,
         IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         RemoteAgentProxyOptions? options = null)
     {
         _endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _remoteApiBaseUrl = string.IsNullOrWhiteSpace(remoteApiBaseUrl)
+            ? throw new ArgumentException("A remote API base URL is required.", nameof(remoteApiBaseUrl))
+            : remoteApiBaseUrl;
         _turnTokenRegistry = turnTokenRegistry;
         _options = options ?? new RemoteAgentProxyOptions();
         _logger = loggerFactory.CreateLogger<RemoteAgentProxy>();
@@ -139,7 +146,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         _streamWriter = streamWriter;
         _projectId = projectId;
         _agentName = agentName;
-        _apiBaseUrl = apiBaseUrl;
+        _apiBaseUrl = _remoteApiBaseUrl;
         _apiKey = apiKey;
         _userId = userId;
         _preparedWritebackRequired = false;

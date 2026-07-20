@@ -287,6 +287,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   // a render, and it's cleared right after being consumed so it can't leak into an unrelated
   // new conversation started later (e.g. via "New Session" from the Sessions page).
   const pendingResumeFromRunIdRef = useRef<string | null>(null);
+  const sendingRef = useRef(false);
 
   const { events, status: streamStatus } = useSeededRunStream(runId, undefined);
 
@@ -337,7 +338,9 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
 
   const handleSubmit = useCallback(async () => {
     const message = input.trim();
-    if (!message || busy) return;
+    if (!message || busy || sendingRef.current) return;
+    sendingRef.current = true;
+    setInput('');
     setBusy(true);
     setError(null);
     setPendingMessage({ id: `pending-${Date.now()}`, text: message });
@@ -356,7 +359,6 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       } else {
         await apiClient.sendAssistantMessage(runId, { message });
       }
-      setInput('');
     } catch (err) {
       setPendingMessage(null);
       if (
@@ -400,6 +402,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         setError(formatApiErrorMessage(err));
       }
     } finally {
+      sendingRef.current = false;
       setBusy(false);
     }
   }, [busy, effectiveProjectId, input, runId]);

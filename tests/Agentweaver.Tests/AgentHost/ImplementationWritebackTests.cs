@@ -457,7 +457,8 @@ public sealed class ImplementationWritebackTests : IDisposable
         new(
             new FixedEndpointResolver(requiresPreparedWriteback),
             new StubHttpClientFactory(),
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            "http://agentweaver-api.agentweaver.svc.cluster.local:8080");
 
     private static Task SetupProxyAsync(RemoteAgentProxy proxy) =>
         proxy.SetupAsync(

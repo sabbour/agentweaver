@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 
@@ -298,6 +299,7 @@ public sealed class Spec018FactorySelectionTests
         services.AddHttpClient();
         services.AddSingleton<ISandboxAgentEndpointResolver>(new NoOpSandboxAgentEndpointResolver());
         services.AddSingleton<IAgentHostTurnTokenRegistry, Spec018TurnTokenRegistry>();
+        services.AddSingleton<IConfiguration>(RemoteConfiguration());
 
         // Simulate AddAgentRuntime() base registration (a placeholder factory for the test)
         services.AddSingleton<IWorkflowAgentFactory, Spec018StubFactory>();
@@ -350,18 +352,37 @@ public sealed class Spec018FactorySelectionTests
         services.AddHttpClient();
         services.AddSingleton<ISandboxAgentEndpointResolver>(new NoOpSandboxAgentEndpointResolver());
         services.AddSingleton<IAgentHostTurnTokenRegistry, Spec018TurnTokenRegistry>();
+        services.AddSingleton<IConfiguration>(RemoteConfiguration());
         services.AddSingleton<RemoteWorkflowAgentFactory>();
 
         var sp = services.BuildServiceProvider();
         var remoteFactory = sp.GetRequiredService<RemoteWorkflowAgentFactory>();
 
-        // All factory methods must produce a RemoteAgentProxy
-        remoteFactory.CreateWorkerAgent().Should().BeOfType<RemoteAgentProxy>();
-        remoteFactory.CreateRaiAgent().Should().BeOfType<RemoteAgentProxy>();
-        remoteFactory.CreateRubberduckAgent().Should().BeOfType<RemoteAgentProxy>();
-        remoteFactory.CreateBuildTestAgent().Should().BeOfType<RemoteAgentProxy>();
-        remoteFactory.CreateScribeAgent().Should().BeOfType<RemoteAgentProxy>();
+        var proxies = new[]
+        {
+            remoteFactory.CreateWorkerAgent(),
+            remoteFactory.CreateRaiAgent(),
+            remoteFactory.CreateRubberduckAgent(),
+            remoteFactory.CreateBuildTestAgent(),
+            remoteFactory.CreateScribeAgent(),
+        };
+
+        proxies.Should().AllBeOfType<RemoteAgentProxy>();
+        proxies.Cast<RemoteAgentProxy>().Should().OnlyContain(
+            proxy => proxy.RemoteApiBaseUrl == RemoteApiUrl,
+            "root, child, coordinator, Build/Test, and Scribe agents share the remote A2A override");
     }
+
+    private const string RemoteApiUrl =
+        "http://agentweaver-api.agentweaver.svc.cluster.local:8080";
+
+    private static IConfiguration RemoteConfiguration() =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agentweaver:RemoteApiBaseUrl"] = RemoteApiUrl,
+            })
+            .Build();
 
     /// <summary>Minimal stub factory used in place of the full WorkflowAgentFactory in DI tests.</summary>
     private sealed class Spec018StubFactory : IWorkflowAgentFactory
@@ -378,6 +399,90 @@ public sealed class Spec018FactorySelectionTests
         public void RegisterTurnToken(string runId, string token) { }
         public void UnregisterTurnToken(string runId) { }
         public string? TryGetTurnToken(string runId) => null;
+    }
+}
+
+public sealed class RemoteApiBaseUrlTests
+{
+    [Theory]
+    [InlineData("http://agentweaver-api.agentweaver.svc.cluster.local:8080")]
+    [InlineData("https://api.internal.example/base")]
+    public void ResolveRemoteApiBaseUrl_ValidRemoteUrl_ReturnsConfiguredValue(string value)
+    {
+        var configuration = Configuration(value);
+
+        RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(configuration).Should().Be(value);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("api.internal:8080")]
+    [InlineData("ftp://api.internal.example")]
+    [InlineData("http://localhost:8080")]
+    [InlineData("http://tools.localhost:8080")]
+    [InlineData("http://127.0.0.2:8080")]
+    [InlineData("http://[::1]:8080")]
+    [InlineData("http://0.0.0.0:8080")]
+    [InlineData("http://[::]:8080")]
+    [InlineData("http://*:8080")]
+    [InlineData("http://+:8080")]
+    [InlineData("http://user:password@api.internal.example:8080")]
+    public void ResolveRemoteApiBaseUrl_UnsafeOrMissingUrl_FailsClosed(string? value)
+    {
+        var act = () => RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(Configuration(value));
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void ResolveRemoteApiBaseUrl_InvalidValue_DoesNotEchoPotentialCredentials()
+    {
+        const string value = "http://user:sensitive-value@api.internal.example:8080";
+
+        var act = () => RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(Configuration(value));
+
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().NotContain(value).And.NotContain("sensitive-value");
+    }
+
+    [Fact]
+    public void InProcessApiBaseUrl_ExplicitLoopback_RemainsUnchanged()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agentweaver:ApiBaseUrl"] = "http://localhost:8080",
+                ["Agentweaver:RemoteApiBaseUrl"] =
+                    "http://agentweaver-api.agentweaver.svc.cluster.local:8080",
+            })
+            .Build();
+
+        RunWorkflowFactory.ResolveApiBaseUrl(configuration).Should().Be("http://localhost:8080");
+    }
+
+    [Fact]
+    public void InProcessApiBaseUrl_Derivation_IgnoresRemoteOverride()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["urls"] = "http://+:8080",
+                ["Agentweaver:RemoteApiBaseUrl"] =
+                    "http://agentweaver-api.agentweaver.svc.cluster.local:8080",
+            })
+            .Build();
+
+        RunWorkflowFactory.ResolveApiBaseUrl(configuration).Should().Be("http://localhost:8080");
+    }
+
+    private static IConfiguration Configuration(string? value)
+    {
+        var values = new Dictionary<string, string?>();
+        if (value is not null)
+            values["Agentweaver:RemoteApiBaseUrl"] = value;
+
+        return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
 }
 
@@ -706,15 +811,15 @@ public sealed class Spec018RemoteAgentProxyInvariantTests
     [Fact]
     public void RemoteAgentProxy_Constructor_AcceptsExpectedParameters()
     {
-        // Constructor: endpoint resolver, HttpClient factory, logger factory, optional turn-token
-        // registry, and worker-side streaming deadline options.
+        // Constructor: endpoint resolver, HttpClient factory, logger factory, remote API URL,
+        // optional turn-token registry, and worker-side streaming deadline options.
         var ctor = typeof(RemoteAgentProxy)
             .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
             .Single();
 
-        ctor.GetParameters().Should().HaveCount(5,
+        ctor.GetParameters().Should().HaveCount(6,
             "the proxy must accept the endpoint resolver, HttpClient factory, logger factory, " +
-            "optional per-run turn-token registry, and configurable worker stream deadlines");
+            "remote API URL, optional per-run turn-token registry, and configurable worker stream deadlines");
     }
 
     [Fact]
@@ -729,6 +834,7 @@ public sealed class Spec018RemoteAgentProxyInvariantTests
         paramTypes.Should().Contain(typeof(ISandboxAgentEndpointResolver));
         paramTypes.Should().Contain(typeof(IHttpClientFactory));
         paramTypes.Should().Contain(typeof(ILoggerFactory));
+        paramTypes.Should().Contain(typeof(string));
         paramTypes.Should().Contain(typeof(IAgentHostTurnTokenRegistry));
         paramTypes.Should().Contain(typeof(RemoteAgentProxyOptions));
     }

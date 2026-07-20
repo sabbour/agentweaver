@@ -8,7 +8,7 @@ metadata:
 spec:
   endpointSelector:
     matchLabels:
-      app: agentweaver-sandbox
+      app: agentweaver-agent-host
   egress:
     - toEndpoints:
         - matchLabels:

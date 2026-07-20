@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AssistantRunPage } from '../pages/AssistantRunPage';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -74,6 +74,16 @@ const REAL_MESSAGE_RESPONSE = {
   tools_invoked: ['coordinator_list_projects'],
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockRunStreamState.current = {
@@ -120,6 +130,25 @@ describe('AssistantRunPage', () => {
     });
   });
 
+  it('clears the textarea before the first-run create request settles', async () => {
+    const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
+    vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    typeAndSend('  what projects exist?  ');
+
+    await waitFor(() => {
+      expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'what projects exist?' }),
+      );
+      expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
+    });
+    expect(screen.getByTestId('assistant-pending-message').textContent).toContain('what projects exist?');
+
+    createRequest.resolve(REAL_CREATE_RESPONSE);
+    await waitFor(() => expect(screen.queryByTestId('assistant-empty-state')).toBeNull());
+  });
+
   it('sends subsequent messages via real send-message endpoint once a run exists', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
 
@@ -136,6 +165,72 @@ describe('AssistantRunPage', () => {
     );
     // The create call is not made again for follow-ups.
     expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the textarea before a follow-up request settles', async () => {
+    const messageRequest = deferred<typeof REAL_MESSAGE_RESPONSE>();
+    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(messageRequest.promise);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    typeAndSend('first message');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+
+    typeAndSend('  second message  ');
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
+        'assistant-run-1',
+        expect.objectContaining({ message: 'second message' }),
+      );
+      expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
+    });
+    expect(screen.getByTestId('assistant-pending-message').textContent).toContain('second message');
+
+    messageRequest.resolve(REAL_MESSAGE_RESPONSE);
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).disabled).toBe(false);
+    });
+  });
+
+  it('keeps the textarea clear if a dispatched request fails', async () => {
+    const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
+    vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    typeAndSend('hello');
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
+    });
+
+    createRequest.reject(new Error('Request failed'));
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-error').textContent).toContain('Request failed');
+    });
+    expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('leaves empty or busy submissions unchanged and does not dispatch the old message twice', async () => {
+    const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
+    vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    const textarea = screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement;
+
+    fireEvent.change(textarea, { target: { value: '   ' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
+    expect(textarea.value).toBe('   ');
+    expect(apiClient.createAssistantRun).not.toHaveBeenCalled();
+
+    fireEvent.change(textarea, { target: { value: 'first message' } });
+    act(() => {
+      fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
+      fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
+    });
+    await waitFor(() => {
+      expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
+      expect(textarea.value).toBe('');
+    });
+
+    createRequest.resolve(REAL_CREATE_RESPONSE);
   });
 
   it('renders the tool-approval UI when a permission-required event is streamed', async () => {

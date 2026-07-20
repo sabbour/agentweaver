@@ -22,10 +22,6 @@ var builder = WebApplication.CreateBuilder(args);
 // Load AgentHost options (per-run config injected as env vars / config at pod launch).
 builder.Services.Configure<AgentHostOptions>(builder.Configuration.GetSection("AgentHost"));
 
-// Mutable per-run runtime state. Immutable AgentHostOptions carries static config; this holder
-// carries RunId/UserId/TurnBearerToken/KvUserSecretName delivered later via POST /configure
-// (warm pool) or seeded from options at startup (env-var launch).
-builder.Services.AddSingleton<AgentHostRuntimeState>();
 builder.Services.AddSingleton<PodLocalWorkspaceManager>();
 builder.Services.Configure<PreviewRunnerOptions>(builder.Configuration.GetSection("AgentHost:PreviewRunner"));
 
@@ -135,7 +131,7 @@ builder.Services.AddSingleton<PreviewRunner>();
 builder.Services.AddSingleton<IPreviewRunner>(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
-builder.Services.AddAgentRuntime();
+builder.Services.AddAgentHostRuntime();
 
 // The production AgentHost runs inside a per-run Kata VM. Do not nest bubblewrap inside that
 // boundary: the hardened pod cannot mount bwrap's private /proc. This registration intentionally

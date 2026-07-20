@@ -19,6 +19,7 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
 {
     private readonly IAgentRunner _agentRunner;
     private readonly CatalogReader _catalog;
+    private readonly CatalogConformanceSnapshot _catalogSnapshot;
     private readonly ILogger<CopilotBlueprintGenerator> _logger;
     private readonly string? _defaultModel;
 
@@ -27,10 +28,12 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
         CatalogReader catalog,
         IConfiguration configuration,
         ILogger<CopilotBlueprintGenerator> logger,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        CatalogConformanceSnapshot? catalogSnapshot = null)
     {
         _agentRunner = agentRunner;
         _catalog = catalog;
+        _catalogSnapshot = catalogSnapshot ?? new CatalogConformanceSnapshot(catalog);
         _logger = logger;
         _defaultModel = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveBlueprintModel();
@@ -55,9 +58,9 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
         var sandboxList = string.Join(" | ", BlueprintService.KnownSandboxProfiles);
 
         // Build the library workflow selection table from the catalog.
-        var workflowRows = _catalog.LoadAllWorkflowYamls()
-            .Select(w => Workflows.WorkflowDefinitionLoader.Load(w.Yaml, w.Source, isBuiltIn: true))
-            .Where(r => r.IsValid && r.Definition is not null)
+        var workflowRows = _catalogSnapshot.Workflows
+            .Where(r => r.IsValid && r.Definition is not null &&
+                        !string.Equals(r.Definition.Id, Workflows.BuiltInWorkflows.DefaultWorkflowId, StringComparison.Ordinal))
             .OrderBy(r => r.Definition!.Id, StringComparer.Ordinal)
             .Select(r => $"- {r.Definition!.Id}: {r.Definition.Description ?? r.Definition.Name}")
             .ToList();

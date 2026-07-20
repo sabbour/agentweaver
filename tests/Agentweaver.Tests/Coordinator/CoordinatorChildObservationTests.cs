@@ -879,8 +879,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     /// </summary>
     private sealed class BlockingEventStream : IRunEventStream
     {
-        public ValueTask AppendAsync(string runId, RunEvent evt, CancellationToken ct = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default) =>
+            ValueTask.FromResult(evt.Sequence);
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(
             string runId, int fromSequence = 0,
