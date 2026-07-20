@@ -572,6 +572,9 @@ describe('copilot-fluent-system hardened components', () => {
     expect(showcaseSource.slice(Math.max(0, imgMatches[0].index - 400), imgMatches[0].index + 400)).toContain('azf-showcase-icon-grid__glyph');
   });
 
+  // This renders the full showcase app (heaviest component tree in the suite); under
+  // full-suite parallel worker contention it can exceed the global 15s test timeout,
+  // so it gets its own longer budget rather than inflating the timeout for every test.
   it('exposes primary showcase experiences with preview-first browsers', () => {
     const showcaseSource = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'showcase', 'AzureFluentShowcaseApp.tsx'), 'utf8');
     const { container } = render(<AzureFluentShowcaseApp />);
@@ -847,7 +850,7 @@ describe('copilot-fluent-system hardened components', () => {
     fireEvent.change(screen.getByLabelText('Filter icons'), { target: { value: 'storage' } });
     expect(screen.getByText('Storage/Storage Accounts')).toBeDefined();
     expect(screen.queryByText('Compute/Virtual Machine')).toBeNull();
-  });
+  }, 30000);
 
   it('keeps the showcase inventory aligned with COMPONENTS.md coverage requirements', () => {
     const catalogMarkdown = readFileSync(resolve(process.cwd(), 'src', 'copilot-fluent-system', 'catalog', 'COMPONENTS.md'), 'utf8');

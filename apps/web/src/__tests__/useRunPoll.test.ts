@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mockGetRun = vi.fn();
 
 vi.mock('../api/client', () => ({
-  AgentweaverApiClient: vi.fn().mockImplementation(() => ({
-    getRun: mockGetRun,
-  })),
+  // vitest 4 invokes the mock implementation with `new` when the real export
+  // is constructed via `new AgentweaverApiClient(...)` -- an arrow function
+  // is never constructible in JS, so this must be a regular `function`
+  // (returning the mock instance overrides the `new`-created `this`).
+  AgentweaverApiClient: vi.fn().mockImplementation(function AgentweaverApiClientMock() {
+    return { getRun: mockGetRun };
+  }),
 }));
 
 describe('useRunPoll', () => {

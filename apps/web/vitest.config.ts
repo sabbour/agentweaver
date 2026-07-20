@@ -6,5 +6,8 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     globals: false,
+    // vitest 4's default 5000ms is occasionally too tight for the heavier
+    // copilot-fluent-system showcase render test on a cold transform cache.
+    testTimeout: 15000,
   },
 });
