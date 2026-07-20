@@ -47,8 +47,18 @@ squad/{issue-number}-{kebab-case-slug}
    git push -u origin "squad/{issue-number}-{slug}"
    gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
    ```
-5. After approval and green blocking CI, squash-merge.
-6. Remove a local agent worktree after merge.
+5. **Before merging any PR, always verify its live state directly — never assume from the diff alone:**
+   ```bash
+   gh pr view {pr-number} --json mergeable,mergeStateStatus,statusCheckRollup \
+     --jq '{mergeable, mergeState: .mergeStateStatus, checks: [.statusCheckRollup[] | {name, status, conclusion}]}'
+   ```
+   Confirm `mergeable` is `MERGEABLE` (no conflicts) and every required check
+   (`.NET tests`, `Node toolchain tests`, `Web tests`, `Docs build`) shows
+   `conclusion: SUCCESS`. Re-run any failed required check once
+   (`gh run rerun {run-id} --failed`) to rule out known CPU-contention flakes
+   before treating a real failure as caused by the PR's own changes.
+6. After confirming the above, squash-merge.
+7. Remove a local agent worktree after merge.
 
 ## Anti-Patterns
 
@@ -56,3 +66,4 @@ squad/{issue-number}-{kebab-case-slug}
 - ❌ Merge-committing a PR instead of squash-merging it
 - ❌ Letting a locally run agent work an issue in the shared primary checkout
 - ❌ Creating a local worktree for a hosted agent
+- ❌ Merging or trusting a PR without checking its live `mergeable`/`mergeStateStatus` and each required check's actual `conclusion`

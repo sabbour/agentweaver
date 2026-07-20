@@ -264,6 +264,17 @@ gh pr ready {pr-number}
 
 **Trigger:** PR is approved and CI passes.
 
+**Always verify live state before merging — never assume from a diff review alone:**
+```bash
+gh pr view {pr-number} --json mergeable,mergeStateStatus,statusCheckRollup \
+  --jq '{mergeable, mergeState: .mergeStateStatus, checks: [.statusCheckRollup[] | {name, status, conclusion}]}'
+```
+Confirm `mergeable` is `MERGEABLE` (no merge conflicts) and every required check
+(`.NET tests`, `Node toolchain tests`, `Web tests`, `Docs build`) shows
+`conclusion: SUCCESS`. If a required check failed, rerun it once
+(`gh run rerun {run-id} --failed`) to rule out a known CPU-contention flake before
+concluding the PR's own changes caused a real failure.
+
 **GitHub:** first ensure the branch is current with `dev`. If protection says
 it is behind, fetch `origin/dev`, update the feature branch, push, and wait
 for every required check to rerun.
