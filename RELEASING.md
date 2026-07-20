@@ -122,6 +122,11 @@ releasable state (see the full contributor convention in
   while incompatible development continues, or needs a deliberate multi-day
   stabilization window.
 
+The checkable **Branch Topology Activation Plan** (including when to enable
+Merge Queue, create `release/X.Y`, or adopt `dev → release → main`) is maintained
+in [CONTRIBUTING.md](CONTRIBUTING.md#branch-topology--room-for-growth). It governs
+topology changes; this document remains the release-operation reference.
+
 ### No local integration branch
 
 There is no supported long-lived local `integration`, `staging`, or

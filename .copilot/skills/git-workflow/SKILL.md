@@ -13,6 +13,10 @@ does not use `dev`, preview, or insiders integration branches. Reviewed changes 
 a short-lived branch and a PR targeting `main`; PRs are squash-merged so `main`
 has one commit per logical change.
 
+For the conditions that could change this topology, see
+[CONTRIBUTING.md's Branch Topology Activation Plan](../../../CONTRIBUTING.md#branch-topology--room-for-growth);
+do not introduce a branch tier before one applies.
+
 Issue branches use:
 
 ```text

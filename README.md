@@ -184,8 +184,9 @@ can deploy an unmerged feature branch to a real cluster for integration
 testing. The cluster is the staging/integration **environment**; protected
 `main` plus required up-to-date PR checks is the git integration path. GitHub
 Merge Queue is unavailable while the repo is owned by the personal `sabbour`
-account; if it moves to an organization, revisit Merge Queue then. See the
-[full explanation](https://sabbour.me/agentweaver/guide/getting-started#how-local-and-azure-testing-fit-the-branch-flow).
+account. The [Branch Topology Activation Plan](CONTRIBUTING.md#branch-topology--room-for-growth)
+defines the measurable conditions for enabling it or adding another branch tier.
+See the [full explanation](https://sabbour.me/agentweaver/guide/getting-started#how-local-and-azure-testing-fit-the-branch-flow).
 
 ## Deploy to Azure
 

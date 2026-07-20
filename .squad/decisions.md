@@ -135,3 +135,17 @@
 - Real-sandbox Linux/WSL end-to-end tests should early-exit when the required backend is unavailable instead of trying to dynamically skip through a failure path.
 - Coordinator persistence must retain the direct `MemoryDbContext` RunEvents fallback when `IRunEventStream` is not registered (as in test harness construction), while still preferring durable event-stream append in production.
 - Remaining Windows PodLocal workspace failures are an environment/path-length limitation on this machine, not evidence that the v0.9.71 merge changed pod-local workspace behavior.
+
+
+---
+
+## 2026-07-20T14-36-47-07-00 — Branch Topology Activation Plan
+
+**Scope source:** `decisions/inbox/niobe-branching-growth-review.md` (permanent supporting analysis; retained in place).
+
+- **Final verdict:** retain protected `main` as the only long-lived integration branch now. This supplements, rather than deletes, the 2026-07-20 branching-strategy settlement above, preserving its audit trail.
+- **Branch Topology Activation Plan:** replace the prior vague “revisit later” posture with these checkable activation conditions:
+  - **Trigger A — Merge Queue:** when the repository is organization-owned and either **at least 5 PRs in a rolling 14-day period** rerun blocking CI solely because another PR merged first, **or** the median time from all review/check requirements being satisfied to merge exceeds **one business day for two consecutive weeks** because of update/retest serialization. Enable Merge Queue (with `merge_group` CI) while retaining `main` as the sole integration branch.
+  - **Trigger B — protected maintenance branch:** when the project makes its **first commitment to patch an older minor after an incompatible newer minor lands on `main`**. Create and protect `release/X.Y`; patch from it and forward-port applicable fixes to `main`.
+  - **Trigger C — full `dev → release → main` promotion tier:** when **two consecutive releases** each require **at least 3 business days** of RC soak while **at least two independent next-version changes** must keep integrating in parallel, **or** the project formally commits to a durably-diverging externally consumed `next` channel.
+- These measurable conditions explicitly prevent the earlier short-sighted reasoning that a topology is unnecessary merely because the repository does not need it today. Full rationale, boundaries, and the migration playbook remain in `decisions/inbox/niobe-branching-growth-review.md`.

@@ -122,8 +122,10 @@ az boards work-item show --id {id} --output json
 **Trigger:** Agent accepts issue assignment and begins work.
 
 **Actions:**
-1. Fetch current `origin/main`; this trunk-based repository does not use `dev`
-   unless an explicitly authorized maintenance branch is named.
+1. Fetch current `origin/main`; this trunk-based repository does not use `dev`.
+   A maintenance or promotion branch is permitted only when the
+   [Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology--room-for-growth)
+   applies.
 2. Create the `squad/{issue-number}-{slug}` branch using the workspace rule in
    [`CONTRIBUTING.md`](../../CONTRIBUTING.md#ai-agent-contributions):
    locally run agents use a dedicated `.worktrees/{branch-slug}` worktree; hosted agents
@@ -281,6 +283,8 @@ If another PR merges first, GitHub marks this PR out of date:
 
 This strict fallback causes update/retest churn under concurrent PRs, but
 GitHub Merge Queue is unavailable while Agentweaver is personal-account-owned.
+The [Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology--room-for-growth)
+defines the measurable conditions for changing this model.
 
 **Azure DevOps** (when the connected repository is ADO rather than Agentweaver GitHub):
 ```bash

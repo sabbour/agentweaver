@@ -11,7 +11,9 @@ current worktree root, then the main checkout reported by `git worktree list --p
 
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md#ai-agent-contributions) is the canonical
 contribution policy. This reference supplies the mechanics; do not create a competing
-policy in spawn prompts or skills.
+policy in spawn prompts or skills. Its
+[Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology--room-for-growth)
+governs whether a branch tier may be added.
 
 | Contributor | Workspace rule |
 |-------------|----------------|

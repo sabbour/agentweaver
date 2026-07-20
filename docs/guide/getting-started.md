@@ -240,9 +240,10 @@ GitHub Merge Queue is unavailable while this repository is owned by the
 personal `sabbour` account. The enforceable fallback is standard protection:
 every change uses a PR, the branch must be up to date with `main`, and the four
 blocking checks rerun before squash merge. Concurrent PRs may need repeated
-updates/retests when another PR merges first. If the repository is ever moved
-to a GitHub organization, Merge Queue should be revisited. Official releases
-are cut from an exact protected-`main` commit; see
+updates/retests when another PR merges first. The
+[Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology--room-for-growth)
+defines the measurable conditions for enabling Merge Queue or adding another
+branch tier. Official releases are cut from an exact protected-`main` commit; see
 [RELEASING.md](../../RELEASING.md).
 
 ---

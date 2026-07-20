@@ -62,9 +62,14 @@ owner rollout after the pending process/CI changes land.
 
 ## Future organization-owned option
 
-If the repository is transferred to a GitHub organization, revisit GitHub
-Merge Queue. Public organization repositories can use it on any organization
-plan; private organization repositories require GitHub Enterprise Cloud.
-At that point, add the CI `merge_group` trigger, require Merge Queue, start
-with merge groups of one, and disable the redundant “branch must be up to
-date” rule. This is a future option, not a current action item.
+If the repository is transferred to a GitHub organization, GitHub Merge Queue
+becomes available for consideration. Public organization repositories can use
+it on any organization plan; private organization repositories require GitHub
+Enterprise Cloud. Transfer alone does not activate it: apply Trigger A in the
+[Branch Topology Activation Plan](../CONTRIBUTING.md#branch-topology--room-for-growth).
+When that trigger applies, add the CI `merge_group` trigger, require Merge
+Queue, start with merge groups of one, and disable the redundant “branch must
+be up to date” rule. This is a future option, not a current action item.
+
+For the measurable conditions that activate this future option or other topology
+changes, see [the Branch Topology Activation Plan](../CONTRIBUTING.md#branch-topology--room-for-growth).

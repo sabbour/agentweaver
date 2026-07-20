@@ -82,6 +82,35 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
    change done. Peer review or a passing unit test alone does not mean a fix is verified
    or deployed — only confirming it live, after a real deploy, does.
 
+## Branch Topology — room for growth
+
+Today's model is a protected `main`-only trunk: `main` is the sole long-lived
+integration branch. Do not add a permanent `dev` tier merely because the repository
+is growing. Instead, use this **Branch Topology Activation Plan**:
+
+- **Trigger A — Merge Queue:** activate when the repository is organization-owned and
+  either at least **5 PRs in a rolling 14-day period** must rerun blocking CI solely
+  because another PR merged first, or the median time from “all review/check
+  requirements satisfied” to merge exceeds **one business day for two consecutive
+  weeks** because of update/retest serialization. Enable Merge Queue with
+  `merge_group` CI while keeping `main` as the sole integration branch.
+- **Trigger B — protected maintenance branch:** activate when the project makes its
+  **first explicit commitment to ship a fix for an older minor line after an
+  incompatible newer minor has landed on `main`**. Create and protect `release/X.Y`
+  from the last supported tag; publish patch tags from it and forward-port applicable
+  fixes to `main`.
+- **Trigger C — full `dev → release/vX.Y.Z → main` promotion tier:** adopt it only
+  when either **two consecutive releases** each require a combined release-candidate
+  soak of at least **3 business days**, while at least **two independent next-version
+  changes** must continue integrating during each soak and cannot reasonably be hidden
+  behind feature flags or isolated on short-lived branches; or the project formally
+  commits to a **durable externally consumed prerelease/next channel** whose supported
+  source must advance independently of the stable/published branch for at least one
+  release cycle.
+
+For rationale and the migration playbook, see
+[Niobe's branching growth review](.squad/decisions/inbox/niobe-branching-growth-review.md).
+
 ## Testing
 
 Run only the suite(s) relevant to what you changed:
