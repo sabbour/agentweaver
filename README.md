@@ -354,3 +354,5 @@ block-beta
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
 - [AKS architecture](docs/guide/architecture-aks.md)
+- [Contributing](CONTRIBUTING.md)
+- [Releasing](RELEASING.md)
