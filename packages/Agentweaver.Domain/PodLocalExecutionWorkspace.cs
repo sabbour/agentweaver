@@ -18,6 +18,15 @@ public enum AgentHostPurpose
     /// The write-back/finalization path is implemented by issue #253, not by the assembly flow.
     /// </summary>
     ImplementationTurn = 2,
+
+    /// <summary>
+    /// Runs the MCP-driven operator assistant chat loop (narrow AgentHost cutover). The pod hosts
+    /// <c>OperatorAssistantAgent</c> instead of the sandboxed <c>CopilotAIAgent</c> workflow turn:
+    /// tools are sourced exclusively from the AgentweaverMCP server, native/shell tools are
+    /// rejected, and consequential tool calls are gated by the pod's own <c>IToolApprovalGate</c>.
+    /// No workspace/repository checkout is prepared for this purpose.
+    /// </summary>
+    OperatorAssistant = 3,
 }
 
 /// <summary>Policy controlling where an AgentHost executes and whether local changes may be finalized.</summary>

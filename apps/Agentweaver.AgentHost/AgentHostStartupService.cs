@@ -148,6 +148,24 @@ internal sealed class AgentHostStartupService : IHostedService
     {
         var opts = _options;
         var runId = configuration.RunId;
+
+        // Narrow AgentHost cutover (#346/#347): the operator assistant purpose never touches a
+        // workspace/repository checkout and does not drive CopilotAIAgent at all (RoutingPodTurnRunner
+        // selects OperatorPodTurnRunner instead) — skip the sandbox-oriented provisioning below
+        // entirely (scratch dir, working-directory resolution, local workspace materialization,
+        // CopilotAIAgent.SetupAsync) and go straight to ready. Operator runs also carry empty
+        // RepositoryPath/WorkingDirectory (they have no worktree), which CopilotAIAgent.SetupAsync is
+        // not designed to receive.
+        if (configuration.Purpose == AgentHostPurpose.OperatorAssistant)
+        {
+            _runtimeState.SetEffectiveWorkingDirectory(string.Empty);
+            _ready = true;
+            _logger.LogInformation(
+                "AgentHostStartupService: operator assistant purpose configured for run {RunId}; skipping sandbox provisioning.",
+                runId);
+            return;
+        }
+
         var agentScratchDirectory = _workspaceManager.PrepareAgentScratchDirectory(runId);
         Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH", agentScratchDirectory);
         Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR", agentScratchDirectory);

@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using agenthost::Agentweaver.AgentHost;
+using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -305,6 +306,166 @@ public sealed class A2ARoundTripIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task RealA2ARoundTrip_OperatorAssistantPurpose_ExecutesMcpToolCallAndApprovalFlow_ThroughRemotePath()
+    {
+        // Narrow AgentHost cutover (#346/#347): proves the REAL A2ATurnBridgeAgent + RoutingPodTurnRunner
+        // + OperatorPodTurnRunner select the operator assistant path (not CopilotAIAgent) end to end
+        // over a REAL A2A HTTP transport, and that:
+        //  - the pod's OWN IToolApprovalGate — not the worker's — is what a tool-approval grant resolves;
+        //  - a gated tool call is blocked until granted (fails closed while pending);
+        //  - the OAuth token and run id delivered via the existing /configure contract
+        //    (AgentHostRunConfiguration.GitHubAccessToken / RunId) are what reaches the assistant request;
+        //  - the turn completes with the definitive agent.turn.end marker (no phantom-incomplete failure).
+        var port = GetFreeTcpPort();
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.TryConfigure(new AgentHostRunConfiguration(
+            RunId: "run-operator-roundtrip-1",
+            UserId: "user-1",
+            TurnBearerToken: "turn-token",
+            KvUserSecretName: null,
+            GitHubAccessToken: "gh-oauth-token-abc",
+            PreviewRunnerCredential: null,
+            SharedWorkingDirectory: null,
+            Purpose: AgentHostPurpose.OperatorAssistant,
+            ProjectId: "proj-1",
+            AgentName: "Operator")).Should().BeTrue();
+
+        var approvalGate = new InMemoryToolApprovalGate();
+        var fakeAssistant = new GatedFakeOperatorAssistantAgent();
+        var operatorRunner = new OperatorPodTurnRunner(
+            fakeAssistant, runtimeState, approvalGate, NullLogger<OperatorPodTurnRunner>.Instance);
+        var routingRunner = new RoutingPodTurnRunner(
+            copilotRunner: new DeterministicTurnRunner(), operatorRunner, runtimeState);
+
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls($"http://localhost:{port}");
+        var agentHostedBuilder = builder.AddAIAgent(
+            A2ATurnBridgeAgent.AgentName,
+            (sp, _) => new A2ATurnBridgeAgent(
+                new MinimalInnerAgent(),
+                routingRunner,
+                NullLogger<A2ATurnBridgeAgent>.Instance),
+            ServiceLifetime.Singleton);
+#pragma warning disable MEAI001
+        agentHostedBuilder.AddA2AServer(options => options.AgentRunMode = AgentRunMode.DisallowBackground);
+#pragma warning restore MEAI001
+
+        await using var app = builder.Build();
+        app.MapA2AHttpJson(agentHostedBuilder, "/a2a/agent");
+        await app.StartAsync();
+
+        try
+        {
+            using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
+            var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
+            var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
+            await using var proxy = new RemoteAgentProxy(resolver, httpFactory, NullLoggerFactory.Instance);
+            var workerEvents = Channel.CreateUnbounded<RunEvent>();
+            await proxy.SetupAsync(
+                workingDirectory: "",
+                repositoryPath: "",
+                runId: "run-operator-roundtrip-1",
+                modelId: null,
+                systemPromptContext: null,
+                workerEvents.Writer,
+                projectId: "proj-1",
+                agentName: "Operator",
+                apiBaseUrl: null,
+                apiKey: null,
+                TestCt,
+                userId: "user-1");
+
+            var envelope = new OperatorAssistantTurnEnvelope(
+                Message: "please run the tool",
+                AgentDefinition: "You are the operator.",
+                GitHubLogin: "octocat",
+                ContextRunId: null,
+                History: Array.Empty<ConsoleFacadeHistoryMessage>());
+            var taskJson = JsonSerializer.Serialize(envelope);
+
+            // Grant the approval concurrently with the turn — mirrors the real
+            // /api/runs/{id}/tool-approvals -> pod /tool-approvals fallback path (a live grant while
+            // the tool call is genuinely pending, not a pre-armed one).
+            var grantTask = Task.Run(async () =>
+            {
+                while (!approvalGate.HasArmedApproval("run-operator-roundtrip-1"))
+                    await Task.Delay(15, TestCt);
+                await approvalGate.GrantAsync("run-operator-roundtrip-1", fakeAssistant.LastRequestId!, ApprovalScope.Once);
+            });
+
+            var text = await proxy.RunTurnAsync(taskJson, isRevision: false, TestCt);
+            await grantTask;
+
+            workerEvents.Writer.Complete();
+            var received = new List<RunEvent>();
+            await foreach (var evt in workerEvents.Reader.ReadAllAsync(TestCt))
+                received.Add(evt);
+
+            // The request the OperatorAssistantAgent-shaped fake actually received came entirely
+            // through the existing /configure contract (AgentHostRuntimeState), not a new channel.
+            fakeAssistant.LastRequest.Should().NotBeNull();
+            fakeAssistant.LastRequest!.ConversationId.Should().Be("run-operator-roundtrip-1");
+            fakeAssistant.LastRequest.CallerUser.Should().Be("user-1");
+            fakeAssistant.LastRequest.CallerBearerToken.Should().Be("gh-oauth-token-abc",
+                "the OAuth token must arrive via the SAME GitHubAccessToken field the existing /configure contract already carries");
+            fakeAssistant.LastRequest.ProjectId.Should().Be("proj-1");
+            fakeAssistant.LastRequest.Message.Should().Be("please run the tool");
+            fakeAssistant.LastRequest.AgentDefinition.Should().Be("You are the operator.");
+
+            // The tool call was genuinely gated: it only "ran" (per the fake) after the grant.
+            fakeAssistant.ToolRanAfterApproval.Should().BeTrue();
+            text.Should().Be("done: please run the tool");
+
+            received.Select(r => r.Type).Should().Contain(EventTypes.ToolCall)
+                .And.Contain(EventTypes.ToolApprovalRequired)
+                .And.Contain(EventTypes.ToolApprovalResolved)
+                .And.Contain(EventTypes.ToolResult)
+                .And.Contain(EventTypes.AgentTurnEnd,
+                    "the operator turn must also emit the definitive completion marker so the worker never reports a phantom-incomplete failure");
+
+            var resolved = received.First(r => r.Type == EventTypes.ToolApprovalResolved);
+            JsonSerializer.Serialize(resolved.Payload).Should().Contain("\"approved\":true");
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task OperatorPodTurnRunner_WithoutStreamWriter_FailsClosed_InsteadOfRunningToolsUngated()
+    {
+        // If the bridge ever ran a turn without attaching a stream writer, a null sink would silently
+        // disable approval gating in OperatorAssistantAgent (its BuildToolDeclarations only gates when
+        // given a non-null sink). The runner must refuse the turn instead of degrading to "ungated".
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.TryConfigure(new AgentHostRunConfiguration(
+            RunId: "run-no-writer",
+            UserId: "user-1",
+            TurnBearerToken: "turn-token",
+            KvUserSecretName: null,
+            GitHubAccessToken: "gh-oauth-token",
+            PreviewRunnerCredential: null,
+            SharedWorkingDirectory: null,
+            Purpose: AgentHostPurpose.OperatorAssistant));
+
+        var runner = new OperatorPodTurnRunner(
+            new GatedFakeOperatorAssistantAgent(),
+            runtimeState,
+            new InMemoryToolApprovalGate(),
+            NullLogger<OperatorPodTurnRunner>.Instance);
+
+        var envelope = new OperatorAssistantTurnEnvelope("hi", "def", null, null, Array.Empty<ConsoleFacadeHistoryMessage>());
+
+        // SetTurnStreamWriter is never called — mirrors a wiring defect, not a legitimate no-stream case.
+        var act = () => runner.RunTurnAsync(JsonSerializer.Serialize(envelope), isRevision: false, TestCt);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*without a sink*");
+    }
+
     private static CancellationToken TestCt =>
         new CancellationTokenSource(TimeSpan.FromSeconds(60)).Token;
 
@@ -459,5 +620,45 @@ public sealed class A2ARoundTripIntegrationTests
             new(new MinimalSession());
 
         private sealed class MinimalSession : AgentSession;
+    }
+
+    /// <summary>
+    /// Fake <see cref="IOperatorAssistantAgent"/> that models a single gated MCP tool call: it emits
+    /// a tool-call event, then asks the sink to gate an approval-required tool exactly as the real
+    /// <c>OperatorAssistantAgent</c> does for a consequential MCP tool, and only reports the tool as
+    /// having actually run once the operator's decision resolves the gate — proving
+    /// <see cref="OperatorPodTurnRunner"/> wires the pod's own <see cref="IToolApprovalGate"/> into the
+    /// turn without needing a live MCP server or Copilot client.
+    /// </summary>
+    private sealed class GatedFakeOperatorAssistantAgent : IOperatorAssistantAgent
+    {
+        private const string ToolName = "run_something";
+
+        public OperatorAssistantRequest? LastRequest { get; private set; }
+        public string? LastRequestId { get; private set; }
+        public bool ToolRanAfterApproval { get; private set; }
+
+        public async Task<OperatorAssistantResponse> RunTurnAsync(
+            OperatorAssistantRequest request,
+            IOperatorAssistantTurnSink? sink,
+            CancellationToken ct)
+        {
+            LastRequest = request;
+            LastRequestId = Guid.NewGuid().ToString("n");
+
+            if (sink is not null)
+                await sink.OnToolCallAsync(ToolName, argumentsJson: null, ct).ConfigureAwait(false);
+
+            var approved = sink is null
+                || await sink.OnApprovalRequiredAsync(LastRequestId, ToolName, argumentsJson: null, ct)
+                    .ConfigureAwait(false);
+
+            ToolRanAfterApproval = approved;
+
+            if (sink is not null)
+                await sink.OnToolResultAsync(ToolName, success: approved, ct).ConfigureAwait(false);
+
+            return new OperatorAssistantResponse($"done: {request.Message}", new[] { ToolName });
+        }
     }
 }
