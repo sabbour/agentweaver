@@ -315,19 +315,42 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     stream = scope.ServiceProvider.GetService<IRunEventStream>();
                 }
 
-                if (stream is null)
-                {
-                    _loggerFactory.CreateLogger<RunWorkflowFactory>().LogWarning(
-                        "Unable to persist run event snapshot for {RunId} because no IRunEventStream is available",
-                        runId);
-                }
-                else
+                if (stream is not null)
                 {
                     // Durable write-through is idempotent on the unique (RunId, Sequence) index,
                     // so re-appending the full history reconciles any gaps left by a dropped
                     // per-append mirror without duplicating rows.
                     foreach (var e in events.OrderBy(e => e.Sequence))
                         _ = await stream.AppendAsync(runId, e).ConfigureAwait(false);
+                }
+                else
+                {
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+                    var existingSeqs = db.RunEvents
+                        .Where(e => e.RunId == runId)
+                        .Select(e => e.Sequence)
+                        .ToHashSet();
+
+                    var toInsert = events
+                        .Where(e => !existingSeqs.Contains(e.Sequence))
+                        .OrderBy(e => e.Sequence)
+                        .Select(e => new RunEventRecord
+                        {
+                            RunId = runId,
+                            Sequence = e.Sequence,
+                            EventType = e.Type,
+                            PayloadJson = JsonSerializer.Serialize(e.Payload),
+                            CreatedAt = e.TimestampUtc == default ? DateTime.UtcNow : e.TimestampUtc.UtcDateTime,
+                        })
+                        .ToList();
+
+                    if (toInsert.Count > 0)
+                    {
+                        db.RunEvents.AddRange(toInsert);
+                        await db.SaveChangesAsync().ConfigureAwait(false);
+                    }
                 }
             }
 

@@ -4114,16 +4114,38 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             stream = scope.ServiceProvider.GetService<IRunEventStream>();
         }
 
-        if (stream is null)
+        if (stream is not null)
         {
-            _logger.LogWarning(
-                "Collective assembly: unable to persist run events snapshot for {RunId} because no IRunEventStream is available",
-                coordinatorRunId);
+            foreach (var evt in events.OrderBy(e => e.Sequence))
+                _ = await stream.AppendAsync(coordinatorRunId, evt, ct).ConfigureAwait(false);
             return;
         }
 
-        foreach (var evt in events.OrderBy(e => e.Sequence))
-            _ = await stream.AppendAsync(coordinatorRunId, evt, ct).ConfigureAwait(false);
+        using var fallbackScope = _scopeFactory.CreateScope();
+        var db = fallbackScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var existingSeqs = db.RunEvents
+            .Where(e => e.RunId == coordinatorRunId)
+            .Select(e => e.Sequence)
+            .ToHashSet();
+
+        var toInsert = events
+            .Where(e => !existingSeqs.Contains(e.Sequence))
+            .OrderBy(e => e.Sequence)
+            .Select(e => new RunEventRecord
+            {
+                RunId = coordinatorRunId,
+                Sequence = e.Sequence,
+                EventType = e.Type,
+                PayloadJson = JsonSerializer.Serialize(e.Payload),
+                CreatedAt = e.TimestampUtc == default ? DateTime.UtcNow : e.TimestampUtc.UtcDateTime,
+            })
+            .ToList();
+
+        if (toInsert.Count > 0)
+        {
+            db.RunEvents.AddRange(toInsert);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
     }
 
     // Adds a server-side wall-clock `timestamp_utc` (ISO-8601 "O") to every assembly event so the

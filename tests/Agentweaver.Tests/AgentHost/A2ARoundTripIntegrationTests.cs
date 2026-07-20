@@ -361,7 +361,8 @@ public sealed class A2ARoundTripIntegrationTests
             using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
             var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
             var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
-            await using var proxy = new RemoteAgentProxy(resolver, httpFactory, NullLoggerFactory.Instance);
+            await using var proxy = new RemoteAgentProxy(
+                resolver, httpFactory, NullLoggerFactory.Instance, RemoteApiBaseUrl);
             var workerEvents = Channel.CreateUnbounded<RunEvent>();
             await proxy.SetupAsync(
                 workingDirectory: "",

@@ -6,6 +6,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -44,6 +45,7 @@ public sealed class RemoteOperatorAssistantAgent(
     IHttpClientFactory httpClientFactory,
     ILoggerFactory loggerFactory,
     IOptions<RemoteAgentProxyOptions> proxyOptions,
+    IConfiguration configuration,
     IRunEventStream eventStream,
     ILogger<RemoteOperatorAssistantAgent> logger,
     IAgentHostPodLifecycle? podLifecycle = null) : IOperatorAssistantAgent
@@ -88,7 +90,12 @@ public sealed class RemoteOperatorAssistantAgent(
         }
 
         var proxy = new RemoteAgentProxy(
-            endpointResolver, httpClientFactory, loggerFactory, turnTokenRegistry, proxyOptions.Value);
+            endpointResolver,
+            httpClientFactory,
+            loggerFactory,
+            RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(configuration),
+            turnTokenRegistry,
+            proxyOptions.Value);
 
         var channel = Channel.CreateUnbounded<RunEvent>(new UnboundedChannelOptions
         {

@@ -137,11 +137,6 @@ spec:
             # this must be reachable from the sandbox namespace.
             - name: Agentweaver__RemoteApiBaseUrl
               value: http://agentweaver-api.agentweaver.svc.cluster.local:8080
-            # Operator assistant (#346): in-cluster MCP endpoint (AgentweaverMCP /mcp).
-            # Service name from k8s/mcp-service.yaml: agentweaver-mcp, ClusterIP :8080.
-            # ASP.NET Core config binding uses __ as the section separator.
-            - name: Assistant__McpEndpoint
-              value: http://agentweaver-mcp:8080/mcp
             - name: Workspace__Provider
               value: persistent-volume
             - name: Workspace__PersistentVolume__MountRoot
