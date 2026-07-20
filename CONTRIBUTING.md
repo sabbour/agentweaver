@@ -7,7 +7,7 @@ make a change, and get it merged.
 
 See [Prerequisites in the getting started guide](https://sabbour.me/agentweaver/guide/getting-started#prerequisites)
 for the tools you'll need (git, Node.js 22+, .NET 10 SDK, and Azure CLI if you're touching
-deploy/upgrade scripts) and per-platform install instructions (winget/brew/apt-get).
+the deploy/upgrade scripts) and per-platform install instructions (winget/brew/apt-get).
 
 ## Getting set up
 
@@ -19,7 +19,9 @@ npm run dev     # starts the API (http://localhost:5000) and Web UI (http://loca
 ```
 
 See the [Getting started guide](https://sabbour.me/agentweaver/guide/getting-started) for the
-full walkthrough, including configuring a GitHub OAuth App for local sign-in.
+full walkthrough, including configuring a GitHub OAuth App for local sign-in (the callback
+URL for local dev is `http://localhost:5000/auth/github/callback` — the API's own origin,
+no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 
 ## Repository layout
 
@@ -37,17 +39,24 @@ full walkthrough, including configuring a GitHub OAuth App for local sign-in.
 
 ## Making a change
 
-1. **Branch from `dev`.** Feature/fix work merges into `dev` first; `dev` promotes to
-   `preview` and then `main` via the `squad-promote` workflow (see [Releasing](RELEASING.md)).
-   Use a descriptive branch name with a conventional prefix, e.g. `fix/123-short-desc`,
-   `feat/short-desc`, `docs/short-desc`, `chore/short-desc`.
-2. **Make focused changes.** Keep PRs scoped to one concern — it's easier to review and to
-   revert if something goes wrong.
+1. **Work directly against `main`.** This repo does not use a `dev`/`preview` staging
+   branch flow — commits are made (or PRs opened) straight against `main`. Use a
+   short-lived branch with a descriptive, conventional prefix for anything you want
+   reviewed first, e.g. `fix/123-short-desc`, `feat/short-desc`, `docs/short-desc`.
+2. **Keep changes focused.** Scope one change to one concern — it's easier to review and
+   to revert if something goes wrong.
 3. **Add or update tests** for any behavior change (see Testing below).
 4. **Update docs** if you changed user-facing behavior, npm scripts, or configuration —
    `README.md` and `docs/guide/` are the two places most likely to need updates.
-5. **Run the relevant test suite(s) locally** before opening a PR (see below).
-6. **Open a PR against `dev`** with a clear description of what changed and why.
+5. **Run the relevant test suite(s) locally and confirm they pass before merging.**
+   There is no CI pipeline in this repo wired to run `dotnet test`/`node --test`/`vitest`
+   automatically — you are responsible for running and confirming the relevant suite(s)
+   yourself.
+6. **Verify live for anything with runtime/deploy impact**, not just via unit tests —
+   e.g. after a change to `scripts/azure/`, run the affected command for real (with
+   `--dry-run` where supported) against an actual environment before considering the
+   change done. Peer review or a passing unit test alone does not mean a fix is verified
+   or deployed — only confirming it live, after a real deploy, does.
 
 ## Testing
 
@@ -71,14 +80,10 @@ npm --prefix apps/web run lint
 npm run docs:build
 ```
 
-For anything that touches the deploy/upgrade/release scripts, also consider a live dry run
-(`--dry-run` is supported by `azure:release`) — see `scripts/azure/*.mjs` module headers for
-the exact semantics of each command before changing them.
-
 ## Commit messages
 
-This repo generates its `CHANGELOG.md` from commit history, bucketed by prefix. Please use
-a conventional-commit-style prefix:
+`CHANGELOG.md` is generated from commit history, bucketed by prefix. Please use a
+conventional-commit-style prefix:
 
 - `feat: ...` — new functionality
 - `fix: ...` — bug fixes
@@ -91,8 +96,11 @@ a conventional-commit-style prefix:
 - **.NET**: follow the existing conventions in the file/module you're editing. Don't
   introduce a new formatting style into an existing file.
 - **Node.js (`scripts/azure/`)**: ESM (`.mjs`), no bash/PowerShell — this toolchain is
-  intentionally 100% cross-platform Node.js. See module header comments in `scripts/azure/`
-  for the design rationale behind each command before changing behavior.
+  intentionally 100% cross-platform Node.js (it fully replaced the earlier
+  bash/PowerShell scripts). Read the module header comment at the top of the relevant
+  `scripts/azure/*.mjs` file before changing behavior — several non-obvious
+  ordering/timing decisions are documented there specifically to avoid reintroducing
+  past bugs.
 - **Web**: TypeScript + React, FluentUI components. Run `npm --prefix apps/web run lint`
   before submitting.
 
@@ -104,6 +112,8 @@ a conventional-commit-style prefix:
 - Do not commit secrets (API keys, GitHub OAuth client secrets, connection strings) —
   `appsettings.Development.json` is git-ignored for local secrets; use .NET user-secrets
   or environment variables instead.
+- Do not weaken auth/security checks (or otherwise take shortcuts) just to make a test
+  or a manual verification pass — fix the real blocker instead.
 
 ## Questions
 

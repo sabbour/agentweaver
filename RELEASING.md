@@ -1,40 +1,21 @@
 # Releasing Agentweaver
 
-This describes how Agentweaver ships changes: the branch promotion flow, the semver
-release process, and the difference between a **release** and an **upgrade**.
-
-## Branch flow
-
-```
-feat/fix/docs/chore branch → dev → preview → main
-```
-
-- **`dev`** — integration branch. PRs from feature/fix branches land here first.
-- **`preview`** — staging branch. `dev` is promoted to `preview` (squashing/stripping
-  internal-only paths like `.squad/`, `team-docs/`, `docs/proposals/`) via the
-  `squad-promote` GitHub Actions workflow.
-- **`main`** — release branch. `preview` promotes to `main` once its version has a
-  matching `CHANGELOG.md` entry and contains no forbidden internal paths. Pushing to
-  `main` triggers `squad-release.yml`.
-
-Promotion is manual (`workflow_dispatch` on `squad-promote.yml`), supports a dry run
-(`dry_run: true`), and validates before merging:
-- `preview → main` fails if `VERSION`'s value doesn't have a corresponding
-  `## [vX.Y.Z]` entry in `CHANGELOG.md`.
-- `preview → main` fails if any `.squad/`, `.ai-team/`, `.ai-team-templates/`,
-  `team-docs/`, or `docs/proposals/` files are present.
+This describes how Agentweaver ships changes: versioning, cutting a semver release, and
+the difference between a **release** and an **upgrade**. Everything here is driven by the
+Node.js toolchain in `scripts/azure/` — there is no separate branch-promotion pipeline;
+work lands on `main` and releases/upgrades are cut from there directly.
 
 ## Versioning
 
-Agentweaver uses semver, tracked in the repo-root `VERSION` file (currently plain
-`X.Y.Z`, no `v` prefix). `CHANGELOG.md` is **generated**, not hand-maintained — run
+Agentweaver uses semver, tracked in the repo-root `VERSION` file (plain `X.Y.Z`, no `v`
+prefix). `CHANGELOG.md` is **generated**, not hand-maintained — run
 `python scripts/gen-changelog.py` to regenerate it from git tag/commit history if needed
 (grouped by release tag, bucketed by commit-message prefix: `fix`, `feat`,
 `refactor`/`chore`, `docs`, `test`).
 
 ## Cutting a release
 
-Releases are cut with the Node.js toolchain (`scripts/azure/release.mjs`), not by hand:
+Releases are cut with `scripts/azure/release.mjs`, not by hand:
 
 ```bash
 npm run azure:release -- major   # or: minor | patch
@@ -91,17 +72,18 @@ npm run azure:verify    # post-deploy health/provenance verification only
 npm run azure:dev       # local dev orchestration (see npm run dev)
 ```
 
-Run any command with `--help` for its full flag reference, and see the module header
+Run any command with `--help` for its full flag reference, and read the module header
 comment at the top of the corresponding `scripts/azure/*.mjs` file for the detailed
 design rationale and binding semantics behind its behavior — several non-obvious
 ordering/timing decisions (documented inline) exist specifically to avoid past
 regressions (e.g. the stale-image and warm-pool-teardown issues referenced above).
 
-## After a release ships
+## After a release or upgrade ships
 
 - Confirm the new tag/image is actually running in the target environment
   (`npm run azure:verify`, or check via `kubectl`/Application Insights) before
-  considering any related GitHub issue closeable — merging to `main` or tagging alone
-  is not sufficient confirmation that a fix has shipped.
+  considering any related GitHub issue closeable. Merging to `main`, tagging, or a
+  passing peer review alone are **not** sufficient — only live confirmation that the
+  commit has shipped counts.
 - If the release includes infra/schema changes, double-check `k8s/` manifests and EF
   Core migrations were included in the tagged commit.
