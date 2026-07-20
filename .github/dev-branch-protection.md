@@ -39,9 +39,8 @@ Under **Settings → General → Pull Requests**:
 - Default squash commit title: **pull request title**
 - Automatically delete head branches: **on**
 
-## Manual activation required
+## Activation status
 
-Ahmed (repo admin) must activate this ruleset in **GitHub Settings → Rules → Rulesets**
-and confirm the repository merge settings above. This migration intentionally does **not**
-mutate GitHub rulesets through `gh api`; activation is a separate, audited owner action.
-Before activation, verify the four exact required check names on a `dev` pull-request run.
+**Active** as of 2026-07-21, ruleset `dev-integration-ruleset` (id `19284785`), applied via
+an audited `gh api` call at Ahmed's explicit direction. Repository merge settings
+(squash-only, auto-delete head branches) were applied at the same time.

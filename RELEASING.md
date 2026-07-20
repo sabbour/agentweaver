@@ -108,7 +108,8 @@ on `dev`. Keep the checkout used for publication clean and exactly at the tagged
 `dev` uses the required-check and merge settings in
 [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md); `main` uses the
 stable-entry rules in [`.github/main-branch-protection.md`](.github/main-branch-protection.md).
-Both rulesets remain a manual GitHub admin activation.
+Both rulesets are active as of 2026-07-21 (applied via an audited `gh api` call at
+Ahmed's explicit direction).
 
 ### Dev/test and release flow
 
