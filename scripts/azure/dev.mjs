@@ -159,6 +159,36 @@ export async function openBrowser(url, { exec = execDefault } = {}) {
 }
 
 /**
+ * Returns a copy-pasteable install command for `tool`, matching the current
+ * platform's package manager (winget on Windows, Homebrew on macOS, apt-get
+ * on Linux). Falls back to a generic doc-link message on unrecognized
+ * platforms (e.g. FreeBSD) rather than guessing a wrong command.
+ */
+export function installHint(tool, platform = process.platform) {
+  const commands = {
+    git: {
+      win32: "winget install --id Git.Git -e",
+      darwin: "brew install git",
+      linux: "sudo apt-get update && sudo apt-get install -y git",
+    },
+    dotnet: {
+      win32: "winget install Microsoft.DotNet.SDK.10",
+      darwin: "brew install --cask dotnet-sdk",
+      linux: "curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0 && export PATH=\"$HOME/.dotnet:$PATH\"",
+    },
+    node: {
+      win32: "winget install OpenJS.NodeJS.LTS",
+      darwin: "brew install node@20",
+      linux: "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs",
+    },
+  };
+  const byPlatform = commands[tool];
+  const cmd = byPlatform?.[platform];
+  if (cmd) return `Install with: ${cmd}`;
+  return "See https://git-scm.com/, https://dot.net/download, or https://nodejs.org/ for platform-specific install instructions.";
+}
+
+/**
  * Local dev environment setup only: prereq checks (git, .NET 10 SDK, Node
  * 20+) + `apps/web` npm install + `dotnet restore`. No Azure calls at all.
  * Mirrors install.sh/install.ps1's install_local(). Invoked via `dev --setup`
@@ -177,18 +207,18 @@ export async function runLocalSetup({ exec = execDefault, log = logDefault, repo
     return result.stdout.trim();
   };
 
-  await requireCmd("git", ["--version"]);
+  await requireCmd("git", ["--version"], installHint("git"));
   log.ok("git found");
-  const dotnetVersion = await requireCmd("dotnet", ["--version"], "Install .NET 10 SDK from https://dot.net/download");
+  const dotnetVersion = await requireCmd("dotnet", ["--version"], installHint("dotnet"));
   const dotnetMajor = Number.parseInt(dotnetVersion.split(".")[0], 10);
   if (!(dotnetMajor >= 10)) {
-    throw new Error(`.NET 10 SDK is required (found ${dotnetVersion}). Install from https://dot.net/download`);
+    throw new Error(`.NET 10 SDK is required (found ${dotnetVersion}). ${installHint("dotnet")}`);
   }
   log.ok(`dotnet ${dotnetVersion}`);
-  const nodeVersion = await requireCmd("node", ["--version"], "Install Node.js from https://nodejs.org/");
+  const nodeVersion = await requireCmd("node", ["--version"], installHint("node"));
   const nodeMajor = Number.parseInt(nodeVersion.replace(/^v/, "").split(".")[0], 10);
   if (!(nodeMajor >= 20)) {
-    throw new Error(`Node.js 20.19+ or 22.12+ is required (found ${nodeVersion}). Install from https://nodejs.org/`);
+    throw new Error(`Node.js 20.19+ or 22.12+ is required (found ${nodeVersion}). ${installHint("node")}`);
   }
   log.ok(`node ${nodeVersion}`);
 

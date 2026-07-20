@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
-import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup } from "../dev.mjs";
+import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup, installHint } from "../dev.mjs";
 
 function noopLog() {
   const rec = () => () => {};
@@ -199,4 +199,29 @@ test("runLocalSetup: throws a clear error when a prerequisite is missing", async
     },
   };
   await assert.rejects(runLocalSetup({ exec, log: noopLog(), repoRoot: os.tmpdir() }), /dotnet/);
+});
+
+test("runLocalSetup: missing-prerequisite error includes a platform-specific install command", async () => {
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "git") return { stdout: "git version 2.40", stderr: "", code: 0 };
+      return { stdout: "", stderr: "not found", code: 1 };
+    },
+    async run() {
+      return { code: 0 };
+    },
+  };
+  await assert.rejects(runLocalSetup({ exec, log: noopLog(), repoRoot: os.tmpdir() }), /Install with:|dot\.net\/download/);
+});
+
+test("installHint: returns winget/brew/apt commands for each known tool on each platform", () => {
+  for (const tool of ["git", "dotnet", "node"]) {
+    assert.match(installHint(tool, "win32"), /winget install/);
+    assert.match(installHint(tool, "darwin"), /brew install/);
+    assert.match(installHint(tool, "linux"), /apt-get install|dotnet-install\.sh/);
+  }
+});
+
+test("installHint: falls back to doc links on an unrecognized platform", () => {
+  assert.match(installHint("git", "freebsd"), /git-scm\.org|git-scm\.com/);
 });

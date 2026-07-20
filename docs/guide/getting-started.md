@@ -46,8 +46,17 @@ section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
 
 You need these tools before you start:
 
-- .NET 10 SDK (`global.json` pins `10.0.100`)
-- Node.js 20.19+ (or 22.12+) — required by Vite 8
+| Tool | Windows (winget) | macOS (Homebrew) | Linux (Debian/Ubuntu) |
+| --- | --- | --- | --- |
+| .NET 10 SDK (`global.json` pins `10.0.100`) | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
+| Node.js 20.19+ (or 22.12+) — required by Vite 8 | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
+| git | `winget install --id Git.Git -e` | `brew install git` | `sudo apt-get update && sudo apt-get install -y git` |
+
+`npm run setup` (`dev --setup`) checks these itself and prints the matching
+install command above for your platform if one is missing.
+
+Also needed, not installable via a package manager:
+
 - An existing local Git repository that the agent can target
 - A GitHub account with an active GitHub Copilot subscription — the web UI signs you in via OAuth.
 - A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback`.
