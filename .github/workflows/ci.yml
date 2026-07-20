@@ -1,0 +1,142 @@
+name: CI
+
+# Runs the repository's real verification suites on every pull request and on
+# pushes to main. Each area runs in its own job so it gets a dedicated runner:
+# the .NET and web test suites contain timing-sensitive tests (heartbeat /
+# deadline / render-timeout budgets) that flake only under CPU contention, so
+# keeping the suites off a single shared runner keeps the signal reliable.
+#
+# Commands mirror the ones documented in CONTRIBUTING.md exactly:
+#   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
+#   - node --test scripts/azure/tests/*.test.mjs
+#   - npm --prefix apps/web run test
+#   - npm --prefix apps/web run lint   (advisory -- see the web-lint job)
+#   - npm run docs:build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs for the same ref (e.g. a new push to an open PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet-tests:
+    name: .NET tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      # CopilotSkipCliDownload=true keeps the GitHub.Copilot.SDK MSBuild target
+      # from trying to fetch a platform copilot CLI binary during build. It is
+      # required on ARM64/Windows dev machines and harmless on an x64 runner --
+      # kept here for parity with the documented local command.
+      - name: Run .NET tests
+        run: dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
+
+  node-toolchain-tests:
+    name: Node toolchain tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The scripts/azure toolchain uses only Node built-ins (no dependencies),
+      # so there is nothing to install -- run the built-in test runner directly.
+      - name: Run Node toolchain tests
+        run: node --test scripts/azure/tests/*.test.mjs
+
+  web-tests:
+    name: Web tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      - name: Run web tests (Vitest)
+        run: npm run test
+        working-directory: apps/web
+
+  web-lint:
+    name: Web lint
+    runs-on: ubuntu-latest
+    # Advisory, not blocking: a lint failure marks THIS job red so the finding
+    # stays visible on the PR, but job-level continue-on-error keeps the overall
+    # run from failing (so lint does not block merge). The eslint-plugin-react-
+    # hooks v7 upgrade added strict React-Compiler-style rules that surface a
+    # pre-existing backlog in apps/web; flip continue-on-error to false to make
+    # lint a hard gate once that backlog is cleared.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      - name: Run web lint (ESLint)
+        run: npm run lint
+        working-directory: apps/web
+
+  docs-build:
+    name: Docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install docs dependencies
+        run: npm ci
+        working-directory: docs
+
+      # Builds the VitePress site (source of truth for sabbour.me/agentweaver).
+      # Catches broken markdown, dead config, and landing-page regressions.
+      - name: Build docs site
+        run: npm run docs:build

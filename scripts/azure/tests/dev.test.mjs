@@ -5,8 +5,49 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup, installHint, checkPrerequisites } from "../dev.mjs";
+
+const TEST_TMP_ROOT = path.join(process.cwd(), "scripts", "azure", "tests", ".tmp");
+
+async function createRepoRootFixture(testName, { exampleContents, developmentContents } = {}) {
+  const fixtureName = `${testName.replaceAll(/[^a-z0-9-]+/gi, "-").toLowerCase()}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  const repoRoot = path.join(TEST_TMP_ROOT, fixtureName);
+  const apiRoot = path.join(repoRoot, "apps", "Agentweaver.Api");
+  await mkdir(apiRoot, { recursive: true });
+
+  const defaultExampleContents = `{
+  "_comment": "fixture",
+  "Auth": {
+    "GitHub": {
+      "ClientId": "",
+      "ClientSecret": "",
+      "CallbackUrl": "http://localhost:5000/auth/github/callback",
+      "FrontendUrl": "http://localhost:5173"
+    }
+  },
+  "Providers": {
+    "GitHubCopilot": {
+      "GitHubToken": "",
+      "Model": "claude-sonnet-4.6"
+    }
+  }
+}
+`;
+
+  await writeFile(path.join(apiRoot, "appsettings.Development.json.example"), exampleContents ?? defaultExampleContents, "utf8");
+  if (developmentContents !== undefined) {
+    await writeFile(path.join(apiRoot, "appsettings.Development.json"), developmentContents, "utf8");
+  }
+
+  return {
+    repoRoot,
+    apiRoot,
+    cleanup: () => rm(repoRoot, { recursive: true, force: true }),
+  };
+}
 
 function noopLog() {
   const rec = () => () => {};
@@ -162,7 +203,9 @@ test("run: --skip-build does not invoke a build command", async () => {
   assert.equal(buildCalls.length, 0);
 });
 
-test("run: --setup delegates to runLocalSetup and never starts the API/Web dev servers", async () => {
+test("run: --setup delegates to runLocalSetup and never starts the API/Web dev servers", async (t) => {
+  const fixture = await createRepoRootFixture("run-setup");
+  t.after(fixture.cleanup);
   const execCalls = [];
   const exec = {
     async capture(cmd, args) {
@@ -181,7 +224,7 @@ test("run: --setup delegates to runLocalSetup and never starts the API/Web dev s
     spawnCalls.push(args);
     return { pid: 1 };
   };
-  const result = await run({ argv: ["--setup"], exec, log: noopLog(), repoRoot: os.tmpdir(), spawn });
+  const result = await run({ argv: ["--setup"], exec, log: noopLog(), repoRoot: fixture.repoRoot, spawn });
   assert.equal(result.ok, true);
   assert.equal(spawnCalls.length, 0); // no API/Web processes started
   assert.ok(execCalls.some(([cmd, ...args]) => cmd === "npm" && args.includes("install")));
@@ -224,6 +267,193 @@ test("runLocalSetup: reports every missing prerequisite, not just the first one"
   // Both failures should be reported, each with its install hint.
   assert.ok(errorLines.some((l) => /dotnet/.test(l) && /Install with:|dot\.net\/download/.test(l)));
   assert.ok(errorLines.some((l) => /node/.test(l) && /Install with:|nodejs\.org/.test(l)));
+});
+
+test("runLocalSetup: scaffolds appsettings.Development.json from the checked-in example when missing", async (t) => {
+  const fixture = await createRepoRootFixture("scaffold-if-missing", {
+    exampleContents: `{
+  "_comment": "fixture",
+  "Auth": {
+    "GitHub": {
+      "ClientId": "",
+      "ClientSecret": "",
+      "CallbackUrl": "http://localhost:5000/auth/github/callback",
+      "FrontendUrl": "http://localhost:5173"
+    }
+  },
+  "Providers": {
+    "GitHubCopilot": {
+      "GitHubToken": "",
+      "Model": "claude-sonnet-4.6"
+    }
+  }
+}
+`,
+  });
+  t.after(fixture.cleanup);
+
+  const infoLines = [];
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "dotnet") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      return { stdout: "git version 2.40", stderr: "", code: 0 };
+    },
+    async run() {
+      return { code: 0 };
+    },
+  };
+
+  const result = await runLocalSetup({
+    exec,
+    log: { ...noopLog(), info: (msg) => infoLines.push(msg) },
+    repoRoot: fixture.repoRoot,
+  });
+
+  const developmentPath = path.join(fixture.apiRoot, "appsettings.Development.json");
+  const examplePath = path.join(fixture.apiRoot, "appsettings.Development.json.example");
+  const [developmentContents, exampleContents] = await Promise.all([
+    readFile(developmentPath, "utf8"),
+    readFile(examplePath, "utf8"),
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(developmentContents, exampleContents);
+  assert.ok(
+    infoLines.includes(
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+    ),
+  );
+});
+
+test("runLocalSetup: leaves an existing appsettings.Development.json untouched", async (t) => {
+  const existingContents = `{
+  "existing": true
+}
+`;
+  const fixture = await createRepoRootFixture("leave-existing", {
+    developmentContents: existingContents,
+  });
+  t.after(fixture.cleanup);
+
+  const infoLines = [];
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "dotnet") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      return { stdout: "git version 2.40", stderr: "", code: 0 };
+    },
+    async run() {
+      return { code: 0 };
+    },
+  };
+
+  const result = await runLocalSetup({
+    exec,
+    log: { ...noopLog(), info: (msg) => infoLines.push(msg) },
+    repoRoot: fixture.repoRoot,
+  });
+
+  const developmentContents = await readFile(path.join(fixture.apiRoot, "appsettings.Development.json"), "utf8");
+  assert.equal(result.ok, true);
+  assert.equal(developmentContents, existingContents);
+  assert.ok(
+    !infoLines.includes(
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+    ),
+  );
+});
+
+test("runLocalSetup: does not overwrite an existing appsettings.Development.json that differs from the example (COPYFILE_EXCL race-safety)", async (t) => {
+  // Guards the check-then-copy (TOCTOU) race: even though the destination
+  // content differs from the example (so a naive unconditional copy WOULD
+  // clobber it), scaffolding must use COPYFILE_EXCL and leave the existing
+  // file byte-for-byte untouched, returning no "Scaffolded" message.
+  const existingContents = `{
+  "Auth": { "GitHub": { "ClientId": "already-configured-by-the-user" } }
+}
+`;
+  const fixture = await createRepoRootFixture("race-safe-no-overwrite", {
+    developmentContents: existingContents,
+  });
+  t.after(fixture.cleanup);
+
+  const infoLines = [];
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "dotnet") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      return { stdout: "git version 2.40", stderr: "", code: 0 };
+    },
+    async run() {
+      return { code: 0 };
+    },
+  };
+
+  const result = await runLocalSetup({
+    exec,
+    log: { ...noopLog(), info: (msg) => infoLines.push(msg) },
+    repoRoot: fixture.repoRoot,
+  });
+
+  const developmentPath = path.join(fixture.apiRoot, "appsettings.Development.json");
+  const examplePath = path.join(fixture.apiRoot, "appsettings.Development.json.example");
+  const [developmentContents, exampleContents] = await Promise.all([
+    readFile(developmentPath, "utf8"),
+    readFile(examplePath, "utf8"),
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(developmentContents, existingContents);
+  assert.notEqual(developmentContents, exampleContents);
+  assert.ok(
+    !infoLines.includes(
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+    ),
+  );
+});
+
+test("runLocalSetup: prints GitHub OAuth guidance in the local dev ready summary", async (t) => {
+  const fixture = await createRepoRootFixture("ready-summary");
+  t.after(fixture.cleanup);
+  const infoLines = [];
+  const sectionLines = [];
+  const log = {
+    ...noopLog(),
+    info: (msg) => infoLines.push(msg),
+    section: (msg) => sectionLines.push(msg),
+  };
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "dotnet") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      return { stdout: "git version 2.40", stderr: "", code: 0 };
+    },
+    async run() {
+      return { code: 0 };
+    },
+  };
+
+  const result = await runLocalSetup({ exec, log, repoRoot: fixture.repoRoot });
+
+  assert.equal(result.ok, true);
+  assert.ok(sectionLines.includes("LOCAL DEV READY"));
+  assert.ok(
+    infoLines.includes(
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+    ),
+  );
+  assert.ok(infoLines.includes("  For local sign-in: create a GitHub OAuth App: https://github.com/settings/developers"));
+  assert.ok(infoLines.includes("  Callback URL:      http://localhost:5000/auth/github/callback"));
+  assert.ok(
+    infoLines.includes("  Set Auth:GitHub:ClientId (non-secret) in apps/Agentweaver.Api/appsettings.Development.json."),
+  );
+  assert.ok(
+    infoLines.includes("  Store secrets via user-secrets (run in apps/Agentweaver.Api), never in the JSON file:"),
+  );
+  assert.ok(infoLines.includes('    dotnet user-secrets set Auth:GitHub:ClientSecret "<client-secret>"'));
+  assert.ok(infoLines.includes('    dotnet user-secrets set Providers:GitHubCopilot:GitHubToken "<github-pat-with-copilot-access>"'));
+  assert.ok(infoLines.includes("  Full walkthrough:  docs/guide/getting-started.md#1-configure-the-api"));
 });
 
 test("checkPrerequisites: runs all checks concurrently and reports ok:false with per-tool results", async () => {

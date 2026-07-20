@@ -13,6 +13,20 @@ prefix). `CHANGELOG.md` is **generated**, not hand-maintained — run
 (grouped by release tag, bucketed by commit-message prefix: `fix`, `feat`,
 `refactor`/`chore`, `docs`, `test`).
 
+## Before you cut a release
+
+A release is cut from whatever is on `main` at `HEAD`, so `main` should be in a releasable
+state first:
+
+- **CI should be green on the commit you are releasing from.** The
+  [`CI` workflow](.github/workflows/ci.yml) runs the .NET, Node-toolchain, and web test
+  suites on every push to `main`; do not cut a release on top of a commit whose blocking CI
+  jobs are failing. *(New policy introduced alongside CI — CI is not yet wired as a
+  branch-protection required check, so this is currently a convention the releaser is
+  responsible for, not an automated gate.)*
+- **The working tree must be clean.** `azure:release` refuses to run against a dirty tree
+  (staged or unstaged changes) and aborts before touching anything.
+
 ## Cutting a release
 
 Releases are cut with `scripts/azure/release.mjs`, not by hand:
@@ -63,6 +77,10 @@ Key differences from `release`:
 - Cycles the AgentHost warm pool by **reapplying `SandboxTemplate`/`SandboxWarmPool` and
   waiting** for `status.readyReplicas == spec.replicas` (timeout ~180s) — it never
   manually deletes pods.
+
+The same "green CI on the commit you are shipping" convention applies to an `upgrade` that
+targets a shared or production environment; for a throwaway dev/test environment it is your
+call.
 
 ## Other useful commands
 

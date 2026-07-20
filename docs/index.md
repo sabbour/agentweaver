@@ -24,6 +24,25 @@ import { withBase } from 'vitepress'
         <a class="aw-button aw-button-secondary" href="./guide/getting-started">Run your first team</a>
         <a class="aw-button aw-button-secondary" href="https://github.com/sabbour/agentweaver">View on GitHub</a>
       </div>
+      <div class="aw-hero-quickstart" aria-label="Quick start">
+        <div class="aw-hero-quickstart-card">
+          <h3>Run locally</h3>
+          <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
+cd agentweaver
+npm run setup
+npm run dev</code></pre>
+        </div>
+        <div class="aw-hero-quickstart-card">
+          <h3>Deploy to Azure</h3>
+          <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
+cd agentweaver
+npm run azure:deploy</code></pre>
+        </div>
+      </div>
+      <p class="aw-hero-quickstart-note">
+        See the <a href="./guide/getting-started#prerequisites">getting started guide</a>
+        for prerequisites and full details.
+      </p>
     </div>
   </section>
 
