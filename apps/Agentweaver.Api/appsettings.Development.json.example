@@ -1,0 +1,33 @@
+{
+  "_comment": "Copy this file to appsettings.Development.json. Put Auth:GitHub:ClientId (non-secret) here, but keep secrets OUT of this file: store them with dotnet user-secrets, run from apps/Agentweaver.Api -- 'dotnet user-secrets set Auth:GitHub:ClientSecret <value>' and 'dotnet user-secrets set Providers:GitHubCopilot:GitHubToken <github-pat-with-copilot-access>'. In the Development environment, user-secrets loads after (and overrides) appsettings.Development.json.",
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Agentweaver": "Debug"
+    }
+  },
+  "Cors": {
+    "AllowedOrigins": ["http://localhost:5173"]
+  },
+  "Auth": {
+    "Keys": [
+      {
+        "Token": "local-dev-key",
+        "User": "local-developer"
+      }
+    ],
+    "GitHub": {
+      "ClientId": "",
+      "ClientSecret": "",
+      "CallbackUrl": "http://localhost:5000/auth/github/callback",
+      "FrontendUrl": "http://localhost:5173"
+    }
+  },
+  "Providers": {
+    "GitHubCopilot": {
+      "GitHubToken": "",
+      "Model": "claude-sonnet-4.6"
+    }
+  }
+}

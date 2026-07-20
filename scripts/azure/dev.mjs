@@ -26,6 +26,7 @@
 // toolchain's scope for this port; local App Insights config should be set
 // directly via apps/Agentweaver.Api's own configuration providers.
 
+import { copyFileSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
@@ -226,6 +227,24 @@ export async function checkPrerequisites({ exec = execDefault } = {}) {
   return { ok: results.every((r) => r.ok), results };
 }
 
+function scaffoldDevelopmentAppSettings(repoRoot) {
+  const apiRoot = path.join(repoRoot, "apps", "Agentweaver.Api");
+  const examplePath = path.join(apiRoot, "appsettings.Development.json.example");
+  const developmentPath = path.join(apiRoot, "appsettings.Development.json");
+  // Copy only if the destination does not already exist, atomically:
+  // COPYFILE_EXCL makes copyFileSync fail with EEXIST rather than overwrite,
+  // which closes the check-then-copy (TOCTOU) race where a file appearing
+  // between an existsSync() check and the copy would be clobbered. An
+  // existing file is left untouched (same user-visible behavior as before).
+  try {
+    copyFileSync(examplePath, developmentPath, fsConstants.COPYFILE_EXCL);
+    return true;
+  } catch (err) {
+    if (err.code === "EEXIST") return false;
+    throw err;
+  }
+}
+
 /**
  * Local dev environment setup only: prereq checks (git, .NET 10 SDK, Node
  * 20+) + `apps/web` npm install + `dotnet restore`. No Azure calls at all.
@@ -264,11 +283,25 @@ export async function runLocalSetup({ exec = execDefault, log = logDefault, repo
   await exec.run("dotnet", ["restore", path.join(repoRoot, "agentweaver.sln"), "-v", "q", "--nologo"]);
   log.ok(".NET packages restored.");
 
+  const scaffoldedDevelopmentAppSettings = scaffoldDevelopmentAppSettings(repoRoot);
+
   log.info("");
   log.section("LOCAL DEV READY");
   log.info("  Start the API:   npm run dev:api");
   log.info("  Start the Web:   npm run dev:web");
   log.info("  Or both at once: npm run dev");
+  if (scaffoldedDevelopmentAppSettings) {
+    log.info(
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+    );
+  }
+  log.info("  For local sign-in: create a GitHub OAuth App: https://github.com/settings/developers");
+  log.info("  Callback URL:      http://localhost:5000/auth/github/callback");
+  log.info("  Set Auth:GitHub:ClientId (non-secret) in apps/Agentweaver.Api/appsettings.Development.json.");
+  log.info("  Store secrets via user-secrets (run in apps/Agentweaver.Api), never in the JSON file:");
+  log.info('    dotnet user-secrets set Auth:GitHub:ClientSecret "<client-secret>"');
+  log.info('    dotnet user-secrets set Providers:GitHubCopilot:GitHubToken "<github-pat-with-copilot-access>"');
+  log.info("  Full walkthrough:  docs/guide/getting-started.md#1-configure-the-api");
 
   return { ok: true };
 }

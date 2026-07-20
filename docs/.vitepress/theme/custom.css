@@ -335,6 +335,51 @@ html.dark .mermaid .sequenceNumber {
   margin-top: 24px;
 }
 
+.aw-hero-quickstart {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 32px !important;
+}
+
+.aw-hero-quickstart-card {
+  flex: 1 1 260px;
+  min-width: 240px;
+  padding: 16px 18px;
+  border: 1px solid rgba(250, 246, 242, 0.16);
+  border-radius: 12px;
+  background: rgba(250, 246, 242, 0.04);
+}
+
+.aw-hero-quickstart-card h3 {
+  margin: 0 0 10px !important;
+  color: rgba(250, 246, 242, 0.9);
+  font-size: 0.92rem;
+  font-weight: 620;
+}
+
+.aw-hero-quickstart-code {
+  margin: 0 !important;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: rgba(11, 10, 9, 0.55);
+  color: rgba(250, 246, 242, 0.86);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.aw-hero-quickstart-note {
+  margin-top: 14px !important;
+  color: rgba(250, 246, 242, 0.62);
+  font-size: 0.85rem;
+}
+
+.aw-hero-quickstart-note a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .aw-button {
   display: inline-flex;
   align-items: center;
