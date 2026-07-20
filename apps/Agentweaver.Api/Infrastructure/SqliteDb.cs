@@ -629,10 +629,6 @@ public sealed class SqliteDb
         CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_run
             ON backlog_tasks (run_id) WHERE run_id IS NOT NULL;
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
-            ON backlog_tasks (parent_prd_run_id, promotion_key)
-            WHERE parent_prd_run_id IS NOT NULL AND promotion_key IS NOT NULL;
-
         CREATE TABLE IF NOT EXISTS backlog_task_dependencies (
             project_id TEXT NOT NULL,
             task_id TEXT NOT NULL,

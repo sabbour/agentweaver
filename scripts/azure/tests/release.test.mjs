@@ -15,6 +15,10 @@ import {
   bumpVersion,
   isWorkingTreeClean,
   previousTag,
+  previousTagBefore,
+  isReleaseTag,
+  RELEASE_TAG_PATTERN,
+  ReleaseResumeError,
   tagDate,
   generateChangelog,
   run,
@@ -49,7 +53,12 @@ test("bumpVersion: throws InvalidBumpError on an invalid bump argument", () => {
 });
 
 test("parseArgs: parses positional bump + --dry-run", () => {
-  assert.deepEqual(parseArgs(["patch", "--dry-run"]), { bump: "patch", dryRun: true, help: false });
+  assert.deepEqual(parseArgs(["patch", "--dry-run"]), { bump: "patch", resumeTag: undefined, dryRun: true, help: false });
+});
+
+test("parseArgs: parses --resume release tag", () => {
+  assert.deepEqual(parseArgs(["--resume", "v1.2.3"]), { bump: undefined, resumeTag: "v1.2.3", dryRun: false, help: false });
+  assert.throws(() => parseArgs(["patch", "--resume", "v1.2.3"]), /either a version bump or --resume/);
 });
 
 test("parseArgs: help via -h/--help/help", () => {
@@ -88,6 +97,40 @@ test("previousTag: returns '' when no tag exists", async () => {
 test("previousTag: returns the trimmed tag on success", async () => {
   const capture = async () => ({ code: 0, stdout: "v1.2.3\n" });
   assert.equal(await previousTag({ cwd: "/repo", capture }), "v1.2.3");
+});
+
+test("isReleaseTag: matches only final vX.Y.Z tags (no suffix/prefix)", () => {
+  assert.equal(isReleaseTag("v0.9.6"), true);
+  assert.equal(isReleaseTag("v10.20.30"), true);
+  assert.equal(isReleaseTag("  v1.2.3\n"), true); // trimmed
+  assert.equal(isReleaseTag("v0.9.6-rc1"), false); // prerelease suffix
+  assert.equal(isReleaseTag("v0.9.6+build"), false); // build metadata
+  assert.equal(isReleaseTag("0.9.6"), false); // missing v prefix
+  assert.equal(isReleaseTag("v1.2"), false); // not full semver
+  assert.equal(isReleaseTag("release-1.2.3"), false);
+  assert.equal(isReleaseTag(""), false);
+  assert.equal(isReleaseTag(undefined), false);
+  assert.equal(RELEASE_TAG_PATTERN.source, "^v\\d+\\.\\d+\\.\\d+$");
+});
+
+test("previousTag: skips prerelease/lightweight tags and returns the newest final release tag", async () => {
+  // `git tag --list --sort=-v:refname` yields newest-first; a prerelease tag
+  // sorts above its final release but must be ignored as a release boundary.
+  const capture = async (cmd, args) => {
+    assert.deepEqual(args, ["tag", "--list", "--sort=-v:refname"]);
+    return { code: 0, stdout: "v0.9.7-rc2\nv0.9.7-rc1\nv0.9.6\nnightly\nv0.9.5\n" };
+  };
+  assert.equal(await previousTag({ cwd: "/repo", capture }), "v0.9.6");
+});
+
+test("previousTag: returns '' when no final release tag exists", async () => {
+  const capture = async () => ({ code: 0, stdout: "v0.9.6-rc1\nnightly\n" });
+  assert.equal(await previousTag({ cwd: "/repo", capture }), "");
+});
+
+test("previousTagBefore: returns the final release tag before the supplied tag", async () => {
+  const capture = async () => ({ code: 0, stdout: "v1.0.1\nv1.0.0\nv0.9.9\n" });
+  assert.equal(await previousTagBefore("v1.0.1", { cwd: "/repo", capture }), "v1.0.0");
 });
 
 test("tagDate: returns epoch fallback when tag is falsy", async () => {
@@ -130,6 +173,7 @@ function makeGitExec({ dirty = false } = {}) {
     async capture(cmd, args, opts) {
       captureCalls.push({ cmd, args, opts });
       if (cmd === "git" && args[0] === "diff") return { code: dirty ? 1 : 0, stdout: "" };
+      if (cmd === "git" && args[0] === "tag" && args[1] === "--list") return { code: 0, stdout: "v1.0.0\n" };
       if (cmd === "git" && args[0] === "describe") return { code: 0, stdout: "v1.0.0\n" };
       if (cmd === "git" && args[0] === "log") return { code: 0, stdout: "2024-01-01T00:00:00Z\n" };
       if (cmd === "gh" && args[0] === "pr") return { code: 0, stdout: "- Some fix (#42)\n" };
@@ -238,4 +282,71 @@ test("run: --dry-run performs no git/gh mutations and toggles exec dry-run aroun
   assert.equal(exec.calls.run.length, 0); // no git mutations were issued via exec.run
   assert.ok(dryRunObserved.includes(true)); // dry-run mode was active during delegated steps
   assert.equal(exec.isDryRun(), false); // restored afterwards
+});
+
+test("run: --resume skips version/tag/GitHub-release creation and delegates deployment steps", async () => {
+  const exec = makeGitExec();
+  const originalCapture = exec.capture;
+  exec.capture = async (cmd, args, opts) => {
+    if (cmd === "git" && args[0] === "tag" && args[1] === "--list") {
+      return { code: 0, stdout: "v1.0.1\nv1.0.0\n" };
+    }
+    if (cmd === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc123\n" };
+    if (cmd === "gh" && args[0] === "release" && args[1] === "view") return { code: 0, stdout: "v1.0.1\n" };
+    return originalCapture(cmd, args, opts);
+  };
+  const calls = [];
+  const steps = {
+    buildImages: fakeStep("buildImages", calls, {}),
+    verifyProvenance: fakeStep("verifyProvenance", calls, {}),
+    deployStep: fakeStep("deployStep", calls, {}),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 2, fail: 0 }),
+  };
+
+  const result = await run({
+    argv: ["--resume", "v1.0.1"],
+    repoRoot: "C:\\repo",
+    exec,
+    log: noopLog(),
+    git: {},
+    resolveVariables: async ({ env }) => env,
+    steps,
+    readFile: () => "1.0.1\n",
+    writeFile: () => {
+      throw new Error("resume must not write VERSION");
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.tag, "v1.0.1");
+  assert.equal(result.previousTag, "v1.0.0");
+  assert.deepEqual(calls.map((call) => call.step), ["buildImages", "verifyProvenance", "deployStep", "verifyStep"]);
+  assert.equal(calls[0].cfg.TARGET_GIT_REF, "v1.0.1");
+  assert.equal(calls[0].cfg.PREVIOUS_IMAGE_TAG, "v1.0.0");
+  assert.equal(exec.calls.run.length, 0);
+});
+
+test("run: --resume rejects a tag that does not match VERSION before deploying", async () => {
+  const exec = makeGitExec();
+  const calls = [];
+  const steps = {
+    buildImages: fakeStep("buildImages", calls),
+    verifyProvenance: fakeStep("verifyProvenance", calls),
+    deployStep: fakeStep("deployStep", calls),
+    verifyStep: fakeStep("verifyStep", calls),
+  };
+
+  await assert.rejects(
+    run({
+      argv: ["--resume", "v1.0.1"],
+      repoRoot: "C:\\repo",
+      exec,
+      log: noopLog(),
+      steps,
+      readFile: () => "1.0.0\n",
+    }),
+    (error) => error instanceof ReleaseResumeError && /VERSION is 1\.0\.0/.test(error.message),
+  );
+  assert.equal(calls.length, 0);
+  assert.equal(exec.calls.run.length, 0);
 });

@@ -93,6 +93,10 @@ Don't invent details; leave a `<!-- TODO -->` where info is missing.
 ## Technical notes
 {any RCA hints, related code areas, or prior context Ahmed mentioned}
 
+## Regression test
+{For non-trivial fixes, name the test that should fail before the fix and pass after it.
+For a trivial one-line fix, state why a regression test is unnecessary.}
+
 ## Docs disposition
 {Does fixing this bug change any user-visible behavior, API contract, or operator workflow?
 - If yes → run `.copilot/skills/docs-feature/SKILL.md` or `.copilot/skills/docs-sync/SKILL.md` after the fix lands
@@ -120,6 +124,15 @@ Don't invent details; leave a `<!-- TODO -->` where info is missing.
 
 ## Out of scope
 {anything explicitly excluded, or "TBD"}
+
+## Spec plan
+**Proposed spec:** <https://github.com/sabbour/agentweaver/blob/main/specs/{area}/{user-story-slug}.md>
+
+Select an existing `specs/` area or propose a new area. Before implementation, create
+one user-story file at that path using the repository format: title; `**Issue:**` and
+`**Area:**` headers; then `## User story`, `## Context / problem`, `## Scope` (with
+In/Out), `## Acceptance criteria`, and `## Notable edge cases`. Add the story to
+`specs/README.md`.
 
 ## Docs disposition
 {New features always need docs. Which area?

@@ -4,6 +4,7 @@ title: "feat(<area>): "
 labels:
   - type:feature
   - release:backlog
+  - squad
 body:
   - type: markdown
     attributes:

@@ -14,3 +14,7 @@ Release batch shipped to staging with live verification and infra checks passing
 - `fenster-341` fixed #341 in `apps/Agentweaver.Mcp/Tools/RunTools.cs`, merged it to `main`, and reported **65 MCP tests passing**.
 - Shipped **v0.9.59** (`561ddc19`) to staging; post-ship validation filed **#342** after the provenance verifier false-failed on a hardcoded `agent-host` pod-count expectation even though manual `kubectl` checks confirmed the real pods were healthy.
 - Follow-up live MCP stress verification remains in progress under `harness-v0959-mcp-stress`.
+
+
+## 2026-07-20T12-01-24-07-00 — CI/docs ship coordination
+- Added the local/Azure Quick Start hero block to `docs/index.md` + `custom.css`, waited for rubber-duck approval, verified the final batch (220/220), then committed and pushed `95a855a0` to `origin/main`.

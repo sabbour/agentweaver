@@ -103,7 +103,16 @@ function needsCmdWrapper(resolvedPath) {
   return /\.(cmd|bat)$/i.test(resolvedPath);
 }
 
-function buildSpawnPlan(cmd, args) {
+/**
+ * Resolves `cmd`/`args` into the concrete `{ file, spawnArgs, spawnOpts }` that
+ * must be passed to `child_process.spawn` for correct cross-platform launcher
+ * resolution (see the module banner comment above). Exposed for callers that
+ * need a long-running/detached `spawn()` themselves (e.g. dev servers) instead
+ * of the awaited `run()`/`capture()` helpers below, so they get the same
+ * `.cmd`/`.bat` wrapper handling instead of a raw `spawn(cmd, ...)` that
+ * throws ENOENT on Windows for shims like `npm`/`npm.cmd`.
+ */
+export function buildSpawnPlan(cmd, args) {
   const resolved = resolveExecutable(cmd);
   if (needsCmdWrapper(resolved)) {
     const commandLine = [escapeCmdCommand(resolved), ...args.map(escapeCmdArgument)].join(" ");

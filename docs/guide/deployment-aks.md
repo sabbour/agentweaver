@@ -82,7 +82,7 @@ npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
 or
 
 ```bash
-npm run azure:deploy -- --resource-group agentweaver-rg --cluster-name agentweaver-aks-2 \
+npm run azure:deploy -- --resource-group agentweaver-rg --cluster-name agentweaver-aks \
   --acr-name agentweaverregistry --location westus2 --keyvault-name agentweaver-kv \
   --github-client-id "$GITHUB_CLIENT_ID" --github-client-secret "$GITHUB_CLIENT_SECRET"
 ```

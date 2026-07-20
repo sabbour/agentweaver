@@ -221,7 +221,7 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
 
             // Dispatch to correct validator based on whether path is absolute
             string resolved;
-            if (Path.IsPathRooted(path))
+            if (SandboxPathValidator.ShouldTreatAsAbsoluteOrEscapeAttempt(path))
             {
                 resolved = SandboxPathValidator.ValidateAbsoluteContained(path, _sandboxRoot);
             }

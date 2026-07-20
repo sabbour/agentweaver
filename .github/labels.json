@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Canonical label taxonomy for new and updated Agentweaver issues. The sync-squad-labels workflow reads this file for managed static labels; squad member labels are generated from .squad/team.md.",
+  "policy": {
+    "exclusiveNamespaces": ["go:", "release:", "type:", "priority:"],
+    "deprecatedLabels": {
+      "bug": "Use type:bug for new or relabeled issues.",
+      "enhancement": "Use type:feature for new or relabeled issues.",
+      "workstream:*": "Use the narrower area:* vocabulary for new or relabeled issues. Existing issues are intentionally not mass-migrated."
+    }
+  },
+  "managedLabels": [
+    { "name": "squad", "color": "9B8FCC", "description": "Squad triage inbox — Lead will assign to a member" },
+
+    { "name": "type:feature", "color": "DDD1F2", "description": "New capability" },
+    { "name": "type:bug", "color": "FF0422", "description": "Something broken" },
+    { "name": "type:spike", "color": "F2DDD4", "description": "Research/investigation — produces a plan, not code" },
+    { "name": "type:docs", "color": "D4E5F7", "description": "Documentation work" },
+    { "name": "type:chore", "color": "D4E5F7", "description": "Maintenance, refactoring, cleanup" },
+    { "name": "type:epic", "color": "CC4455", "description": "Parent issue that decomposes into sub-issues" },
+
+    { "name": "priority:p0", "color": "B60205", "description": "Blocking release" },
+    { "name": "priority:p1", "color": "D93F0B", "description": "This sprint" },
+    { "name": "priority:p2", "color": "FBCA04", "description": "Next sprint" },
+
+    { "name": "go:yes", "color": "0E8A16", "description": "Ready to implement" },
+    { "name": "go:no", "color": "B60205", "description": "Not pursuing" },
+    { "name": "go:needs-research", "color": "FBCA04", "description": "Needs investigation" },
+
+    { "name": "release:backlog", "color": "D4E5F7", "description": "Not yet targeted" },
+    { "name": "release:v0.x", "color": "0E8A16", "description": "Delivered in the current v0.x product line" },
+    { "name": "release:v0.7", "color": "0075CA", "description": "Planned for v0.7 release" },
+    { "name": "release:v0.8", "color": "E4E669", "description": "Planned for v0.8 release" },
+    { "name": "release:v0.9", "color": "0075CA", "description": "Planned for v0.9 release" },
+    { "name": "release:v0.10", "color": "0075CA", "description": "Planned for v0.10 release" },
+    { "name": "release:v0.11", "color": "0075CA", "description": "Planned for v0.11 release" },
+    { "name": "release:v0.12", "color": "0075CA", "description": "Planned for v0.12 release" },
+    { "name": "release:v0.13", "color": "0075CA", "description": "Planned for v0.13 release" },
+    { "name": "release:v0.14", "color": "0075CA", "description": "Planned for v0.14 release" },
+    { "name": "release:v0.15", "color": "0075CA", "description": "Planned for v0.15 release" },
+    { "name": "release:v1.0.0", "color": "8B7DB5", "description": "Targeted for v1.0.0" },
+
+    { "name": "area:coordinator-ui", "color": "1D76DB", "description": "Coordinator run UI, approvals, messaging, and preview experience" },
+    { "name": "area:runtime-resilience", "color": "D93F0B", "description": "Runtime, sandbox, assembly, retry, and deployment resilience" },
+    { "name": "area:backlog", "color": "5319E7", "description": "Backlog, GitHub issue/project integration, and multi-run planning" },
+    { "name": "area:mcp", "color": "0E8A16", "description": "MCP and conversational operator experience" },
+    { "name": "area:workflows", "color": "FBCA04", "description": "Workflow generation, authoring, gates, and automation" },
+    { "name": "area:observability", "color": "0052CC", "description": "Telemetry, tracing, metrics, and model/session visibility" },
+
+    { "name": "feedback", "color": "00E5FF", "description": "User feedback — high signal, needs attention" },
+    { "name": "status:testing", "color": "FFD33D", "description": "Validation is in progress" },
+    { "name": "good first issue", "color": "7057FF", "description": "Good for newcomers" },
+    { "name": "help wanted", "color": "008672", "description": "Extra attention is needed" }
+  ]
+}

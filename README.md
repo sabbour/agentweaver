@@ -18,13 +18,15 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 | [Node.js 20+](https://nodejs.org/) (LTS) | running every script in this repo, including the Azure toolchain (`scripts/azure/`) | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
 | `npm` (bundled with Node) or `pnpm` | installing dependencies and running package scripts | *(bundled with Node.js)* | *(bundled with Node.js)* | *(bundled with Node.js)* |
 | [.NET SDK 10](https://dot.net/download) | building/running the API and MCP server locally | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
+| **WSL2 + `bubblewrap`** | **Windows local dev only** — `npm run dev` runs the API's sandbox executor inside WSL2 for real isolation ([why](https://sabbour.me/agentweaver/guide/getting-started#why-wsl2-on-windows)); macOS/Linux sandbox natively | `wsl --install` (elevated PowerShell, then reboot), then `sudo apt-get install -y bubblewrap` inside the distro | *Not required* | *Not required* |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in via `az login` | everything under `npm run azure:*` | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
 | [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during `azure:deploy`/`azure:upgrade`/`azure:verify` | `winget install Kubernetes.kubectl` | `brew install kubectl` | `sudo snap install kubectl --classic` |
 | [`gh` CLI](https://cli.github.com/), authenticated via `gh auth status` | `npm run azure:release` only (changelog generation + creating the GitHub Release) | `winget install GitHub.cli` | `brew install gh` | `sudo apt-get update && sudo apt-get install -y gh` (or see [cli.github.com](https://cli.github.com/) if `gh` isn't in your distro's repos) |
 
 `node scripts/azure/cli.mjs dev --setup` (aliased as `npm run setup`) checks
 git/.NET/Node itself and prints the matching install command above for your
-platform if one is missing. It does not check the Azure CLI, `kubectl`, or
+platform if one is missing. On Windows it also prints an **advisory** warning
+when WSL2 is not detected (non-fatal). It does not check the Azure CLI, `kubectl`, or
 `gh`, since local dev doesn't need them.
 
 Docker is **not** required locally — image builds run remotely via `az acr build`
@@ -139,19 +141,51 @@ date. Full step-by-step guide: [sabbour.me/agentweaver/guide/getting-started](ht
 have git/Node/.NET installed yet, or follow the [full getting started
 guide](https://sabbour.me/agentweaver/guide/getting-started).
 
+> **Windows local dev requires WSL2 + `bubblewrap` before you start.** The API
+> runs inside WSL2 for a real isolated sandbox; follow
+> [Why WSL2 on Windows?](https://sabbour.me/agentweaver/guide/getting-started#why-wsl2-on-windows)
+> so setup does not surprise you midway through the first run.
+
 ```bash
 git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
 
-# Bootstrap: checks git/dotnet/node versions, installs apps/web's npm deps,
-# and restores .NET packages (replaces the old install.sh/.ps1 local mode).
+# One-time bootstrap: prerequisite checks, Web install, .NET restore, and
+# appsettings.Development.json scaffolding. No servers or Azure resources.
 npm run setup
 
 # Start the API (http://localhost:5000) and the Web UI (http://localhost:5173).
-npm run azure:dev
+npm run dev
 ```
 
+Before first sign-in, configure the GitHub OAuth client ID and user-secrets as
+described in the [local authentication
+step](https://sabbour.me/agentweaver/guide/getting-started#1-configure-local-authentication-and-model-access).
+The first API build can take **1–3 minutes** (commonly longer through a
+Windows-mounted WSL2 checkout). API logs stream in the terminal; the loop is
+ready only after it prints both **`API is ready`** and **`Web UI is ready`**.
+
 Use `pnpm run <script>` in place of `npm run <script>` if you use pnpm.
+
+### Dev/test versus branching
+
+Local and Azure testing do not require a staging branch:
+
+```text
+feature worktree
+  ├─ npm run dev ───────────────────────> local test (no GitHub interaction)
+  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test environment (any branch)
+  └─ PR CI ─> update to latest main ─> CI rerun ─> squash-merge to protected main
+                                                        └─ release PR ─> tag/release/deploy
+```
+
+`npm run dev` uses whatever is checked out locally. Azure dev/test commands
+can deploy an unmerged feature branch to a real cluster for integration
+testing. The cluster is the staging/integration **environment**; protected
+`main` plus required up-to-date PR checks is the git integration path. GitHub
+Merge Queue is unavailable while the repo is owned by the personal `sabbour`
+account; if it moves to an organization, revisit Merge Queue then. See the
+[full explanation](https://sabbour.me/agentweaver/guide/getting-started#how-local-and-azure-testing-fit-the-branch-flow).
 
 ## Deploy to Azure
 
@@ -162,9 +196,19 @@ guide](https://sabbour.me/agentweaver/guide/getting-started#deploy-to-azure-one-
 From a cloned checkout:
 
 ```bash
-# Interactive smart installer (run with no flags, in a terminal / TTY):
+# First/full provisioning of a personal or shared dev/test environment:
 npm run azure:deploy
 ```
+
+This is **environment validation, not a release**. Use `azure:deploy` to
+provision or idempotently reconcile the full environment; after it exists,
+use `npm run azure:upgrade` to ship the current clean `HEAD` — even from an
+unmerged feature branch/worktree — during normal development, and
+`npm run azure:verify` to rerun live checks. Only the release workflow changes
+`VERSION`, creates a `vX.Y.Z` tag, and publishes a GitHub Release. Its current
+script still needs the documented protected-release-PR split before
+protected-main enforcement. See the
+[deploy/upgrade/release decision table](RELEASING.md#deploying-to-azure-is-not-the-same-as-cutting-a-release).
 
 With no arguments, `azure:deploy` launches an interactive installer that prompts
 for: the Azure subscription (defaulting to your current `az` default), a
@@ -201,7 +245,7 @@ and fails fast naming any missing required field):
 ```bash
 npm run azure:deploy -- \
   --resource-group agentweaver-rg \
-  --cluster-name agentweaver-aks-2 \
+  --cluster-name agentweaver-aks \
   --acr-name agentweaverregistry \
   --location westus2 \
   --keyvault-name agentweaver-kv \
@@ -214,7 +258,7 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
 ```json
 {
   "RESOURCE_GROUP": "agentweaver-rg",
-  "CLUSTER_NAME": "agentweaver-aks-2",
+  "CLUSTER_NAME": "agentweaver-aks",
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
   "KEYVAULT_NAME": "agentweaver-kv",
@@ -253,13 +297,16 @@ never by deleting pods).
 **Related commands** (see the [operations guide](docs/guide/operations.md) and
 [AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
 
-- `npm run azure:release` — bumps the semver `VERSION`, tags and pushes the release, generates a changelog and GitHub Release, then builds/deploys/verifies it.
+- `npm run azure:release` — current semver publication command; it still commits/tags/pushes directly and must be split into protected release-PR preparation plus exact-SHA publication before protected-main enforcement (see `RELEASING.md`).
 - `npm run azure:verify` — runs the post-deploy health verification checks on their own.
 
 ### Local development
 
 ```bash
-# Full development environment (API + Web UI)
+# Supported full environment (API + Web UI; no browser auto-open)
+npm run dev
+
+# Same orchestration, but open the browser when ready
 npm run azure:dev
 
 # Frontend only (builds, then starts Vite)
@@ -273,7 +320,11 @@ Use `pnpm run` with the same script name if you use pnpm.
 
 ### Run components manually
 
-Start each component from the repo root (three terminals):
+Start each component from the repo root (three terminals). On Windows, use the
+full `npm run dev` loop for actual agent execution: the raw `dotnet run`
+command below runs natively and does not provide the required WSL2 +
+`bubblewrap` sandbox path; it is suitable only for API debugging that does not
+execute model-generated commands.
 
 ```bash
 # Terminal 1 — API backend
@@ -302,7 +353,7 @@ From the repository root, run these with `npm run <script>` (or `pnpm run <scrip
 | `setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages. No Azure calls. |
 | `azure:deploy` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
 | `azure:upgrade` | Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool. |
-| `azure:release` | Semver bump/tag/GitHub release, then build/deploy/verify. |
+| `azure:release` | Current semver bump/tag/GitHub release + deploy command; queue-compatible preparation/publication split is pending. |
 | `azure:verify` | Post-deploy health verification checks. |
 | `azure:dev` | Start the local API + Web UI dev environment. |
 | `dev:web` | Build the web frontend, then start Vite. |

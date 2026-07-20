@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -22,6 +23,63 @@ public sealed class SqliteBacklogTaskStoreTests
         var project = MakeProject();
         await projects.InsertAsync(project);
         return (testDb, store, project);
+    }
+
+    [Fact]
+    public async Task EnsureCreated_MigratesLegacyBacklogTableBeforeCreatingPromotionIndex()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), $"agentweaver-legacy-backlog-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using (var connection = new SqliteConnection($"Data Source={filePath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE backlog_tasks (
+                        task_id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        state TEXT NOT NULL,
+                        order_key TEXT NOT NULL,
+                        captured_by TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        committed_at TEXT,
+                        claimed_at TEXT,
+                        run_id TEXT,
+                        archived_at TEXT,
+                        source_file_path TEXT
+                    );
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = filePath })
+                .Build();
+
+            var db = new SqliteDb(config);
+            var act = async () => await db.EnsureCreatedAsync();
+
+            await act.Should().NotThrowAsync();
+
+            await using var migrated = await db.OpenConnectionAsync();
+            await using var verify = migrated.CreateCommand();
+            verify.CommandText =
+                "SELECT COUNT(*) FROM pragma_index_list('backlog_tasks') WHERE name = 'idx_backlog_tasks_parent_promotion_key';";
+            Convert.ToInt64(await verify.ExecuteScalarAsync()).Should().Be(1);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            foreach (var path in new[] { filePath, filePath + "-wal", filePath + "-shm" })
+            {
+                try { File.Delete(path); }
+                catch { }
+            }
+        }
     }
 
     // =========================================================================

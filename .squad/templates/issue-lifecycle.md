@@ -36,6 +36,8 @@ Each platform tracks issue lifecycle differently. Squad normalizes these into a 
 | Open, branch exists | `state: open`, linked branch exists | `inProgress` |
 | Open, PR opened | `state: open`, PR exists, `reviewDecision: null` | `needsReview` |
 | Open, PR approved | `state: open`, PR `reviewDecision: APPROVED` | `readyToMerge` |
+| Open, approved PR behind main | branch is not up to date | `needsUpdate` |
+| Open, updated branch checks running | required checks pending after sync | `ciRunning` |
 | Open, changes requested | `state: open`, PR `reviewDecision: CHANGES_REQUESTED` | `changesRequested` |
 | Open, CI failure | `state: open`, PR `statusCheckRollup: FAILURE` | `ciFailure` |
 | Closed | `state: closed` | `done` |
@@ -120,24 +122,32 @@ az boards work-item show --id {id} --output json
 **Trigger:** Agent accepts issue assignment and begins work.
 
 **Actions:**
-1. Ensure working on latest base branch (usually `main` or `dev`)
-2. Create feature branch using Squad naming convention
+1. Fetch current `origin/main`; this trunk-based repository does not use `dev`
+   unless an explicitly authorized maintenance branch is named.
+2. Create the `squad/{issue-number}-{slug}` branch using the workspace rule in
+   [`CONTRIBUTING.md`](../../CONTRIBUTING.md#ai-agent-contributions):
+   locally run agents use a dedicated `.worktrees/{branch-slug}` worktree; hosted agents
+   use the platform-provided isolated environment; humans may use either a worktree or a
+   normal branch in the main checkout.
 3. Transition issue to `inProgress` state
 
 **Branch creation commands:**
 
-**Standard (single-agent, no parallelism):**
+**Locally run Squad agent (required):**
 ```bash
-git checkout main && git pull && git checkout -b squad/{issue-number}-{slug}
+git fetch origin main
+git worktree add ".worktrees/{branch-slug}" -b squad/{issue-number}-{slug} origin/main
+cd ".worktrees/{branch-slug}"
 ```
 
-**Worktree (parallel multi-agent):**
+**Human contributor (optional worktree):**
 ```bash
-git worktree add ../worktrees/{issue-number} -b squad/{issue-number}-{slug}
-cd ../worktrees/{issue-number}
+git fetch origin main
+git checkout -b squad/{issue-number}-{slug} origin/main
 ```
 
-> **Note:** Worktree support is in progress (#525). Current implementation uses standard checkout.
+Hosted agents do not run local worktree commands; their host creates an isolated branch and
+environment. See [worktree-reference.md](worktree-reference.md) for mechanics.
 
 ### 3. Implementation & Commit
 
@@ -221,12 +231,19 @@ Working as {member} ({role})
 - **Approved** → `readyToMerge`
 - **Changes requested** → `changesRequested`
 - **CI failure** → `ciFailure`
+- **Rejected / independent rewrite required** → reviewer-rejection lockout
 
 **When changes are requested:**
 1. Agent addresses feedback
 2. Commits fixes to the same branch
 3. Pushes updates
 4. Requests re-review
+
+Ordinary **changes requested** feedback never locks out the original author. Lockout applies
+only when a Reviewer explicitly declares **Rejected / independent rewrite required** (use the
+PR comment marker `REJECTED — requires independent rewrite`). A different agent must then
+produce the next revision. Keep that marker on the PR so the handoff is auditable on GitHub;
+use a `status:locked-out` label too if the repository provides it.
 
 **Update workflow:**
 ```bash
@@ -242,23 +259,30 @@ git push
 gh pr ready {pr-number}
 ```
 
-### 6. PR Merge
+### 6. Protected merge admission
 
 **Trigger:** PR is approved and CI passes.
 
-**Merge strategies:**
+**GitHub:** first ensure the branch is current with `main`. If protection says
+it is behind, fetch `origin/main`, update the feature branch, push, and wait
+for every required check to rerun.
 
-**GitHub (merge commit):**
-```bash
-gh pr merge {pr-number} --merge --delete-branch
-```
-
-**GitHub (squash):**
 ```bash
 gh pr merge {pr-number} --squash --delete-branch
 ```
 
-**Azure DevOps:**
+If another PR merges first, GitHub marks this PR out of date:
+
+1. Move it to `needsUpdate`.
+2. Fetch current `origin/main` and update the feature branch.
+3. Resolve conflicts; never bypass a blocking check.
+4. Run relevant tests, push, and wait for required CI again.
+5. Squash-merge only when the branch is current and green.
+
+This strict fallback causes update/retest churn under concurrent PRs, but
+GitHub Merge Queue is unavailable while Agentweaver is personal-account-owned.
+
+**Azure DevOps** (when the connected repository is ADO rather than Agentweaver GitHub):
 ```bash
 az repos pr update --id {pr-id} --status completed --delete-source-branch true
 ```
@@ -267,7 +291,7 @@ az repos pr update --id {pr-id} --status completed --delete-source-branch true
 1. Issue automatically closes (if "Closes #{number}" is in PR description)
 2. Feature branch is deleted
 3. Squad board state transitions to `done`
-4. Worktree cleanup (if worktree was used — #525)
+4. Worktree cleanup for locally run agents
 
 ### 7. Cleanup
 
@@ -278,10 +302,10 @@ git pull
 git branch -d squad/{issue-number}-{slug}
 ```
 
-**Worktree cleanup (future, #525):**
+**Locally run agent worktree cleanup:**
 ```bash
 cd {original-cwd}
-git worktree remove ../worktrees/{issue-number}
+git worktree remove .worktrees/{branch-slug}
 ```
 
 ## Spawn Prompt Additions for Issue Work
@@ -315,7 +339,7 @@ When spawning an agent to work on an issue, include this context block:
 2. Push branch
 3. Open PR using:
    ```
-   gh pr create --title "{title}" --body "Closes #{number}\n\n{description}" --head squad/{issue-number}-{slug} --base {base-branch}
+   gh pr create --title "{title}" --body "Closes #{number}\n\n{description}" --head squad/{issue-number}-{slug} --base main
    ```
 4. Report PR URL to coordinator
 ```
@@ -327,7 +351,7 @@ Ralph (the work monitor) continuously checks issue and PR state:
 1. **Triage:** Detects untriaged issues, assigns `squad:{member}` labels
 2. **Spawn:** Launches agents for assigned issues
 3. **Monitor:** Tracks PR state transitions (needsReview → changesRequested → readyToMerge)
-4. **Merge:** Automatically merges approved PRs
+4. **Merge:** Syncs stale PRs, waits for rerun CI, and squash-merges green PRs
 5. **Cleanup:** Marks issues as done when PRs merge
 
 **Ralph's work-check cycle:**
@@ -344,8 +368,9 @@ See `.squad/templates/ralph-reference.md` for Ralph's full lifecycle.
 If the project has no human reviewers configured:
 1. PR opens
 2. CI runs
-3. If CI passes, Ralph auto-merges
-4. Issue closes
+3. If `main` moved, Ralph updates the branch and waits for CI again
+4. Ralph squash-merges the current green PR
+5. Issue closes
 
 ### Human Review Required
 
@@ -353,29 +378,31 @@ If the project requires human approval:
 1. PR opens
 2. Human reviewer is notified (GitHub/ADO notifications)
 3. Reviewer approves or requests changes
-4. If approved + CI passes, Ralph merges
+4. If approved + current with `main` + CI passes, Ralph squash-merges
 5. If changes requested, agent addresses feedback
 
 ### Squad Member Review
 
 If the issue was assigned to a squad member and they authored the PR:
 1. Another squad member reviews (conflict of interest avoidance)
-2. Original author is locked out from re-working rejected code (rejection lockout)
-3. Reviewer can approve edits or reject outright
+2. Ordinary **changes requested** feedback can be revised by the original author.
+3. Only an explicit **Rejected / independent rewrite required** declaration locks out the
+   original author; the reviewer records `REJECTED — requires independent rewrite` on the PR,
+   then another agent produces the next revision.
 
 ## Common Issue Lifecycle Patterns
 
 ### Pattern 1: Quick Fix (Single Agent, No Review)
 ```
 Issue created → Assigned to agent → Branch created → Code fixed → 
-PR opened → CI passes → Auto-merged → Issue closed
+PR opened → Updated to latest main → CI passes → Squash-merged → Issue closed
 ```
 
 ### Pattern 2: Feature Development (Human Review)
 ```
 Issue created → Assigned to agent → Branch created → Feature implemented → 
 PR opened → Human reviews → Changes requested → Agent fixes → 
-Re-reviewed → Approved → Merged → Issue closed
+Re-reviewed → Approved → Queued → Merge-group CI → Merged → Issue closed
 ```
 
 ### Pattern 3: Research-Then-Implement
@@ -385,11 +412,11 @@ Research documented → Research PR merged → Implementation issue created →
 Implementation agent spawned → Feature built → PR merged
 ```
 
-### Pattern 4: Parallel Multi-Agent (Future, #525)
+### Pattern 4: Parallel Locally Run Agents
 ```
 Epic issue created → Decomposed into sub-issues → Each sub-issue assigned → 
 Multiple agents work in parallel worktrees → PRs opened concurrently → 
-All PRs reviewed → All PRs merged → Epic closed
+All PRs reviewed → Each updates/retests after preceding merges → All PRs merged → Epic closed
 ```
 
 ## Anti-Patterns

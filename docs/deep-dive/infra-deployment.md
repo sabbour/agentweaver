@@ -12,7 +12,7 @@ The deployment is built around five ideas:
 4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets; API app secrets use CSI, while AgentHost user tokens are fetched at runtime from Key Vault after `/configure`.
 5. **Networking starts closed**: default deny policies are opened only for the paths each component actually needs.
 
-The deployment scripts default to `agentweaver-rg`, `agentweaver-aks-2`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied.
+The deployment scripts default to `agentweaver-rg`, `agentweaver-aks`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied.
 
 ## Rebuild mental model
 

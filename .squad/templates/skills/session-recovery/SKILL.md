@@ -120,7 +120,11 @@ WHERE sr.ref_type = 'issue'
 ORDER BY s.updated_at DESC;
 ```
 
-Cross-reference with `gh issue list --label "status:in-progress"` to find issues that are marked in-progress but have no active session.
+There is no `status:in-progress` label. Cross-reference open issues carrying a
+`squad:{member}` assignment label with their linked/open PRs (and branch/session
+activity) to identify orphaned work. For example, list open issues and inspect their
+labels with `gh issue list --state open --json number,title,labels`, then compare with
+`gh pr list --state open --json number,title,headRefName`.
 
 ### 7. Resume a Session
 

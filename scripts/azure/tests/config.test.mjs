@@ -56,7 +56,7 @@ test("resolveConfig: full precedence chain across multiple fields", async () => 
   const schema = {
     resourceGroup: { env: "RESOURCE_GROUP", default: "agentweaver-rg" },
     location: { env: "LOCATION", default: "westus2" },
-    clusterName: { env: "CLUSTER_NAME", default: "agentweaver-aks-2" },
+    clusterName: { env: "CLUSTER_NAME", default: "agentweaver-aks" },
   };
   const config = await resolveConfig(schema, {
     flags: { resourceGroup: "flag-rg" },
@@ -155,13 +155,13 @@ test("parseJsonc: tolerates // line comments, /* block */ comments, and trailing
     // resource group
     "resourceGroup": "agentweaver-rg",
     /* cluster name */
-    "clusterName": "agentweaver-aks-2",
+    "clusterName": "agentweaver-aks",
     "tags": ["a", "b",],
   }`;
   const parsed = parseJsonc(text);
   assert.deepEqual(parsed, {
     resourceGroup: "agentweaver-rg",
-    clusterName: "agentweaver-aks-2",
+    clusterName: "agentweaver-aks",
     tags: ["a", "b"],
   });
 });

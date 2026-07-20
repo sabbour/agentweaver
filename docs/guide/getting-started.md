@@ -11,12 +11,59 @@ You need these tools before you start:
 | .NET 10 SDK (`global.json` pins `10.0.100`) | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
 | Node.js 20.19+ (or 22.12+) — required by Vite 8 | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
 | git | `winget install --id Git.Git -e` | `brew install git` | `sudo apt-get update && sudo apt-get install -y git` |
+| **WSL2 + bubblewrap** — **Windows local dev only** (macOS/Linux run the sandbox natively; see [Why WSL2 on Windows?](#why-wsl2-on-windows) below) | `wsl --install` in an **elevated** PowerShell, then reboot; then inside the distro: `sudo apt-get install -y bubblewrap` | *Not required* | *Not required* |
 | Azure CLI (`az`), logged in via `az login` — only needed for `azure:deploy`/`azure:upgrade`/`azure:verify` (not for local dev) | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
 
 `npm run setup` (`dev --setup`) checks the local-dev tools (git/.NET/Node)
 itself and prints the matching install command above for your platform if
-one is missing. It does not check the Azure CLI, since local dev doesn't
-need it.
+one is missing. On Windows it also emits an **advisory** warning if WSL2 is
+not detected (it does not hard-fail on it, and does not check whether
+`bubblewrap` is installed inside the distro — see the note below). It does not
+check the Azure CLI, since local dev doesn't need it.
+
+### Why WSL2 on Windows?
+
+On **Windows**, `npm run dev` launches the API **inside WSL2** (via
+`wsl --exec`), and it is a hard requirement for local dev there. Here's why:
+
+Every agent run executes model-generated shell commands, so those commands
+must run in a real sandbox with genuine **filesystem, PID, and network
+isolation** — otherwise an agent command could read outside its workspace or
+exfiltrate data. The API picks a sandbox backend at startup:
+
+- **Native Windows** ("processcontainer") **cannot enforce network
+  isolation** — its own diagnostic warns *"unrestricted network on Windows
+  (allowlist enforcement unavailable); data exfiltration surface is open."* On
+  a stock Windows 11 host it is also skipped entirely (its highest tier needs
+  ViVeTool velocity keys that aren't enabled by default), so the runtime falls
+  through to WSL2 regardless.
+- **WSL2 + bubblewrap (`bwrap`)** provides real isolation: a workspace-confined
+  filesystem plus PID/user/**network** namespaces (network is fully off unless
+  a run explicitly enables it). This is the backend Windows local dev relies
+  on.
+- Without WSL2, `npm run dev` fails outright at `wsl.exe`. With WSL2 but
+  **without** `bubblewrap` in the distro, there is **no safe fallback**: inside
+  the WSL distro (a Linux environment) the sandbox picks its backend from the
+  Linux executor chain in
+  [`SandboxExecutorFactory.cs`](https://github.com/sabbour/agentweaver/blob/main/packages/Agentweaver.SandboxExec/SandboxExecutorFactory.cs)
+  — `LinuxBwrapExecutor` (needs `bwrap`) → `LinuxNativeMxcSandboxExecutor`
+  (needs `lxc`) → `PassthroughExecutor`. If neither `bwrap` nor `lxc` is present,
+  it falls all the way through to **`PassthroughExecutor`, which runs
+  agent-generated commands directly on the host with ZERO isolation** (no
+  filesystem confinement, no PID/network namespaces). This is **not** the
+  `unshare`-based degradation the Windows-host native path uses — it is *no
+  sandbox at all*. **Install `bubblewrap` in the distro** (as in the setup
+  above) so local dev actually runs sandboxed; a missing `bubblewrap` means your
+  agent runs are completely unsandboxed, not merely "weaker."
+
+  > **Open question (not decided here):** whether the runtime should *hard-fail*
+  > instead of silently selecting `PassthroughExecutor` when no isolation backend
+  > is available is a separate runtime-behavior decision for the maintainer; this
+  > note only documents the current fall-through behavior accurately.
+
+**macOS and Linux are unaffected** — the API runs directly (no WSL) and the
+runtime already prefers native `bwrap` there, so no WSL2 is involved in local
+dev on those platforms.
 
 ### Installing prerequisites
 
@@ -118,9 +165,13 @@ Also needed, not installable via a package manager:
 
 ---
 
-## Install (one command)
+## Local development quick start
 
-From a cloned checkout, the installer checks prerequisites, installs web and .NET dependencies, and launches the dev environment:
+> **Windows:** complete [WSL2 + bubblewrap](#why-wsl2-on-windows)
+> setup before this loop. `npm run setup` warns when WSL2 is missing, but
+> `npm run dev` actually runs the API inside WSL2 and cannot work without it.
+
+From a cloned checkout, prepare dependencies once:
 
 ```bash
 git clone https://github.com/sabbour/agentweaver.git
@@ -128,7 +179,71 @@ cd agentweaver
 npm run setup
 ```
 
-After the installer completes, skip to [Configure the API](#1-configure-the-api) below.
+`setup` checks git/.NET/Node (and advises about WSL2 on Windows), installs
+`apps/web` dependencies, restores .NET packages, and scaffolds
+`apps/Agentweaver.Api/appsettings.Development.json` without overwriting an
+existing file. It does **not** start servers or touch Azure.
+
+Before first sign-in, complete [Configure local authentication and model
+access](#1-configure-local-authentication-and-model-access). Then start both
+servers from the repo root:
+
+```bash
+npm run dev
+```
+
+The first API build can take roughly **1–3 minutes**, especially on Windows
+when the checkout is mounted into WSL2. Subsequent starts are faster; use
+`npm run dev -- --skip-build` only when the Release build is already current.
+API startup logs stream in the same terminal. The loop is ready when it prints:
+
+```text
+API is ready
+Web UI is ready
+
+API   http://localhost:5000
+Web   http://localhost:5173
+```
+
+Leave that terminal running and open <http://localhost:5173>. If the API exits
+during startup, `npm run dev` now fails immediately and leaves the actual .NET
+error visible above the failure message instead of waiting silently.
+
+---
+
+## How local and Azure testing fit the branch flow
+
+Git branching and the local runtime are independent. `npm run dev` runs
+whatever commit is checked out in the current branch/worktree; it does not
+contact GitHub or update protected `main`. Use it freely for
+pure local iteration before a PR exists.
+
+Azure dev/test is also available **before merge**. Run `npm run azure:deploy`
+or `npm run azure:upgrade` from any feature branch/worktree to validate that
+exact `HEAD` on a personal or shared real cluster. The Azure cluster is the
+integration/staging **environment**; there is intentionally no integration or
+staging **git branch**.
+
+```text
+feature branch/worktree
+  ├─ npm run dev                         local-only test, at any time
+  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test/staging environment
+  │                                      (optional manual verification at any time)
+  └─ PR CI ─> update to latest main ─> required CI rerun ─> protected main
+                                                               │
+                                                               └─ release PR
+                                                                    └─ exact main SHA
+                                                                         └─ tag/publish/deploy
+```
+
+GitHub Merge Queue is unavailable while this repository is owned by the
+personal `sabbour` account. The enforceable fallback is standard protection:
+every change uses a PR, the branch must be up to date with `main`, and the four
+blocking checks rerun before squash merge. Concurrent PRs may need repeated
+updates/retests when another PR merges first. If the repository is ever moved
+to a GitHub organization, Merge Queue should be revisited. Official releases
+are cut from an exact protected-`main` commit; see
+[RELEASING.md](../../RELEASING.md).
 
 ---
 
@@ -141,6 +256,22 @@ git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
 npm run azure:deploy
 ```
+
+Use `azure:deploy` for the **first or full idempotent provisioning** of a
+personal, shared dev/test, or staging environment. Once that environment
+exists, use `npm run azure:upgrade` for the normal edit → build → redeploy
+loop from the current `HEAD` — including an unmerged feature-branch `HEAD` —
+then `npm run azure:verify` if you want to rerun only the live checks. For a
+shared environment, coordinate ownership and prefer a clean commit;
+`azure:upgrade -- --allow-dirty` is only a personal/throwaway test escape hatch.
+
+> **This is a dev/test/staging deploy — not a release.** `azure:deploy` (and
+> `azure:upgrade`) stand up or update a live Azure environment for development,
+> testing, or staging use. They do **not** bump the version, create a git tag,
+> or publish a GitHub Release, and you can run them as often as you like.
+> Cutting an official, versioned release of the project is a *separate* command
+> (`npm run azure:release`) with its own process — see
+> [RELEASING.md](https://github.com/sabbour/agentweaver/blob/main/RELEASING.md).
 
 With no flags, in an interactive terminal, this prompts you through Azure
 subscription, resource group, location, cluster/ACR/Key Vault names (smart
@@ -182,10 +313,10 @@ Every build/deploy/upgrade/release/dev workflow runs through one cross-platform 
 | Script | What it does |
 |---|---|
 | `npm start` / `npm run dev` | Local dev orchestration (API + web), browser auto-open disabled. Alias for `azure:dev -- --no-browser`. |
-| `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [Install (one command)](#install-one-command) quick start uses. Alias for `dev -- --setup`. |
+| `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
 | `npm run azure:deploy` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:upgrade` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
-| `npm run azure:release` | Semver release workflow (`major`/`minor`/`patch`): bumps `VERSION`, tags, generates a GitHub release, and composes over the same build/deploy engine as `deploy`/`upgrade`. Add `-- --dry-run` to preview without making changes. |
+| `npm run azure:release` | Current semver publication workflow: bumps `VERSION`, tags, generates a GitHub release, and composes over the shared deploy engine. Its direct commit/push behavior must be split into protected release-PR preparation + exact-SHA publication before protected-main enforcement; see [RELEASING.md](../../RELEASING.md#cutting-a-release). `--dry-run` remains safe. |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |
 | `npm run azure:dev` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). |
 | `npm run dev:web` | Builds and starts only the web UI (Vite dev server) against an API you're already running separately. |
@@ -199,15 +330,13 @@ Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full
 - **`azure:dev` / `dev` / `setup`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step), `--setup` (local-only setup, no servers started — this is what `npm run setup` runs).
 - **`azure:release`**: positional `major|minor|patch` bump argument, `--dry-run` (or `DRY_RUN=true`) to preview without tagging/publishing.
 
-## 1. Configure the API
+## 1. Configure local authentication and model access
 
-The API reads settings from `appsettings.json` plus the environment-specific file for `ASPNETCORE_ENVIRONMENT`. If you want to use `apps/Agentweaver.Api/appsettings.Local.json`, set the environment to `Local` before you start the API.
-
-```powershell
-$env:ASPNETCORE_ENVIRONMENT = "Local"
-```
-
-Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your non-secret GitHub OAuth App settings and model provider:
+`npm run dev` runs the API with `ASPNETCORE_ENVIRONMENT=Development`.
+`npm run setup` copies
+`apps/Agentweaver.Api/appsettings.Development.json.example` to
+`appsettings.Development.json` if the destination is absent. Put only
+non-secret local settings there:
 
 ```json
 {
@@ -226,38 +355,38 @@ Use `apps/Agentweaver.Api/appsettings.Local.json` to configure your non-secret G
 }
 ```
 
-The `ClientId` and `ClientSecret` come from your GitHub OAuth App settings page. `CallbackUrl` must match the **Authorization callback URL** registered in the app exactly. Store the client secret with .NET user-secrets, not in `appsettings*.json`:
+The `ClientId` and `ClientSecret` come from your GitHub OAuth App settings
+page. `CallbackUrl` must exactly match its **Authorization callback URL**.
+Store secrets with .NET user-secrets, never in `appsettings*.json`:
 
 ```powershell
 cd apps/Agentweaver.Api
 dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
+dotnet user-secrets set "Providers:GitHubCopilot:GitHubToken" "<github-token-with-copilot-access>"
+cd ../..
 ```
 
-## 2. Start the API
+## 2. Start the local development loop
 
-From the repository root, start the backend:
-
-```powershell
-dotnet run --project apps/Agentweaver.Api
-```
-
-The API listens on the default ASP.NET Core development URL unless you override it through standard host settings.
-
-## 3. Submit a run from the web UI
-
-Open the web UI to submit runs, watch live events, and review results. Install dependencies and start the Vite dev server:
+From the repository root:
 
 ```powershell
-cd apps/web
-npm install
 npm run dev
 ```
 
-Set `VITE_API_URL` in `apps/web/.env` so the browser client points at your API (default `http://localhost:5000`), then open the local URL that Vite prints in the console.
+This builds and starts the API, waits for `/health`, then starts Vite and waits
+for the Web UI. Use `Ctrl+C` to stop the loop. For component-by-component
+debugging, `npm run dev:api` and `npm run dev:web` remain available. On
+Windows, the API-only script runs native `dotnet`; do not use it to execute
+agents because it bypasses the supported WSL2 + `bubblewrap` path. Use the
+full `npm run dev` loop for sandboxed agent runs.
 
-```dotenv
-VITE_API_URL=http://localhost:5000
-```
+## 3. Submit a run from the web UI
+
+Open <http://localhost:5173> after both readiness messages appear. The default
+Web configuration targets the local API at <http://localhost:5000>; set
+`VITE_API_URL` in `apps/web/.env` only when intentionally pointing the Web UI
+at a different API.
 
 ## 4. Create a project, run, and review
 

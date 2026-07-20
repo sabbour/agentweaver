@@ -42,32 +42,60 @@ import * as verifyStepDefault from "./steps/40-verify.mjs";
 
 export const VALID_BUMPS = Object.freeze(["major", "minor", "patch"]);
 
+// Shared "is this a real, final release tag" predicate. A release boundary is
+// an annotated `vX.Y.Z` tag with NO suffix -- lightweight tags and prerelease
+// tags like `v0.9.6-rc1` must NOT count as release boundaries, or they would
+// pollute the changelog / release-note range. The identical regex string
+// (`^v\d+\.\d+\.\d+$`) is used by scripts/gen-changelog.py so both tools agree
+// on what counts as a release.
+export const RELEASE_TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
+
+/** True only for a final `vX.Y.Z` release tag (no prerelease/build suffix). */
+export function isReleaseTag(tag) {
+  return RELEASE_TAG_PATTERN.test((tag ?? "").trim());
+}
+
 export class InvalidBumpError extends Error {}
 export class DirtyWorkingTreeError extends Error {}
+export class ReleaseResumeError extends Error {}
 
-/** Parses `release` subcommand argv: positional bump arg + --dry-run/-h/--help. */
+/** Parses `release` subcommand argv: bump, --resume <tag>, --dry-run, or help. */
 export function parseArgs(argv = []) {
   let bump;
+  let resumeTag;
   let dryRun = false;
   let help = false;
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (arg === "--dry-run") dryRun = true;
     else if (arg === "-h" || arg === "--help" || arg === "help") help = true;
+    else if (arg === "--resume") {
+      resumeTag = argv[index + 1];
+      if (!resumeTag || resumeTag.startsWith("-")) {
+        throw new Error("Missing release tag after --resume. Example: release --resume v1.2.3");
+      }
+      index += 1;
+    }
     else if (!bump) bump = arg;
     else throw new Error(`Unknown argument: ${arg}. Run 'release --help' for usage.`);
   }
-  return { bump, dryRun, help };
+  if (bump && resumeTag) {
+    throw new Error("Specify either a version bump or --resume <tag>, not both.");
+  }
+  return { bump, resumeTag, dryRun, help };
 }
 
 export const HELP_TEXT = `release -- Agentweaver semver release workflow
 
 Usage:
   node scripts/azure/cli.mjs release <major|minor|patch> [--dry-run]
+  node scripts/azure/cli.mjs release --resume vX.Y.Z [--dry-run]
 
 Bumps VERSION, tags, pushes, creates a GitHub Release, then delegates image
 build/retag/provenance/deploy/verify to the shared step engine (steps/20,
 25, 30, 40) -- the same engine 'deploy' and 'upgrade' use. Never duplicates
-build logic locally.
+build logic locally. --resume performs only the shared image/deploy/verify
+steps after confirming the tag and GitHub Release already exist and match VERSION.
 
 Environment variables:
   DRY_RUN=true   Same as --dry-run: print actions without making changes.
@@ -107,10 +135,57 @@ export async function isWorkingTreeClean({ cwd, capture }) {
   return unstaged.code === 0 && staged.code === 0;
 }
 
-/** Resolves the previous release tag (`git describe --tags --abbrev=0`), or '' if none exists. */
+/** Resolves the previous release tag: the most recent final `vX.Y.Z` tag (prerelease/lightweight tags excluded), or '' if none exists. */
 export async function previousTag({ cwd, capture }) {
-  const result = await capture("git", ["describe", "--tags", "--abbrev=0"], { cwd, allowFailure: true });
-  return result.code === 0 ? result.stdout.trim() : "";
+  // Enumerate tags newest-first by semver and return the most recent FINAL
+  // release tag. Using `git tag --list` (not `git describe --tags`) lets us
+  // skip prerelease/lightweight tags (e.g. v0.9.6-rc1) that must not define a
+  // release boundary -- see isReleaseTag / RELEASE_TAG_PATTERN.
+  const result = await capture("git", ["tag", "--list", "--sort=-v:refname"], { cwd, allowFailure: true });
+  if (result.code !== 0) return "";
+  for (const line of result.stdout.split("\n")) {
+    const tag = line.trim();
+    if (isReleaseTag(tag)) return tag;
+  }
+  return "";
+}
+
+/** Resolves the final release tag immediately preceding `tag` in semver order. */
+export async function previousTagBefore(tag, { cwd, capture }) {
+  const result = await capture("git", ["tag", "--list", "--sort=-v:refname"], { cwd, allowFailure: true });
+  if (result.code !== 0) return "";
+  let foundTarget = false;
+  for (const line of result.stdout.split("\n")) {
+    const candidate = line.trim();
+    if (candidate === tag) {
+      foundTarget = true;
+      continue;
+    }
+    if (foundTarget && isReleaseTag(candidate)) return candidate;
+  }
+  return "";
+}
+
+/** Validates that a failed release can safely resume its non-git steps. */
+export async function validateResumeTarget(tag, version, { cwd, capture, repo = "sabbour/agentweaver" }) {
+  if (!isReleaseTag(tag)) {
+    throw new ReleaseResumeError(`Invalid resume tag '${tag}'. Expected a final release tag such as v1.2.3.`);
+  }
+  if (tag !== `v${version}`) {
+    throw new ReleaseResumeError(
+      `Cannot resume ${tag}: VERSION is ${version}, which does not match the tag. Check out the release commit or restore VERSION before resuming.`,
+    );
+  }
+  const tagResult = await capture("git", ["rev-parse", "--verify", `${tag}^{commit}`], { cwd, allowFailure: true });
+  if (tagResult.code !== 0) {
+    throw new ReleaseResumeError(`Cannot resume ${tag}: the tag does not exist locally. Fetch tags and try again.`);
+  }
+  const releaseResult = await capture("gh", ["release", "view", tag, "--repo", repo], { cwd, allowFailure: true });
+  if (releaseResult.code !== 0) {
+    throw new ReleaseResumeError(
+      `Cannot resume ${tag}: its GitHub Release does not exist. Run the normal release command only if no release was created.`,
+    );
+  }
 }
 
 /** Resolves the ISO-8601 author date of a tag, for the changelog baseline. */
@@ -151,8 +226,8 @@ export async function generateChangelog(sinceDate, previousTagLabel, { capture, 
 }
 
 /**
- * Main entry point for the `release` subcommand: bump/tag/GitHub-release,
- * then delegate to the shared build/provenance/deploy/verify step engine.
+ * Main entry point for the `release` subcommand: bump/tag/GitHub-release, or
+ * resume an already-created release, then delegate to the shared step engine.
  *
  * @param {object} [opts]
  * @param {string[]} [opts.argv]
@@ -183,14 +258,14 @@ export async function run(opts = {}) {
   const deployStep = steps.deployStep ?? deployStepDefault;
   const verifyStep = steps.verifyStep ?? verifyStepDefault;
 
-  const { bump, dryRun: dryRunFlag, help } = parseArgs(argv);
+  const { bump, resumeTag, dryRun: dryRunFlag, help } = parseArgs(argv);
   const dryRun = dryRunFlag || process.env.DRY_RUN === "true";
 
   if (help) {
     log.info(HELP_TEXT);
     return { ok: true, help: true };
   }
-  if (!VALID_BUMPS.includes(bump)) {
+  if (!resumeTag && !VALID_BUMPS.includes(bump)) {
     throw new InvalidBumpError(`argument must be one of: ${VALID_BUMPS.join(", ")}. Run with --help for usage.`);
   }
 
@@ -210,40 +285,52 @@ export async function run(opts = {}) {
   }
 
   const currentVersion = readCurrentVersion(repoRoot, { readFile });
-  const newVersion = bumpVersion(currentVersion, bump);
-  const newTag = `v${newVersion}`;
-  log.info(`==> Bumping version: ${currentVersion} -> ${newVersion} (${bump})`);
+  const newVersion = resumeTag ? currentVersion : bumpVersion(currentVersion, bump);
+  const newTag = resumeTag ?? `v${newVersion}`;
+  if (resumeTag) {
+    log.info(`==> Resuming release ${newTag}; VERSION is ${currentVersion}.`);
+    await validateResumeTarget(newTag, currentVersion, { cwd: repoRoot, capture: exec.capture });
+  } else {
+    log.info(`==> Bumping version: ${currentVersion} -> ${newVersion} (${bump})`);
+  }
 
-  const lastTag = await previousTag({ cwd: repoRoot, capture: exec.capture });
+  const lastTag = resumeTag
+    ? await previousTagBefore(newTag, { cwd: repoRoot, capture: exec.capture })
+    : await previousTag({ cwd: repoRoot, capture: exec.capture });
   const lastTagDate = await tagDate(lastTag, { cwd: repoRoot, capture: exec.capture });
   if (lastTag) log.info(`  Last tag: ${lastTag}`);
   else log.info("  (no previous tag found; treating first commit as baseline)");
 
-  const versionFilePath = path.join(repoRoot, "VERSION");
-  log.info("==> Writing VERSION file...");
-  await runOrLog(`Write ${newVersion} to VERSION`, async () => writeFile(versionFilePath, `${newVersion}\n`));
+  let changelog;
+  if (!resumeTag) {
+    const versionFilePath = path.join(repoRoot, "VERSION");
+    log.info("==> Writing VERSION file...");
+    await runOrLog(`Write ${newVersion} to VERSION`, async () => writeFile(versionFilePath, `${newVersion}\n`));
 
-  log.info("==> Committing version bump...");
-  await runOrLog("git add VERSION", () => exec.run("git", ["add", versionFilePath], { cwd: repoRoot }));
-  await runOrLog(`git commit -m "chore(release): bump version to ${newTag}"`, () =>
-    exec.run("git", ["commit", "-m", `chore(release): bump version to ${newTag}`], { cwd: repoRoot }),
-  );
+    log.info("==> Committing version bump...");
+    await runOrLog("git add VERSION", () => exec.run("git", ["add", versionFilePath], { cwd: repoRoot }));
+    await runOrLog(`git commit -m "chore(release): bump version to ${newTag}"`, () =>
+      exec.run("git", ["commit", "-m", `chore(release): bump version to ${newTag}`], { cwd: repoRoot }),
+    );
 
-  log.info(`==> Creating annotated tag ${newTag}...`);
-  await runOrLog(`git tag -a ${newTag}`, () => exec.run("git", ["tag", "-a", newTag, "-m", `Release ${newTag}`], { cwd: repoRoot }));
+    log.info(`==> Creating annotated tag ${newTag}...`);
+    await runOrLog(`git tag -a ${newTag}`, () => exec.run("git", ["tag", "-a", newTag, "-m", `Release ${newTag}`], { cwd: repoRoot }));
 
-  log.info("==> Pushing release commit and tag to origin...");
-  await runOrLog("git push origin HEAD", () => exec.run("git", ["push", "origin", "HEAD"], { cwd: repoRoot }));
-  await runOrLog(`git push origin ${newTag}`, () => exec.run("git", ["push", "origin", newTag], { cwd: repoRoot }));
+    log.info("==> Pushing release commit and tag to origin...");
+    await runOrLog("git push origin HEAD", () => exec.run("git", ["push", "origin", "HEAD"], { cwd: repoRoot }));
+    await runOrLog(`git push origin ${newTag}`, () => exec.run("git", ["push", "origin", newTag], { cwd: repoRoot }));
 
-  log.info(`==> Generating changelog from merged PRs since ${lastTagDate}...`);
-  const changelog = dryRun ? "(dry-run: changelog not generated)" : await generateChangelog(lastTagDate, lastTag, { capture: exec.capture });
-  log.info(changelog);
+    log.info(`==> Generating changelog from merged PRs since ${lastTagDate}...`);
+    changelog = dryRun ? "(dry-run: changelog not generated)" : await generateChangelog(lastTagDate, lastTag, { capture: exec.capture });
+    log.info(changelog);
 
-  log.info(`==> Creating GitHub release ${newTag}...`);
-  await runOrLog(`gh release create ${newTag}`, () =>
-    exec.run("gh", ["release", "create", newTag, "--title", newTag, "--notes", changelog]),
-  );
+    log.info(`==> Creating GitHub release ${newTag}...`);
+    await runOrLog(`gh release create ${newTag}`, () =>
+      exec.run("gh", ["release", "create", newTag, "--title", newTag, "--notes", changelog]),
+    );
+  } else {
+    log.info(`==> Tag and GitHub Release ${newTag} already exist; skipping release creation.`);
+  }
 
   // --- Delegate to the shared step engine (never duplicate build logic) ----
   log.info("");

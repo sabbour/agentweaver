@@ -21,7 +21,7 @@ import {
 
 const CFG = Object.freeze({
   RESOURCE_GROUP: "agentweaver-rg",
-  CLUSTER_NAME: "agentweaver-aks-2",
+  CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   NAMESPACE: "agentweaver",
   ACR_LOGIN_SERVER: "agentweaverregistry.azurecr.io",

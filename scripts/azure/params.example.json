@@ -16,7 +16,7 @@
 {
   // Azure resource names (all optional -- fall back to variables.mjs's DEFAULTS).
   "RESOURCE_GROUP": "agentweaver-rg",
-  "CLUSTER_NAME": "agentweaver-aks-2",
+  "CLUSTER_NAME": "agentweaver-aks",
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
   "KEYVAULT_NAME": "agentweaver-kv",

@@ -1,7 +1,18 @@
 # Contributing to Agentweaver
 
-Thanks for considering a contribution! This doc covers everything you need to get set up,
-make a change, and get it merged.
+Thanks for considering a contribution! This doc is the **contribution process** guide — how
+to make a change and get it merged. It has two parts:
+
+- **Dev environment & reference** (setup, repo layout, testing, code style) — the quick
+  version lives here, but the **canonical, in-depth environment setup guide is
+  [Getting started](https://sabbour.me/agentweaver/guide/getting-started)** (prerequisites,
+  per-platform installs, local run, OAuth config). This doc does not duplicate it — it points
+  to it and adds only the repo conventions a contributor needs.
+- **Contribution workflow** ([Making a change](#making-a-change), [Continuous
+  integration](#continuous-integration), [Opening a pull request](#opening-a-pull-request),
+  [Commit messages](#commit-messages), [AI agent contributions](#ai-agent-contributions)) —
+  how a change actually lands. For the release/versioning process, see
+  [RELEASING.md](RELEASING.md).
 
 ## Prerequisites
 
@@ -39,10 +50,23 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 
 ## Making a change
 
-1. **Work directly against `main`.** This repo does not use a `dev`/`preview` staging
-   branch flow — commits are made (or PRs opened) straight against `main`. Use a
-   short-lived branch with a descriptive, conventional prefix for anything you want
-   reviewed first, e.g. `fix/123-short-desc`, `feat/short-desc`, `docs/short-desc`.
+1. **Use a short-lived branch and PR for every change.** This repo does not use a
+   `dev`/`preview` staging branch flow — protected `main` is the only long-lived branch.
+   Branch from current `origin/main` with a descriptive conventional prefix, e.g.
+   `fix/123-short-desc`, `feat/short-desc`, `docs/short-desc`.
+   - **Direct pushes to `main` are not allowed**, including tiny and docs-only changes.
+   - Before merge, the branch must be current with `main` and all blocking CI
+     must rerun successfully. GitHub enforces this through “require branches
+     to be up to date before merging.”
+   - **Squash-merge** so `main` keeps **one commit per logical change**.
+     GitHub automatically deletes the source branch after merge. That single commit
+     subject is what feeds the generated `CHANGELOG.md` (and matches the PR title used for the
+     GitHub Release notes), so a clean one-commit-per-change history keeps both in sync. See
+     [Releasing](RELEASING.md#branching-model).
+   - Do **not** create a long-lived local `integration`/`staging` branch as a
+     private promotion pipeline. A disposable merge-test branch or worktree is
+     fine, but delete it after validation; see
+     [No local integration branch](RELEASING.md#no-local-integration-branch).
 2. **Keep changes focused.** Scope one change to one concern — it's easier to review and
    to revert if something goes wrong.
 3. **Add or update tests** for any behavior change (see Testing below).
@@ -50,8 +74,8 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
    `README.md` and `docs/guide/` are the two places most likely to need updates.
 5. **Run the relevant test suite(s) locally before you push.** CI (see
    [Continuous integration](#continuous-integration) below) re-runs the full suite on
-   every pull request and on pushes to `main`, but running the affected suite locally
-   first keeps the feedback loop short and avoids red PRs.
+   every pull request and push to `main`, but running the
+   affected suite locally first keeps the feedback loop short and avoids red PRs.
 6. **Verify live for anything with runtime/deploy impact**, not just via unit tests —
    e.g. after a change to `scripts/azure/`, run the affected command for real (with
    `--dry-run` where supported) against an actual environment before considering the
@@ -82,7 +106,7 @@ npm run docs:build
 
 ## Continuous integration
 
-Pull requests (and pushes to `main`) are automatically verified by the
+Pull requests and pushes to `main` are verified by the
 [`CI` workflow](.github/workflows/ci.yml). It runs the same commands documented under
 [Testing](#testing) above, split into one job per area so each gets a dedicated runner
 (several .NET and web tests are timing-sensitive and flake under CPU contention if
@@ -104,9 +128,17 @@ stricter React-Compiler-style rules that surface a pre-existing backlog of viola
 flip it to blocking once the backlog is cleared. Until then, **do not add new lint
 violations** — run `npm --prefix apps/web run lint` locally and keep your own changes clean.
 
-CI is not yet enforced as a required status check via branch protection. Treat a green run
-(with, at most, the advisory `Web lint` job red) as the bar for merging, and do not merge a
-PR with a failing blocking job.
+The repository policy requires these four blocking jobs on a branch that is
+up to date with `main`. Ahmed must activate the GitHub ruleset described in
+[`.github/main-branch-protection.md`](.github/main-branch-protection.md) to
+make admission mechanical. Until activation, follow the same PR and strict
+update/retest policy manually and never direct-push or merge around a failing
+blocking job.
+
+GitHub Merge Queue is unavailable while this repository is owned by the
+personal `sabbour` account. Strict up-to-date protection causes more
+update/retest churn when concurrent PRs race, but it is the enforceable
+fallback. Revisit Merge Queue only if the repository moves to an organization.
 
 ## Opening a pull request
 
@@ -116,7 +148,21 @@ PR with a failing blocking job.
 - **Describe what changed and why**, and how you verified it (which suite(s) you ran, and
   any live/deploy verification for runtime changes).
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
-  findings before asking for review or merging.
+  findings before asking for review.
+- **Update, retest, then squash-merge.** If another PR reaches `main` first,
+  GitHub marks yours out of date. Update from `origin/main`, resolve conflicts,
+  rerun relevant tests/CI, and merge only after all required checks are green
+  on the updated branch.
+
+## Labels
+
+[`.github/labels.json`](.github/labels.json) is the canonical taxonomy for new and
+relabeled issues. Use one `type:*`, `priority:*`, `go:*`, and `release:*` label where
+applicable; use `squad:{member}` for ownership and an optional `area:*` label for product
+scope. `sync-squad-labels.yml` reads that manifest for static labels and generates squad
+member labels from the roster. The legacy `bug`, `enhancement`, and `workstream:*` labels
+are deprecated in favor of `type:bug`, `type:feature`, and the smaller `area:*` vocabulary;
+existing issues are not being mass-relabelled.
 
 ## Commit messages
 
@@ -160,8 +206,8 @@ developed with **Squad**, a team of named agents (Trinity, Tank, Morpheus, Smith
 Seraph, Scribe, Ralph, Rai, and others), and can optionally route work to GitHub's
 `@copilot` coding agent when it is on the roster. This section documents how that
 agent-driven flow works. It does **not** replace the human workflow above — human
-contributors follow [Making a change](#making-a-change) (direct-to-main, PR or direct
-commit, CI gating) and can skip this section.
+contributors follow the same branch → up-to-date PR → squash-merge path in
+[Making a change](#making-a-change) and can skip this section.
 
 **Issue-driven lifecycle.** Agent work is anchored to a GitHub issue and follows
 issue -> branch -> PR -> review -> merge. The label-based automation in
@@ -177,6 +223,12 @@ issue -> branch -> PR -> review -> merge. The label-based automation in
 - `squad-label-enforce.yml` enforces mutual exclusivity within the `go:`, `type:`,
   `priority:`, and `release:` label namespaces.
 
+Feature and bug issue templates add the `squad` label by default, so the triage workflow
+routes them when filed. For issues filed outside those templates, add `squad` manually
+to request Squad routing. Triage is a lightweight operating norm rather than a hard SLA:
+handle P0 reports the same business day and route other new Squad issues within a few
+business days.
+
 The assigned agent branches as `squad/{issue-number}-{slug}`, commits with a
 conventional-commit message that references the issue (`Closes #{number}`, including the
 `Co-authored-by: Copilot` trailer), pushes, and opens a PR with `gh pr create` against
@@ -185,12 +237,64 @@ conventional-commit message that references the issue (`Closes #{number}`, inclu
 orchestration rules live in [`.github/agents/squad.agent.md`](.github/agents/squad.agent.md).
 Agent PRs are gated by the same [CI](#continuous-integration) as everyone else's.
 
-**Peer review and the reviewer-rejection protocol.** When an agent with a Reviewer role
-(Tester, Code Reviewer, Lead, or Rai for Responsible AI) rejects another agent's work, the
-original author is **locked out** of revising that artifact — a *different* agent must
-produce the next version, and the Reviewer chooses whether to reassign it or escalate to a
-newly spawned specialist. The Coordinator enforces this mechanically. The full rules are in
-the "Reviewer Rejection Protocol" section of `squad.agent.md`.
+**Branches vs. worktrees.** A **locally run** Squad agent (including a Copilot CLI agent)
+must use one dedicated git worktree per issue under [`.worktrees/`](.worktrees/), reusing it
+when collaborating on that issue. This prevents concurrent local agents from sharing a
+working tree or index. A **hosted** agent (such as GitHub's `@copilot` coding agent) uses the
+platform's isolated branch and environment instead — no local worktree applies. **Human
+contributors** may use a worktree as a convenience, but a plain short-lived branch in the
+main checkout is supported. The creation, reuse, dependency, team-root, and cleanup
+mechanics live in [`.squad/templates/worktree-reference.md`](.squad/templates/worktree-reference.md);
+do not duplicate them here.
+
+**New feature workflow.** Proposing a new feature or capability (agent or human):
+
+1. **Open a GitHub issue first** — no un-tracked feature work. Describe the user
+   story/problem it solves.
+2. **Add or update a spec under [`specs/`](specs/README.md)** before or alongside the code.
+   Specs are area-grouped, **one file per user story**, each linking its GitHub issue
+   number — follow the existing files' format exactly (title; `**Issue:**` + `**Area:**`
+   header; `## User story`, `## Context / problem`, `## Scope` (In/Out), `## Acceptance
+   criteria`, `## Notable edge cases`), and add the story to the matching area section of
+   [`specs/README.md`](specs/README.md).
+3. **Then follow the normal issue → branch → PR → review → merge lifecycle** above,
+   including updating user-facing docs (`docs/guide/`, `README.md`) in the same change as
+   required by the **Documenting your work** guidance below.
+
+New user-facing functionality that lands **without** a corresponding `specs/` entry should
+be **flagged in review**. This is a **convention, not an enforced gate**: the
+[`docs-drift.yml`](.github/workflows/docs-drift.yml) nudge watches API/workflow/blueprint/
+MCP code paths against `docs/**` only — it does **not** cover `specs/`, so nothing
+mechanically blocks a spec-less feature PR. Reviewers are responsible for catching it.
+
+**Bug-fix workflow.** Fixing a bug (agent or human):
+
+1. **Open (or reuse) a GitHub issue** describing the bug: repro steps and expected vs.
+   actual behavior. Don't file untracked fixes for anything beyond a trivial/obvious
+   one-liner (typo, broken link, obviously-wrong constant) — anything with behavioral
+   nuance or a risk of regression gets an issue.
+2. **Reference the issue in the commit/PR** with `Closes #N` (see [Commit
+   messages](#commit-messages)) so it auto-closes on merge.
+3. **Include a regression test** that fails before the fix and passes after, whenever the
+   bug is in code with a test suite — this is the existing "[add or update tests for any
+   behavior change](#making-a-change)" rule applied to fixes, and it is what QA
+   (Smith's charter) means by preventing regressions. A fix with no test should say why one
+   isn't feasible.
+4. **After merge**, the same lifecycle applies: CI-gated, and the issue closes
+   automatically via `Closes #N` (or close it manually if the fix only partially addresses
+   the issue).
+
+**Peer review and the reviewer-rejection protocol.** **Changes requested** is ordinary
+review feedback: the original author may revise the same PR normally, with no lockout.
+Lockout occurs only when a Reviewer (Tester, Code Reviewer, Lead, or Rai for Responsible AI)
+explicitly declares **Rejected / independent rewrite required** — for example, with the
+exact PR comment marker `REJECTED — requires independent rewrite`. Then the original author
+is **locked out** of the next revision, a different agent must produce it, and the Reviewer
+chooses whether to reassign or escalate. The Coordinator enforces that rule mechanically.
+The rejection marker must remain on the PR so the author rotation is auditable on GitHub
+without Coordinator session history; a `status:locked-out` PR label may additionally be
+used when the repository creates it. The full rules are in the "Reviewer Rejection Protocol"
+section of `squad.agent.md`.
 
 **Rubber-ducking.** Before a non-trivial or risky change ships, the Coordinator can invoke a
 `rubber-duck` review pass — a dedicated critical-feedback agent whose only job is to hunt for
@@ -198,9 +302,11 @@ bugs, logic errors, and design flaws before anything is committed. It is invoked
 Coordinator's discretion for higher-risk work, not automatically on every change.
 
 **Auditable decisions.** Meaningful design decisions are recorded to the decisions inbox
-(`.squad/decisions/inbox/`); Scribe periodically merges those into the canonical
-`.squad/decisions.md`. This keeps agent-driven changes traceable back to the reasoning behind
-them.
+(`.squad/decisions/inbox/`); Scribe periodically merges routine operational decisions into
+the canonical `.squad/decisions.md`. Cross-cutting architecture or technical decisions that
+should survive that ledger's compaction are promoted to numbered
+[ADRs](docs/architecture/decisions/README.md). This keeps agent-driven changes traceable back
+to the reasoning behind them.
 
 **Documenting your work.** Docs are part of the definition of done, not a follow-up. When a
 change affects user-facing behavior — npm scripts, CLI flags, setup/deploy steps, API routes

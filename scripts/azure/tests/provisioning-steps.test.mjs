@@ -16,7 +16,7 @@ import * as genA2aMtlsCerts from "../steps/gen-a2a-mtls-certs.mjs";
 
 const CFG = Object.freeze({
   RESOURCE_GROUP: "agentweaver-rg",
-  CLUSTER_NAME: "agentweaver-aks-2",
+  CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
   NAMESPACE: "agentweaver",
@@ -267,7 +267,7 @@ test("17-provision-postgres: generateAdminPassword strips shell-unsafe chars and
 test("17-provision-postgres: skips server creation when it already exists", async () => {
   const exec = fakeExec({
     captureImpl: (cmd, args) => {
-      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks-2_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };

@@ -1212,8 +1212,8 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
     if (evt.type !== 'tool.approval_resolved' && evt.type !== 'coordinator.child_approval_resolved') continue;
     const requestId = readString(evt.payload, ['requestId', 'request_id']);
     if (!requestId) continue;
-    if (Boolean(evt.payload['expired'])) resolvedApprovals.set(requestId, 'expired');
-    else if (Boolean(evt.payload['approved'])) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
+    if (evt.payload['expired']) resolvedApprovals.set(requestId, 'expired');
+    else if (evt.payload['approved']) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
     else resolvedApprovals.set(requestId, 'deny');
   }
 
@@ -1496,10 +1496,10 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
     case 'coordinator.assembly_rai_started':
       return 'Collective assembly: RAI check started.';
     case 'coordinator.assembly_rai_completed':
-      if (Boolean(p['raiSafetyFlagged'] ?? p['rai_safety_flagged'])) {
+      if (p['raiSafetyFlagged'] ?? p['rai_safety_flagged']) {
         return 'Collective assembly: RAI check completed with safety flags.';
       }
-      if (Boolean(p['raiRevisionRequested'] ?? p['rai_revision_requested'])) {
+      if (p['raiRevisionRequested'] ?? p['rai_revision_requested']) {
         const feedback = readString(p, ['feedback']);
         return `Collective assembly: RAI check requested revisions${feedback ? ` — ${feedback}` : '.'}`;
       }
@@ -1568,7 +1568,7 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       return `Command approval required: ${command}${intention ? ` — ${intention}` : ''}`;
     }
     case 'coordinator.child_approval_resolved': {
-      const outcome = Boolean(p['expired']) ? 'expired' : Boolean(p['approved']) ? 'approved' : 'denied';
+      const outcome = p['expired'] ? 'expired' : p['approved'] ? 'approved' : 'denied';
       return `Child tool approval ${outcome} for ${subtaskDescription(p, subtasks)}.`;
     }
     case 'coordinator.autopilot_answered': {
@@ -1637,14 +1637,14 @@ function turnsToTimelineModel(turns: ConversationTurn[], eventCount: number): Ru
       .map((row, rowIndex) => ({
         messageId: row.key || `${turn.key}-row-${rowIndex}`,
         text: row.content,
-        streaming: Boolean(turn.open && row.role === 'agent'),
+        streaming: turn.open === true && row.role === 'agent',
         timestamp: row.timestamp ?? Date.now(),
       }));
     return {
       id: turn.key || `turn-${index}`,
       intent: index === 0 ? 'Activity' : `Activity ${index + 1}`,
       status: turn.open ? 'running' : 'complete',
-      active: Boolean(turn.open),
+      active: turn.open === true,
       synthetic: true,
       tools: [],
       messages,
@@ -1678,8 +1678,8 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
     if (evt.type === 'tool.approval_resolved' || evt.type === 'coordinator.child_approval_resolved') {
       const requestId = readString(evt.payload, ['requestId', 'request_id']);
       if (!requestId) continue;
-      if (Boolean(evt.payload['expired'])) resolvedApprovals.set(requestId, 'expired');
-      else if (Boolean(evt.payload['approved'])) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
+      if (evt.payload['expired']) resolvedApprovals.set(requestId, 'expired');
+      else if (evt.payload['approved']) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
       else resolvedApprovals.set(requestId, 'deny');
     }
     if (!firstSystem && evt.type === 'agent.system_prompt') {
@@ -1990,7 +1990,7 @@ export function AgentSessionPanel({
   // The run may leave a turn "open" (no agent.turn.end / run.completed|failed|error) while
   // it's actually parked/blocked/awaiting review or otherwise no longer streaming — force
   // any such open step closed so its tool calls don't show a perpetual spinner (#299).
-  const isRunTimelineInactive = Boolean(runDetail) && runDetail?.status !== 'in_progress';
+  const isRunTimelineInactive = runDetail != null && runDetail.status !== 'in_progress';
   const timelineModel = useMemo(
     () => {
       if (selectedIsAssemblyAggregate) {

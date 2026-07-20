@@ -26,7 +26,7 @@ public static class SandboxPathValidator
             throw new SandboxViolationException(requestedPath ?? string.Empty, sandboxRoot, "empty path is not permitted");
 
         // 1. Reject absolute paths outright.
-        if (Path.IsPathRooted(requestedPath))
+        if (ShouldTreatAsAbsoluteOrEscapeAttempt(requestedPath))
             throw new SandboxViolationException(requestedPath, sandboxRoot, "absolute paths are not permitted");
 
         // 2. Segment scan - reject any ".." component before combining.
@@ -138,6 +138,44 @@ public static class SandboxPathValidator
         ValidateNoReparsePointsInAncestors(normalized, sandboxRoot);
 
         return normalized;
+    }
+
+    /// <summary>
+    /// Canonicalizes and validates the sandbox root itself. The root directory must
+    /// not be a symlink/junction/reparse point because all descendant containment
+    /// checks trust the configured root boundary once construction succeeds.
+    /// </summary>
+    public static string ValidateSandboxRoot(string sandboxRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sandboxRoot))
+            throw new SandboxViolationException(sandboxRoot ?? string.Empty, sandboxRoot ?? string.Empty, "sandbox root is not permitted to be empty");
+
+        var normalizedRoot = Path.GetFullPath(sandboxRoot);
+        if (Directory.Exists(normalizedRoot))
+        {
+            var rootInfo = new DirectoryInfo(normalizedRoot);
+            if (rootInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new SandboxViolationException(normalizedRoot, normalizedRoot,
+                    "sandbox root cannot be a symbolic link or junction");
+        }
+
+        return ValidateAbsoluteContained(normalizedRoot, normalizedRoot);
+    }
+
+    internal static bool ShouldTreatAsAbsoluteOrEscapeAttempt(string path)
+    {
+        if (Path.IsPathRooted(path))
+            return true;
+
+        if (path.StartsWith(@"\\?\", StringComparison.Ordinal) ||
+            path.StartsWith(@"\\.\", StringComparison.Ordinal) ||
+            path.StartsWith(@"\\", StringComparison.Ordinal))
+            return true;
+
+        return path.Length >= 3 &&
+               char.IsAsciiLetter(path[0]) &&
+               path[1] == ':' &&
+               (path[2] == '\\' || path[2] == '/');
     }
 
     /// <summary>

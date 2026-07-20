@@ -77,7 +77,7 @@ neither requirement since it never leaves the local subprocess.
 - surface: all
 
 The staging Agentweaver environment (the `agentweaver` namespace on the
-`agentweaver-aks-2` cluster) is periodically undeployed/deleted, not a permanently
+`agentweaver-aks` cluster) is periodically undeployed/deleted, not a permanently
 available fixture. Before treating "can't reach staging" as a Harness or application
 bug, run `kubectl get pods,svc,ingress -n agentweaver` first. If nothing is there,
 this is an environment-availability gap to raise/redeploy, not a defect to chase in

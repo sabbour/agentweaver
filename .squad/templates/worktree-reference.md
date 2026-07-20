@@ -1,126 +1,66 @@
 # Worktree Reference
 
-### Worktree Awareness
+## Team-root awareness
 
-Squad and all spawned agents may be running inside a **git worktree** rather than the main checkout. All `.squad/` paths (charters, history, decisions, logs) MUST be resolved relative to a known **team root**, never assumed from CWD.
+Squad agents may run inside a git worktree. Resolve `.squad/` paths from the
+`TEAM_ROOT` supplied by the Coordinator, never from an assumed current directory.
+The Coordinator resolves that root through `.squad/config.json` overrides, then the
+current worktree root, then the main checkout reported by `git worktree list --porcelain`.
 
-**Two strategies for resolving the team root:**
+## Worktree policy
 
-| Strategy | Team root | State scope | When to use |
-|----------|-----------|-------------|-------------|
-| **worktree-local** | Current worktree root | Branch-local — each worktree has its own `.squad/` state | Feature branches that need isolated decisions and history |
-| **main-checkout** | Main working tree root | Shared — all worktrees read/write the main checkout's `.squad/` | Single source of truth for memories, decisions, and logs across all branches |
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md#ai-agent-contributions) is the canonical
+contribution policy. This reference supplies the mechanics; do not create a competing
+policy in spawn prompts or skills.
 
-**How the Coordinator resolves the team root (on every session start):**
+| Contributor | Workspace rule |
+|-------------|----------------|
+| Locally run Squad agent (including Copilot CLI) | **Required:** one dedicated local git worktree per issue. |
+| Hosted agent (for example, GitHub `@copilot`) | Use the platform-created isolated branch/environment; no local worktree applies. |
+| Human contributor | Worktrees are optional; a normal branch in the main checkout is supported. |
 
-0. **Check config.json overrides first** — read `.squad/config.json` in the current directory (or at the git root):
-   - If `teamRoot` is set → Team root = that path. **STOP — do not walk further.**
-   - If `stateLocation` is `"external"` → Resolve external AppData path. Team root = external path. **STOP.**
-   - Otherwise → continue to step 1.
-1. **Check CWD first** — does `.squad/` exist in the current working directory?
-   - **Yes** → Team root = CWD. This handles monorepos where `.squad/` lives in a subfolder.
-2. If not, run `git rev-parse --show-toplevel` to get the current worktree root.
-3. Check if `.squad/` exists at that root (fall back to `.ai-team/` for repos that haven't migrated yet).
-   - **Yes** → use **worktree-local** strategy. Team root = current worktree root.
-   - **No** → use **main-checkout** strategy. Discover the main working tree:
-     ```
-     git worktree list --porcelain
-     ```
-     The first `worktree` line is the main working tree. Team root = that path.
-4. The user may override the strategy at any time (e.g., *"use main checkout for team state"* or *"keep team state in this worktree"*).
+## Locally run agent lifecycle
 
-**Passing the team root to agents:**
-- The Coordinator includes `TEAM_ROOT: {resolved_path}` in every spawn prompt.
-- Agents resolve ALL `.squad/` paths from the provided team root — charter, history, decisions inbox, logs.
-- Agents never discover the team root themselves. They trust the value from the Coordinator.
+Use one worktree per issue. Agents collaborating on that issue reuse it; locally run
+agents must not work issue changes in the shared main checkout.
 
-**Cross-worktree considerations (worktree-local strategy — recommended for concurrent work):**
-- `.squad/` files are **branch-local**. Each worktree works independently — no locking, no shared-state races.
-- When branches merge into main, `.squad/` state merges with them. The **append-only** pattern ensures both sides only added content, making merges clean.
-- A `merge=union` driver in `.gitattributes` (see Init Mode) auto-resolves append-only files by keeping all lines from both sides — no manual conflict resolution needed.
-- The Scribe commits `.squad/` changes to the worktree's branch. State flows to other branches through normal git merge / PR workflow.
+1. Fetch current `origin/main` and check for an existing matching worktree:
+   ```bash
+   git fetch origin main
+   git worktree list
+   ```
+2. If none exists, create it under `.worktrees/` using the issue branch:
+   ```bash
+   git worktree add ".worktrees/{branch-slug}" \
+     -b "squad/{issue-number}-{kebab-case-slug}" origin/main
+   ```
+3. Make the worktree ready. Reuse a `node_modules` junction/symlink from the main
+   checkout when safe; otherwise install dependencies in the worktree.
+4. Pass `WORKTREE_PATH` and `TEAM_ROOT` in the spawn context.
+5. A worktree isolates files and indexes; it does **not** provide integration
+   safety. Before merge, the feature branch must be updated to current
+   `origin/main` and required CI must rerun successfully.
+6. After the PR squash-merges, remove the worktree:
+   ```bash
+   git worktree remove ".worktrees/{branch-slug}"
+   git worktree prune
+   ```
 
-**Cross-worktree considerations (main-checkout strategy):**
-- All worktrees share the same `.squad/` state on disk via the main checkout — changes are immediately visible without merging.
-- **Not safe for concurrent sessions.** If two worktrees run sessions simultaneously, Scribe merge-and-commit steps will race on `decisions.md` and git index. Use only when a single session is active at a time.
-- Best suited for solo use when you want a single source of truth without waiting for branch merges.
+## Hosted and human work
 
-### Worktree Lifecycle Management
+For a hosted agent, pass the issue, branch, and PR target (`main`) to the hosting
+platform but do not create or clean up a local worktree. A human may use the same
+worktree commands for convenience, or simply create a short-lived branch in the main
+checkout.
 
-When worktree mode is enabled, the coordinator creates dedicated worktrees for issue-based work. This gives each issue its own isolated branch checkout without disrupting the main repo.
+Protected-branch lifecycle: `needsReview` → `readyToMerge` → `needsUpdate`
+(when `main` moved) → `ciFailure`/`readyToMerge` after the rerun → `done`.
+Sync from current `origin/main`, resolve any conflict or failure, test, push,
+and squash-merge only when GitHub reports the branch current and green. Never
+retarget to a local `dev` or `integration` branch.
 
-**Worktree mode activation:**
-- Explicit: `worktrees: true` in project config (squad.config.ts or package.json `squad` section)
-- Environment: `SQUAD_WORKTREES=1` set in environment variables
-- Default: `false` (backward compatibility — agents work in the main repo)
+## State considerations
 
-**Creating worktrees:**
-- One worktree per issue number
-- Multiple agents on the same issue share a worktree
-- Path convention: `{repo-parent}/{repo-name}-{issue-number}`
-  - Example: Working on issue #42 in `C:\src\squad` → worktree at `C:\src\squad-42`
-- Branch: `squad/{issue-number}-{kebab-case-slug}` (created from base branch, typically `main`)
-
-**Dependency management:**
-- After creating a worktree, link `node_modules` from the main repo to avoid reinstalling
-- Windows: `cmd /c "mklink /J {worktree}\node_modules {main-repo}\node_modules"`
-- Unix: `ln -s {main-repo}/node_modules {worktree}/node_modules`
-- If linking fails (permissions, cross-device), fall back to `npm install` in the worktree
-
-**Reusing worktrees:**
-- Before creating a new worktree, check if one exists for the same issue
-- `git worktree list` shows all active worktrees
-- If found, reuse it (cd to the path, verify branch is correct, `git pull` to sync)
-- Multiple agents can work in the same worktree concurrently if they modify different files
-
-**Cleanup:**
-- After a PR is merged, the worktree should be removed
-- `git worktree remove {path}` + `git branch -d {branch}`
-- Ralph heartbeat can trigger cleanup checks for merged branches
-
-### Pre-Spawn: Worktree Setup
-
-When spawning an agent for issue-based work (user request references an issue number, or agent is working on a GitHub issue):
-
-**1. Check worktree mode:**
-- Is `SQUAD_WORKTREES=1` set in the environment?
-- Or does the project config have `worktrees: true`?
-- If neither: skip worktree setup → agent works in the main repo (existing behavior)
-
-**2. If worktrees enabled:**
-
-a. **Determine the worktree path:**
-   - Parse issue number from context (e.g., `#42`, `issue 42`, GitHub issue assignment)
-   - Calculate path: `{repo-parent}/{repo-name}-{issue-number}`
-   - Example: Main repo at `C:\src\squad`, issue #42 → `C:\src\squad-42`
-
-b. **Check if worktree already exists:**
-   - Run `git worktree list` to see all active worktrees
-   - If the worktree path already exists → **reuse it**:
-     - Verify the branch is correct (should be `squad/{issue-number}-*`)
-     - `cd` to the worktree path
-     - `git pull` to sync latest changes
-     - Skip to step (e)
-
-c. **Create the worktree:**
-   - Determine branch name: `squad/{issue-number}-{kebab-case-slug}` (derive slug from issue title if available)
-   - Determine base branch (typically `main`, check default branch if needed)
-   - Run: `git worktree add {path} -b {branch} {baseBranch}`
-   - Example: `git worktree add C:\src\squad-42 -b squad/42-fix-login main`
-
-d. **Set up dependencies:**
-   - Link `node_modules` from main repo to avoid reinstalling:
-     - Windows: `cmd /c "mklink /J {worktree}\node_modules {main-repo}\node_modules"`
-     - Unix: `ln -s {main-repo}/node_modules {worktree}/node_modules`
-   - If linking fails (error), fall back: `cd {worktree} && npm install`
-   - Verify the worktree is ready: check build tools are accessible
-
-e. **Include worktree context in spawn:**
-   - Set `WORKTREE_PATH` to the resolved worktree path
-   - Set `WORKTREE_MODE` to `true`
-   - Add worktree instructions to the spawn prompt (see template below)
-
-**3. If worktrees disabled:**
-- Set `WORKTREE_PATH` to `"n/a"`
-- Set `WORKTREE_MODE` to `false`
-- Use existing `git checkout -b` flow (no changes to current behavior)
+Use the Coordinator-supplied `TEAM_ROOT` for shared Squad state. If a worktree has
+worktree-local state, it remains branch-local and merges through normal PR flow. Avoid
+concurrent writes to shared main-checkout state.

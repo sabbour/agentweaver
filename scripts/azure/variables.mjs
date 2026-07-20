@@ -34,7 +34,7 @@ export const LOG_ANALYTICS_WORKSPACE_NAME = "agentweaver-logs";
 
 export const DEFAULTS = Object.freeze({
   RESOURCE_GROUP: "agentweaver-rg",
-  CLUSTER_NAME: "agentweaver-aks-2",
+  CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
   KEYVAULT_NAME: "agentweaver-kv",

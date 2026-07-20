@@ -6,10 +6,11 @@
 //     apphost binary exists.
 //   - Starts the API (`dotnet run --project apps/Agentweaver.Api --no-build`)
 //     as a detached child process bound to http://localhost:5000.
+//   - Polls the API's /health endpoint (up to 60s), failing immediately if
+//     the API process exits and streaming its output for diagnosis.
 //   - Starts the Web UI (`npm run dev -- --force`) in apps/web, bound to
-//     http://localhost:5173.
-//   - Polls the API's /health endpoint (up to 60s) and the Vite dev server's
-//     stdout (up to 20s) for readiness.
+//     http://localhost:5173, after the API is healthy.
+//   - Polls the Vite dev server (up to 20s) for readiness.
 //   - Opens the browser at the Web UI URL unless --no-browser / opts.noBrowser.
 //
 // PLATFORM NOTE: start-dev.ps1 always launches the API through WSL2 (`wsl
@@ -68,10 +69,23 @@ any servers. Does NOT touch Azure. This replaces install.sh/install.ps1's
 install_local() and is what 'npm run setup' runs.
 `;
 
-/** Polls a URL's status via fetch until it responds 200 or the timeout elapses. Mirrors Invoke-WebRequest polling. */
-export async function waitForHttpOk(url, { timeoutMs = 60_000, intervalMs = 2_000, fetchImpl = fetch, sleep = defaultSleep, log = logDefault } = {}) {
+/** Polls a URL until it responds 200, its process exits, or the timeout elapses. */
+export async function waitForHttpOk(
+  url,
+  {
+    timeoutMs = 60_000,
+    intervalMs = 2_000,
+    fetchImpl = fetch,
+    sleep = defaultSleep,
+    log = logDefault,
+    childProcess,
+  } = {},
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
+    if (childProcess?.exitCode !== null && childProcess?.exitCode !== undefined) {
+      return false;
+    }
     try {
       const resp = await fetchImpl(url, { method: "GET" });
       if (resp.status === 200) return true;
@@ -128,24 +142,35 @@ export function startApi({ exec = execDefault, repoRoot = DEFAULT_REPO_ROOT, log
   if (isWindows) {
     const wslRoot = toWslPath(repoRoot);
     const command = `cd '${wslRoot}' && ASPNETCORE_ENVIRONMENT=Development dotnet run --project apps/Agentweaver.Api --configuration Release --urls ${API_URL} --no-build`;
-    return spawn("wsl", ["--exec", "bash", "-c", command], { stdio: "ignore" });
+    return spawn("wsl", ["--exec", "bash", "-c", command], { stdio: ["ignore", "inherit", "inherit"] });
   }
   return spawn("dotnet", ["run", "--project", "apps/Agentweaver.Api", "--configuration", "Release", "--urls", API_URL, "--no-build"], {
     cwd: repoRoot,
     env: { ...process.env, ASPNETCORE_ENVIRONMENT: "Development" },
-    stdio: "ignore",
+    stdio: ["ignore", "inherit", "inherit"],
   });
 }
 
 /** Starts the Web UI (Vite) dev server. Returns the child process handle. */
 export function startWeb({ repoRoot = DEFAULT_REPO_ROOT, log = logDefault, spawn = defaultSpawn } = {}) {
   log.info("Starting Web UI (Vite)...");
-  return spawn("npm", ["run", "dev", "--", "--force"], { cwd: path.join(repoRoot, "apps", "web"), stdio: "ignore" });
+  return spawn("npm", ["run", "dev", "--", "--force"], {
+    cwd: path.join(repoRoot, "apps", "web"),
+    stdio: ["ignore", "inherit", "inherit"],
+  });
 }
 
+// `npm` (and any other Node-ecosystem launcher) is a `.cmd` shim on Windows;
+// child_process.spawn cannot execute it directly without going through
+// cmd.exe (see lib/exec.mjs's module banner). Route through the same
+// buildSpawnPlan() the awaited run()/capture() helpers use so long-running
+// detached spawns (like the Web UI dev server) get correct `.cmd`/`.bat`
+// resolution instead of an unhandled `spawn npm ENOENT`.
 async function defaultSpawn(cmd, args, opts) {
   const { spawn } = await import("node:child_process");
-  return spawn(cmd, args, opts);
+  const { buildSpawnPlan } = await import("./lib/exec.mjs");
+  const plan = buildSpawnPlan(cmd, args);
+  return spawn(plan.file, plan.spawnArgs, { ...plan.spawnOpts, ...opts });
 }
 
 /** Opens the default browser at `url`, best-effort (never throws). */
@@ -182,6 +207,12 @@ export function installHint(tool, platform = process.platform) {
       darwin: "brew install node@20",
       linux: "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs",
     },
+    wsl2: {
+      // Windows-only: `wsl --install` needs an elevated PowerShell + a reboot;
+      // bubblewrap must then be installed *inside* the distro for real
+      // isolation (the WSL sandbox executor probes for it, never installs it).
+      win32: "wsl --install (elevated PowerShell, then reboot), then inside the distro: sudo apt-get install -y bubblewrap",
+    },
   };
   const byPlatform = commands[tool];
   const cmd = byPlatform?.[platform];
@@ -190,16 +221,55 @@ export function installHint(tool, platform = process.platform) {
 }
 
 /**
+ * Windows-only, **advisory** WSL2 presence check. On Windows, `dev.mjs`
+ * launches the API through `wsl --exec` because the API's sandbox executor
+ * needs the Linux bwrap backend for genuine filesystem/PID/network isolation
+ * (the native-Windows processcontainer backend cannot enforce network
+ * restrictions — see MxcSandboxExecutor's network warning — and on a stock
+ * Windows 11 host the mxc probe refuses the base-container tier and falls
+ * through to WSL2 anyway). Without WSL2, `npm run dev` fails at `wsl.exe`.
+ *
+ * This probe is deliberately kept to a cheap, reliable `wsl --status`
+ * exit-code check. It does NOT try to detect whether bubblewrap is installed
+ * *inside* the distro: that requires booting the default distro
+ * (`wsl --exec bash -lc 'command -v bwrap'`), which is slow and order-
+ * dependent (which distro is default), so it would be a flaky gate. That
+ * requirement is documented in getting-started.md instead, and the runtime
+ * degrades gracefully (bwrap -> unshare -> passthrough) with its own logged
+ * warnings. Because it is advisory, a false negative only prints an extra
+ * hint — it never fails setup.
+ */
+export async function checkWsl2({ exec = execDefault } = {}) {
+  const hint = installHint("wsl2");
+  const result = await exec.capture("wsl", ["--status"], { allowFailure: true });
+  if (result.code !== 0) {
+    return {
+      name: "wsl2",
+      ok: false,
+      advisory: true,
+      message: `WSL2 not detected — it is required for Windows local dev (the API runs its sandbox executor inside WSL2). ${hint}`,
+    };
+  }
+  return { name: "wsl2", ok: true, advisory: true, version: "detected" };
+}
+
+/**
  * Checks all prerequisites (git, .NET 10 SDK, Node 20+) concurrently and
  * reports every failure at once, rather than stopping at the first one --
  * so a user missing both dotnet and node learns about both in a single run
  * instead of fixing one, re-running, then discovering the next.
  *
+ * On Windows, an extra **advisory** WSL2 check is appended (see
+ * {@link checkWsl2}). Advisory results never flip the overall `ok`: WSL2 is
+ * not needed for `npm run setup` itself (which only restores/installs), only
+ * for the later `npm run dev`, so a missing WSL2 warns rather than fails.
+ *
  * Returns `{ ok, results }` where `results` is one entry per tool:
  * `{ name, ok, version }` on success or `{ name, ok: false, message }` on
- * failure (message already includes the platform-specific install hint).
+ * failure (message already includes the platform-specific install hint);
+ * advisory entries additionally carry `advisory: true`.
  */
-export async function checkPrerequisites({ exec = execDefault } = {}) {
+export async function checkPrerequisites({ exec = execDefault, platform = process.platform } = {}) {
   const specs = [
     { name: "git", cmd: "git", args: ["--version"] },
     { name: "dotnet", cmd: "dotnet", args: ["--version"], minMajor: 10, versionLabel: ".NET 10 SDK" },
@@ -224,7 +294,11 @@ export async function checkPrerequisites({ exec = execDefault } = {}) {
     }),
   );
 
-  return { ok: results.every((r) => r.ok), results };
+  if (platform === "win32") {
+    results.push(await checkWsl2({ exec }));
+  }
+
+  return { ok: results.filter((r) => !r.advisory).every((r) => r.ok), results };
 }
 
 function scaffoldDevelopmentAppSettings(repoRoot) {
@@ -259,10 +333,11 @@ export async function runLocalSetup({ exec = execDefault, log = logDefault, repo
   const { ok, results } = await checkPrerequisites({ exec });
   for (const r of results) {
     if (r.ok) log.ok(r.name === "git" ? r.version : `${r.name} ${r.version}`);
+    else if (r.advisory) log.warn(r.message);
     else log.error(r.message);
   }
   if (!ok) {
-    const failures = results.filter((r) => !r.ok);
+    const failures = results.filter((r) => !r.ok && !r.advisory);
     // Message intentionally short -- the per-tool details were already
     // printed above via log.error(); this is just the thrown signal that
     // stops setup and sets a non-zero exit code.
@@ -354,12 +429,20 @@ export async function run(opts = {}) {
   }
 
   const apiProcess = await startApi({ exec, repoRoot, log, spawn });
-  const webProcess = await startWeb({ repoRoot, log, spawn });
 
   log.info("");
   log.info(`Waiting for API health endpoint on ${API_URL} ...`);
-  const apiReady = await waitForHttpOk(`${API_URL}/health`, { fetchImpl, sleep, log });
-  log.info(apiReady ? "  API is ready" : `  API did not respond within the timeout window -- check the API process output`);
+  const apiReady = await waitForHttpOk(`${API_URL}/health`, { fetchImpl, sleep, log, childProcess: apiProcess });
+  if (!apiReady) {
+    const exitDetail =
+      apiProcess?.exitCode !== null && apiProcess?.exitCode !== undefined
+        ? `exited with code ${apiProcess.exitCode}`
+        : "did not become healthy within 60 seconds";
+    throw new Error(`API ${exitDetail}. Review the API output above for the startup failure.`);
+  }
+  log.info("  API is ready");
+
+  const webProcess = await startWeb({ repoRoot, log, spawn });
 
   log.info("Waiting for Vite...");
   const webReady = await waitForHttpOk(WEB_URL, { timeoutMs: 20_000, intervalMs: 1_000, fetchImpl, sleep, log }).catch(() => false);

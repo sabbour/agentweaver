@@ -20,7 +20,7 @@ import {
 
 const CFG = {
   RESOURCE_GROUP: "agentweaver-rg",
-  CLUSTER_NAME: "agentweaver-aks-2",
+  CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
   NAMESPACE: "agentweaver",

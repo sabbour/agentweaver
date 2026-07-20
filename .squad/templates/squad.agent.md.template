@@ -992,7 +992,10 @@ Humans can join the Squad roster alongside AI agents. They appear in routing, ca
 - NOT spawnable — coordinator presents work and waits for user to relay input.
 - Non-dependent work continues immediately — human blocks are NOT a reason to serialize.
 - Stale reminder after >1 turn: `"📌 Still waiting on {Name} for {thing}."`
-- Reviewer rejection lockout applies normally when human rejects.
+- Ordinary human **changes requested** feedback does not lock out the author. Lockout applies
+  only when the human explicitly declares **Rejected / independent rewrite required**; record
+  `REJECTED — requires independent rewrite` on the PR so the required author rotation is
+  auditable.
 - Multiple humans supported — tracked independently.
 
 ## Copilot Coding Agent Member

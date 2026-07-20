@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup, installHint, checkPrerequisites } from "../dev.mjs";
+import { API_URL, WEB_URL, parseArgs, HELP_TEXT, waitForHttpOk, toWslPath, run, runLocalSetup, installHint, checkPrerequisites, checkWsl2 } from "../dev.mjs";
 
 const TEST_TMP_ROOT = path.join(process.cwd(), "scripts", "azure", "tests", ".tmp");
 
@@ -120,6 +120,25 @@ test("waitForHttpOk: tolerates fetch throwing (treats as not-ready)", async () =
   assert.equal(attempts, 2);
 });
 
+test("waitForHttpOk: stops polling when the child process exits", async () => {
+  let calls = 0;
+  const childProcess = { exitCode: null };
+  const fetchImpl = async () => {
+    calls++;
+    childProcess.exitCode = 1;
+    throw new Error("ECONNREFUSED");
+  };
+  const ok = await waitForHttpOk("http://localhost:1234/health", {
+    fetchImpl,
+    sleep: async () => {},
+    log: noopLog(),
+    timeoutMs: 5000,
+    childProcess,
+  });
+  assert.equal(ok, false);
+  assert.equal(calls, 1);
+});
+
 test("run: --help returns without starting any processes", async () => {
   const spawnCalls = [];
   const spawn = (...args) => {
@@ -201,6 +220,32 @@ test("run: --skip-build does not invoke a build command", async () => {
 
   const buildCalls = execCalls.filter((c) => c.args?.includes("build"));
   assert.equal(buildCalls.length, 0);
+});
+
+test("run: fails clearly and does not start Web when the API exits before readiness", async () => {
+  const spawnCalls = [];
+  const spawn = (cmd, args, opts) => {
+    spawnCalls.push({ cmd, args, opts });
+    return { pid: 1, exitCode: 1 };
+  };
+
+  await assert.rejects(
+    run({
+      argv: ["--skip-build", "--no-browser"],
+      repoRoot: "C:\\repo",
+      exec: { async run() { return { code: 0 }; } },
+      log: noopLog(),
+      fetchImpl: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      spawn,
+      sleep: async () => {},
+    }),
+    /API exited with code 1.*startup failure/,
+  );
+
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0].cmd, "wsl");
 });
 
 test("run: --setup delegates to runLocalSetup and never starts the API/Web dev servers", async (t) => {
@@ -496,4 +541,52 @@ test("installHint: returns winget/brew/apt commands for each known tool on each 
 
 test("installHint: falls back to doc links on an unrecognized platform", () => {
   assert.match(installHint("git", "freebsd"), /git-scm\.org|git-scm\.com/);
+});
+
+test("installHint: wsl2 on win32 points at `wsl --install` + bubblewrap", () => {
+  const hint = installHint("wsl2", "win32");
+  assert.match(hint, /wsl --install/);
+  assert.match(hint, /bubblewrap/);
+});
+
+test("checkPrerequisites: appends an advisory WSL2 result on win32 (missing WSL2 does NOT flip ok)", async () => {
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "dotnet") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      if (cmd === "git") return { stdout: "git version 2.40", stderr: "", code: 0 };
+      return { stdout: "", stderr: "not found", code: 1 }; // wsl --status fails
+    },
+  };
+  const { ok, results } = await checkPrerequisites({ exec, platform: "win32" });
+  // All required tools present -> ok stays true even though WSL2 is missing.
+  assert.equal(ok, true);
+  const wsl = results.find((r) => r.name === "wsl2");
+  assert.ok(wsl, "expected a wsl2 result on win32");
+  assert.equal(wsl.advisory, true);
+  assert.equal(wsl.ok, false);
+  assert.match(wsl.message, /WSL2 not detected/);
+});
+
+test("checkPrerequisites: no WSL2 check off win32", async () => {
+  const exec = {
+    async capture(cmd) {
+      if (cmd === "dotnet") return { stdout: "10.0.100", stderr: "", code: 0 };
+      if (cmd === "node") return { stdout: "v22.12.0", stderr: "", code: 0 };
+      return { stdout: "git version 2.40", stderr: "", code: 0 };
+    },
+  };
+  const { results } = await checkPrerequisites({ exec, platform: "linux" });
+  assert.equal(results.find((r) => r.name === "wsl2"), undefined);
+});
+
+test("checkWsl2: ok when `wsl --status` exits 0, advisory-missing otherwise", async () => {
+  const present = await checkWsl2({ exec: { async capture() { return { stdout: "", stderr: "", code: 0 }; } } });
+  assert.equal(present.ok, true);
+  assert.equal(present.advisory, true);
+
+  const missing = await checkWsl2({ exec: { async capture() { return { stdout: "", stderr: "", code: 1 }; } } });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.advisory, true);
+  assert.match(missing.message, /required for Windows local dev/);
 });

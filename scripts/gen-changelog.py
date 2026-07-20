@@ -1,13 +1,33 @@
 #!/usr/bin/env python3
-"""One-off generator for CHANGELOG.md from git tag history.
+"""Generator for the in-repo CHANGELOG.md from git tag/commit history.
 
-Not a maintained release-automation script - just used to bootstrap the
-initial CHANGELOG.md from existing tags/commits. Kept in scripts/ for
-reference in case the changelog needs to be regenerated/rebuilt later.
+This is the single source of truth for CHANGELOG.md: the file is generated,
+never hand-edited. Re-run `python scripts/gen-changelog.py` to rebuild it from
+the annotated `vX.Y.Z` tags and the conventional-commit subjects between them
+(bucketed by prefix: fix / feat / refactor|chore|perf|build|ci / docs / test).
+
+Scope note: this populates ONLY the in-repo CHANGELOG.md. It is a *separate*
+artifact from the GitHub Release notes, which `scripts/azure/release.mjs`
+generates independently from merged-PR titles at release time (see RELEASING.md
+-> "Changelog vs. GitHub Release notes"). The two are not redundant -- they
+describe the same releases from two sources (commit subjects vs. PR titles) and
+never write to the same place. Both anchor on the annotated `vX.Y.Z` tag as the
+definition of "a release", so with squash-merge (one commit == one merged PR)
+they stay in agreement.
 """
 import subprocess
 import re
 from collections import OrderedDict
+
+# Shared "is this a real, final release tag" predicate. Must stay in lock-step
+# with RELEASE_TAG_PATTERN in scripts/azure/release.mjs -- an identical regex
+# (`^v\d+\.\d+\.\d+$`) so both tools agree on what counts as a release boundary.
+# Lightweight tags and prerelease tags (e.g. v0.9.6-rc1) are excluded so they
+# can't pollute the changelog's tag ranges.
+RELEASE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+
+def is_release_tag(tag: str) -> bool:
+    return bool(RELEASE_TAG_RE.match(tag.strip()))
 
 def run(args):
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
@@ -16,6 +36,9 @@ def run(args):
 raw = run(["git", "for-each-ref", "--sort=creatordate",
            "--format=%(refname:short)|%(creatordate:short)", "refs/tags"])
 tags = [line.split("|") for line in raw.strip().splitlines() if line.strip()]
+# Keep only final vX.Y.Z release tags so prerelease/lightweight tags don't
+# create bogus range boundaries.
+tags = [t for t in tags if is_release_tag(t[0])]
 
 # Build ranges: (prev_tag_or_None, tag, date)
 ranges = []
@@ -51,9 +74,13 @@ def categorize(subject: str) -> str:
             return name
     return "Other"
 
+first_tag = tags[0][0] if tags else ""
+last_tag = tags[-1][0] if tags else ""
+tag_range = f"(`{first_tag}` through `{last_tag}`)" if first_tag and last_tag else ""
+
 out_lines = []
 out_lines.append("# Changelog\n")
-out_lines.append("All notable changes to Agentweaver are documented in this file, generated from the repository's git tag/commit history (`v0.7.0` through `v0.9.60`).\n")
+out_lines.append(f"All notable changes to Agentweaver are documented in this file, generated from the repository's git tag/commit history {tag_range}.\n".replace("  ", " "))
 out_lines.append(
     "Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by "
     "release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, "

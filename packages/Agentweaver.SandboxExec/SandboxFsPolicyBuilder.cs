@@ -22,9 +22,9 @@ public static class SandboxFsPolicyBuilder
         SandboxPolicyEnrichment? enrichment = null,
         IReadOnlyList<string>? additionalReadWriteRoots = null)
     {
-        // Canonicalize sandbox root through the full validator.
-        var canonicalRoot = SandboxPathValidator.ValidateAbsoluteContained(
-            Path.GetFullPath(sandboxRoot), Path.GetFullPath(sandboxRoot));
+        // Canonicalize sandbox root through the full validator and reject
+        // symlink/junction roots before descendant containment trusts them.
+        var canonicalRoot = SandboxPathValidator.ValidateSandboxRoot(sandboxRoot);
 
         var rwPaths = new List<string>();
         var roPaths = new List<string>();
