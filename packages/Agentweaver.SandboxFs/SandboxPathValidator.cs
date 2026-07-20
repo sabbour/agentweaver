@@ -172,10 +172,19 @@ public static class SandboxPathValidator
             path.StartsWith(@"\\", StringComparison.Ordinal))
             return true;
 
-        return path.Length >= 3 &&
+        if (path.Length >= 3 &&
+            char.IsAsciiLetter(path[0]) &&
+            path[1] == ':' &&
+            (path[2] == '\\' || path[2] == '/'))
+            return true;
+
+        // Drive-relative paths like "C:foo" (letter + ':' with no following
+        // separator) are ambiguous — Path.IsPathRooted treats these as rooted
+        // on Windows but NOT on Linux/macOS, so without this explicit check
+        // they'd slip past containment validation when running on Linux.
+        return path.Length >= 2 &&
                char.IsAsciiLetter(path[0]) &&
-               path[1] == ':' &&
-               (path[2] == '\\' || path[2] == '/');
+               path[1] == ':';
     }
 
     /// <summary>

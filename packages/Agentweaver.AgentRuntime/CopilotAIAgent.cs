@@ -1817,8 +1817,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var args = new Dictionary<string, object> { ["path"] = path };
 
         if (path.Length > 0 &&
-            (path[^1] == Path.DirectorySeparatorChar ||
-             path[^1] == Path.AltDirectorySeparatorChar ||
+            (path[^1] == '\\' ||
+             path[^1] == '/' ||
              Directory.Exists(path)))
         {
             return ("list_directory", args);

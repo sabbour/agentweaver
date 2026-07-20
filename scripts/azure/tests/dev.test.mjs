@@ -245,7 +245,9 @@ test("run: fails clearly and does not start Web when the API exits before readin
   );
 
   assert.equal(spawnCalls.length, 1);
-  assert.equal(spawnCalls[0].cmd, "wsl");
+  // startApi() only routes through WSL2 on win32 (module-level `isWindows`,
+  // not injectable); on Linux/macOS CI runners it spawns `dotnet` directly.
+  assert.equal(spawnCalls[0].cmd, process.platform === "win32" ? "wsl" : "dotnet");
 });
 
 test("run: --setup delegates to runLocalSetup and never starts the API/Web dev servers", async (t) => {

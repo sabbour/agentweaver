@@ -815,10 +815,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var path = request.Path ?? "";
         var args = new Dictionary<string, object> { ["path"] = path };
 
-        // Heuristic: trailing separator OR existing directory → list_directory
+        // Heuristic: trailing separator OR existing directory → list_directory.
+        // Check literal '\' and '/' rather than Path.DirectorySeparatorChar/
+        // AltDirectorySeparatorChar: on Linux both constants equal '/', so a
+        // caller-supplied Windows-style path (trailing '\') would otherwise
+        // go unrecognized as a directory hint.
         if (path.Length > 0 &&
-            (path[^1] == Path.DirectorySeparatorChar ||
-             path[^1] == Path.AltDirectorySeparatorChar ||
+            (path[^1] == '\\' ||
+             path[^1] == '/' ||
              Directory.Exists(path)))
         {
             return ("list_directory", args);

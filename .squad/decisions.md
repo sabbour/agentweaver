@@ -67,3 +67,71 @@
 - CONTRIBUTING and RELEASING now treat green `main` CI as the release bar, document the issue/reviewer/rubber-duck/decisions-inbox workflow, and require docs-as-you-go updates for shipped behavior.
 - `scripts/azure/dev.mjs` now includes GitHub OAuth setup guidance, scaffolds `appsettings.Development.json` when needed, and prints a dev-ready summary aligned to the supported npm scripts.
 - The docs home page now includes a local/Azure Quick Start hero block. After rubber-duck approval, the full batch was verified (220/220) and committed/pushed to `origin/main` as `95a855a0`.
+
+
+---
+
+## 2026-07-20T12-08-00-07-00 — Release/versioning policy, recovery semantics, and ADR/label governance
+
+**Scope sources merged:** `link-release-process-design.md`, `link-release-process-docs-and-tag-predicate.md`, `link-release-adrs.md`.
+
+- While Agentweaver remains `0.x`, patch bumps are for backwards-compatible bug fixes only; minor bumps carry both new features and breaking changes; major is reserved until the project intentionally declares `1.0.0` stability.
+- `azure:deploy` and `azure:upgrade` are environment iteration commands, not release cuts. Only `azure:release` creates the official version/tag/release path.
+- `CHANGELOG.md` (generated from conventional-commit subjects) and GitHub Release notes (generated from merged PR titles) are intentionally separate artifacts; the authoritative release boundary remains the annotated `vX.Y.Z` tag. The shared real-release tag predicate is `^v\d+\.\d+\.\d+$`.
+- `azure:release --resume vX.Y.Z` is the supported recovery path after the version-bump commit, annotated tag, and GitHub Release already exist. The normal bump path remains non-idempotent, and a later follow-up should split prepare-vs-publish so protected-main release PRs can carry the `VERSION` bump before tagging.
+- Durable cross-cutting architecture decisions now belong in numbered ADRs under `docs/architecture/decisions/`; routine operational/team decisions remain in `.squad/decisions.md`.
+- `.github/labels.json` is the canonical future label taxonomy. `workstream:*` is deprecated in favor of the smaller `area:*` vocabulary without rewriting historical issue labels.
+- Docs/process corrections from the same review set are durable: missing `bubblewrap` inside WSL means fallback to fully unsandboxed passthrough (not a weaker `unshare` path), CONTRIBUTING now documents explicit new-feature and bug-fix issue/spec workflows, and agent worktree guidance must reflect the real `.worktrees/{branch-slug}` layout.
+
+---
+
+## 2026-07-20T12-20-00-07-00 — Local dev, Azure verification, and protected-main clarity
+
+**Scope source merged:** `link-devtest-clarity.md`.
+
+- Local `npm run dev` is branch-agnostic and never interacts with GitHub protection. The normal flow is: feature worktree/branch → local verification → optional Azure verification → PR → protected-branch admission on `main`.
+- `azure:deploy` is first/full idempotent provisioning, `azure:upgrade` is normal current-HEAD iteration on an existing environment, and `azure:verify` is read-only live verification. `--allow-dirty` is for personal/throwaway use only, not shared validation.
+- The local-dev API readiness failure was a real SQLite migration-ordering bug, not slow startup: existing databases missing `backlog_tasks.parent_prd_run_id` crashed because schema setup tried to create `idx_backlog_tasks_parent_promotion_key` before the idempotent `ALTER TABLE` migrations ran. The index must only be created in the post-column migration sequence; Vite must not start unless API health succeeds.
+- There is no supported long-lived local integration/staging branch. The audited local-only refs (`main-staging`, `integration`, `integration-v0.9.71`, `release-staging`, `release/v0.9.71-foundation-integration`, `main-tip`, `localmain/main`, `merge-docs-landing-main`) are safe to delete once any attached worktree is removed.
+
+---
+
+## 2026-07-20T14-05-53-07-00 — Branching strategy settled: protected `main` only
+
+**Scope sources merged:** `morpheus-branching-strategy-design.md`, `Morpheus-use-protected-trunk-based-github-flow-with-a-seria.md`, plus the Merge Queue availability correction recorded in `link-devtest-clarity.md`.
+
+- Settled decision: keep `main` as the only long-lived branch. Do not add `dev`, `preview`, release-candidate, or routine release-maintenance tiers for current Agentweaver development.
+- Every change, including docs-only changes and release `VERSION` bumps, must land through a short-lived PR. Required blocking checks are `.NET tests`, `Node toolchain tests`, `Web tests`, and `Docs build`; `Web lint` stays advisory until its existing backlog is cleared.
+- Protect `main` for maintainers too: squash-only merge, automatic source-branch deletion, and only a narrow, documented, audited emergency/admin bypass.
+- Release flow stays tag-centric: merge a normal protected PR for the `VERSION` bump, then create annotated tag `vX.Y.Z` on that exact green merged SHA and publish/deploy from the tag.
+- GitHub Merge Queue is unavailable today because `sabbour/agentweaver` is a personal-account repository. The earlier merge-queue-of-one design and the later dev/preview/main promotion alternative are retained only as audit trail; the enforceable current design is strict protected-PR admission on `main`.
+
+---
+
+## 2026-07-20T12-25-00-07-00 — Review outcome auditability and deterministic Squad triage
+
+**Scope source merged:** `link-skills-reconcile.md`.
+
+- Ordinary GitHub `Changes requested` feedback does not lock out the original author. Lockout applies only when a reviewer explicitly records `REJECTED — requires independent rewrite`; that PR marker is the durable audit trail.
+- Feature and bug issue templates apply the existing `squad` label by default so `squad-triage.yml` runs deterministically. Issues created outside those templates must receive `squad` manually.
+- Operating expectation: triage P0 Squad issues the same business day and route other new Squad issues within a few business days.
+
+---
+
+## 2026-07-20T12-30-00-07-00 — Default AKS cluster name and active-doc defaults
+
+**Scope source merged:** `link-rename-cluster.md`.
+
+- The configured/documented default AKS cluster name is now `agentweaver-aks` instead of `agentweaver-aks-2`.
+- This is a defaults-only change across active code, tests, params, docs, and diagrams. Historical records and descriptions of past live clusters are not retroactively rewritten.
+
+---
+
+## 2026-07-20T12-35-00-07-00 — Sandbox containment, persistence fallback, and merge-resolution follow-ups
+
+**Scope sources merged:** `smith-ci-red-investigation.md`, `tank-v0971-merge-resolutions.md`.
+
+- The recurring red `.NET tests` runs were real product failures, not flakes. Linux containment must reject Windows-style absolute, UNC, and device paths before relative normalization, and sandbox roots must be validated as non-symlink/non-reparse before they are trusted.
+- Real-sandbox Linux/WSL end-to-end tests should early-exit when the required backend is unavailable instead of trying to dynamically skip through a failure path.
+- Coordinator persistence must retain the direct `MemoryDbContext` RunEvents fallback when `IRunEventStream` is not registered (as in test harness construction), while still preferring durable event-stream append in production.
+- Remaining Windows PodLocal workspace failures are an environment/path-length limitation on this machine, not evidence that the v0.9.71 merge changed pod-local workspace behavior.
