@@ -26,6 +26,30 @@ You need these tools before you start:
 - A GitHub account with an active GitHub Copilot subscription — the web UI signs you in via OAuth.
 - A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback`.
 
+## npm script reference
+
+Every build/deploy/upgrade/release/dev workflow runs through one cross-platform Node CLI (`scripts/azure/cli.mjs`) — no bash or PowerShell required on any platform. The root `package.json` exposes these scripts:
+
+| Script | What it does |
+|---|---|
+| `npm start` / `npm run dev` | Local dev orchestration (API + web), browser auto-open disabled. Alias for `azure:dev -- --no-browser`. |
+| `npm run azure:deploy` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. |
+| `npm run azure:deploy -- --local` | Local-only setup: checks prerequisites, installs dependencies — skips the Azure pipeline entirely. This is what the [Install (one command)](#install-one-command) quick start uses. |
+| `npm run azure:upgrade` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
+| `npm run azure:release` | Semver release workflow (`major`/`minor`/`patch`): bumps `VERSION`, tags, generates a GitHub release, and composes over the same build/deploy engine as `deploy`/`upgrade`. Add `-- --dry-run` to preview without making changes. |
+| `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |
+| `npm run azure:dev` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). |
+| `npm run dev:web` | Builds and starts only the web UI (Vite dev server) against an API you're already running separately. |
+| `npm run dev:api` | Builds and runs only the .NET API. |
+| `npm run docs:dev` / `docs:build` / `docs:preview` | This documentation site (VitePress). |
+
+Every `azure:*` script accepts `-- --help` to print its full flag list, for example `npm run azure:deploy -- --help`. Useful flags across commands:
+
+- **`azure:deploy`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--keyvault-name`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`.
+- **`azure:upgrade`**: `--allow-dirty` to bypass the clean-working-tree check (dev/test escape hatch only — never use for a real upgrade).
+- **`azure:dev`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step).
+- **`azure:release`**: positional `major|minor|patch` bump argument, `--dry-run` (or `DRY_RUN=true`) to preview without tagging/publishing.
+
 ## 1. Configure the API
 
 The API reads settings from `appsettings.json` plus the environment-specific file for `ASPNETCORE_ENVIRONMENT`. If you want to use `apps/Agentweaver.Api/appsettings.Local.json`, set the environment to `Local` before you start the API.
