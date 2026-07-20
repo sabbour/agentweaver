@@ -8,7 +8,7 @@ name: CI
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
 #   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
-#   - node --test scripts/azure/tests/*.test.mjs
+#   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 #   - npm --prefix apps/web run test
 #   - npm --prefix apps/web run lint   (advisory -- see the web-lint job)
 #   - npm run docs:build
@@ -68,7 +68,7 @@ jobs:
       # The scripts/azure toolchain uses only Node built-ins (no dependencies),
       # so there is nothing to install -- run the built-in test runner directly.
       - name: Run Node toolchain tests
-        run: node --test scripts/azure/tests/*.test.mjs
+        run: node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 
   web-tests:
     name: Web tests
@@ -140,3 +140,19 @@ jobs:
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
         run: npm run docs:build
+
+  changeset-advisory:
+    name: Changeset advisory
+    if: github.event_name == 'pull_request' && (github.base_ref == 'dev' || startsWith(github.base_ref, 'release/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm run changeset:check -- --base origin/${{ github.base_ref }}

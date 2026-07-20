@@ -14,6 +14,19 @@
     "dev:api": "dotnet build apps/Agentweaver.Api -c Release -p:CopilotSkipCliDownload=true && dotnet run --project apps/Agentweaver.Api -c Release --no-build -p:CopilotSkipCliDownload=true",
     "docs:dev": "npm --prefix docs run dev",
     "docs:build": "npm --prefix docs run build",
-    "docs:preview": "npm --prefix docs run preview"
-  }
+    "docs:preview": "npm --prefix docs run preview",
+    "changeset": "changeset add",
+    "changeset:status": "changeset status --verbose",
+    "changeset:check": "node scripts/changesets/check.mjs",
+    "version:check": "node scripts/changesets/check-version.mjs",
+    "release:plan": "node scripts/changesets/plan-release.mjs",
+    "release:prepare": "node scripts/changesets/prepare-release.mjs",
+    "release:sync-dev": "node scripts/changesets/sync-dev.mjs",
+    "release:stable": "node scripts/azure/cli.mjs release"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.31.0",
+    "@types/node": "^26.1.1"
+  },
+  "version": "0.9.70"
 }
