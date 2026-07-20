@@ -266,9 +266,9 @@ export async function runLocalSetup({ exec = execDefault, log = logDefault, repo
 
   log.info("");
   log.section("LOCAL DEV READY");
-  log.info("  Start the API:   dotnet run --project apps/Agentweaver.Api");
-  log.info("  Start the Web:   npm --prefix apps/web run dev");
-  log.info("  Or both at once: node scripts/azure/cli.mjs dev");
+  log.info("  Start the API:   npm run dev:api");
+  log.info("  Start the Web:   npm run dev:web");
+  log.info("  Or both at once: npm run dev");
 
   return { ok: true };
 }
