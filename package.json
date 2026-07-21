@@ -4,6 +4,7 @@
   "scripts": {
     "start": "node scripts/azure/cli.mjs dev --no-browser",
     "dev": "node scripts/azure/cli.mjs dev --no-browser",
+    "dev:open": "node scripts/azure/cli.mjs dev",
     "setup": "node scripts/azure/cli.mjs dev --setup",
     "azure:provision-infra": "node scripts/azure/cli.mjs provision-infra",
     "azure:deploy-from-local": "node scripts/azure/cli.mjs deploy-from-local",
@@ -11,7 +12,6 @@
     "azure:deploy-from-release": "node scripts/azure/cli.mjs deploy-from-release",
     "azure:release": "node scripts/azure/cli.mjs release",
     "azure:verify": "node scripts/azure/cli.mjs verify",
-    "azure:dev": "node scripts/azure/cli.mjs dev",
     "dev:web": "npm --prefix apps/web run build && npm --prefix apps/web run dev",
     "dev:api": "dotnet build apps/Agentweaver.Api -c Release -p:CopilotSkipCliDownload=true && dotnet run --project apps/Agentweaver.Api -c Release --no-build -p:CopilotSkipCliDownload=true",
     "docs:dev": "npm --prefix docs run dev",
