@@ -69,6 +69,8 @@ squad/{issue-number}-{kebab-case-slug}
   and a clean checkout at that tag commit.
 - `azure:deploy-from-local` ships the current local HEAD under a short-SHA
   image identifier and never creates release identity.
+- `azure:deploy-from-commit -- <sha-or-ref>` deploys any exact committed ref
+  through a temporary detached worktree without switching the caller's checkout.
 - `azure:provision-infra` is the full Azure infrastructure installer and
   reconciler, not the command for deploying a published release.
 - `azure:release` composes publication and the first release deployment.

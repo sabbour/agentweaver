@@ -228,6 +228,7 @@ staging **git branch**.
 feature branch/worktree
   ├─ npm run dev                         local-only test, at any time
   ├─ azure:provision-infra / azure:deploy-from-local ─────> Azure dev/test/staging environment
+  ├─ azure:deploy-from-commit <ref> ──────────────────────> exact teammate/PR/older commit
   │                                      (optional manual verification at any time)
   └─ PR CI ─> update to latest dev ─> required CI rerun ─> protected dev
                                                                │
@@ -266,6 +267,8 @@ loop from the current `HEAD` — including an unmerged feature-branch `HEAD` —
 then `npm run azure:verify` if you want to rerun only the live checks. For a
 shared environment, coordinate ownership and prefer a clean commit;
 `azure:deploy-from-local -- --allow-dirty` is only a personal/throwaway test escape hatch.
+Use `npm run azure:deploy-from-commit -- <sha-or-ref>` when the source is an
+already-committed ref that should be deployed without switching this checkout.
 
 > **This is a dev/test/staging deploy — not a release.** `azure:provision-infra` (and
 > `azure:deploy-from-local`) stand up or update a live Azure environment for development,
@@ -321,6 +324,7 @@ required on any platform. The root `package.json` exposes these scripts:
 | `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
 | `npm run azure:provision-infra` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:deploy-from-local` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
+| `npm run azure:deploy-from-commit -- <sha-or-ref>` | Fetches and resolves an arbitrary committed ref, deploys it through a temporary detached worktree, and leaves the caller's checkout untouched. |
 | `npm run release:publish` | From a prepared exact-main checkout, creates the annotated tag and GitHub Release without deploying. |
 | `npm run azure:deploy-from-release -- vX.Y.Z` | Deploys an existing published release from an exact checkout of its tag commit. |
 | `npm run azure:release` | Composes `release:publish` and `azure:deploy-from-release` for the first shipment. |
@@ -334,6 +338,7 @@ Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full
 
 - **`azure:provision-infra`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--keyvault-name`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`.
 - **`azure:deploy-from-local`**: `--allow-dirty` to bypass the clean-working-tree check (personal/throwaway testing only).
+- **`azure:deploy-from-commit`**: one required SHA or ref; no dirty-tree option because only committed source is eligible.
 - **`azure:deploy-from-release`**: positional existing `vX.Y.Z` tag; the checkout must be clean and at that tag commit.
 - **`azure:dev` / `dev` / `setup`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step), `--setup` (local-only setup, no servers started — this is what `npm run setup` runs).
 - **`release:publish` / `azure:release`**: `--dry-run`; `azure:release -- --resume vX.Y.Z` resumes a partially completed first shipment.

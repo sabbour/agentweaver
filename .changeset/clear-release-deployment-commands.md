@@ -2,4 +2,4 @@
 "agentweaver": minor
 ---
 
-Separate repository release publication, published-release deployment, local-source deployment, and Azure infrastructure provisioning into explicit commands.
+Separate repository release publication, published-release deployment, local-checkout deployment, arbitrary-commit deployment, and Azure infrastructure provisioning into explicit commands.

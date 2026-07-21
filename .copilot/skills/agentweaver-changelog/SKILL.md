@@ -32,7 +32,8 @@ triggers: ["generate the changelog", "changelog for this release", "add a change
 - `release:publish` creates repository release identity but performs no Azure
   operations.
 - `azure:deploy-from-release` consumes an existing published `vX.Y.Z`.
-- `azure:deploy-from-local` and `azure:provision-infra` use SHA identity and
+- `azure:deploy-from-local`, `azure:deploy-from-commit`, and
+  `azure:provision-infra` use SHA identity and
   never consume changesets or create a release.
 - Never hand-edit or regenerate the changelog after publication.
 

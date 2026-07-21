@@ -99,6 +99,12 @@ the tag and then redeploys:
 npm run azure:deploy-from-local
 ```
 
+To deploy another committed ref without switching the current checkout:
+
+```bash
+npm run azure:deploy-from-commit -- <sha-or-ref>
+```
+
 ## Observability notes
 
 - Token and AIC usage data now lives in **Application Insights / Azure Monitor**, not in the application database.
@@ -115,6 +121,7 @@ npm run azure:deploy-from-local
 | `npm run azure:deploy-from-release -- vX.Y.Z` | Deploy an existing published release |
 | `npm run azure:provision-infra` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
 | `npm run azure:deploy-from-local` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
+| `npm run azure:deploy-from-commit -- <sha-or-ref>` | Deploy an arbitrary exact commit through a temporary detached worktree |
 | `npm run azure:verify` | Verify the current deployment |
 
 Use `pnpm run` in place of `npm run` if pnpm is your selected package runner.

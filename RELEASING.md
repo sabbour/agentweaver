@@ -9,6 +9,7 @@ Repository release identity and Azure deployment are separate operations.
 |---|---|---|
 | `npm run azure:provision-infra` | Current HEAD short SHA by default | Provision or reconcile Azure infrastructure and perform its initial deployment. |
 | `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
+| `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
 | `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag and GitHub Release from the exact protected-`main` SHA. No Azure work. |
 | `npm run azure:deploy-from-release -- vX.Y.Z` | Existing published semver tag | Build/retag and deploy that exact release to the configured environment. |
 | `npm run azure:release` | Prepared `vX.Y.Z` | First-shipment convenience command: publish, then deploy the same release. |
@@ -18,6 +19,10 @@ Repository release identity and Azure deployment are separate operations.
 local HEAD SHA
   └─ azure:deploy-from-local
        └─ image:<short-SHA> → running dev/test environment
+
+arbitrary branch / PR tip / commit
+  └─ azure:deploy-from-commit -- <sha-or-ref>
+       └─ detached exact-commit worktree → image:<short-SHA> → running environment
 
 prepared exact main SHA
   └─ release:publish
@@ -113,6 +118,20 @@ It mints a short-SHA image tag, builds, deploys, performs post-deploy provenance
 verification, reapplies and waits for the AgentHost warm pool, and never creates
 or consumes a semver release. `--allow-dirty` is only for personal/throwaway
 testing; the tag identifies the base HEAD commit, not uncommitted content.
+
+Use `azure:deploy-from-commit` to deploy an already-committed branch, PR tip, or
+older commit without switching the current checkout:
+
+```bash
+npm run azure:deploy-from-commit -- origin/teammate-branch
+npm run azure:deploy-from-commit -- pull/123/head
+npm run azure:deploy-from-commit -- abc1234
+```
+
+It fetches and resolves the argument to an exact commit, creates a temporary
+detached worktree, runs the same SHA deployment pipeline as
+`azure:deploy-from-local`, and removes the worktree afterward. It never includes
+uncommitted changes and has no dirty-tree override.
 
 After any deployment, use `npm run azure:verify` or inspect the cluster directly
 before considering the change shipped.

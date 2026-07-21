@@ -9,6 +9,7 @@ import * as logDefault from "./lib/log.mjs";
 const SUBCOMMANDS = Object.freeze([
   "provision-infra",
   "deploy-from-local",
+  "deploy-from-commit",
   "deploy-from-release",
   "publish-release",
   "release",
@@ -24,6 +25,7 @@ Usage:
 Commands:
   provision-infra      Provision/reconcile Azure infrastructure and perform its initial deployment.
   deploy-from-local    Deploy current local HEAD using a SHA image identifier.
+  deploy-from-commit   Deploy an arbitrary exact commit without switching the caller's checkout.
   deploy-from-release  Deploy an existing published vX.Y.Z release.
   publish-release      Tag and publish a prepared exact-main release without deploying.
   release              Publish, then deploy, a prepared exact-main release.
@@ -68,6 +70,8 @@ export async function run(argv = [], opts = {}) {
         return importFn("./provision-infra.mjs");
       case "deploy-from-local":
         return importFn("./deploy-from-local.mjs");
+      case "deploy-from-commit":
+        return importFn("./deploy-from-commit.mjs");
       case "deploy-from-release":
         return importFn("./deploy-from-release.mjs");
       case "publish-release":

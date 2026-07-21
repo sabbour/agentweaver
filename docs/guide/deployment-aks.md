@@ -101,6 +101,17 @@ builds and pushes images, redeploys, verifies provenance, and cycles the
 AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
 never manual pod deletion).
 
+To deploy an arbitrary committed branch, PR ref, or historical commit without
+switching the caller's checkout:
+
+```bash
+npm run azure:deploy-from-commit -- <sha-or-ref>
+```
+
+The ref is fetched and resolved to an exact commit, deployed from a temporary
+detached worktree, and identified by its short SHA. Uncommitted state is never
+included.
+
 ### Publishing and deploying a release
 
 ```bash
@@ -158,7 +169,7 @@ described above.
 | Symptom | Check |
 |---|---|
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
-| ImagePullBackOff | confirm ACR attach and image tag was pushed (`azure:provision-infra`/`azure:deploy-from-local` build+push this step) |
+| ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
 | API/MCP auth failures | confirm Key Vault has `github-client-id`, `github-client-secret`, `mcp-oauth-signing-key` |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

@@ -256,6 +256,113 @@ export async function verifyWarmPoolImage(namespace, expectedTag, opts = {}) {
 }
 
 /**
+ * Shared exact-commit deployment pipeline used by local-HEAD and arbitrary-ref
+ * deployment commands. The caller owns commit/ref resolution and ensures
+ * `cwd` contains the exact source tree represented by `verifyGitRef`.
+ */
+export async function deployCommittedSha(cfg, opts = {}) {
+  const {
+    imageTag,
+    verifyGitRef,
+    exec = execDefault,
+    log = logDefault,
+    git = gitDefault,
+    kubectl = kubectlDefault,
+    buildStep = buildStepDefault,
+    provenanceStep = provenanceStepDefault,
+    deployStep = deployStepDefault,
+    cwd = cfg.repoRoot,
+    sectionTitle = "Agentweaver SHA deployment: build + redeploy + warm-pool cycle",
+    summaryTitle = "SHA DEPLOYMENT SUMMARY",
+    retryLabel = "SHA deployment",
+  } = opts;
+
+  if (!imageTag) {
+    throw new Error("deployCommittedSha requires an immutable imageTag.");
+  }
+
+  log.section(sectionTitle);
+  log.field("Deployment tag", imageTag);
+
+  const deploymentCfg = {
+    ...cfg,
+    IMAGE_TAG: imageTag,
+    AGENTHOST_IMAGE_TAG: imageTag,
+    TARGET_GIT_REF: verifyGitRef,
+    repoRoot: cwd,
+  };
+
+  log.info("");
+  log.info("Step 1/4: Building + pushing images...");
+  const buildResult = await buildStep.run(deploymentCfg, { exec, git, kubectl });
+
+  log.info("");
+  log.info("Step 2/4: Redeploying (re-applies SandboxTemplate + SandboxWarmPool)...");
+  const deployResult = await deployStep.run(deploymentCfg, {
+    run: exec.run,
+    capture: exec.capture,
+    log,
+    repoRoot: cwd,
+  });
+
+  log.info("");
+  log.info("Step 3/4: Verifying image provenance...");
+  const provenanceResult = await provenanceStep.run(
+    { ...deploymentCfg, VERIFY_GIT_REF: verifyGitRef },
+    { exec, git, kubectl },
+  );
+
+  log.info("");
+  log.info("Step 4/4: Cycling the AgentHost warm pool (reapply-and-wait; no manual pod deletion)...");
+  const warmPoolStatus = await waitForWarmPoolReady(deploymentCfg.NAMESPACE, { exec, log });
+  const warmPoolImageCheck = warmPoolStatus.skipped
+    ? { ok: true, pods: [], mismatched: [] }
+    : await verifyWarmPoolImage(deploymentCfg.NAMESPACE, imageTag, {
+        kubectl,
+        log,
+        exec,
+        acrName: deploymentCfg.ACR_NAME,
+      });
+
+  log.info("");
+  log.section(summaryTitle);
+  log.field("Image tag", imageTag);
+  log.field("AgentHost tag", imageTag);
+  log.field("ACR", deploymentCfg.ACR_LOGIN_SERVER);
+  log.field("Target commit", buildResult?.targetCommit ?? "<unknown>");
+  log.field(
+    "Provenance",
+    `${provenanceResult.results.filter((result) => result.status === "ok").length}/${provenanceResult.results.length} images verified`,
+  );
+  log.field("Deployed host", deployResult?.HOST ?? "<unknown>");
+  if (warmPoolStatus.skipped) {
+    log.field("Warm pool", "skipped (SandboxWarmPool/CRD not present)");
+  } else {
+    log.field(
+      "Warm pool",
+      `${warmPoolStatus.readyReplicas}/${warmPoolStatus.replicas} ready, image ${warmPoolImageCheck.ok ? "verified" : "MISMATCHED -- see warnings above"}`,
+    );
+  }
+
+  if (!warmPoolImageCheck.ok) {
+    throw new Error(
+      `Warm pool is ready but ${warmPoolImageCheck.mismatched.length} pod(s) do not run the expected AgentHost tag '${imageTag}'. ` +
+        "The SandboxWarmPool controller (updateStrategy: Recreate) should replace these automatically as they cycle -- " +
+        `re-run the ${retryLabel} warm-pool wait step if this persists, but do NOT manually delete these pods.`,
+    );
+  }
+
+  return {
+    imageTag,
+    targetCommit: buildResult?.targetCommit,
+    plans: buildResult?.plans,
+    provenance: provenanceResult,
+    deploy: deployResult,
+    warmPool: { ...warmPoolStatus, imageCheck: warmPoolImageCheck },
+  };
+}
+
+/**
  * Main entry point: mints a new immutable tag, builds+pushes images,
  * verifies provenance, redeploys, and cycles the warm pool
  * (reapply-and-wait; never manual pod deletion).
@@ -285,8 +392,6 @@ export async function run(cfg, opts = {}) {
     cwd = cfg.repoRoot,
   } = opts;
 
-  log.section("Agentweaver local deployment: build + redeploy + warm-pool cycle");
-
   if (!allowDirty) {
     const dirty = await isWorkingTreeDirty({ cwd, capture: exec.capture });
     if (dirty) {
@@ -301,69 +406,19 @@ export async function run(cfg, opts = {}) {
   }
 
   const newTag = await mintLocalDeployTag({ cwd, git });
-  log.field("Local deployment tag", newTag);
-
-  const localDeployCfg = {
-    ...cfg,
-    IMAGE_TAG: newTag,
-    AGENTHOST_IMAGE_TAG: newTag,
-    repoRoot: cwd,
-  };
-
-  log.info("");
-  log.info("Step 1/4: Building + pushing images...");
-  const buildResult = await buildStep.run(localDeployCfg, { exec, git, kubectl });
-
-  log.info("");
-  log.info("Step 2/4: Redeploying (re-applies SandboxTemplate + SandboxWarmPool)...");
-  const deployResult = await deployStep.run(localDeployCfg, { run: exec.run, capture: exec.capture, log, repoRoot: cwd });
-
-  log.info("");
-  log.info("Step 3/4: Verifying image provenance...");
-  // steps/25 is a POST-DEPLOY safety net (see its module header): it checks
-  // the digest ACTUALLY running in the cluster right now, so it must run
-  // after deploy -- running it before deploy compares the still-old live
-  // pods against the new target commit and always reports false STALE
-  // IMAGE failures. VERIFY_GIT_REF is deliberately left unset here so
-  // steps/25 defaults it to HEAD -- never default it to IMAGE_TAG (see
-  // module header, decision #4).
-  const provenanceResult = await provenanceStep.run({ ...localDeployCfg, VERIFY_GIT_REF: undefined }, { exec, git, kubectl });
-
-  log.info("");
-  log.info("Step 4/4: Cycling the AgentHost warm pool (reapply-and-wait; no manual pod deletion)...");
-  const warmPoolStatus = await waitForWarmPoolReady(localDeployCfg.NAMESPACE, { exec, log });
-  const warmPoolImageCheck = warmPoolStatus.skipped
-    ? { ok: true, pods: [], mismatched: [] }
-    : await verifyWarmPoolImage(localDeployCfg.NAMESPACE, newTag, { kubectl, log, exec, acrName: localDeployCfg.ACR_NAME });
-
-  log.info("");
-  log.section("LOCAL DEPLOYMENT SUMMARY");
-  log.field("Image tag", newTag);
-  log.field("AgentHost tag", newTag);
-  log.field("ACR", localDeployCfg.ACR_LOGIN_SERVER);
-  log.field("Target commit", buildResult?.targetCommit ?? "<unknown>");
-  log.field("Provenance", `${provenanceResult.results.filter((r) => r.status === "ok").length}/${provenanceResult.results.length} images verified`);
-  log.field("Deployed host", deployResult?.HOST ?? "<unknown>");
-  if (warmPoolStatus.skipped) {
-    log.field("Warm pool", "skipped (SandboxWarmPool/CRD not present)");
-  } else {
-    log.field("Warm pool", `${warmPoolStatus.readyReplicas}/${warmPoolStatus.replicas} ready, image ${warmPoolImageCheck.ok ? "verified" : "MISMATCHED -- see warnings above"}`);
-  }
-
-  if (!warmPoolImageCheck.ok) {
-    throw new Error(
-      `Warm pool is ready but ${warmPoolImageCheck.mismatched.length} pod(s) do not run the expected AgentHost tag '${newTag}'. ` +
-        "The SandboxWarmPool controller (updateStrategy: Recreate) should replace these automatically as they cycle -- " +
-        "re-run the local deployment's warm-pool wait step if this persists, but do NOT manually delete these pods.",
-    );
-  }
-
-  return {
+  return deployCommittedSha(cfg, {
     imageTag: newTag,
-    targetCommit: buildResult?.targetCommit,
-    plans: buildResult?.plans,
-    provenance: provenanceResult,
-    deploy: deployResult,
-    warmPool: { ...warmPoolStatus, imageCheck: warmPoolImageCheck },
-  };
+    verifyGitRef: undefined,
+    exec,
+    log,
+    git,
+    kubectl,
+    buildStep,
+    provenanceStep,
+    deployStep,
+    cwd,
+    sectionTitle: "Agentweaver local deployment: build + redeploy + warm-pool cycle",
+    summaryTitle: "LOCAL DEPLOYMENT SUMMARY",
+    retryLabel: "local deployment",
+  });
 }

@@ -99,15 +99,18 @@ test("run: routes 'release' to release.mjs's run()", async () => {
   assert.deepEqual(received.argv, ["patch"]);
 });
 
-test("run: routes 'publish-release' and 'deploy-from-release' with argv", async () => {
+test("run: routes commit, publication, and release deployment commands with argv", async () => {
   const received = [];
   const modules = {
+    "deploy-from-commit": { run: async (opts) => { received.push(["commit", opts.argv]); return { ok: true }; } },
     "publish-release": { run: async (opts) => { received.push(["publish", opts.argv]); return { ok: true }; } },
     "deploy-from-release": { run: async (opts) => { received.push(["deploy", opts.argv]); return { ok: true }; } },
   };
+  await run(["deploy-from-commit", "origin/feature"], { log: noopLog(), modules });
   await run(["publish-release", "--dry-run"], { log: noopLog(), modules });
   await run(["deploy-from-release", "v1.2.3"], { log: noopLog(), modules });
   assert.deepEqual(received, [
+    ["commit", ["origin/feature"]],
     ["publish", ["--dry-run"]],
     ["deploy", ["v1.2.3"]],
   ]);

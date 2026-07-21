@@ -45,6 +45,7 @@
 
 - The Azure/AKS toolchain is the Node-based `azure:*` flow for infrastructure provisioning, local deployment, published-release deployment, release orchestration, verification, and local development; legacy `.sh`/`.ps1` deploy/install/release/start-dev scripts were intentionally removed once parity was proven.
 - `azure:deploy-from-local` must mint a new immutable tag from HEAD, refuse dirty trees by default, deploy **before** provenance verification, and treat warm-pool success as reapply-and-wait plus image verification.
+- `azure:deploy-from-commit` resolves any committed ref and runs that same SHA deployment pipeline from a temporary detached worktree, without switching or using dirty state from the caller's checkout.
 - Build/provenance share one declarative image spec; watched-path and build-arg bugs fixed during the migration stay part of the contract.
 - `git clone` is the only install/bootstrap entry point; there is no replacement remote `curl|bash` or `curl|iex` installer.
 - The v0.9.71 integration kept the Node toolchain as canonical, preserved the current Assistant resume/send protections, wired `RemoteApiBaseUrl` through `RemoteAgentProxy`, and removed obsolete `Assistant__McpEndpoint` Kubernetes config.
