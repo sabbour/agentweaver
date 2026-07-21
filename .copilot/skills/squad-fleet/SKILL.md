@@ -1,5 +1,5 @@
 ---
-name: agentweaver-squad-fleet
+name: squad-fleet
 description: >
   Launch Squad agents in parallel across multiple GitHub issues using Fleet mode —
   each agent gets its own git worktree and branch so they never step on each other.
@@ -115,7 +115,7 @@ Each agent prompt must include:
 - `BRANCH` — their branch name
 - Domain routing: which squad member they are and what they own
 - Commit format and PR instructions (see Step 6)
-- The `squad-fleet` skill path for reference: `.copilot/skills/agentweaver-squad-fleet/SKILL.md`
+- The `squad-fleet` skill path for reference: `.copilot/skills/squad-fleet/SKILL.md`
 
 **Minimal agent spawn prompt template:**
 ```
