@@ -1,5 +1,12 @@
 # Blueprint to shipped fix
 
+## Dry-run findings (2026-07-22)
+
+- **Blocked before Beat 1:** the provided Playwright auth state (`C:\Users\asabbour\.copilot\session-state\15b0c7c4-9d50-4b25-a48b-e530292d7f98\files\staging-auth.json`) reloaded into a signed-out staging session, and the app rendered the **Sign in with GitHub** page instead of an authenticated dashboard.
+- **No authenticated selectors were validated yet:** because team policy forbids bypassing or shortcutting auth, this dry run stopped immediately after confirming the stale/expired auth state and did **not** attempt Beats 1-9.
+- **Scenario setup that is now ready:** the dry-run repo exists at `https://github.com/sabbour/agentweaver-demo-dryrun`, and the seeded bug issue exists at `https://github.com/sabbour/agentweaver-demo-dryrun/issues/1` (`Bug: welcome banner overlaps primary action on narrow tablet width`).
+- **Follow-up needed before recording:** a human must sign in on staging, refresh/save a valid Playwright storage state, and rerun this plan to replace the remaining `[VERIFY SELECTOR]` placeholders from live authenticated snapshots.
+
 ## Status: planning only
 
 This document is a **PLAN**, not a recording script already validated against the live app. Run a dry-run pass against **staging** first, replace every `[VERIFY SELECTOR]` placeholder with the real ref/test id/locator discovered from live `snapshot` output, and confirm the seeded empty repo + seeded bug issue are present before recording.
@@ -10,12 +17,12 @@ Create a brand-new Agentweaver project from an empty GitHub repository, cast a f
 
 ## Recording assumptions
 
-- Use a staging build URL such as `<STAGING_BASE_URL>`.
+- Use staging build URL `https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io`.
 - Sign in ahead of time with a demo account that can create projects, approve reviews, and merge PRs.
 - Prepare:
-  - `<EMPTY_REPO_URL>` — brand-new GitHub repo with no app code yet.
+  - `https://github.com/sabbour/agentweaver-demo-dryrun` — brand-new GitHub repo with no app code yet.
   - `<IDEA_PROMPT>` — one small feature idea suitable for a first slice.
-  - `<SEEDED_BUG_ISSUE_URL>` / `<SEEDED_BUG_ISSUE_TITLE>` — bug issue already present on the repo.
+  - `https://github.com/sabbour/agentweaver-demo-dryrun/issues/1` / `Bug: welcome banner overlaps primary action on narrow tablet width` — bug issue already present on the repo.
 - Record at 1920x1080.
 - Keep **video action callouts enabled** during mouse/typing moments; hide them only during static reading or when you want the review-gate framing to breathe on screen.
 - Insert short manual pauses in the recording runner between commands where noted so cursor travel and typing are visible on camera.
@@ -25,7 +32,7 @@ Create a brand-new Agentweaver project from an empty GitHub repository, cast a f
 ```bash
 playwright-cli open --browser=chrome
 playwright-cli resize 1920 1080
-playwright-cli goto <STAGING_BASE_URL>
+playwright-cli goto https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io
 playwright-cli snapshot
 playwright-cli video-start blueprint-to-shipped-fix.webm
 playwright-cli video-show-actions --duration=900 --position=top-right
@@ -55,7 +62,7 @@ playwright-cli snapshot
 playwright-cli hover <REF_REPO_URL_INPUT [VERIFY SELECTOR]>
 # [PAUSE 500ms]
 playwright-cli click <REF_REPO_URL_INPUT [VERIFY SELECTOR]>
-playwright-cli type "<EMPTY_REPO_URL>"
+playwright-cli type "https://github.com/sabbour/agentweaver-demo-dryrun"
 playwright-cli snapshot
 playwright-cli hover <REF_PROJECT_NAME_INPUT [VERIFY SELECTOR]>
 playwright-cli click <REF_PROJECT_NAME_INPUT [VERIFY SELECTOR]>
