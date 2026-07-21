@@ -405,6 +405,10 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             await db.SaveChangesAsync();
         }
 
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        // Exercise the poller/watchdog application path without relying on its fire-and-forget cadence.
+        await coordinator.ApplyDeferredDecisionAsync(runId, CancellationToken.None);
+
         var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
         spec.Should().NotBeNull("a deferred confirm decision must be applied so the run leaves awaiting_confirmation");
     }

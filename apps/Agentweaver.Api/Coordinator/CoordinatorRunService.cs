@@ -593,11 +593,17 @@ public sealed class CoordinatorRunService
     /// after the confirmation gate is armed; exits when a decision is found and applied, the run is
     /// no longer registered, or the cancellation token fires.
     /// </summary>
-    private async Task PollDeferredDecisionsAsync(
-        string runId, StreamingRun streamingRun, ExternalRequest request, string ownerUser, CancellationToken ct)
+    private async Task PollDeferredDecisionsAsync(string runId, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
+            // Stop if the run has left the registry (completed or failed on the primary).
+            if (_registry.Get(runId) is null)
+                return;
+
+            if (await ApplyDeferredDecisionAsync(runId, ct).ConfigureAwait(false))
+                return;
+
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
@@ -606,77 +612,82 @@ public sealed class CoordinatorRunService
             {
                 return;
             }
+        }
+    }
 
-            // Stop if the run has left the registry (completed or failed on the primary).
-            if (_registry.Get(runId) is null)
-                return;
+    /// <summary>
+    /// Applies one deferred outcome-spec decision for a locally resident coordinator run.
+    /// The database row is atomically claimed before the pending gate is consumed, so concurrent
+    /// poller and watchdog attempts can apply the decision at most once.
+    /// </summary>
+    internal async Task<bool> ApplyDeferredDecisionAsync(string runId, CancellationToken ct)
+    {
+        var streamingRun = _registry.Get(runId);
+        if (streamingRun is null)
+            return false;
 
-            CoordinatorOutcomeSpecDecision? decision;
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        CoordinatorOutcomeSpecDecision? decision;
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
-                var row = await db.DeferredDecisions
-                    .FirstOrDefaultAsync(d => d.RunId == runId, ct)
-                    .ConfigureAwait(false);
+            var row = await db.DeferredDecisions
+                .FirstOrDefaultAsync(d => d.RunId == runId, ct)
+                .ConfigureAwait(false);
 
-                if (row is null)
-                    continue;
+            if (row is null)
+                return false;
 
-                decision = JsonSerializer.Deserialize<CoordinatorOutcomeSpecDecision>(
-                    row.DecisionJson, JsonDefaults.Options);
+            decision = JsonSerializer.Deserialize<CoordinatorOutcomeSpecDecision>(
+                row.DecisionJson, JsonDefaults.Options);
 
-                // Atomically delete — at-most-once; if another replica somehow also picked it up,
-                // one of the two deletes will affect 0 rows and that caller skips submission.
-                var deleted = await db.DeferredDecisions
-                    .Where(d => d.RunId == runId)
-                    .ExecuteDeleteAsync(ct)
-                    .ConfigureAwait(false);
+            var deleted = await db.DeferredDecisions
+                .Where(d => d.RunId == runId)
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
 
-                if (deleted == 0 || decision is null)
-                    continue;
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error polling deferred decisions for run {RunId}", runId);
-                continue;
-            }
+            if (deleted == 0 || decision is null)
+                return false;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error applying deferred decision for run {RunId}", runId);
+            return false;
+        }
 
-            // Atomically consume the pending gate (mirrors normal SubmitDecisionAsync path).
-            var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
-            if (pending is null)
-            {
-                _logger.LogWarning(
-                    "Deferred decision for run {RunId}: pending gate already consumed; skipping", runId);
-                return;
-            }
+        var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
+        if (pending is null)
+        {
+            _logger.LogWarning(
+                "Deferred decision for run {RunId}: pending gate already consumed; skipping", runId);
+            return false;
+        }
 
-            if (decision.Revise)
-            {
-                var entry = _streamStore.Get(runId);
-                entry?.ClearAwaitingReview();
-                entry?.RecordNext(EventTypes.RevisionStarted, new { });
-            }
+        if (decision.Revise)
+        {
+            var entry = _streamStore.Get(runId);
+            entry?.ClearAwaitingReview();
+            entry?.RecordNext(EventTypes.RevisionStarted, new { });
+        }
 
-            try
-            {
-                var response = pending.Request.CreateResponse(decision);
-                await streamingRun.SendResponseAsync(response).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Coordinator deferred decision for run {RunId} applied on primary replica", runId);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "Coordinator deferred SendResponseAsync failed for run {RunId}", runId);
-            }
-
-            return;
+        try
+        {
+            var response = pending.Request.CreateResponse(decision);
+            await streamingRun.SendResponseAsync(response).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Coordinator deferred decision for run {RunId} applied on primary replica", runId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Coordinator deferred SendResponseAsync failed for run {RunId}", runId);
+            return false;
         }
     }
 
@@ -763,7 +774,7 @@ public sealed class CoordinatorRunService
                     await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
                     // Start polling for decisions deferred by secondary replicas that failed to
                     // restore the MAF checkpoint. Fire-and-forget — cancels when the run CT cancels.
-                    _ = PollDeferredDecisionsAsync(runId, streamingRun, rie.Request, ownerUser, ct);
+                    _ = PollDeferredDecisionsAsync(runId, ct);
                     break;
 
                 case WorkflowOutputEvent woe:
@@ -895,7 +906,7 @@ public sealed class CoordinatorRunService
     /// <para>
     /// For each persisted deferral it re-establishes the run via <see cref="RecoverSpecPhaseAsync"/>
     /// (which re-arms the gate and starts <see cref="PollDeferredDecisionsAsync"/>, applying the
-    /// decision within one poll cycle). Resident runs are left to their own poller; runs no longer at
+    /// decision within one poll cycle). Resident runs are drained directly as a watchdog fallback; runs no longer at
     /// the gate get their stale deferral discarded; runs without a checkpoint (in-API mode, nothing to
     /// resume) are left untouched. Every step is isolated and idempotent, so a failed resume simply
     /// retries on a later tick. Returns the number of deferrals acted on (recovered or discarded).
@@ -921,9 +932,12 @@ public sealed class CoordinatorRunService
         {
             ct.ThrowIfCancellationRequested();
 
-            // A resident watch loop already owns the drain: its PollDeferredDecisionsAsync applies it.
             if (_registry.Get(runId) is not null)
+            {
+                if (await ApplyDeferredDecisionAsync(runId, ct).ConfigureAwait(false))
+                    acted++;
                 continue;
+            }
 
             if (!RunId.TryParse(runId, out var id))
                 continue;
@@ -1237,7 +1251,7 @@ public sealed class CoordinatorRunService
             // so WatchAsync will never see it. Start PollDeferredDecisionsAsync here so deferred
             // decisions from secondary replicas are picked up for recovered runs.
             if (recoveredRequest is not null)
-                _ = PollDeferredDecisionsAsync(runId, streamingRun, recoveredRequest, run.SubmittingUser, runCt);
+                _ = PollDeferredDecisionsAsync(runId, runCt);
             _logger.LogInformation("Recovered coordinator run {RunId} at the spec confirmation gate", run.Id);
         }
         catch
