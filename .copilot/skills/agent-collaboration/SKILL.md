@@ -1,5 +1,5 @@
 ---
-name: "agentweaver-agent-collaboration"
+name: "agent-collaboration"
 description: "Standard collaboration patterns for all squad agents — worktree awareness, decisions, cross-agent communication"
 domain: "team-workflow"
 confidence: "high"

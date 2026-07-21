@@ -1,5 +1,5 @@
 ---
-name: agentweaver-squad-commands
+name: squad-commands
 description: >
   Categorized catalog of common Squad operations. Coordinator reads this
   file and presents it as an interactive menu when the user asks for
