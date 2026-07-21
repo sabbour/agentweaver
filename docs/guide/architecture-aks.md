@@ -15,10 +15,11 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 ![AKS component diagram (simplified overview): Client through the Gateway to Frontend, API, MCP; API and Worker to the AgentHost warm pool; shared Workspace PVC and CSI SecretProviderClass; PostgreSQL, Key Vault, ACR, and GitHub](../diagrams/aks-component-simplified.svg)
 
 <!--
-  Pre-rendered from ../diagrams/aks-component-simplified.mmd -- GitHub's live
-  Mermaid renderer clips long subgraph/node labels on this diagram. To edit:
-  change the .mmd source, run `npm run docs:render-diagrams`, and commit the
-  regenerated SVG. CI fails if the SVG drifts from the source.
+  Pre-rendered from ../diagrams/src/aks-component-simplified.json (React Flow +
+  dagre layout) -- GitHub's live Mermaid renderer clipped long subgraph/node
+  labels on this diagram. To edit: change the JSON source, run
+  `npm run docs:render-diagrams`, and commit the regenerated SVG. CI fails if
+  the SVG's source hash drifts from docs/diagrams/manifest.json.
 -->
 
 > This is a simplified overview. See the detailed diagram below for the full request/data flow.
@@ -26,10 +27,11 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 ![AKS component diagram (detailed): full request/data flow between the Browser/AI client, AKS Gateway, Frontend, API, Worker, MCP, the Kata VM AgentHost warm pool, Workspace PVC, CSI SecretProviderClass, Azure Key Vault, Azure PostgreSQL, Azure Container Registry, and GitHub](../diagrams/aks-component-detailed.svg)
 
 <!--
-  Pre-rendered from ../diagrams/aks-component-detailed.mmd -- same clipping
-  issue as above, at even greater severity given this diagram's size. To
-  edit: change the .mmd source, run `npm run docs:render-diagrams`, and
-  commit the regenerated SVG. CI fails if the SVG drifts from the source.
+  Pre-rendered from ../diagrams/src/aks-component-detailed.json -- same
+  clipping issue as above, at even greater severity given this diagram's
+  size. To edit: change the JSON source, run `npm run docs:render-diagrams`,
+  and commit the regenerated SVG. CI fails if the SVG's source hash drifts
+  from docs/diagrams/manifest.json.
 -->
 
 ---

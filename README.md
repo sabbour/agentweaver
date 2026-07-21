@@ -376,11 +376,12 @@ project's maintained harness workflows:
 ![AKS block diagram: Client and GitHub reach the AKS Cluster's core services (Frontend, API, Worker, MCP), which use the Kata VM Pool AgentHost warm pool, shared storage (Workspace PVC, CSI SecretProvider), PostgreSQL, Key Vault, and ACR](docs/diagrams/aks-block-diagram.svg)
 
 <!--
-  This diagram is pre-rendered from docs/diagrams/aks-block-diagram.mmd to a
-  static SVG, because GitHub's live Mermaid renderer clips long subgraph and
-  node labels on this diagram (e.g. "AKS Cluster" -> "AKS Cluste"). To edit
-  the diagram: change the .mmd source, then run `npm run docs:render-diagrams`
-  and commit the regenerated SVG. CI fails if the SVG drifts from the source.
+  This diagram is pre-rendered from docs/diagrams/src/aks-block-diagram.json
+  (React Flow + dagre layout) to a static SVG, because GitHub's live Mermaid
+  renderer clipped long subgraph and node labels on this diagram (e.g.
+  "AKS Cluster" -> "AKS Cluste"). To edit the diagram: change the JSON source,
+  then run `npm run docs:render-diagrams` and commit the regenerated SVG.
+  CI fails if the SVG's source hash drifts from docs/diagrams/manifest.json.
 -->
 
 > Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/guide/architecture-aks.md)

@@ -16,6 +16,10 @@ npm-debug.log*
 dist/
 *.tsbuildinfo
 
+# Architecture diagram render harness: scratch file written fresh per-diagram
+# before each Playwright navigation, never meant to be committed.
+scripts/docs/render-diagrams/public/diagram-data.json
+
 # Misc
 .DS_Store
 .impeccable/

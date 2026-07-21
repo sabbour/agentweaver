@@ -1,0 +1,46 @@
+{
+  "title": "AKS block diagram",
+  "direction": "TB",
+  "groups": [
+    { "id": "aks", "label": "AKS Cluster" },
+    { "id": "core", "label": "Core services", "parent": "aks" },
+    { "id": "kata", "label": "Kata VM Pool", "parent": "aks" },
+    { "id": "storage", "label": "Shared storage", "parent": "aks" }
+  ],
+  "nodes": [
+    { "id": "Client", "label": "🌐 Client", "variant": "client" },
+    { "id": "GitHubExt", "label": "GitHub", "variant": "ext" },
+    { "id": "fe", "label": "Frontend ×2", "variant": "svc", "parent": "core" },
+    { "id": "api", "label": "API ×2", "variant": "core", "parent": "core" },
+    { "id": "worker", "label": "Worker ×1+HPA", "variant": "workerStyle", "parent": "core" },
+    { "id": "mcp", "label": "MCP ×1", "variant": "svc", "parent": "core" },
+    { "id": "ah", "label": "AgentHost\nWarm Pool ×2", "variant": "runtime", "parent": "kata" },
+    { "id": "pvc", "label": "🗄 Workspace PVC", "variant": "data", "parent": "storage" },
+    { "id": "csi", "label": "CSI SecretProvider", "variant": "data", "parent": "storage" },
+    { "id": "pg", "label": "🗄 PostgreSQL", "variant": "ext" },
+    { "id": "kv", "label": "Key Vault", "variant": "ext" },
+    { "id": "acr", "label": "ACR", "variant": "ext" }
+  ],
+  "edges": [
+    { "source": "Client", "target": "fe" },
+    { "source": "Client", "target": "api" },
+    { "source": "Client", "target": "mcp" },
+    { "source": "api", "target": "ah" },
+    { "source": "worker", "target": "ah" },
+    { "source": "api", "target": "pvc", "style": "plain" },
+    { "source": "worker", "target": "pvc", "style": "plain" },
+    { "source": "ah", "target": "pvc", "style": "plain" },
+    { "source": "csi", "target": "kv", "style": "dashed" },
+    { "source": "api", "target": "pg" },
+    { "source": "worker", "target": "pg" },
+    { "source": "api", "target": "kv" },
+    { "source": "ah", "target": "kv" },
+    { "source": "api", "target": "GitHubExt" },
+    { "source": "ah", "target": "GitHubExt" },
+    { "source": "acr", "target": "fe", "style": "dashed", "label": "image pull" },
+    { "source": "acr", "target": "api", "style": "dashed", "label": "image pull" },
+    { "source": "acr", "target": "worker", "style": "dashed", "label": "image pull" },
+    { "source": "acr", "target": "mcp", "style": "dashed", "label": "image pull" },
+    { "source": "acr", "target": "ah", "style": "dashed", "label": "image pull" }
+  ]
+}

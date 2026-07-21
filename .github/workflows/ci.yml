@@ -219,10 +219,12 @@ jobs:
         run: npm ci
 
       # README.md's "Block diagram" and architecture-aks.md's "Component
-      # diagram" are pre-rendered from docs/diagrams/*.mmd to static SVG
-      # (GitHub's live Mermaid renderer clips long subgraph/node labels on
-      # those diagrams). Re-render from source and fail if the committed
-      # SVGs have drifted, so a .mmd edit can't ship without its SVG.
+      # diagram" are pre-rendered from docs/diagrams/src/*.json (React Flow +
+      # dagre layout) to static SVG (GitHub's live Mermaid renderer clipped
+      # long subgraph/node labels on those diagrams). This check is a pure
+      # SHA-256 hash comparison against docs/diagrams/manifest.json -- no
+      # rendering/browser involved -- so it can't drift between OSes; it
+      # fails if a source JSON was edited without regenerating its SVG.
       - name: Check rendered diagrams match source
         run: npm run docs:check-diagrams
 
