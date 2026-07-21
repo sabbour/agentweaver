@@ -56,6 +56,10 @@ ARG IMAGE_TAG=dev
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
+# Surface build provenance to the running process (LABELs are image metadata only and
+# are not readable via Environment.GetEnvironmentVariable at runtime).
+ENV IMAGE_TAG=${IMAGE_TAG}
+ENV GIT_SHA=${GIT_SHA}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

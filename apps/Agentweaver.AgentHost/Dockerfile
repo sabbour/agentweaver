@@ -51,6 +51,10 @@ ARG YQ_VERSION=4.44.3
 
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
+# Surface build provenance to the running process (LABELs are image metadata only and
+# are not readable via Environment.GetEnvironmentVariable at runtime).
+ENV IMAGE_TAG=${IMAGE_TAG}
+ENV GIT_SHA=${GIT_SHA}
 
 # ── Core dev toolchain ────────────────────────────────────────────────────────
 # The lxc-native-linux sandbox bind-mounts host paths, so every tool installed
