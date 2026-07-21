@@ -1,0 +1,111 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Volumes",
+  "alt": "Volumes: agentweaver-web Deployment, agentweaver-worker Deployment, Per-run sandbox pods, Azure Files — worktrees, Azure PostgreSQL, x",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "Cluster",
+      "label": "AKS namespace",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Web",
+      "label": "agentweaver-web Deployment",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      },
+      "subLabel": "role=web · HPA on request load",
+      "meta": "SA: agentweaver-api",
+      "group": "Cluster"
+    },
+    {
+      "id": "Worker",
+      "label": "agentweaver-worker Deployment",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "role=worker · KEDA on queue depth",
+      "meta": "SA: agentweaver-worker + sandbox RBAC",
+      "group": "Cluster"
+    },
+    {
+      "id": "Pods",
+      "label": "Per-run sandbox pods",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "Cluster"
+    },
+    {
+      "id": "WS",
+      "label": "Azure Files — worktrees",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "Cluster"
+    },
+    {
+      "id": "PG",
+      "label": "Azure PostgreSQL",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "Flexible Server — private"
+    },
+    {
+      "id": "x",
+      "label": "x",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Worker",
+      "to": "Pods",
+      "label": "dispatches",
+      "dashed": true
+    },
+    {
+      "from": "Worker",
+      "to": "WS",
+      "label": "/workspace RWX"
+    },
+    {
+      "from": "Pods",
+      "to": "WS",
+      "label": "/workspace RWX"
+    },
+    {
+      "from": "Web",
+      "to": "PG"
+    },
+    {
+      "from": "Worker",
+      "to": "PG"
+    },
+    {
+      "from": "Pods",
+      "to": "x",
+      "label": "no DB access — via worker only",
+      "dashed": true,
+      "undirected": true
+    }
+  ]
+}

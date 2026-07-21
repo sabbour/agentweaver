@@ -1,0 +1,110 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Scenario 4 — Drive the full lifecycle from an MCP client (Copilot CLI)",
+  "alt": "Scenario 4 — Drive the full lifecycle from an MCP client (Copilot CLI): MCP client, project_create, team_cast, coordinator_start, outcome_spec_confirm, work_plan + children, run_review, memory_export",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "C",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "P",
+      "label": "project_create",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "T",
+      "label": "team_cast",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "O",
+      "label": "coordinator_start",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SP",
+      "label": "outcome_spec_confirm",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "W",
+      "label": "work_plan + children",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "RV",
+      "label": "run_review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "MEM",
+      "label": "memory_export",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "C",
+      "to": "P"
+    },
+    {
+      "from": "P",
+      "to": "T"
+    },
+    {
+      "from": "T",
+      "to": "O"
+    },
+    {
+      "from": "O",
+      "to": "SP"
+    },
+    {
+      "from": "SP",
+      "to": "W"
+    },
+    {
+      "from": "W",
+      "to": "RV"
+    },
+    {
+      "from": "RV",
+      "to": "MEM"
+    }
+  ]
+}

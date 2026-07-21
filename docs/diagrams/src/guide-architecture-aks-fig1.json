@@ -1,0 +1,80 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "AgentHost warm-pool lifecycle",
+  "alt": "AgentHost warm-pool lifecycle: Standby, Configuring, Ready, Serving, Released",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Standby",
+      "label": "Standby",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "warm pool creates pod",
+      "meta": ".NET + SDK pre-warmed"
+    },
+    {
+      "id": "Configuring",
+      "label": "Configuring",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "POST /configure",
+      "meta": "RunId/UserId/token/KV secret"
+    },
+    {
+      "id": "Ready",
+      "label": "Ready",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "SetupAsync complete",
+      "meta": "/healthz 200"
+    },
+    {
+      "id": "Serving",
+      "label": "Serving",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      },
+      "subLabel": "A2A message:stream turns"
+    },
+    {
+      "id": "Released",
+      "label": "Released",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "run completes or suspends",
+      "meta": "claim deleted or TTL"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Standby",
+      "to": "Configuring"
+    },
+    {
+      "from": "Configuring",
+      "to": "Ready"
+    },
+    {
+      "from": "Ready",
+      "to": "Serving"
+    },
+    {
+      "from": "Serving",
+      "to": "Released"
+    }
+  ]
+}

@@ -1,0 +1,147 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "5. Security model (H1–H7)",
+  "alt": "5. Security model (H1–H7): Worker pod, Scoped ingress, Transport identity, H3: Authorization, AgentHost listener, v1/message:stream, v1/card, CopilotAIAgent, DB checkpoint store, Sandbox:AgentExecutionMode",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Worker",
+      "label": "Worker pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "RemoteAgentProxy"
+    },
+    {
+      "id": "NP",
+      "label": "Scoped ingress",
+      "icon": "route",
+      "badge": {
+        "text": "Gateway",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "TLS",
+      "label": "Transport identity",
+      "icon": "route",
+      "badge": {
+        "text": "Gateway",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "TurnAuth",
+      "label": "H3: Authorization",
+      "icon": "route",
+      "badge": {
+        "text": "Gateway",
+        "tone": "teal"
+      },
+      "subLabel": "Bearer {per-run token}"
+    },
+    {
+      "id": "Listener",
+      "label": "AgentHost listener",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "H4: Kestrel limits + SSE heartbeats"
+    },
+    {
+      "id": "MS",
+      "label": "v1/message:stream",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Card",
+      "label": "v1/card",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "H3: authz-gated + minimized"
+    },
+    {
+      "id": "Agent",
+      "label": "CopilotAIAgent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "H6: egress allowlist only"
+    },
+    {
+      "id": "CK",
+      "label": "DB checkpoint store",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Flag",
+      "label": "Sandbox:AgentExecutionMode",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Worker",
+      "to": "NP",
+      "label": "H2: NetworkPolicy worker→sandbox:port only"
+    },
+    {
+      "from": "NP",
+      "to": "TLS",
+      "label": "H1: TLS + mTLS/SPIFFE workload-identity-bound cert"
+    },
+    {
+      "from": "TLS",
+      "to": "TurnAuth"
+    },
+    {
+      "from": "TurnAuth",
+      "to": "Listener"
+    },
+    {
+      "from": "Listener",
+      "to": "MS"
+    },
+    {
+      "from": "Listener",
+      "to": "Card"
+    },
+    {
+      "from": "MS",
+      "to": "Agent"
+    },
+    {
+      "from": "Agent",
+      "to": "CK",
+      "label": "H5: durable resume (checkpoint store, idempotent)",
+      "dashed": true
+    },
+    {
+      "from": "Listener",
+      "to": "Flag",
+      "label": "H7: preview pinned by version+hash rollback = in-api flag",
+      "dashed": true
+    }
+  ]
+}

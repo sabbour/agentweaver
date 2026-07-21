@@ -65,11 +65,12 @@ When you instantiate a Blueprint:
 2. For each role, it selects a persona name from a thematic universe (e.g., Matrix, Star Wars)
 3. The named agents are recorded in the project's team files
 
-```mermaid
-flowchart LR
-    A["Blueprint roster\nSoftware Engineer\nQA Engineer\nTech Lead"] -->|Casting algorithm| B["Named squad\nNeo — Software Engineer\nTrinity — QA Engineer\nMorpheus — Tech Lead"]
-    B --> C[Your project team]
-```
+![How casting works: Blueprint roster, Named squad, Your project team](../diagrams/guide-teams-fig1.png)
+
+<!-- Rendered from ../diagrams/src/guide-teams-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The persona names are not stored in the Blueprint — the Blueprint is universe-agnostic. The same Blueprint instantiated into two different projects may produce different named agents.
 

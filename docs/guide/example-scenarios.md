@@ -10,23 +10,12 @@ This page walks through complete, end-to-end scenarios using Agentweaver — fro
 agent → rai → review → merge → scribe
 ```
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    A[Agent] --> R[RAI]
-    R --> V{Human review}
-    V -- Approve --> M[Merge]
-    V -- Request changes --> A
-    V -- Decline --> X[Declined]
-    M --> S[Scribe]
+![Example walkthroughs: Agent, RAI, Human review, Merge, Declined, Scribe](../diagrams/guide-example-scenarios-fig1.png)
 
-    classDef step fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef gate fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef term fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    class A,R,M,S step;
-    class V gate;
-    class X term;
-```
+<!-- Rendered from ../diagrams/src/guide-example-scenarios-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 For coordinator child runs (the subtasks of an orchestration), the trimmed pipeline is `agent → rai → assemble-ready`. The `review → merge → scribe` stages run **once** over the assembled output of all children, not per subtask.
 
@@ -101,21 +90,12 @@ After a successful merge, a **Scribe** pass runs automatically. It auto-merges `
 
 Use the Kanban board to queue work and let the heartbeat dispatch it.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    B[Backlog] -->|You drag| R[Ready]
-    R -->|Heartbeat dispatches| A[Active]
-    A -->|Needs approval| H[Human Review]
-    H -->|Approve| D[Done]
-    A -->|Failure| P[Problems]
-    H -->|Request changes| A
+![Scenario 2 — Pick up a backlog task with the board and heartbeat: Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/guide-example-scenarios-fig2.png)
 
-    classDef you fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef coord fill:#CFE4FA,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    class B,R you;
-    class A,H,D,P coord;
-```
+<!-- Rendered from ../diagrams/src/guide-example-scenarios-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 1. **Capture a task** in the Backlog column (`POST /api/projects/{id}/backlog/tasks`). Add a description for context — sharper descriptions produce sharper OutcomeSpecs.
 2. **Rank** the backlog by dragging cards (`POST .../backlog/tasks/{taskId}/reorder`), and optionally pin a workflow per card (`PUT .../backlog/tasks/{taskId}/workflow-override`).
@@ -150,19 +130,11 @@ Everything above is available programmatically through the [MCP server](/referen
 7. **Review** — `run_review` with the approve / request-changes / decline decision.
 8. **Record knowledge** — `decision_inbox_submit` or `squad_decide`, `memory_record`, `memory_search`; export with `memory_export`.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    C[MCP client] --> P[project_create]
-    P --> T[team_cast]
-    T --> O[coordinator_start]
-    O --> SP[outcome_spec_confirm]
-    SP --> W[work_plan + children]
-    W --> RV[run_review]
-    RV --> MEM[memory_export]
+![Scenario 4 — Drive the full lifecycle from an MCP client (Copilot CLI): MCP client, project_create, team_cast, coordinator_start, outcome_spec_confirm, work_plan + children, run_review, memory_export](../diagrams/guide-example-scenarios-fig3.png)
 
-    classDef tool fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    class C,P,T,O,SP,W,RV,MEM tool;
-```
+<!-- Rendered from ../diagrams/src/guide-example-scenarios-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 See the [MCP reference](/reference/mcp) for full tool parameters and the [API reference](/reference/api) for the underlying endpoints.

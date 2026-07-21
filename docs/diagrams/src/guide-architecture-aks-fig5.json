@@ -1,0 +1,165 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Secrets management",
+  "alt": "Secrets management: Managed Identity, ServiceAccount, ServiceAccount, AKS OIDC Issuer, AKS OIDC Issuer, Azure Key Vault, SecretProviderClass, Per-user GitHub token secret, API Pod, Warm AgentHost Pod, MCP Pod",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "MI",
+      "label": "Managed Identity",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "subLabel": "agentweaver-api-identity",
+      "meta": "Key Vault Secrets User"
+    },
+    {
+      "id": "SA",
+      "label": "ServiceAccount",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "agentweaver-api",
+      "meta": "azure.workload.identity/client-id"
+    },
+    {
+      "id": "SA2",
+      "label": "ServiceAccount",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "agentweaver-agent-host",
+      "meta": "azure.workload.identity/client-id"
+    },
+    {
+      "id": "OIDC",
+      "label": "AKS OIDC Issuer",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "subLabel": "agentweaver-api-fedcred"
+    },
+    {
+      "id": "OIDC2",
+      "label": "AKS OIDC Issuer",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "agentweaver-agenthost-fedcred"
+    },
+    {
+      "id": "KV",
+      "label": "Azure Key Vault",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "subLabel": "agentweaver-kv"
+    },
+    {
+      "id": "SPC",
+      "label": "SecretProviderClass",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "agentweaver-secrets"
+    },
+    {
+      "id": "USERSECRET",
+      "label": "Per-user GitHub token secret",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "ghtok-user--{base32(userId)}"
+    },
+    {
+      "id": "API",
+      "label": "API Pod",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "/mnt/secrets-store/",
+      "meta": "github-client-id · github-client-secret · mcp-oauth-signing-key"
+    },
+    {
+      "id": "AGENT",
+      "label": "Warm AgentHost Pod",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "KeyVaultUserTokenProvider"
+    },
+    {
+      "id": "MCP",
+      "label": "MCP Pod",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "(no mounted secrets)"
+    }
+  ],
+  "edges": [
+    {
+      "from": "SA",
+      "to": "OIDC",
+      "label": "federated credential"
+    },
+    {
+      "from": "OIDC",
+      "to": "MI"
+    },
+    {
+      "from": "SA2",
+      "to": "OIDC2",
+      "label": "federated credential"
+    },
+    {
+      "from": "OIDC2",
+      "to": "MI"
+    },
+    {
+      "from": "MI",
+      "to": "KV",
+      "label": "Key Vault Secrets User"
+    },
+    {
+      "from": "KV",
+      "to": "SPC"
+    },
+    {
+      "from": "SPC",
+      "to": "API",
+      "label": "CSI volume mount"
+    },
+    {
+      "from": "KV",
+      "to": "USERSECRET"
+    },
+    {
+      "from": "USERSECRET",
+      "to": "AGENT",
+      "label": "SecretClient + DefaultAzureCredential after POST /configure"
+    }
+  ]
+}

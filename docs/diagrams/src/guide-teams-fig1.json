@@ -1,0 +1,50 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "How casting works",
+  "alt": "How casting works: Blueprint roster, Named squad, Your project team",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Blueprint roster",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Software Engineer",
+      "meta": "QA Engineer · Tech Lead"
+    },
+    {
+      "id": "B",
+      "label": "Named squad",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Neo — Software Engineer",
+      "meta": "Trinity — QA Engineer · Morpheus — Tech Lead"
+    },
+    {
+      "id": "C",
+      "label": "Your project team",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "label": "Casting algorithm"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    }
+  ]
+}

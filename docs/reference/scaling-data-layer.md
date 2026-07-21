@@ -161,19 +161,12 @@ Each tier gets a PodDisruptionBudget mirroring the existing `minAvailable: 1` pa
 
 The single-writer ReadWriteOnce `/data` Azure Disk exists **only** because of SQLite. Once Postgres is the store, drop that PVC and its mounts, remove the data-path/HOME env, and flip the deployment from `Recreate` to `RollingUpdate` with `replicas > 1`. The `/workspace` ReadWriteMany Azure Files PVC **stays** — it is multi-attach-safe and still shares git worktrees with sandbox pods, so it does not block horizontal scale. The SQLite backup CronJob is superseded by Flexible Server's managed backups.
 
-```mermaid
-flowchart TD
-    subgraph Cluster["AKS namespace"]
-        Web["agentweaver-web Deployment<br/>role=web · HPA on request load<br/>SA: agentweaver-api"]
-        Worker["agentweaver-worker Deployment<br/>role=worker · KEDA on queue depth<br/>SA: agentweaver-worker + sandbox RBAC"]
-        Worker -. dispatches .-> Pods[Per-run sandbox pods]
-        Worker -- "/workspace RWX" --> WS[(Azure Files — worktrees)]
-        Pods -- "/workspace RWX" --> WS
-    end
-    Web --> PG[(Azure PostgreSQL<br/>Flexible Server — private)]
-    Worker --> PG
-    Pods -. "no DB access — via worker only" .-x PG
-```
+![Volumes: agentweaver-web Deployment, agentweaver-worker Deployment, Per-run sandbox pods, Azure Files — worktrees, Azure PostgreSQL, x](../diagrams/reference-scaling-data-layer-fig1.png)
+
+<!-- Rendered from ../diagrams/src/reference-scaling-data-layer-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A hard topology rule: **sandbox pods talk to the worker tier, never directly to Postgres.** All run-state reads and writes flow through the worker's leasing/orchestration path. Postgres stays reachable only from web and worker pods, keeping the database blast radius tiny and avoiding handing DB credentials to internet-egressing, Kata-isolated agent pods.
 

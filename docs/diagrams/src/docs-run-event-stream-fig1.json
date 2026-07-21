@@ -1,0 +1,105 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Architecture — shared store, cursor stream",
+  "alt": "Architecture — shared store, cursor stream: Run producer, RunStreamEntry, RunEvents, Replica A, Replica B, Browser / MCP watcher",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Producer",
+      "label": "Run producer",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "workflow · coordinator · review"
+    },
+    {
+      "id": "Local",
+      "label": "RunStreamEntry",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "pod-local history"
+    },
+    {
+      "id": "DB",
+      "label": "RunEvents",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "shared database"
+    },
+    {
+      "id": "WebA",
+      "label": "Replica A",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "SSE endpoint"
+    },
+    {
+      "id": "WebB",
+      "label": "Replica B",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "SSE endpoint"
+    },
+    {
+      "id": "Browser",
+      "label": "Browser / MCP watcher",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "Last-Event-ID cursor"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Producer",
+      "to": "Local",
+      "label": "RecordNext / Record"
+    },
+    {
+      "from": "Local",
+      "to": "DB",
+      "label": "AppendAsync mirror"
+    },
+    {
+      "from": "Producer",
+      "to": "DB",
+      "label": "terminal backfill safety net"
+    },
+    {
+      "from": "DB",
+      "to": "WebA",
+      "label": "SubscribeAsync run id + cursor"
+    },
+    {
+      "from": "DB",
+      "to": "WebB",
+      "label": "SubscribeAsync run id + cursor"
+    },
+    {
+      "from": "WebA",
+      "to": "Browser",
+      "label": "SSE frames"
+    },
+    {
+      "from": "WebB",
+      "to": "Browser",
+      "label": "SSE frames"
+    }
+  ]
+}

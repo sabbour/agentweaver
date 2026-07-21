@@ -8,19 +8,12 @@ When all agents finish their work and the coordinator assembles the combined out
 
 ## The review pipeline
 
-```mermaid
-flowchart LR
-    A[All agents complete] --> B[Results assembled]
-    B --> C[RAI check]
-    C -- Pass --> D[Human review]
-    C -- Revision needed --> E[Agent revises]
-    E --> C
-    D -- Commit and Merge --> G[Merged]
-    D -- Change --> H[Agent revises]
-    H --> D
-    D -- Decline --> I[Declined]
-    G --> J[Scribe records session]
-```
+![The review pipeline: All agents complete, Results assembled, RAI check, Human review, Agent revises, Merged, Agent revises, Declined, Scribe records session](../diagrams/guide-review-fig1.png)
+
+<!-- Rendered from ../diagrams/src/guide-review-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Automatic RAI check
 

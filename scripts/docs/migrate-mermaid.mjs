@@ -51,15 +51,25 @@ function slugBase(file) {
   return dir === 'deep-dive' ? doc : `${dir}-${doc}`;
 }
 
-function embedBlock(name, alt) {
+function embedBlock(name, alt, relDir) {
   return [
-    `![${alt}](../diagrams/${name}.png)`,
+    `![${alt}](${relDir}${name}.png)`,
     '',
-    `<!-- Rendered from ../diagrams/src/${name}.json by docs/diagram-renderer +`,
+    `<!-- Rendered from ${relDir}src/${name}.json by docs/diagram-renderer +`,
     '     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.',
     '     Edit the JSON, then run `npm run docs:render-diagrams` and commit the',
     '     regenerated PNG + .hash.txt. -->',
   ].join('\n');
+}
+
+const diagramsDir = path.join(repoRoot, 'docs', 'diagrams');
+
+// Relative POSIX path from a doc's directory to docs/diagrams/, with a trailing
+// slash (e.g. `../diagrams/` for docs/experience/*.md, `diagrams/` for a doc at
+// the docs/ root like docs/run-event-stream.md).
+function relDiagramsDir(file) {
+  const rel = path.relative(path.dirname(file), diagramsDir).split(path.sep).join('/');
+  return rel.endsWith('/') ? rel : `${rel}/`;
 }
 
 async function processFile(file) {
@@ -67,6 +77,7 @@ async function processFile(file) {
   const lines = raw.split('\n');
   const out = [];
   const base = slugBase(file);
+  const relDir = relDiagramsDir(file);
   let heading = base;
   let fig = 0;
   const result = { file, converted: [], skipped: [], warnings: [] };
@@ -101,7 +112,7 @@ async function processFile(file) {
         fig = nextFig;
         result.converted.push({ name, spec: converted.spec });
         result.warnings.push(...converted.warnings.map((w) => `${name}: ${w}`));
-        out.push(indent + embedBlock(name, converted.spec.alt));
+        out.push(indent + embedBlock(name, converted.spec.alt, relDir));
         i = j; // skip past closing fence
         continue;
       }

@@ -1,0 +1,136 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The review pipeline",
+  "alt": "The review pipeline: All agents complete, Results assembled, RAI check, Human review, Agent revises, Merged, Agent revises, Declined, Scribe records session",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "All agents complete",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Results assembled",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "RAI check",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Human review",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Agent revises",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Merged",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Agent revises",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "I",
+      "label": "Declined",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "J",
+      "label": "Scribe records session",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "label": "Pass"
+    },
+    {
+      "from": "C",
+      "to": "E",
+      "label": "Revision needed"
+    },
+    {
+      "from": "E",
+      "to": "C"
+    },
+    {
+      "from": "D",
+      "to": "G",
+      "label": "Commit and Merge"
+    },
+    {
+      "from": "D",
+      "to": "H",
+      "label": "Change"
+    },
+    {
+      "from": "H",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "I",
+      "label": "Decline"
+    },
+    {
+      "from": "G",
+      "to": "J"
+    }
+  ]
+}
