@@ -46,6 +46,18 @@ public sealed class KubernetesRemoteApiManifestTests
     }
 
     [Fact]
+    public void AgentHostEgress_ExplicitlyAllowsMcpOnTcp8080()
+    {
+        var document = DocumentNamed(
+            ReadManifest("networkpolicy-agenthost-egress.yaml"),
+            "agenthost-egress-allowlist");
+
+        document.Should().Contain("app.kubernetes.io/component: agent-host");
+        document.Should().Contain("app: agentweaver-mcp");
+        document.Should().Contain("port: 8080");
+    }
+
+    [Fact]
     public void ExistingAgentHostPolicies_SelectRenamedAgentHostLabel()
     {
         var files = new[]
