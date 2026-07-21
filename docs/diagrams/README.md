@@ -8,6 +8,32 @@ labels on diagrams this complex, and pre-rendering to static SVG makes the
 result render identically everywhere (GitHub web, VitePress) regardless of
 viewer-side renderer quirks.
 
+## Why JSON graph specs instead of parsing `.mmd` directly
+
+These diagrams originally existed as Mermaid `.mmd` source. When this pipeline replaced
+Mermaid rendering, we considered keeping `.mmd` as the live source of truth and parsing it
+programmatically (via `@mermaid-js/mermaid`'s internal parser) into a graph spec at render
+time. We deliberately did **not** do that:
+
+- Mermaid's parser is designed to feed Mermaid's own renderer, not to export a stable,
+  documented AST for external tools — relying on it means depending on undocumented
+  internals that can change between Mermaid versions with no compatibility guarantee.
+- It would reintroduce a Mermaid dependency into a pipeline whose entire point is to stop
+  depending on Mermaid, and reintroduce parser-version drift as a new source of
+  cross-environment flakiness (the same class of bug this pipeline was built to eliminate
+  in its rendering step).
+- The `.mmd` files' actual content (node labels, edges, groups, styling categories) was a
+  one-time, already-correct starting point — there was no ongoing need to keep re-parsing
+  Mermaid syntax once that content was captured.
+
+Instead, each original `.mmd` file's structure (nodes/edges/labels/subgraphs/`classDef`
+categories) was translated **once**, by hand, into the equivalent
+`docs/diagrams/specs/*.json` graph spec (see below) — a small, stable, fully-documented
+JSON schema owned by this pipeline. Those JSON specs are now the sole source of truth
+going forward: edit the JSON, not Mermaid syntax, to change a diagram. The original
+`.mmd` files were removed since keeping two divergent "sources of truth" for the same
+diagram (one unused) would itself be a maintainability trap.
+
 ## How it works
 
 ```
