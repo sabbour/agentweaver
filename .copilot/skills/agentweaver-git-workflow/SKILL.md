@@ -75,6 +75,12 @@ Separate worktrees prevent that collision.
      git checkout -b "squad/{issue-number}-{slug}" dev
      ```
 2. Make focused changes, run the relevant tests, and commit with the issue reference.
+   **Before committing, check if a changeset is needed:** if the diff touches
+   `apps/`, `packages/`, `scripts/azure/`, or `k8s/` with a real user-facing
+   behavior change (not just lint/refactor/test-only), run `npm run changeset`
+   (see the [changelog skill](../agentweaver-changelog/SKILL.md)). The
+   `Changeset advisory` CI job only emits a warning — it never blocks merge —
+   so this is easy to silently skip; don't rely on CI to catch it.
 3. Push and open a draft or ready PR against `dev`:
    ```bash
    git push -u origin "squad/{issue-number}-{slug}"
@@ -107,3 +113,6 @@ worktree naming convention above, run relevant tests, and open a PR against `dev
 - ❌ Spawning a local code-changing agent without explicit `fetch`, `worktree add`, and `cd` commands
 - ❌ Creating a local worktree for a hosted agent
 - ❌ Merging or trusting a PR without checking its live `mergeable`/`mergeStateStatus` and each required check's actual `conclusion`
+- ❌ Opening a PR with a real user-facing fix/feature under `apps/`, `packages/`,
+  `scripts/azure/`, or `k8s/` without adding a changeset, and assuming the
+  non-blocking `Changeset advisory` job would have caught it if one were needed
