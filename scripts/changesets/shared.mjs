@@ -6,6 +6,10 @@ const FRAGMENT_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]+)$/;
 const BUMP_PATTERN = /^\s*["']?([^"':\s]+)["']?\s*:\s*(major|minor|patch)\s*$/gm;
 const RELEASE_METADATA_PATTERN = /^(VERSION|package\.json|package-lock\.json|CHANGELOG\.md|\.changeset\/)/;
 const RELEASE_RELEVANT_PATTERN = /^(apps\/|packages\/|scripts\/azure\/|k8s\/)/;
+// Matches test-only paths that never ship product behavior even though they live
+// under a release-relevant prefix (e.g. apps/web/src/__tests__/foo.test.tsx).
+// Excluding these avoids demanding a changeset for a PR that only touches tests.
+const TEST_ONLY_PATTERN = /(^|\/)(__tests__|tests)\/|\.(test|spec)\.[^/]+$/;
 
 export function readVersionMirrors(repoRoot, { readFile = fs.readFileSync } = {}) {
   const version = readFile(path.join(repoRoot, "VERSION"), "utf8").trim();
@@ -78,7 +82,7 @@ export function parseChangesetFragment(content, { allowMajor = false } = {}) {
 }
 
 export function isReleaseRelevant(paths) {
-  return paths.some((file) => RELEASE_RELEVANT_PATTERN.test(file));
+  return paths.some((file) => RELEASE_RELEVANT_PATTERN.test(file) && !TEST_ONLY_PATTERN.test(file));
 }
 
 export function isReleaseMetadataOnly(paths) {

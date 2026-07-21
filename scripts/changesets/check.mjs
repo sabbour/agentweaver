@@ -58,7 +58,7 @@ const exempt = hasChangesetExemption(labels, body);
 const needsChangeset = isReleaseRelevant(changed) && !isReleaseMetadataOnly(changed);
 
 if (needsChangeset && added.length === 0 && !exempt) {
-  console.warn("::warning::Relevant product changes have no changeset. Add one or use changeset:not-required with a Changeset exemption: rationale.");
+  throw new Error("Relevant product changes have no changeset. Add one with `npm run changeset`, or use the changeset:not-required label with a `Changeset exemption: <rationale>` line in the PR body.");
 }
 
 if (exempt) {
