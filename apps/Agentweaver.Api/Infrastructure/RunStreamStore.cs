@@ -28,7 +28,7 @@ public sealed class RunStreamEntry
     private bool _isCompleted;
     private bool _isAwaitingReview;
     private readonly Lock _lock = new();
-    private readonly TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private volatile TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile TaskCompletionSource _eventSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public RunStreamEntry(string owner, string runId = "", IRunEventStream? eventStream = null)
@@ -68,6 +68,26 @@ public sealed class RunStreamEntry
     public void ClearAwaitingReview()
     {
         lock (_lock) _isAwaitingReview = false;
+    }
+
+    /// <summary>
+    /// Reopens a completed entry for a new live turn (e.g. a reviewer-triggered revision that
+    /// resumes the SAME child run) WITHOUT discarding <see cref="_history"/>. Clears
+    /// <see cref="_isCompleted"/> and <see cref="_isAwaitingReview"/> so the SSE loop keeps
+    /// streaming instead of breaking out on the stale completed flag, and mints a fresh
+    /// completion signal so a subsequent <see cref="WaitForChangeAsync"/> blocks correctly
+    /// again (the prior signal was already resolved by <see cref="MarkCompleted"/>).
+    /// Callers MUST use this instead of removing + recreating the stream entry — recreating
+    /// loses every event recorded before the reopen (issue #388).
+    /// </summary>
+    public void Reopen()
+    {
+        lock (_lock)
+        {
+            _isCompleted = false;
+            _isAwaitingReview = false;
+        }
+        Interlocked.Exchange(ref _completionSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
     }
 
     /// <summary>
@@ -340,6 +360,21 @@ public sealed class RunStreamStore
 
     public RunStreamEntry? Get(string runId) =>
         _entries.TryGetValue(runId, out var pair) ? pair.Entry : null;
+
+    /// <summary>
+    /// Reopens an existing (typically completed) run's stream entry in place, preserving its
+    /// recorded history, so a reviewer-triggered revision turn (Build &amp; Test gate, RAI,
+    /// rubber-duck, etc.) APPENDS to the target agent's message stream instead of losing it.
+    /// Returns the reopened entry, or <c>null</c> when no entry exists for <paramref name="runId"/>
+    /// (the caller's subsequent <see cref="Create"/> then starts a fresh — necessarily empty —
+    /// entry, which is the correct fallback when the entry was evicted/never existed).
+    /// </summary>
+    public RunStreamEntry? Reopen(string runId)
+    {
+        var entry = Get(runId);
+        entry?.Reopen();
+        return entry;
+    }
 
     /// <summary>
     /// Removes a run's stream entry from the store.
