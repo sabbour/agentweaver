@@ -8,9 +8,10 @@
 #
 # TLS: the single `https` listener terminates TLS using the managed default-domain
 # certificate. Before deploying, apply the DefaultDomainCertificate resource and
-# wait for it to become Available, then substitute ${HOST} with the managed host.
-# The deploy script (30-deploy.sh) derives HOST automatically and uses envsubst
-# to render this manifest before applying.
+# wait for it to become Available, then patch the listener hostname to the managed
+# host. The deploy script (steps/30-deploy.mjs) derives HOST live from the cluster
+# and injects it via the production overlay's Kustomize `replacements` (sourced
+# from the generated agentweaver-runtime-config ConfigMap) before `kubectl apply -k`.
 #
 # allowedRoutes.from: Same restricts route attachment to this namespace only.
 apiVersion: gateway.networking.k8s.io/v1
@@ -26,7 +27,7 @@ spec:
     - name: https
       port: 443
       protocol: HTTPS
-      hostname: ${HOST}
+      hostname: agentweaver.example.com
       tls:
         mode: Terminate
         certificateRefs:

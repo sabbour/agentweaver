@@ -160,7 +160,7 @@ flowchart TB
 
 The Worker now runs in `pod-per-run`, so coordinator child agents execute in AgentHost pods via this warm pool rather than in-process on the Worker:
 
-- **AgentHost pool** — `agentweaver-agent-host`, `k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed for live agent turns.
+- **AgentHost pool** — `agentweaver-agent-host`, `k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`, keeps two AgentHost pods pre-warmed for live agent turns.
 
 Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with run identity, credentials, purpose, and a shared/local workspace descriptor, then waits for `/healthz` to become ready before sending the first `message:stream` turn. Normal runs use `ExecutionWorkspaceMode.Shared`. Assembly Build/Test uses `LocalReadOnly`, sends an immutable source ref/base SHA/tree contract, and executes from a verified checkout created inside the disk-backed `/local-workspace` emptyDir; its preview maps the API-resolved relative cwd into that same checkout. `LocalWritable` and `ImplementationTurn` define the reuse seam for #253 without enabling implementation write-back in this path.
 
@@ -175,7 +175,7 @@ flowchart LR
 
 `/configure` has one-time semantics (`409` after the first successful configuration). It is not protected by the turn bearer token because it delivers that token; the NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
 
-The live sandbox path binds claims to the AgentHost warm pool (`AgentHostWarmPoolRef`, default `agentweaver-agent-host`) and delivers per-run context through `/configure`; it does not create per-run templates or per-run warm pools for AgentHost. Source: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:40`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:332`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:480`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:497`, `k8s/sandbox-template-agenthost.yaml:36`, `k8s/sandbox-warmpool-agenthost.yaml:19`.
+The live sandbox path binds claims to the AgentHost warm pool (`AgentHostWarmPoolRef`, default `agentweaver-agent-host`) and delivers per-run context through `/configure`; it does not create per-run templates or per-run warm pools for AgentHost. Source: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:40`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:332`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:480`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:497`, `k8s/base/sandbox-template-agenthost.yaml:36`, `k8s/base/sandbox-warmpool-agenthost.yaml:19`.
 
 ---
 
@@ -324,12 +324,12 @@ Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentwea
 
 #### Sandbox isolation
 
-Sandbox pods (`k8s/networkpolicy-sandbox.yaml` plus `k8s/networkpolicy-agenthost.yaml`) have a deny-by-default posture with one turn-path exception:
+Sandbox pods (`k8s/base/networkpolicy-sandbox.yaml` plus `k8s/base/networkpolicy-agenthost.yaml`) have a deny-by-default posture with one turn-path exception:
 - **Ingress deny-all by default** — command execution still uses pod-exec through the kube-apiserver.
 - **A2A ingress exception** — `allow-worker-to-agenthost-a2a` opens only TCP `8088` from worker/API pods to AgentHost pods. `POST /configure` is intentionally not protected by the turn bearer token because it delivers that token; NetworkPolicy is the guard. `POST /a2a/agent/v1/message:stream` still requires `Authorization: Bearer {per-run token}`, delivered by `/configure` and unique per run.
 - **Egress allow-list** — DNS (`kube-dns`) + HTTPS on port 443 to the GitHub IP range `140.82.112.0/20` only. The cluster-internal pod and service CIDRs are not in the allow-list, so sandbox pods cannot reach API or other workload pods via the network.
 
-The FQDN-based `CiliumNetworkPolicy` in `k8s/cilium-network-policy-sandbox.yaml` further narrows sandbox internet egress to specific hostnames: `api.github.com`, `registry.npmjs.org` (and `*.npmjs.org`), and Azure AI service domains. This policy requires `--network-dataplane cilium --enable-acns` at cluster creation and must be applied alongside `networkpolicy-sandbox.yaml`.
+The FQDN-based `CiliumNetworkPolicy` in `k8s/base/cilium-network-policy-sandbox.yaml` further narrows sandbox internet egress to specific hostnames: `api.github.com`, `registry.npmjs.org` (and `*.npmjs.org`), and Azure AI service domains. This policy requires `--network-dataplane cilium --enable-acns` at cluster creation and must be applied alongside `networkpolicy-sandbox.yaml`.
 
 ### Non-root containers
 
@@ -388,7 +388,7 @@ The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed ident
 
 One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
 
-**`agentweaver-secrets`** (used by API pod, `k8s/secret-provider-class.yaml`):
+**`agentweaver-secrets`** (used by API pod, `k8s/base/secret-provider-class.yaml`):
 
 | Key Vault secret | File in `/mnt/secrets-store/` | Used for |
 |-----------------|------------------------------|----------|

@@ -30,7 +30,7 @@ The relative `keepalive_url` returned by `POST …/port-forward` is
 `SandboxPreviewService.StartPreviewAsync` is orchestration-only: it resolves the bound pod, patches labels,
 creates the ClusterIP Service, and creates the HTTPRoute. It deliberately does **not** connect from the API pod
 to `podIP:{target_port}` because `sandbox-allow-preview-ingress` admits TCP `3000-9000` only from the preview
-Gateway's data-plane pods ([`SandboxPreviewService.cs:134`](#source), [`k8s/networkpolicy-sandbox.yaml`](#source)).
+Gateway's data-plane pods ([`SandboxPreviewService.cs:134`](#source), [`k8s/base/networkpolicy-sandbox.yaml`](#source)).
 For platform live-preview, readiness is the AgentHost in-pod observation: log hints are tried first, then the
 pod's own `/proc/net/tcp` and `/proc/net/tcp6` tables are parsed for new listening sockets, the app responds on
 its real port, the in-pod `TcpPortForwarder` listens on `0.0.0.0:{publicPort}`, and AgentHost verifies the
@@ -111,7 +111,7 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 |---|---|---|
 | `Sandbox:Preview:Enabled` | `true` (AKS) / `false` (local dev) | Master switch. When `true` the API provisions Gateway-direct HTTPRoute+Service objects and returns a `preview_url`. When `false` the Gateway path and reaper are no-ops and `kubectl port-forward` is used instead. **Enabled by default** in AKS deployments via `Sandbox__Preview__Enabled=true`. |
 | `Sandbox:Preview:ZoneSuffix` | `""` (set by deploy) | Managed `aksapp.io` zone; the preview host is `{token}-preview.{ZoneSuffix}`. Supplied by the AKS deploy script. Production value: `6a41f26c75d5cf00019ef7d7.westus2.staging.aksapp.io`. |
-| `Sandbox:Preview:GatewayName` | `agentweaver-preview-gateway` | Shared Gateway the per-preview HTTPRoute attaches to. Applied from `k8s/gateway-preview.yaml`. |
+| `Sandbox:Preview:GatewayName` | `agentweaver-preview-gateway` | Shared Gateway the per-preview HTTPRoute attaches to. Applied from `k8s/base/gateway-preview.yaml`. |
 | `Sandbox:Preview:GatewayNamespace` | `agentweaver` | Namespace of the shared preview Gateway. |
 | `Sandbox:Preview:Namespace` | `agentweaver` | Namespace where the per-preview Service / HTTPRoute / pod live. |
 | `Sandbox:Preview:IdleTimeoutMinutes` | `30` | Sliding idle TTL; a preview not kept alive within this window is reaped. |

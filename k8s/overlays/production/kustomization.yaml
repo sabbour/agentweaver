@@ -1,0 +1,130 @@
+# Kustomize overlay — production (the repo's single AKS deploy target, matching
+# variables.mjs's NAMESPACE default of "agentweaver").
+#
+# This is the file steps/30-deploy.mjs applies with `kubectl apply -k`. The
+# literal values below are placeholders so this overlay builds standalone for
+# local validation (`kubectl kustomize k8s/overlays/production`); at real
+# deploy time, lib/kustomize.mjs copies this directory into a git-ignored
+# scratch dir and rewrites the `images:` tags and the `agentweaver-runtime-config`
+# configMapGenerator literals with the real values resolved by variables.mjs /
+# live cluster lookups (HOST, PREVIEW_HOSTNAME, etc. are only known once the
+# DefaultDomainCertificate is Available — see steps/30-deploy.mjs's run()).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# Image tag / registry injection — replaces the old envsubst ACR_LOGIN_SERVER /
+# IMAGE_TAG / AGENTHOST_IMAGE_TAG substitution. `name` matches the base
+# manifests' placeholder image exactly; `newName`/`newTag` are rewritten per
+# deploy from cfg.ACR_LOGIN_SERVER / cfg.IMAGE_TAG / cfg.AGENTHOST_IMAGE_TAG.
+images:
+  - name: agentweaverregistry.azurecr.io/agentweaver-api
+    newName: agentweaverregistry.azurecr.io/agentweaver-api
+    newTag: "latest"
+  - name: agentweaverregistry.azurecr.io/agentweaver-frontend
+    newName: agentweaverregistry.azurecr.io/agentweaver-frontend
+    newTag: "latest"
+  - name: agentweaverregistry.azurecr.io/agentweaver-mcp
+    newName: agentweaverregistry.azurecr.io/agentweaver-mcp
+    newTag: "latest"
+  - name: agentweaverregistry.azurecr.io/agentweaver-agent-host
+    newName: agentweaverregistry.azurecr.io/agentweaver-agent-host
+    newTag: "latest"
+
+# Deploy-time-resolved scalar/URL values, generated fresh into a ConfigMap.
+# Replaces the rest of the old envsubst allow-list. Consumed two ways:
+#   1. Deployment env vars reference these keys directly via
+#      valueFrom.configMapKeyRef (api-deployment.yaml, worker-deployment.yaml,
+#      mcp-deployment.yaml, sandbox-template-agenthost.yaml).
+#   2. The `replacements` block below copies individual keys into fields that
+#      can't reference a ConfigMap (Gateway/HTTPRoute hostnames, ServiceAccount
+#      annotations, SecretProviderClass parameters).
+configMapGenerator:
+  - name: agentweaver-runtime-config
+    options:
+      # Disabled: the base Deployments reference this ConfigMap by its plain
+      # name via configMapKeyRef (not envFrom), and steps/30-deploy.mjs already
+      # rolls every Deployment via `kubectl rollout status` on every deploy, so
+      # the hash-suffix's "roll on config change" behavior isn't needed here —
+      # a stable name keeps the base manifests simple and directly readable.
+      disableNameSuffixHash: true
+    # Each value is double-quoted (JSON-escaped) so lib/kustomize.mjs can
+    # rewrite a single literal in place with `JSON.stringify()` at deploy
+    # time without disturbing YAML parsing of the surrounding list.
+    literals:
+      - "HOST=agentweaver.example.com"
+      - "PREVIEW_HOSTNAME=*.example.com"
+      - "IDENTITY_CLIENT_ID=changeme"
+      - "KEYVAULT_NAME=changeme"
+      - "TENANT_ID=changeme"
+      - "OAUTH_ISSUER=https://agentweaver.example.com"
+      - "OAUTH_AUDIENCE=https://agentweaver.example.com/mcp"
+      - "GITHUB_CALLBACK_URL=https://agentweaver.example.com/auth/github/callback"
+      - "GITHUB_FRONTEND_URL=https://agentweaver.example.com/"
+      - "TOKEN_STORE_KEYVAULT_URI=https://changeme.vault.azure.net"
+      - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
+      - "APPINSIGHTS_WORKSPACE_ID="
+      - "SANDBOX_PREVIEW_ZONE_SUFFIX=example.com"
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.HOST
+    targets:
+      - select:
+          kind: Gateway
+          name: agentweaver-gateway
+        fieldPaths:
+          - spec.listeners.0.hostname
+      - select:
+          kind: HTTPRoute
+        fieldPaths:
+          - spec.hostnames.0
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.PREVIEW_HOSTNAME
+    targets:
+      - select:
+          kind: Gateway
+          name: agentweaver-preview-gateway
+        fieldPaths:
+          - spec.listeners.0.hostname
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.IDENTITY_CLIENT_ID
+    targets:
+      - select:
+          kind: SecretProviderClass
+        fieldPaths:
+          - spec.parameters.clientID
+      - select:
+          kind: ServiceAccount
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.KEYVAULT_NAME
+    targets:
+      - select:
+          kind: SecretProviderClass
+        fieldPaths:
+          - spec.parameters.keyvaultName
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.TENANT_ID
+    targets:
+      - select:
+          kind: SecretProviderClass
+        fieldPaths:
+          - spec.parameters.tenantId
+      - select:
+          kind: ServiceAccount
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/tenant-id]

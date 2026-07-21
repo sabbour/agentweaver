@@ -12,7 +12,7 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | Build & Test coupling | Runs after Build & Test for `APPROVED` and `REQUEST_CHANGES`; skipped on `DECLINED`. | `CoordinatorAssemblyService.cs:753` |
 | Port choice | Platform observes the app port inside the sandbox pod using log hints plus `/proc/net/tcp` and `/proc/net/tcp6`, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:262`, `:610`, `:315` |
 | Registration readiness | In-pod AgentHost observe verifies app + forwarder readiness; the API never probes `podIP:{target_port}` before creating Service/HTTPRoute. | `PreviewRunner.cs:315`; `SandboxPreviewService.cs:134` |
-| End-to-end reachability | Confirmed by using the returned Gateway hostname (`preview_url`), because NetworkPolicy admits preview-port ingress only from the Gateway. | `k8s/networkpolicy-sandbox.yaml`; `SandboxPreviewService.cs:147` |
+| End-to-end reachability | Confirmed by using the returned Gateway hostname (`preview_url`), because NetworkPolicy admits preview-port ingress only from the Gateway. | `k8s/base/networkpolicy-sandbox.yaml`; `SandboxPreviewService.cs:147` |
 | Infra unavailable | Emits `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable`. | `PreviewStep.cs:83` |
 | Preview failure | Emits `sandbox.preview_failed`; never blocks human review and never forces changes. | `PreviewStep.cs:31`, `CoordinatorAssemblyService.cs:772` |
 | Approval | Uses existing `AgentPreviewGate`; no preview-specific bypass. | `PreviewStep.cs:157` |

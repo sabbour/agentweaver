@@ -25,7 +25,7 @@ spec:
   parentRefs:
     - name: agentweaver-gateway
   hostnames:
-    - ${HOST}
+    - agentweaver.example.com
   rules:
     - matches:
         - path:

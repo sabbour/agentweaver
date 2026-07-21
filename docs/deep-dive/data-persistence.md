@@ -497,7 +497,7 @@ The production deployment uses one persistent volume for filesystem state:
 
 All application state (runs, projects, memory, events, OAuth) lives in **Azure Database for PostgreSQL Flexible Server**, provisioned externally. Use Azure's built-in automated backups and point-in-time restore for data protection.
 
-Where this lives: `k8s/api-deployment.yaml`, `k8s/pvc-workspace.yaml`.
+Where this lives: `k8s/base/api-deployment.yaml`, `k8s/base/pvc-workspace.yaml`.
 
 ## Rebuild Checklist and Invariants
 

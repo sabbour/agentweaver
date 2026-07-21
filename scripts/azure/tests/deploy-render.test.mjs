@@ -1,28 +1,40 @@
-// deploy-render.test.mjs -- Rendered-YAML parity tests for
-// steps/30-deploy.mjs's renderManifests(), covering every k8s/*.yaml
-// template against a fixed, realistic variable set.
+// deploy-render.test.mjs -- Unit tests for lib/kustomize.mjs, the Kustomize-
+// based replacement for the old envsubst renderer as far as k8s manifest
+// rendering goes (see that module's header comment for the full pipeline).
 //
-// PARITY PROOF (see Tank's Phase 2 summary for full details): this fixed
-// variable set was also run through the REAL bash 30-deploy.sh envsubst
-// invocation inside WSL (GNU gettext envsubst 0.21) and diffed byte-for-byte
-// against this module's renderManifests() output for all 40 k8s/*.yaml
-// files -- zero differences. That one-off diff run is not checked in here
-// (it depends on WSL/envsubst, which is not guaranteed to exist in every
-// dev/CI environment); these node:test assertions are the repeatable,
-// environment-independent half of that parity proof.
+// Covers: buildImageEntries()/buildRuntimeConfigLiterals() derive the right
+// values from a resolved variable set; rewriteOverlayKustomization() safely
+// rewrites the committed overlay's images:/configMapGenerator placeholders;
+// writeOverlay() produces a buildable scratch overlay; parseBuiltDocs() and
+// manifestForFilename() correctly re-group a real `kubectl kustomize` build
+// back into the same per-file manifests steps/30-deploy.mjs applies.
+//
+// These tests shell out to the real `kubectl kustomize` (kubectl's built-in
+// Kustomize support -- no separate `kustomize` binary required) against the
+// real k8s/base + k8s/overlays/production directories, so they double as a
+// "does the checked-in overlay still build" regression check.
 
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderManifests, ALLOW_LIST, DEFAULT_REPO_ROOT } from "../steps/30-deploy.mjs";
-import { renderTemplate } from "../lib/render.mjs";
+import * as execDefault from "../lib/exec.mjs";
+import {
+  FILE_RESOURCES,
+  IMAGE_NAMES,
+  buildImageEntries,
+  buildRuntimeConfigLiterals,
+  rewriteOverlayKustomization,
+  writeOverlay,
+  parseBuiltDocs,
+  manifestForFilename,
+} from "../lib/kustomize.mjs";
+import { DEFAULT_REPO_ROOT } from "../steps/30-deploy.mjs";
 
-const K8S_DIR = path.join(DEFAULT_REPO_ROOT, "k8s");
-
-// Fixed, realistic input variables (values are consistent, well-formed
-// strings -- not real Azure resources, matching the task's parity-test
-// requirement). Same values used for the WSL/envsubst diff run.
+// Fixed, realistic input variables -- distinct values for every field so a
+// successful build actually PROVES replacement/substitution fired, rather
+// than merely producing structurally-valid YAML that happens to match a
+// placeholder by coincidence.
 const VARS = {
   HOST: "agentweaver.abc123def456.westus2.staging.aksapp.io",
   ACR_LOGIN_SERVER: "agentweaverregistry.azurecr.io",
@@ -39,88 +51,97 @@ const VARS = {
   APPINSIGHTS_WORKSPACE_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 };
 
-test("ALLOW_LIST matches the exact envsubst whitelist from 30-deploy.sh/.ps1", () => {
-  assert.deepEqual(ALLOW_LIST, [
-    "HOST",
-    "ACR_LOGIN_SERVER",
-    "IMAGE_TAG",
-    "AGENTHOST_IMAGE_TAG",
-    "IDENTITY_CLIENT_ID",
-    "KEYVAULT_NAME",
-    "AGENTHOST_KEYVAULT_URI",
-    "TENANT_ID",
-    "PREVIEW_HOSTNAME",
-    "PREVIEW_TLS_SECRET",
-    "SANDBOX_PREVIEW_ENABLED",
-    "SANDBOX_PREVIEW_ZONE_SUFFIX",
-    "APPINSIGHTS_WORKSPACE_ID",
-  ]);
+test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IMAGE_TAG/AGENTHOST_IMAGE_TAG", () => {
+  const entries = buildImageEntries(VARS);
+  assert.equal(entries.length, 4);
+  assert.deepEqual(
+    entries.map((e) => e.name),
+    [IMAGE_NAMES.api, IMAGE_NAMES.frontend, IMAGE_NAMES.mcp, IMAGE_NAMES.agentHost],
+  );
+  assert.deepEqual(
+    entries.map((e) => e.newName),
+    [
+      "agentweaverregistry.azurecr.io/agentweaver-api",
+      "agentweaverregistry.azurecr.io/agentweaver-frontend",
+      "agentweaverregistry.azurecr.io/agentweaver-mcp",
+      "agentweaverregistry.azurecr.io/agentweaver-agent-host",
+    ],
+  );
+  assert.deepEqual(
+    entries.map((e) => e.newTag),
+    ["v0.9.71", "v0.9.71", "v0.9.71", "v0.9.71-agenthost"],
+  );
 });
 
-test("renderManifests renders every k8s/*.yaml template and is self-consistent with renderTemplate", () => {
-  const rendered = renderManifests(VARS, { repoRoot: DEFAULT_REPO_ROOT });
-  const yamlFiles = fs.readdirSync(K8S_DIR).filter((n) => n.endsWith(".yaml"));
-  assert.equal(rendered.size, yamlFiles.length);
-  for (const fname of yamlFiles) {
-    const raw = fs.readFileSync(path.join(K8S_DIR, fname), "utf8");
-    const expected = renderTemplate(raw, VARS, ALLOW_LIST);
-    assert.equal(rendered.get(fname), expected, `mismatch rendering ${fname}`);
+test("buildRuntimeConfigLiterals() composites full URLs from HOST and passes through the rest", () => {
+  const literals = buildRuntimeConfigLiterals(VARS);
+  assert.equal(literals.OAUTH_ISSUER, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
+  assert.equal(literals.OAUTH_AUDIENCE, "https://agentweaver.abc123def456.westus2.staging.aksapp.io/mcp");
+  assert.equal(
+    literals.GITHUB_CALLBACK_URL,
+    "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/callback",
+  );
+  assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://agentweaver-kv.vault.azure.net");
+  assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://agentweaver-kv.vault.azure.net/");
+  assert.equal(literals.APPINSIGHTS_WORKSPACE_ID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+  assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
+});
+
+test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
+  const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
+  const original = fs.readFileSync(overlayPath, "utf8");
+  const rewritten = rewriteOverlayKustomization(original, VARS);
+
+  assert.match(rewritten, /newName: agentweaverregistry\.azurecr\.io\/agentweaver-api\s*\n\s*newTag: "v0\.9\.71"/);
+  assert.match(rewritten, /newName: agentweaverregistry\.azurecr\.io\/agentweaver-agent-host\s*\n\s*newTag: "v0\.9\.71-agenthost"/);
+  assert.match(rewritten, /- "HOST=agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io"/);
+  assert.match(rewritten, /- "PREVIEW_HOSTNAME=\*\.abc123def456\.westus2\.staging\.aksapp\.io"/);
+  assert.match(rewritten, /- "IDENTITY_CLIENT_ID=11111111-2222-3333-4444-555555555555"/);
+  assert.match(rewritten, /- "TENANT_ID=66666666-7777-8888-9999-000000000000"/);
+  // Untouched structural content (resources:/replacements: blocks) should survive verbatim.
+  assert.match(rewritten, /resources:\s*\n\s*- \.\.\/\.\.\/base/);
+  assert.match(rewritten, /replacements:/);
+  // No leftover "latest"/"changeme" placeholders for the fields we targeted.
+  assert.doesNotMatch(rewritten, /newTag: "latest"/);
+});
+
+test("writeOverlay() + kubectl kustomize builds cleanly and every resource resolves to real (not placeholder) values", async (t) => {
+  const scratchDir = path.join(DEFAULT_REPO_ROOT, "scripts", "azure", "tests", ".scratch-deploy-render");
+  t.after(() => fs.rmSync(scratchDir, { recursive: true, force: true }));
+
+  const overlayDir = writeOverlay(VARS, { repoRoot: DEFAULT_REPO_ROOT, scratchDir });
+  const { stdout: builtYaml, code } = await execDefault.capture("kubectl", ["kustomize", overlayDir]);
+  assert.equal(code, 0);
+
+  assert.match(builtYaml, /image: agentweaverregistry\.azurecr\.io\/agentweaver-api:v0\.9\.71\b/);
+  assert.match(builtYaml, /image: agentweaverregistry\.azurecr\.io\/agentweaver-agent-host:v0\.9\.71-agenthost/);
+  assert.match(builtYaml, /hostname: agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io/);
+  assert.match(builtYaml, /hostname: '\*\.abc123def456\.westus2\.staging\.aksapp\.io'/);
+  assert.match(builtYaml, /clientID: 11111111-2222-3333-4444-555555555555/);
+  assert.match(builtYaml, /keyvaultName: agentweaver-kv/);
+  assert.match(builtYaml, /tenantId: 66666666-7777-8888-9999-000000000000/);
+  assert.match(builtYaml, /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/);
+  assert.match(builtYaml, /azure\.workload\.identity\/tenant-id: 66666666-7777-8888-9999-000000000000/);
+  assert.doesNotMatch(builtYaml, /changeme/);
+  assert.doesNotMatch(builtYaml, /example\.com/);
+
+  const docs = parseBuiltDocs(builtYaml);
+  // Every FILE_RESOURCES entry must resolve to a real document in the build
+  // -- proves no resource was lost in the base/overlay restructuring.
+  for (const [filename, wanted] of Object.entries(FILE_RESOURCES)) {
+    const manifest = manifestForFilename(docs, filename);
+    for (const { kind, name } of wanted) {
+      assert.match(manifest, new RegExp(`kind: ${kind}\\b`), `${filename} should contain ${kind}/${name}`);
+      assert.match(manifest, new RegExp(`name: ${name}\\b`), `${filename} should contain ${kind}/${name}`);
+    }
   }
 });
 
-test("gateway.yaml: HOST is substituted into the listener hostname", () => {
-  const rendered = renderManifests(VARS, { repoRoot: DEFAULT_REPO_ROOT });
-  const out = rendered.get("gateway.yaml");
-  assert.match(out, /hostname: agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io/);
-  assert.doesNotMatch(out, /\$\{HOST\}/);
+test("manifestForFilename() throws a clear error for an unknown filename (fail-fast, no silent partial applies)", () => {
+  assert.throws(() => manifestForFilename([], "not-a-real-file.yaml"), /no FILE_RESOURCES entry/);
 });
 
-test("gateway-preview.yaml: PREVIEW_HOSTNAME and PREVIEW_TLS_SECRET are substituted", () => {
-  const rendered = renderManifests(VARS, { repoRoot: DEFAULT_REPO_ROOT });
-  const out = rendered.get("gateway-preview.yaml");
-  assert.match(out, /hostname: "\*\.abc123def456\.westus2\.staging\.aksapp\.io"/);
-  assert.match(out, /name: agentweaver-tls/);
-  assert.doesNotMatch(out, /\$\{PREVIEW_HOSTNAME\}|\$\{PREVIEW_TLS_SECRET\}/);
-});
-
-test("secret-provider-class.yaml: IDENTITY_CLIENT_ID, KEYVAULT_NAME, TENANT_ID are substituted everywhere they appear", () => {
-  const rendered = renderManifests(VARS, { repoRoot: DEFAULT_REPO_ROOT });
-  const out = rendered.get("secret-provider-class.yaml");
-  const clientIdOccurrences = out.split(`clientID: "${VARS.IDENTITY_CLIENT_ID}"`).length - 1;
-  const keyvaultOccurrences = out.split(`keyvaultName: "${VARS.KEYVAULT_NAME}"`).length - 1;
-  const tenantOccurrences = out.split(`tenantId: "${VARS.TENANT_ID}"`).length - 1;
-  assert.equal(clientIdOccurrences, 2);
-  assert.equal(keyvaultOccurrences, 2);
-  assert.equal(tenantOccurrences, 2);
-  assert.doesNotMatch(out, /\$\{IDENTITY_CLIENT_ID\}|\$\{KEYVAULT_NAME\}|\$\{TENANT_ID\}/);
-});
-
-test("api-deployment.yaml: allow-listed vars substituted; non-allow-listed GitHub__ClientId/Secret left literal", () => {
-  const rendered = renderManifests(VARS, { repoRoot: DEFAULT_REPO_ROOT });
-  const out = rendered.get("api-deployment.yaml");
-  assert.match(
-    out,
-    /image: agentweaverregistry\.azurecr\.io\/agentweaver-api:v0\.9\.71/,
-  );
-  assert.match(out, /value: https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io\/mcp/);
-  assert.match(out, /value: https:\/\/agentweaver-kv\.vault\.azure\.net/);
-  assert.match(out, /value: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"/);
-  // Not on the allow-list -- must remain byte-for-byte literal (envsubst semantics).
-  assert.match(out, /export Auth__GitHub__ClientId="\$\{GitHub__ClientId\}"/);
-  assert.match(out, /export Auth__GitHub__ClientSecret="\$\{GitHub__ClientSecret\}"/);
-});
-
-test("allow-listed variable left unset by the caller renders as empty string, never removed or left literal", () => {
-  const partialVars = { ...VARS };
-  delete partialVars.APPINSIGHTS_WORKSPACE_ID;
-  const rendered = renderManifests(partialVars, { repoRoot: DEFAULT_REPO_ROOT });
-  const out = rendered.get("api-deployment.yaml");
-  assert.match(out, /value: ""/);
-  assert.doesNotMatch(out, /\$\{APPINSIGHTS_WORKSPACE_ID\}/);
-});
-
-test("stripWildcardPrefix strips a leading '*.' the same way bash's ${DOMAIN#\\*.} does", async () => {
-  const { stripWildcardPrefix } = await import("../steps/30-deploy.mjs");
-  assert.equal(stripWildcardPrefix("*.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io"), "6a3de4fe60529400010f3fba.westus2.staging.aksapp.io");
-  assert.equal(stripWildcardPrefix("agentweaver.example.com"), "agentweaver.example.com");
+test("manifestForFilename() throws when a resource is missing from the build (fail-fast)", () => {
+  const docs = [{ kind: "Namespace", name: "wrong-name", text: "kind: Namespace\nmetadata:\n  name: wrong-name\n" }];
+  assert.throws(() => manifestForFilename(docs, "namespace.yaml"), /did not produce Namespace\/agentweaver/);
 });
