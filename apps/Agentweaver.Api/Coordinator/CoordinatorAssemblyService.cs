@@ -1510,37 +1510,21 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         int workPlanId,
         CancellationToken ct)
     {
-        if (_projectStore is null || _workflowRegistry is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var plan = await db.WorkPlans.AsNoTracking()
-            .Where(w => w.Id == workPlanId)
-            .Select(w => new { w.ProjectId, w.WorkflowId })
-            .FirstOrDefaultAsync(ct)
+        return await CoordinatorAssemblyGateResolver
+            .ResolveAsync(db, _projectStore, _workflowRegistry, workPlanId, ct)
             .ConfigureAwait(false);
-        if (plan is null || !ProjectId.TryParse(plan.ProjectId, out var projectId))
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
-        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
-        var workflow = !string.IsNullOrWhiteSpace(plan.WorkflowId)
-            ? _workflowRegistry.Get(project, plan.WorkflowId!)?.Definition
-            : _workflowRegistry.ResolveDefault(project).Definition;
-        workflow ??= _workflowRegistry.ResolveDefault(project).Definition;
-        if (workflow is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
-        var gates = ResolveAssemblyGates(workflow);
-
-        return gates;
     }
 
+    /// <param name="producesCode">
+    /// When <c>false</c> the platform <c>build_test</c> gate is dropped because the work plan produces
+    /// no buildable/testable code (all-planning outcome) — see #387. Defaults to <c>true</c> so callers
+    /// that only care about the authored gate order (e.g. tests) keep the gate.
+    /// </param>
     internal static IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode> ResolveAssemblyGates(
-        WorkflowDefinition workflow)
+        WorkflowDefinition workflow,
+        bool producesCode = true)
     {
         var traversalOrder = ComputeWorkflowTraversalOrder(workflow);
 
@@ -1570,6 +1554,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .GroupBy(g => g.StageId)
             .Select(grp => grp.First())
             .ToList();
+
+        // #387: a non-code-producing work plan (all-planning outcome) has nothing to build or test, so
+        // the platform build_test gate would find no code, request changes, and loop. Drop it rather
+        // than scheduling it — the coordinator decides applicability from the actual task.
+        if (!producesCode)
+            gates = gates.Where(g => g.GateKind != "build-test").ToList();
 
         return gates;
     }
@@ -2924,10 +2914,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
-        // Req-1 (change #6, in-place): the caller REMOVES the child stream before the revision restart
-        // (_streamStore.Remove below), so the resumed agent can NOT rely on replayed stream history for
-        // prior-round feedback. Thread the ACCUMULATED, target+rejection-scoped feedback EXPLICITLY into
-        // the revision task so an in-place resume also sees every prior requirement, not just the latest.
+        // Req-1 (change #6, in-place): the target agent's LLM context is NOT reconstructed from the
+        // stream — the ACCUMULATED, target+rejection-scoped feedback is threaded EXPLICITLY into the
+        // revision task below (`guidance`), so an in-place resume sees every prior requirement, not just
+        // the latest. The child's run-tree STREAM (issue #388) is REOPENED in place further down (never
+        // removed/recreated) so the target agent's prior messages stay visible and the review request is
+        // appended after them, not lost.
         var priorRounds = await BuildPriorReviewRoundsAsync(context.CoordinatorRunId, targetSubtaskIds, ct)
             .ConfigureAwait(false);
         // In-place resume PRESERVES the child session — pass no prior worktree branch (the agent
@@ -3027,11 +3019,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (launchDecision == RevisionLaunchDecision.Skip)
                 continue;
 
-            // Resume the SAME session + worktree: drop the completed child stream, flip the run back to
-            // InProgress (same runId — never restarted), and inject the feedback as a revision turn.
-            // (directiveId, attempt) thread through so the decorated checkpoint manager confirms the
-            // per-child effect marker on the resumed workflow's first superstep.
-            _streamStore.Remove(subtask.ChildRunId!);
+            // Resume the SAME session + worktree: REOPEN the completed child stream in place (issue
+            // #388 — reopening clears the completed/awaiting-review flags so the SSE loop keeps
+            // streaming, WITHOUT discarding the history already recorded, so the review request is
+            // APPENDED after the target agent's prior messages instead of replacing them), flip the run
+            // back to InProgress (same runId — never restarted), and inject the feedback as a revision
+            // turn. (directiveId, attempt) thread through so the decorated checkpoint manager confirms
+            // the per-child effect marker on the resumed workflow's first superstep.
+            _streamStore.Reopen(subtask.ChildRunId!);
             await _runStore.UpdateStatusAsync(childRunId, RunStatus.InProgress, null, ct)
                 .ConfigureAwait(false);
             await orchestrator.StartRevisionAsync(

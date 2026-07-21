@@ -1633,10 +1633,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         try
         {
-            // Drop the now-completed child stream entry and reset the run to in-progress so the
-            // injected turn observes a clean, live run (the child reached an assemble_ready terminal,
-            // which marked its stream completed). Same runId + worktree — the run is never restarted.
-            _streamStore.Remove(result.ChildRunId);
+            // Reopen the now-completed child stream entry IN PLACE (issue #388) and reset the run to
+            // in-progress so the injected turn observes a live run again (the child reached an
+            // assemble_ready terminal, which marked its stream completed). Reopening clears the
+            // completed/awaiting-review flags WITHOUT discarding the recorded history, so the new
+            // steering turn's events are APPENDED after the target agent's prior messages instead of
+            // replacing them. Same runId + worktree — the run is never restarted.
+            _streamStore.Reopen(result.ChildRunId);
             await _runStore.UpdateStatusAsync(childRunId, RunStatus.InProgress, null, ct).ConfigureAwait(false);
             await _orchestrator.StartRevisionAsync(childRun, directive.Instruction, ct, isChild: true)
                 .ConfigureAwait(false);
@@ -2448,6 +2451,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (RunId.TryParse(coordinatorRunId, out var coordinatorRun))
             coordinatorModel = (await _runStore.GetAsync(coordinatorRun, ct).ConfigureAwait(false))?.ModelId;
 
+        // #386: resolve the ACTUAL assembly gates (including the platform Build & Test gate) from the
+        // selected workflow so they render as `planned` in the run tree from the start, instead of the
+        // RAI + Human Review defaults that omit build_test until assembly execution reaches it.
+        var gates = await CoordinatorAssemblyGateResolver
+            .ResolveAsync(scope.ServiceProvider, workPlanId, ct)
+            .ConfigureAwait(false);
+
         var descriptor = CoordinatorGraphDescriptor.Build(
             coordinatorRunId,
             subtasks,
@@ -2456,6 +2466,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             state?.Status,
             state?.AssemblyTerminalStage,
             state?.AssemblyStatusReason,
+            assemblyGates: gates,
             coordinatorModel: coordinatorModel);
         entry.RecordNext(EventTypes.CoordinatorGraph, descriptor);
     }

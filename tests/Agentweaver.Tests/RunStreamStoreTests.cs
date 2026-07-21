@@ -222,6 +222,67 @@ public sealed class RunStreamStoreTests
     }
 
     [Fact]
+    public void Reopen_PreservesHistory_AndClearsCompletedFlag()
+    {
+        // Regression test for issue #388: a reviewer (Build & Test gate, RAI, rubber-duck, etc.)
+        // sending a review/revision request to a target agent must APPEND to the target's existing
+        // message stream, not wipe it. The shared revision-resume mechanism used to Remove() +
+        // Create() the stream entry, discarding every event recorded before the review — Reopen()
+        // must preserve them instead.
+        var store = new RunStreamStore();
+        var runId = Guid.NewGuid().ToString();
+        var entry = store.Create(runId, "user-a");
+
+        entry.RecordNext("agent.message", new { content = "pre-review work, part 1" });
+        entry.RecordNext("agent.message", new { content = "pre-review work, part 2" });
+        entry.RecordNext("review.requested", new { });
+        store.Complete(runId);
+
+        store.Get(runId)!.IsCompleted.Should().BeTrue();
+
+        var reopened = store.Reopen(runId);
+        reopened.Should().NotBeNull();
+        reopened!.IsCompleted.Should().BeFalse();
+
+        // The review/revision request is appended AFTER the pre-review history, not replacing it.
+        reopened.RecordNext("review.changes_requested", new { feedback = "please fix X" });
+
+        var snapshot = store.Get(runId)!.GetSnapshotSince(0);
+        snapshot.Events.Should().HaveCount(4);
+        snapshot.Events.Select(e => e.Type).Should().ContainInOrder(
+            "agent.message", "agent.message", "review.requested", "review.changes_requested");
+        snapshot.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Reopen_ThenComplete_CanBeWaitedOnAgain()
+    {
+        // A prior MarkCompleted() resolves the completion signal permanently unless Reopen() mints a
+        // fresh one — otherwise every subsequent WaitForChangeAsync would return immediately without
+        // ever observing new events/timeouts correctly.
+        var store = new RunStreamStore();
+        var runId = Guid.NewGuid().ToString();
+        var entry = store.Create(runId, "user-a");
+        entry.RecordNext("agent.message", new { content = "first turn" });
+        store.Complete(runId);
+
+        var reopened = store.Reopen(runId)!;
+        reopened.RecordNext("agent.message", new { content = "revision turn" });
+        store.Complete(runId);
+
+        var snapshot = store.Get(runId)!.GetSnapshotSince(0);
+        snapshot.Events.Should().HaveCount(2);
+        snapshot.IsCompleted.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Reopen_MissingEntry_ReturnsNull()
+    {
+        var store = new RunStreamStore();
+        store.Reopen(Guid.NewGuid().ToString()).Should().BeNull();
+    }
+
+    [Fact]
     public async Task RecordedEvent_WakesWaitingClient_WithoutFullTimeout()
     {
         // A client blocked in WaitForChangeAsync must wake promptly when Record() is

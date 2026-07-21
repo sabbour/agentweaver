@@ -588,9 +588,15 @@ app.MapGet("/api/runs/{id}/graph", async (
     if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
     {
         var plan = await coordinator.GetWorkPlanAsync(id, ct);
-        return Results.Ok(plan is not null
-            ? CoordinatorGraphDescriptor.Build(plan, podRegistry, coordinatorModel: run.ModelId)
-            : CoordinatorGraphDescriptor.BuildEmpty(id, run.ModelId));
+        if (plan is null)
+            return Results.Ok(CoordinatorGraphDescriptor.BuildEmpty(id, run.ModelId));
+
+        // #386: resolve the actual assembly gates (incl. the platform Build & Test gate, when the task
+        // produces code) so the run tree shows them as `planned` up front — not only once assembly
+        // execution reaches them.
+        var assemblyGates = await coordinator.GetAssemblyGatesAsync(id, ct);
+        return Results.Ok(CoordinatorGraphDescriptor.Build(
+            plan, podRegistry, assemblyGates: assemblyGates, coordinatorModel: run.ModelId));
     }
 
     try
