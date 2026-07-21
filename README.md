@@ -12,120 +12,90 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 
 ## Prerequisites
 
-| Tool | Needed for | Windows (winget) | macOS (Homebrew) | Linux (Debian/Ubuntu) |
-| --- | --- | --- | --- | --- |
-| [git](https://git-scm.com/) | cloning the repo; the default image tag is the short git SHA | `winget install --id Git.Git -e` | `brew install git` | `sudo apt-get update && sudo apt-get install -y git` |
-| [Node.js 20+](https://nodejs.org/) (LTS) | running every script in this repo, including the Azure toolchain (`scripts/azure/`) | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
-| `npm` (bundled with Node) or `pnpm` | installing dependencies and running package scripts | *(bundled with Node.js)* | *(bundled with Node.js)* | *(bundled with Node.js)* |
-| [.NET SDK 10](https://dot.net/download) | building/running the API and MCP server locally | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
-| **WSL2 + `bubblewrap`** | **Windows local dev only** — `npm run dev` runs the API's sandbox executor inside WSL2 for real isolation ([why](https://sabbour.me/agentweaver/guide/getting-started#why-wsl2-on-windows)); macOS/Linux sandbox natively | `wsl --install` (elevated PowerShell, then reboot), then `sudo apt-get install -y bubblewrap` inside the distro | *Not required* | *Not required* |
-| [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in via `az login` | everything under `npm run azure:*` | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during Azure deployment commands | `winget install Kubernetes.kubectl` | `brew install kubectl` | `sudo snap install kubectl --classic` |
-| [`gh` CLI](https://cli.github.com/), authenticated via `gh auth status` | `release:publish`, `azure:deploy-from-release`, and `azure:release` release validation/publication | `winget install GitHub.cli` | `brew install gh` | `sudo apt-get update && sudo apt-get install -y gh` (or see [cli.github.com](https://cli.github.com/) if `gh` isn't in your distro's repos) |
+For local development, install Git, Node.js, and the .NET 10 SDK; Windows also
+needs WSL2 + `bubblewrap`. Azure work additionally needs the Azure CLI and
+`kubectl`; publishing a release needs the `gh` CLI. `npm run setup` checks the
+local-development tools after you clone the repository.
 
-`node scripts/azure/cli.mjs dev --setup` (aliased as `npm run setup`) checks
-git/.NET/Node itself and prints the matching install command above for your
-platform if one is missing. On Windows it also prints an **advisory** warning
-when WSL2 is not detected (non-fatal). It does not check the Azure CLI, `kubectl`, or
-`gh`, since local dev doesn't need them.
+For platform-specific install commands, the Windows isolation requirement, and
+OAuth setup, follow the authoritative [Getting started guide](docs/guide/getting-started.md).
 
-Docker is **not** required locally — image builds run remotely via `az acr build`
-(see `scripts/azure/steps/20-build-push-images.mjs`), not a local Docker daemon.
+## Getting Started with an AI Agent
 
-### Installing prerequisites
+You do not need to memorize a command catalog to get started. Open your preferred
+coding agent—GitHub Copilot CLI or an Agentweaver Squad agent—and describe the
+outcome you want. These prompts are ready to paste and give the agent a clear
+starting point:
 
-<details>
-<summary><strong>Windows</strong></summary>
+### Understand the project
+Get a plain-language tour of the product and the important parts of the repository.
 
-Install `winget` first if it isn't already available (it ships with Windows 11
-and recent Windows 10 updates):
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-Repair-WinGetPackageManager -AllUsers
+```text
+Explain what Agentweaver does and how this repository is structured. Point me to the best places to start reading.
 ```
 
-Then install git, Node.js, and the .NET SDK:
+### Run it locally
+Ask the agent to prepare your machine and start the local development loop.
 
-```powershell
-winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
-winget install --id OpenJS.NodeJS.22 --exact --accept-source-agreements --accept-package-agreements
-winget install --id Microsoft.DotNet.SDK.10 --accept-source-agreements --accept-package-agreements
+```text
+Set up my local development environment and run Agentweaver. Tell me about any prerequisites I need to install first.
 ```
 
-Deploying to Azure? Also install the Azure CLI:
+### Provision Azure infrastructure
+Create a fresh Azure environment; the agent should use `azure:provision-infra` for the first-time infrastructure setup.
 
-```powershell
-winget install Microsoft.AzureCLI --accept-source-agreements --accept-package-agreements
+```text
+Provision a fresh Azure environment for Agentweaver.
 ```
 
-`npm` ships bundled with Node.js — no separate install needed. Refresh `PATH`
-in your **current** shell so the newly installed tools are found without
-reopening the terminal:
+### Deploy local work to Azure
+Ship the current checkout to an existing dev/test environment with `azure:deploy-from-local`—no PR is needed for this validation step.
 
-```powershell
-$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-            [Environment]::GetEnvironmentVariable('Path', 'User')
+```text
+Deploy my current local changes to the Azure dev/test environment.
 ```
 
-</details>
+### Deploy a specific commit to Azure
+Ask for a reviewable deployment of a named Git ref using `azure:deploy-from-commit -- <sha-or-ref>`.
 
-<details>
-<summary><strong>macOS</strong></summary>
-
-Install [Homebrew](https://brew.sh/) first if it isn't already available:
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```text
+Deploy commit abc1234 to the Azure dev/test environment so I can review it.
 ```
 
-Then install git, Node.js, and the .NET SDK:
+### Create a release
+Have the agent guide a real release through `release:publish`, or use `azure:release` for the full cut-and-deploy workflow when appropriate.
 
-```bash
-brew install git
-brew install node@20
-brew install --cask dotnet-sdk
+```text
+Cut a new release of Agentweaver.
 ```
 
-Deploying to Azure? Also install the Azure CLI:
+### Deploy an existing release
+Deploy a version that has already been published using `azure:deploy-from-release -- vX.Y.Z`.
 
-```bash
-brew install azure-cli
+```text
+Deploy release v1.4.0 to the staging environment.
 ```
 
-`npm` ships bundled with Node.js — no separate install needed.
+### Investigate a bug or issue
+Start with evidence and root cause before deciding how to change the code.
 
-</details>
-
-<details>
-<summary><strong>Linux (Debian/Ubuntu)</strong></summary>
-
-```bash
-# git
-sudo apt-get update && sudo apt-get install -y git
-
-# Node.js 20.x + npm (via NodeSource -- distro repos are usually outdated)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# .NET SDK 10 (via the official install script -- apt package availability
-# varies by distro/version)
-curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0
-export PATH="$HOME/.dotnet:$PATH"
+```text
+Investigate issue #42 and figure out the root cause before proposing a fix.
 ```
 
-Deploying to Azure? Also install the Azure CLI:
+### Fix a bug or issue
+Ask the agent to trace, implement, and validate a focused fix.
 
-```bash
-curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```text
+Fix the bug described in issue #42.
 ```
 
-</details>
+### Create a new feature
+Describe the outcome in your own words; the agent can help turn it into an implementation plan.
 
-`npm run setup` re-checks the local-dev tools itself after you install them,
-and prints the matching command again if anything is still missing or out of
-date. Full step-by-step guide: [sabbour.me/agentweaver/guide/getting-started](https://sabbour.me/agentweaver/guide/getting-started).
+```text
+Add a new feature: <describe what you want>
+```
 
 ## Features
 
