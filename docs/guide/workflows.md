@@ -80,13 +80,12 @@ Choose **Generate from description**, type what you want the workflow to do in p
 
 The generated workflow is preview-first: Agentweaver opens the YAML draft in the editor and does not write it to `.agentweaver/workflows/` until you save. If validation fails after the server's correction pass, the API returns an error instead of saving a broken workflow.
 
-```mermaid
-flowchart LR
-    A[Describe workflow] --> B[LLM generates YAML]
-    B --> C[Review in editor]
-    C --> D[Validate]
-    D --> E[Save to .agentweaver/workflows/]
-```
+![Generate from description: Describe workflow, LLM generates YAML, Review in editor, Validate, Save to .agentweaver/workflows/](../diagrams/guide-workflows-fig1.png)
+
+<!-- Rendered from ../diagrams/src/guide-workflows-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ::: warning Workflows affect team composition
 A workflow references specific roles by name. If your project's cast doesn't include a role referenced in the workflow, the run will fail validation before it starts. Make sure the workflow's required roles match the agents in your team.

@@ -27,23 +27,12 @@ Submit a goal. The coordinator:
 9. Routes through a **single review gate** (RAI + human approval)
 10. Runs a **Scribe pass** after merge to record what the team learned
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    A[Submit goal] --> B[Coordinator drafts OutcomeSpec]
-    B --> W[Selects workflow]
-    W --> C{You confirm?}
-    C -- Yes --> D[WorkPlan: subtask DAG]
-    C -- Revise --> B
-    D --> E[Parallel child runs\nin isolated worktrees]
-    E --> F[RAI check per agent]
-    F --> G[Assembled result]
-    G --> H{Human review}
-    H -- Approve --> I[Merge]
-    H -- Request changes --> D
-    H -- Decline --> J[Declined]
-    I --> K[Scribe memory pass]
-```
+![Coordinator orchestration: Submit goal, Coordinator drafts OutcomeSpec, Selects workflow, You confirm?, WorkPlan: subtask DAG, Parallel child runs, RAI check per agent, Assembled result, Human review, Merge, Declined, Scribe memory pass](../diagrams/guide-index-fig1.png)
+
+<!-- Rendered from ../diagrams/src/guide-index-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Key concepts
 

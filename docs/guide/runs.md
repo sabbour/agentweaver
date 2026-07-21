@@ -179,14 +179,12 @@ From the runs list you can also **Abandon** an in-flight run (discards pending c
 
 Each agent runs inside a **dedicated git worktree** branched from the project's working directory. Agents cannot reach outside their worktree unless the sandbox policy explicitly allows it. The originating branch is never modified during a run — only after you approve and the merge step completes.
 
-```mermaid
-flowchart LR
-    A[Project working directory] -->|branch per agent| B[Agent worktrees]
-    B -->|agents make changes| C[Changes in worktrees]
-    C -->|all agents done| D[Assembled combined diff]
-    D -->|you approve| E[Merge to branch]
-    D -->|you decline| F[Worktrees discarded]
-```
+![Sandboxed execution: Project working directory, Agent worktrees, Changes in worktrees, Assembled combined diff, Merge to branch, Worktrees discarded](../diagrams/guide-runs-fig1.png)
+
+<!-- Rendered from ../diagrams/src/guide-runs-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## See also
 

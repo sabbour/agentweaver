@@ -46,14 +46,12 @@ The Worker now runs in `pod-per-run`, so coordinator child agents execute in Age
 
 Warm AgentHost pods boot with no `RunId`, enter standby, and accept `POST /configure` even while not ready for A2A turns. The executor claims one warm pod, waits for the claim binding, calls `/configure` with run identity, credentials, purpose, and a shared/local workspace descriptor, then waits for `/healthz` to become ready before sending the first `message:stream` turn. Normal runs use `ExecutionWorkspaceMode.Shared`. Assembly Build/Test uses `LocalReadOnly`, sends an immutable source ref/base SHA/tree contract, and executes from a verified checkout created inside the disk-backed `/local-workspace` emptyDir; its preview maps the API-resolved relative cwd into that same checkout. `LocalWritable` and `ImplementationTurn` define the reuse seam for #253 without enabling implementation write-back in this path.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Standby["Standby<br/>warm pool creates pod<br/>.NET + SDK pre-warmed"] --> Configuring["Configuring<br/>POST /configure<br/>RunId/UserId/token/KV secret"]
-    Configuring --> Ready["Ready<br/>SetupAsync complete<br/>/healthz 200"]
-    Ready --> Serving["Serving<br/>A2A message:stream turns"]
-    Serving --> Released["Released<br/>run completes or suspends<br/>claim deleted or TTL"]
-```
+![AgentHost warm-pool lifecycle: Standby, Configuring, Ready, Serving, Released](../diagrams/guide-architecture-aks-fig1.png)
+
+<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 `/configure` has one-time semantics (`409` after the first successful configuration). It is not protected by the turn bearer token because it delivers that token; the NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
 
@@ -65,71 +63,23 @@ The live sandbox path binds claims to the AgentHost warm pool (`AgentHostWarmPoo
 
 ### Inbound request path
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Client["🌐 Client<br/>HTTPS :443"]
-    LB["Public LoadBalancer IP<br/>provisioned by approuting-istio"]
-    GW["Gateway: agentweaver-gateway<br/>TLS terminated<br/>DefaultDomainCertificate"]
+![Inbound request path: 🌐 Client, Public LoadBalancer IP, Gateway: agentweaver-gateway, Service: agentweaver-api, Service: agentweaver-mcp, Service: agentweaver-frontend, API Pod :8080, MCP Pod :8080, Frontend Pod :8080](../diagrams/guide-architecture-aks-fig2.png)
 
-    API_SVC["Service: agentweaver-api<br/>ClusterIP :8080"]
-    MCP_SVC["Service: agentweaver-mcp<br/>ClusterIP :8080"]
-    FE_SVC["Service: agentweaver-frontend<br/>ClusterIP :80"]
-
-    API_POD["API Pod :8080"]
-    MCP_POD["MCP Pod :8080"]
-    FE_POD["Frontend Pod :8080<br/>ASP.NET Core · React SPA"]
-
-    Client --> LB --> GW
-    GW -->|"PathPrefix /api<br/>PathPrefix /auth"| API_SVC --> API_POD
-    GW -->|"PathPrefix /mcp<br/>/mcp/health → /healthz"| MCP_SVC --> MCP_POD
-    GW -->|"PathPrefix /<br/>(catch-all)"| FE_SVC --> FE_POD
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Client client;
-    class LB,GW,API_SVC,MCP_SVC,FE_SVC,MCP_POD,FE_POD svc;
-    class API_POD core;
-```
+<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Route specificity: `/api` and `/mcp` (longer prefixes) win over `/` — no conflict.
 
 ### Gateway API resource relationships
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-graph LR
-    GW["Gateway<br/>agentweaver-gateway<br/>gatewayClassName: approuting-istio<br/>listener https :443<br/>allowedRoutes.from: Same"]
+![Gateway API resource relationships: Gateway, HTTPRoute, HTTPRoute, HTTPRoute, agentweaver-api :8080, agentweaver-mcp :8080, agentweaver-frontend :80](../diagrams/guide-architecture-aks-fig3.png)
 
-    R1["HTTPRoute<br/>agentweaver-api-route<br/>PathPrefix /api + /auth"]
-    R2["HTTPRoute<br/>agentweaver-mcp-route<br/>PathPrefix /mcp"]
-    R3["HTTPRoute<br/>agentweaver-frontend-route<br/>PathPrefix /"]
-
-    B1["agentweaver-api :8080"]
-    B2["agentweaver-mcp :8080"]
-    B3["agentweaver-frontend :80"]
-
-    GW -->|parentRef| R1 --> B1
-    GW -->|parentRef| R2 --> B2
-    GW -->|parentRef| R3 --> B3
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class GW,R1,R2,R3,B2,B3 svc;
-    class B1 core;
-```
+<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ---
 
@@ -145,46 +95,12 @@ The `approuting-istio` gateway class means the Application Routing add-on uses a
 
 #### Network traffic diagram
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    GW["Gateway Pod<br/>label: gateway.networking.k8s.io/<br/>gateway-name: agentweaver-gateway"]
+![Network traffic diagram: Gateway Pod, API Pod, MCP Pod, Frontend Pods, AgentHost sandbox pod, worker, api.github.com, Azure Key Vault, kube-dns, External Services](../diagrams/guide-architecture-aks-fig4.png)
 
-    subgraph workloads["Workloads — default-deny ingress + egress"]
-        API["API Pod"]
-        MCP["MCP Pod"]
-        FE["Frontend Pods"]
-        SB["AgentHost sandbox pod<br/>deny-all ingress"]
-    end
-
-    GW -->|":8080 allowed"| API
-    GW -->|":8080 allowed"| MCP
-    GW -->|":8080 allowed"| FE
-
-    API -->|":8080 internal"| MCP
-    API & worker -->|"A2A :8088<br/>/configure guarded by NetworkPolicy"| SB
-
-    API & MCP -->|":443 HTTPS<br/>FQDN allowlist"| GH["api.github.com<br/>github.com"]
-    API & MCP -->|"CSI driver for app secrets"| KV["Azure Key Vault"]
-    SB -->|"workload identity<br/>runtime user-token fetch"| KV
-    API & MCP & FE -->|"UDP/TCP :53"| DNS["kube-dns"]
-
-    SB -->|":443 FQDN only<br/>api.github.com<br/>npmjs.org<br/>Azure AI"| EXT["External Services"]
-    SB -->|"UDP/TCP :53"| DNS
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class GW,MCP,FE,DNS svc;
-    class API core;
-    class SB runtime;
-    class GH,KV,EXT ext;
-```
+<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 #### NetworkPolicy rules
 
@@ -230,41 +146,12 @@ See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
 
 Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are fetched at `/configure` time by the pod itself using workload identity and the configured Key Vault URI. There are no static credentials in any manifest.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    MI["Managed Identity<br/>agentweaver-api-identity<br/>Key Vault Secrets User"]
-    SA["ServiceAccount<br/>agentweaver-api<br/>azure.workload.identity/client-id"]
-    SA2["ServiceAccount<br/>agentweaver-agent-host<br/>azure.workload.identity/client-id"]
-    OIDC["AKS OIDC Issuer<br/>agentweaver-api-fedcred"]
-    OIDC2["AKS OIDC Issuer<br/>agentweaver-agenthost-fedcred"]
-    KV["Azure Key Vault<br/>agentweaver-kv"]
+![Secrets management: Managed Identity, ServiceAccount, ServiceAccount, AKS OIDC Issuer, AKS OIDC Issuer, Azure Key Vault, SecretProviderClass, Per-user GitHub token secret, API Pod, Warm AgentHost Pod, MCP Pod](../diagrams/guide-architecture-aks-fig5.png)
 
-    SPC["SecretProviderClass<br/>agentweaver-secrets"]
-    USERSECRET["Per-user GitHub token secret<br/>ghtok-user--{base32(userId)}"]
-
-    API["API Pod<br/>/mnt/secrets-store/<br/>github-client-id<br/>github-client-secret<br/>mcp-oauth-signing-key"]
-    AGENT["Warm AgentHost Pod<br/>KeyVaultUserTokenProvider"]
-    MCP["MCP Pod<br/>(no mounted secrets)"]
-
-    SA -->|"federated credential"| OIDC --> MI
-    SA2 -->|"federated credential"| OIDC2 --> MI
-    MI -->|"Key Vault Secrets User"| KV
-    KV --> SPC -->|"CSI volume mount"| API
-    KV --> USERSECRET -->|"SecretClient + DefaultAzureCredential<br/>after POST /configure"| AGENT
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class SA,SA2,SPC,USERSECRET,MCP svc;
-    class API,AGENT core;
-    class MI,OIDC,KV ext;
-```
+<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing warm AgentHost pods to call Key Vault directly with workload identity.
 

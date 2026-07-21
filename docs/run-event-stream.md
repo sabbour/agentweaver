@@ -8,24 +8,12 @@ For the scaling story, see [Distributed execution & scaling](./deep-dive/distrib
 
 ## Architecture — shared store, cursor stream
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Producer["Run producer<br/>workflow · coordinator · review"]
-    Local["RunStreamEntry<br/>pod-local history"]
-    DB[("RunEvents<br/>shared database")]
-    WebA["Replica A<br/>SSE endpoint"]
-    WebB["Replica B<br/>SSE endpoint"]
-    Browser["Browser / MCP watcher<br/>Last-Event-ID cursor"]
+![Architecture — shared store, cursor stream: Run producer, RunStreamEntry, RunEvents, Replica A, Replica B, Browser / MCP watcher](diagrams/docs-run-event-stream-fig1.png)
 
-    Producer -->|RecordNext / Record| Local
-    Local -->|AppendAsync mirror| DB
-    Producer -->|terminal backfill safety net| DB
-    DB -->|SubscribeAsync run id + cursor| WebA
-    DB -->|SubscribeAsync run id + cursor| WebB
-    WebA -->|SSE frames| Browser
-    WebB -->|SSE frames| Browser
-```
+<!-- Rendered from diagrams/src/docs-run-event-stream-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The horizontal-scale invariant is simple: **the database log is the source of truth, and the cursor is the replay boundary**. `EfRunEventStream.AppendAsync` writes through before acknowledging (`WriteThroughAsync`), and `SubscribeAsync` repeatedly loads rows whose sequence is greater than the caller's last seen cursor, yielding them in sequence order until a terminal event appears. It drains the full replay batch before stopping, so a diagnostic row persisted immediately after a terminal row is still delivered before the SSE subscription closes. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:180`.
 

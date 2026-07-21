@@ -1,0 +1,83 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Agent Communication — Reference",
+  "alt": "Agent Communication — Reference: inbox_submit / inbox_list, decision_create / decision_list, memory_add / memory_list, coordinator_start, worker ↔ sandbox pod",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "Ch1",
+      "label": "Channel 1 — Shared state",
+      "tier": 1
+    },
+    {
+      "id": "Ch2",
+      "label": "Channel 2 — Coordinator handoff",
+      "tier": 1
+    },
+    {
+      "id": "Ch3",
+      "label": "Channel 3 — A2A transport",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "T1",
+      "label": "inbox_submit / inbox_list",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "inbox_merge / inbox_reject",
+      "group": "Ch1"
+    },
+    {
+      "id": "T2",
+      "label": "decision_create / decision_list",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "decision_update",
+      "group": "Ch1"
+    },
+    {
+      "id": "T3",
+      "label": "memory_add / memory_list",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "memory_get / memory_search",
+      "group": "Ch1"
+    },
+    {
+      "id": "T4",
+      "label": "coordinator_start",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "coordinator_work_plan_get",
+      "meta": "coordinator_children_get · coordinator_steer",
+      "group": "Ch2"
+    },
+    {
+      "id": "T5",
+      "label": "worker ↔ sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "message:stream + per-run bearer",
+      "meta": "see A2A reference",
+      "group": "Ch3"
+    }
+  ],
+  "edges": []
+}

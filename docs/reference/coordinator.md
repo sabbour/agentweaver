@@ -127,41 +127,12 @@ An override never escapes the candidate safety boundary: it cannot run a workflo
 
 Whenever the multi-candidate path runs, the coordinator emits a `coordinator.workflow_selected` event (`EmitWorkflowSelectedEvent`) carrying `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, an `overrideHint` (`Reply 'use {other-id}' to change...`), and the list of `available` workflows. If `SelectWorkflowAsync` throws anywhere, it logs a warning and returns the resolved project default so the caller always knows which workflow it is planning against.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Start([SelectWorkflowAsync])
-    ResolveDefault[ResolveDefault<br/>project default = fallback]
-    Available[GetOrLoad.Available<br/>default first, then by id]
-    Kind[ResolveInvocationKindAsync<br/>BacklogPickup -> Heartbeat<br/>else Manual]
-    OverrideCheck{Backlog WorkflowOverrideId<br/>exists and IsEligible?}
-    UseOverride[Use override workflow]
-    Filter[Filter by<br/>WorkflowTriggerEvaluator.IsEligible]
-    Count{Eligible count}
-    Default[Return project default]
-    Single[Use the only candidate<br/>no model call]
-    HumanOverride{Revise feedback<br/>'use id'?}
-    UseHuman[Use requested workflow<br/>emit event]
-    Selector[WorkflowSelector.SelectAsync<br/>CopilotWorkflowSelectionModel]
-    Picked[Emit coordinator.workflow_selected<br/>return choice]
+![The LLM selector and its fallbacks (`apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs`): SelectWorkflowAsync, ResolveDefault, GetOrLoad.Available, ResolveInvocationKindAsync, Backlog WorkflowOverrideId, Use override workflow, Filter by, Eligible count, Return project default, Use the only candidate, Revise feedback, Use requested workflow, …](../diagrams/reference-coordinator-fig1.png)
 
-    Start --> ResolveDefault --> Available --> Kind --> OverrideCheck
-    OverrideCheck -- yes --> UseOverride
-    OverrideCheck -- no --> Filter --> Count
-    Count -- 0 --> Default
-    Count -- 1 --> Single
-    Count -- "2+" --> HumanOverride
-    HumanOverride -- yes --> UseHuman
-    HumanOverride -- no --> Selector --> Picked
-
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-
-    class Start,ResolveDefault,Available,Kind,OverrideCheck,Filter,Count,Default,Single,HumanOverride,UseOverride,UseHuman svc;
-    class Selector ext;
-    class Picked core;
-```
+<!-- Rendered from ../diagrams/src/reference-coordinator-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The selected workflow is not only recorded for display: it becomes prompt context for decomposition so the resulting subtask graph mirrors the intended process shape. The run workflow factory later resolves the effective workflow again when it builds the executable graph, so a stale planning pick can never become unchecked runtime execution.
 

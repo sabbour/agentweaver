@@ -1,0 +1,94 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Scenario 2 — Pick up a backlog task with the board and heartbeat",
+  "alt": "Scenario 2 — Pick up a backlog task with the board and heartbeat: Backlog, Ready, Active, Human Review, Done, Problems",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "B",
+      "label": "Backlog",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "R",
+      "label": "Ready",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "A",
+      "label": "Active",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Human Review",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Done",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "P",
+      "label": "Problems",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "B",
+      "to": "R",
+      "label": "You drag"
+    },
+    {
+      "from": "R",
+      "to": "A",
+      "label": "Heartbeat dispatches"
+    },
+    {
+      "from": "A",
+      "to": "H",
+      "label": "Needs approval"
+    },
+    {
+      "from": "H",
+      "to": "D",
+      "label": "Approve"
+    },
+    {
+      "from": "A",
+      "to": "P",
+      "label": "Failure"
+    },
+    {
+      "from": "H",
+      "to": "A",
+      "label": "Request changes"
+    }
+  ]
+}

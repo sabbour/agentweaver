@@ -89,18 +89,12 @@ A2A requires an in-pod HTTP listener and an east-west ingress rule onto Kata-iso
 | **H6 — No egress broadening** | The sandbox egress allowlist is unchanged: model endpoint, the API broker endpoint, and the run's legitimate git remote(s). Everything else is default-deny. A2A adds **no** egress. |
 | **H7 — Pinned preview** | The preview library is pinned by exact **version + hash**, gated behind the execution-mode flag, and tracked to GA. **The rollback is the `in-api` flag** (see §6), and H7 records the residual-risk mitigations rather than relying on a live second transport. |
 
-```mermaid
-flowchart LR
-    Worker[Worker pod\nRemoteAgentProxy] -->|H2: NetworkPolicy\nworker→sandbox:port only| NP{{Scoped ingress}}
-    NP -->|H1: TLS + mTLS/SPIFFE\nworkload-identity-bound cert| TLS{{Transport identity}}
-    TLS --> TurnAuth{{H3: Authorization\nBearer {per-run token}}}
-    TurnAuth --> Listener[AgentHost listener\nH4: Kestrel limits + SSE heartbeats]
-    Listener --> MS[/v1/message:stream/]
-    Listener --> Card[/v1/card\nH3: authz-gated + minimized/]
-    MS --> Agent[CopilotAIAgent\nH6: egress allowlist only]
-    Agent -. "H5: durable resume\n(checkpoint store, idempotent)" .-> CK[(DB checkpoint store)]
-    Listener -. "H7: preview pinned by version+hash\nrollback = in-api flag" .-> Flag[/Sandbox:AgentExecutionMode/]
-```
+![5. Security model (H1–H7): Worker pod, Scoped ingress, Transport identity, H3: Authorization, AgentHost listener, v1/message:stream, v1/card, CopilotAIAgent, DB checkpoint store, Sandbox:AgentExecutionMode](../diagrams/reference-a2a-fig1.png)
+
+<!-- Rendered from ../diagrams/src/reference-a2a-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Notes on the gates
 
