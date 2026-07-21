@@ -11,13 +11,13 @@ Create a brand-new Agentweaver project from an empty GitHub repository, cast a f
 ## Recording assumptions
 
 - Use a staging build URL such as `<STAGING_BASE_URL>`.
-- Sign in ahead of time with a user that can create projects, approve reviews, and merge PRs.
+- Sign in ahead of time with a demo account that can create projects, approve reviews, and merge PRs.
 - Prepare:
   - `<EMPTY_REPO_URL>` — brand-new GitHub repo with no app code yet.
   - `<IDEA_PROMPT>` — one small feature idea suitable for a first slice.
   - `<SEEDED_BUG_ISSUE_URL>` / `<SEEDED_BUG_ISSUE_TITLE>` — bug issue already present on the repo.
 - Record at 1920x1080.
-- Keep **video action callouts enabled** during mouse/typing moments; hide them only during static reading or live human gates.
+- Keep **video action callouts enabled** during mouse/typing moments; hide them only during static reading or when you want the review-gate framing to breathe on screen.
 - Insert short manual pauses in the recording runner between commands where noted so cursor travel and typing are visible on camera.
 
 ## Global recording preflight
@@ -97,18 +97,20 @@ playwright-cli hover <REF_SKILL_CATALOG_PANEL [VERIFY SELECTOR]>
 playwright-cli mousemove <X_SKILL_CATALOG_PANEL [VERIFY SELECTOR]>
 playwright-cli snapshot
 playwright-cli hover <REF_HUMAN_CONFIRM_CAST_BUTTON [VERIFY SELECTOR]>
+# [PAUSE 700ms]
+playwright-cli mousemove <X_HUMAN_CONFIRM_CAST_BUTTON [VERIFY SELECTOR]>
+playwright-cli click <REF_HUMAN_CONFIRM_CAST_BUTTON [VERIFY SELECTOR]>
 playwright-cli video-hide-actions
 ```
 
-Narration: “Next, we instantiate a full Blueprint team: PM, customer research, marketing, and engineering. Before work begins, Agentweaver shows the proposed cast and each agent’s skill surface so a human can confirm the lineup.”
+Narration: “Next, we instantiate a full Blueprint team: PM, customer research, marketing, and engineering. Here’s the human review gate — for this recording we’re clicking confirm ourselves, but in real use a person approves the cast.”
 
 Recording notes:
 
-- End automation at the confirmation edge.
-- **LIVE HUMAN ACTION REQUIRED — do not automate this click:** confirm the cast after Ahmed verbally acknowledges the team composition.
-- Once the human confirmation is complete, resume with `video-show-actions`.
+- Keep the cursor travel deliberate before the confirm click so the gate reads clearly on camera.
+- Use the brief `video-hide-actions` beat after the click if you want the confirmed state to sit on screen without extra callouts.
 
-Resume after live confirmation:
+Resume after confirmation:
 
 ```bash
 playwright-cli video-show-actions --duration=900 --position=top-right
@@ -311,18 +313,21 @@ playwright-cli snapshot
 playwright-cli mousemove <X_PREVIEW_SURFACE [VERIFY SELECTOR]>
 playwright-cli hover <REF_PREVIEW_SURFACE [VERIFY SELECTOR]>
 playwright-cli snapshot
+playwright-cli hover <REF_APPROVE_OR_MERGE_BUTTON [VERIFY SELECTOR]>
+# [PAUSE 700ms]
+playwright-cli mousemove <X_APPROVE_OR_MERGE_BUTTON [VERIFY SELECTOR]>
+playwright-cli click <REF_APPROVE_OR_MERGE_BUTTON [VERIFY SELECTOR]>
 playwright-cli video-hide-actions
 ```
 
-Narration: “When the first slice is ready, we open the live preview, inspect the result, and stop at the mandatory human gate before anything merges.”
+Narration: “When the first slice is ready, we open the live preview and arrive at the human review gate — for this recording we’re clicking approve ourselves, but in real use a person makes this merge decision.”
 
 Recording notes:
 
-- **LIVE HUMAN ACTION REQUIRED — do not automate this click:** Ahmed should validate the preview and approve the run live.
-- **LIVE HUMAN ACTION REQUIRED — do not automate this click:** Ahmed should trigger the merge/approve action live.
+- Keep the pre-click pause and slow mousemove so the approval feels intentional on camera.
 - After merge completes, show the resulting PR or merge confirmation.
 
-Resume after live approval/merge:
+Resume after approval/merge:
 
 ```bash
 playwright-cli video-show-actions --duration=900 --position=top-right
@@ -446,19 +451,22 @@ Recording notes:
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Pause at the human review gate" --description="Stop for live validation of the bug fix before merge." --duration=12000
+playwright-cli video-chapter "Pass through the human review gate" --description="Show the final bug-fix review decision and click through it for the recording." --duration=12000
 playwright-cli snapshot
+playwright-cli hover <REF_BUG_APPROVE_BUTTON [VERIFY SELECTOR]>
+# [PAUSE 700ms]
+playwright-cli mousemove <X_BUG_APPROVE_BUTTON [VERIFY SELECTOR]>
+playwright-cli click <REF_BUG_APPROVE_BUTTON [VERIFY SELECTOR]>
 playwright-cli video-hide-actions
 ```
 
-Narration: “Nothing ships automatically. The human reviewer inspects the repaired behavior and makes the final decision.”
+Narration: “Nothing ships automatically. Here’s the human review gate — for this recording we’re clicking approve ourselves, but in real use a person decides whether the fix ships.”
 
 Recording notes:
 
-- **LIVE HUMAN ACTION REQUIRED — do not automate this click:** Ahmed validates the bug-fix preview.
-- **LIVE HUMAN ACTION REQUIRED — do not automate this click:** Ahmed approves the run for merge.
+- Keep the approval click slow and obvious so viewers register the decision point.
 
-Resume after live approval:
+Resume after approval:
 
 ```bash
 playwright-cli video-show-actions --duration=900 --position=top-right
@@ -473,6 +481,11 @@ playwright-cli snapshot
 
 ```bash
 playwright-cli video-chapter "Merge and open the issue-linked PR" --description="Complete the bug-fix merge and show the PR connected back to the original source issue." --duration=18000
+playwright-cli hover <REF_FINAL_MERGE_BUTTON [VERIFY SELECTOR]>
+# [PAUSE 700ms]
+playwright-cli mousemove <X_FINAL_MERGE_BUTTON [VERIFY SELECTOR]>
+playwright-cli click <REF_FINAL_MERGE_BUTTON [VERIFY SELECTOR]>
+playwright-cli snapshot
 playwright-cli hover <REF_MERGE_CONFIRMATION_OR_PR_LINK [VERIFY SELECTOR]>
 playwright-cli click <REF_MERGE_CONFIRMATION_OR_PR_LINK [VERIFY SELECTOR]>
 playwright-cli snapshot
@@ -494,8 +507,8 @@ Recording notes:
 - Replace every `[VERIFY SELECTOR]` placeholder with a real ref/test id/locator from staging snapshots.
 - Confirm chapter durations against actual load times; lengthen where live compute takes longer.
 - Confirm whether any steps are chat-based, board-based, modal-based, or tab-based in the current UI.
-- Rehearse the three live human gates:
+- Rehearse the three recorded review-gate clicks:
   - cast confirmation
-  - first-slice review + merge
-  - bug-fix review + merge
+  - first-slice approval + merge
+  - bug-fix approval + merge
 - Confirm the seeded repo and bug issue are still in the expected state right before capture.
