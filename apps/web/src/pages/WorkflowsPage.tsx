@@ -160,24 +160,25 @@ export function WorkflowsPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      apiClient.listWorkflows(projectId),
-      apiClient.getProject(projectId).catch(() => null as Project | null),
-    ])
-      .then(([list, proj]) => {
+    const loadWorkflows = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [list, proj] = await Promise.all([
+          apiClient.listWorkflows(projectId),
+          apiClient.getProject(projectId).catch(() => null as Project | null),
+        ]);
         if (!cancelled) {
           setData(list);
           setProject(proj);
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!cancelled) setError(formatError(err));
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+    void loadWorkflows();
     return () => {
       cancelled = true;
     };

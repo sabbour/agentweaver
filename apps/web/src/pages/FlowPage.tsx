@@ -375,32 +375,31 @@ export function FlowPage() {
   }, [projectId]);
 
   useEffect(() => {
-    if (!projectId || !selectedAgent) {
-      setHistory([]);
-      setHistoryError(null);
-      setHistoryLoading(false);
-      return;
-    }
-
     let cancelled = false;
-    setHistoryLoading(true);
-    setHistoryError(null);
-    apiClient
-      .getProjectRuns(projectId, {
-        agentName: selectedAgent,
-        terminalOnly: true,
-        includeChildren: true,
-        pageSize: 20,
-      })
-      .then((result) => {
+    const loadHistory = async () => {
+      if (!projectId || !selectedAgent) {
+        setHistory([]);
+        setHistoryError(null);
+        setHistoryLoading(false);
+        return;
+      }
+      setHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const result = await apiClient.getProjectRuns(projectId, {
+          agentName: selectedAgent,
+          terminalOnly: true,
+          includeChildren: true,
+          pageSize: 20,
+        });
         if (!cancelled) setHistory(result.items);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!cancelled) setHistoryError(formatError(err));
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setHistoryLoading(false);
-      });
+      }
+    };
+    void loadHistory();
 
     return () => {
       cancelled = true;

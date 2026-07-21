@@ -37,13 +37,13 @@ export function useRefreshCountdown({
   refreshing = false,
 }: UseRefreshCountdownOptions): RefreshCountdownState {
   const totalSeconds = Math.max(0, Math.ceil(intervalMs / 1000));
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
 
   // Re-render once per second so the countdown visibly counts down. Paused timers
   // do not need the tick.
   useEffect(() => {
     if (paused) return;
-    const iv = setInterval(() => setTick((t) => t + 1), 1000);
+    const iv = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(iv);
   }, [paused]);
 
@@ -51,7 +51,7 @@ export function useRefreshCountdown({
   const secondsRemaining =
     base == null
       ? totalSeconds
-      : Math.min(totalSeconds, Math.max(0, Math.ceil((base + intervalMs - Date.now()) / 1000)));
+      : Math.min(totalSeconds, Math.max(0, Math.ceil((base + intervalMs - now) / 1000)));
 
   let label: string;
   if (refreshing) {

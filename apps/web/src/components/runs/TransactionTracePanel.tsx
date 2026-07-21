@@ -380,11 +380,17 @@ export function TransactionTracePanel({
 
   useEffect(() => {
     let cancelled = false;
-    setTrace({ runId, spans: [] });
-    setSelectedKey(null);
-    void apiClient.getRunTraces(runId)
-      .then((next) => { if (!cancelled) setTrace(next); })
-      .catch(() => { if (!cancelled) setTrace({ runId, spans: [] }); });
+    const loadTrace = async () => {
+      setTrace({ runId, spans: [] });
+      setSelectedKey(null);
+      try {
+        const next = await apiClient.getRunTraces(runId);
+        if (!cancelled) setTrace(next);
+      } catch {
+        if (!cancelled) setTrace({ runId, spans: [] });
+      }
+    };
+    void loadTrace();
     return () => { cancelled = true; };
   }, [runId]);
 
@@ -392,7 +398,10 @@ export function TransactionTracePanel({
 
   useEffect(() => {
     // Expand every node with children by default so the full hierarchy is visible.
-    setExpanded(collectExpandableKeys(tree, new Set<string>()));
+    const syncExpanded = async () => {
+      setExpanded(collectExpandableKeys(tree, new Set<string>()));
+    };
+    void syncExpanded();
   }, [tree]);
 
   const selectedNode = findNode(tree, selectedKey);

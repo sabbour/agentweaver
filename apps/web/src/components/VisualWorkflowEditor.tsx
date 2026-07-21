@@ -380,14 +380,17 @@ export function VisualWorkflowEditor({
 
   // Re-derive the graph whenever the canonical YAML changes (either surface).
   useEffect(() => {
-    const { model: parsed, error } = parseWorkflowYaml(yamlText);
-    setParseError(error);
-    if (parsed) {
-      setModel(parsed);
-      const { rfNodes, rfEdges } = buildGraph(parsed, positionsRef.current);
-      setNodes(rfNodes);
-      setEdges(rfEdges);
-    }
+    const syncGraph = async () => {
+      const { model: parsed, error } = parseWorkflowYaml(yamlText);
+      setParseError(error);
+      if (parsed) {
+        setModel(parsed);
+        const { rfNodes, rfEdges } = buildGraph(parsed, positionsRef.current);
+        setNodes(rfNodes);
+        setEdges(rfEdges);
+      }
+    };
+    void syncGraph();
   }, [yamlText]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {

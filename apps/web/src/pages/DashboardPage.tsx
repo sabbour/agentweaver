@@ -791,21 +791,28 @@ export function DashboardPage() {
     inFlightRef.current?.abort();
     const controller = new AbortController();
     inFlightRef.current = controller;
+    setLoading(true);
     void load(controller.signal);
   }, [projectId, load]);
 
   useEffect(() => {
     if (!projectId) return;
     mountedRef.current = true;
-    setLoading(true);
-    runLoad();
-    const iv = setInterval(runLoad, REFRESH_MS);
+    const runLoadLoop = async () => {
+      inFlightRef.current?.abort();
+      const controller = new AbortController();
+      inFlightRef.current = controller;
+      setLoading(true);
+      await load(controller.signal);
+    };
+    void runLoadLoop();
+    const iv = setInterval(() => { void runLoadLoop(); }, REFRESH_MS);
     return () => {
       mountedRef.current = false;
       inFlightRef.current?.abort();
       clearInterval(iv);
     };
-  }, [projectId, runLoad]);
+  }, [projectId, load]);
 
   const dashboardModel = useMemo(() => {
     if (!data) return null;

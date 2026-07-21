@@ -72,18 +72,19 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
   // never remounts, so seeding selection only at mount misses the active project).
   useEffect(() => {
     if (!open) return;
-    setSelectedProjectId(currentProjectId);
     let cancelled = false;
-    apiClient
-      .listProjects({ pageSize: 100 })
-      .then((result) => {
+    const loadProjects = async () => {
+      setSelectedProjectId(currentProjectId);
+      try {
+        const result = await apiClient.listProjects({ pageSize: 100 });
         if (cancelled) return;
         setProjects(result.items);
         setLoadError(false);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setLoadError(true);
-      });
+      }
+    };
+    void loadProjects();
     return () => {
       cancelled = true;
     };
@@ -94,21 +95,22 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
   // selectable — including the project's active workflow and event/heartbeat
   // catalog workflows; "Auto" leaves the choice to the coordinator.
   useEffect(() => {
-    if (!open || !selectedProjectId) {
-      setSelectableWorkflows([]);
-      return;
-    }
     let cancelled = false;
-    setWorkflowOverride(null);
-    apiClient
-      .listWorkflows(selectedProjectId)
-      .then((res) => {
+    const loadWorkflows = async () => {
+      setWorkflowOverride(null);
+      if (!open || !selectedProjectId) {
+        setSelectableWorkflows([]);
+        return;
+      }
+      try {
+        const res = await apiClient.listWorkflows(selectedProjectId);
         if (cancelled) return;
         setSelectableWorkflows(res.workflows.filter((w) => w.id && w.valid));
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setSelectableWorkflows([]);
-      });
+      }
+    };
+    void loadWorkflows();
     return () => {
       cancelled = true;
     };

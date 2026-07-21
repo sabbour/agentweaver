@@ -319,7 +319,10 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     const confirmed = timelineModel.steps.some((step) => step.messages.some(
       (msg) => msg.role === 'user' && msg.text.trim() === pendingMessage.text.trim(),
     ));
-    if (confirmed) setPendingMessage(null);
+    const syncPendingMessage = async () => {
+      if (confirmed) setPendingMessage(null);
+    };
+    void syncPendingMessage();
   }, [pendingMessage, timelineModel]);
 
   // Auto-scroll to the latest message once a resumed run's history has loaded (#item-9) —

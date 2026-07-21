@@ -34,11 +34,8 @@ import {
 } from './WorkflowGraphPanel';
 import {
   initialRunState,
-  nextScenarioId,
   runReducer,
-  type Phase,
   type RunAction,
-  type RunState,
 } from './LandingWorkflowDemo.state';
 
 // ---------------------------------------------------------------------------
@@ -397,9 +394,11 @@ export function ScenarioTheater() {
   const tokenRef = useRef(state.token);
   const phaseRef = useRef(state.phase);
   const inViewRef = useRef(inView);
-  tokenRef.current = state.token;
-  phaseRef.current = state.phase;
-  inViewRef.current = inView;
+  useEffect(() => {
+    tokenRef.current = state.token;
+    phaseRef.current = state.phase;
+    inViewRef.current = inView;
+  }, [inView, state.phase, state.token]);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);

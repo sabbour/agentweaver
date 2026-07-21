@@ -17,7 +17,8 @@ export const FIXED_BOARD_COLUMNS: ReadonlyArray<Pick<BoardColumnDto, 'id' | 'kin
 
 // Resolve a column's left-accent color. `workflowIndex` is the column's 0-based
 // position among the non-intake (workflow) columns; it is ignored for backlog/ready.
-export function columnAccentColor(columnId: string, _workflowIndex: number): string {
+export function columnAccentColor(columnId: string, workflowIndex: number): string {
+  void workflowIndex;
   if (columnId === 'backlog') return tokens.colorNeutralStroke1;
   if (columnId === 'ready') return tokens.colorPaletteMarigoldBorderActive;
   if (columnId === 'problems') return tokens.colorPaletteRedBorderActive;
@@ -96,4 +97,3 @@ export function fixedBoardColumns(columns: BoardColumnDto[]): BoardColumnDto[] {
 
   return FIXED_BOARD_COLUMNS.map((col) => byId.get(col.id) ?? { ...col, cards: [] });
 }
-

@@ -23,7 +23,7 @@ import {
   PageSection,
 } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
 
@@ -156,7 +156,7 @@ export function MemoriesPage() {
   const [editType, setEditType] = useState('');
   const [editContent, setEditContent] = useState('');
 
-  const loadDecisionsPage = async () => {
+  const loadDecisionsPage = useCallback(async () => {
     if (!projectId) return;
     const [d, initialInbox] = await Promise.all([
       apiClient.getDecisions(projectId, { page: decisionsPage, pageSize: decisionsPageSize }),
@@ -176,32 +176,59 @@ export function MemoriesPage() {
     setDecisionsTotalCount(d.total_count);
     setInbox(nextInbox.items);
     setInboxTotalCount(nextInbox.total_count);
-  };
+  }, [decisionsPage, decisionsPageSize, inboxPage, inboxPageSize, projectId]);
 
   useEffect(() => {
     if (!projectId) return;
-    setLoading(true);
-    setLoadError(null);
+    const loadTabData = async () => {
+      setLoading(true);
+      setLoadError(null);
 
-    if (selectedTab === 'decisions') {
-      if (decisions !== null && inbox !== null) { setLoading(false); return; }
-      loadDecisionsPage()
-        .catch((err: unknown) => { setDecisions([]); setDecisionsTotalCount(0); setInbox([]); setInboxTotalCount(0); setLoadError(formatApiError(err)); })
-        .finally(() => setLoading(false));
-    } else if (selectedTab === 'memory') {
-      if (memory !== null) { setLoading(false); return; }
-      apiClient.getProjectMemory(projectId, { page: memoryPage, pageSize: memoryPageSize })
-        .then(m => { setMemory(m.items); setMemoryTotalCount(m.total_count); })
-        .catch((err: unknown) => { setMemory([]); setMemoryTotalCount(0); setLoadError(formatApiError(err)); })
-        .finally(() => setLoading(false));
-    } else {
+      if (selectedTab === 'decisions') {
+        if (decisions !== null && inbox !== null) { setLoading(false); return; }
+        try {
+          await loadDecisionsPage();
+        } catch (err: unknown) {
+          setDecisions([]);
+          setDecisionsTotalCount(0);
+          setInbox([]);
+          setInboxTotalCount(0);
+          setLoadError(formatApiError(err));
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+      if (selectedTab === 'memory') {
+        if (memory !== null) { setLoading(false); return; }
+        try {
+          const m = await apiClient.getProjectMemory(projectId, { page: memoryPage, pageSize: memoryPageSize });
+          setMemory(m.items);
+          setMemoryTotalCount(m.total_count);
+        } catch (err: unknown) {
+          setMemory([]);
+          setMemoryTotalCount(0);
+          setLoadError(formatApiError(err));
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
       if (sessions !== null) { setLoading(false); return; }
-      apiClient.getProjectSessions(projectId, { page: sessionsPage, pageSize: sessionsPageSize })
-        .then(result => { setSessions(result.items); setSessionsTotalCount(result.total_count); })
-        .catch((err: unknown) => { setSessions([]); setSessionsTotalCount(0); setLoadError(formatApiError(err)); })
-        .finally(() => setLoading(false));
-    }
-  }, [projectId, selectedTab, decisions, inbox, memory, sessions, reloadKey, decisionsPage, decisionsPageSize, inboxPage, inboxPageSize, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize]);
+      try {
+        const result = await apiClient.getProjectSessions(projectId, { page: sessionsPage, pageSize: sessionsPageSize });
+        setSessions(result.items);
+        setSessionsTotalCount(result.total_count);
+      } catch (err: unknown) {
+        setSessions([]);
+        setSessionsTotalCount(0);
+        setLoadError(formatApiError(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadTabData();
+  }, [projectId, selectedTab, decisions, inbox, memory, sessions, reloadKey, loadDecisionsPage, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize]);
 
   const retryLoad = () => {
     if (selectedTab === 'decisions') {
