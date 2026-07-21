@@ -142,6 +142,84 @@ public sealed class AssemblyGateCanonicalStageTests
         workflowDerived.GraphNodeId.Should().Be(defaultHumanGate.GraphNodeId);
     }
 
+    // ── #387: gate applicability from the actual task ────────────────────────────────────────────
+    // A non-code-producing work plan (all subtasks are planning-phase deliverables) has nothing to
+    // build or test, so the platform build_test gate must be dropped rather than scheduled — otherwise
+    // it finds no code, requests changes, and loops forever.
+
+    [Fact]
+    public void ResolveAssemblyGates_NonCodeProducingPlan_DropsBuildTestGate()
+    {
+        var workflow = BuildSoftwareWorkflow();
+
+        var codeGates = CoordinatorAssemblyService.ResolveAssemblyGates(workflow, producesCode: true);
+        var nonCodeGates = CoordinatorAssemblyService.ResolveAssemblyGates(workflow, producesCode: false);
+
+        codeGates.Select(g => g.GateKind).Should().Contain("build-test");
+        nonCodeGates.Select(g => g.GateKind).Should().NotContain("build-test");
+        // Other authored gates (RAI, human-review) are preserved for non-code plans.
+        nonCodeGates.Select(g => g.GateKind).Should().Contain(new[] { "rai", "human-review" });
+    }
+
+    [Fact]
+    public void ProducesCode_AllPlanningSubtasks_IsFalse()
+    {
+        CoordinatorAssemblyGateResolver.ProducesCode(new[] { "planning", "planning" }).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("execution")]
+    [InlineData("validation")]
+    [InlineData("none")]
+    [InlineData(null)]
+    public void ProducesCode_AnyNonPlanningSubtask_IsTrue(string? phase)
+    {
+        CoordinatorAssemblyGateResolver.ProducesCode(new[] { "planning", phase }).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ProducesCode_NoSubtasks_IsTrueByDefault()
+    {
+        // Pre-decomposition / unknown: keep the gate (conservative — only drop when confident).
+        CoordinatorAssemblyGateResolver.ProducesCode(Array.Empty<string?>()).Should().BeTrue();
+    }
+
+    private static WorkflowDefinition BuildSoftwareWorkflow() => new()
+    {
+        Id = "software-flow",
+        Name = "Software Flow",
+        Start = "implement",
+        Nodes =
+        [
+            new() { Id = "implement", Type = WorkflowNodeType.Prompt, Label = "Implement" },
+            new()
+            {
+                Id = "rai-check",
+                Type = WorkflowNodeType.Check,
+                Label = "RAI Check",
+                GateKind = "rai",
+                Branches = ["review"],
+            },
+            new() { Id = "build-test", Type = WorkflowNodeType.BuildTest, Label = "Build & Test" },
+            new()
+            {
+                Id = "human-review",
+                Type = WorkflowNodeType.Check,
+                Label = "Human Review",
+                GateKind = "human-review",
+                Branches = ["approved"],
+            },
+            new() { Id = "done", Type = WorkflowNodeType.Terminal, Label = "Done" },
+        ],
+        Edges =
+        [
+            new() { From = "implement", To = "rai-check" },
+            new() { From = "rai-check", To = "build-test", When = "review" },
+            new() { From = "build-test", To = "human-review", When = "approved" },
+            new() { From = "human-review", To = "done", When = "approved" },
+        ],
+    };
+
     private static WorkflowDefinition LoadCatalogWorkflow(string workflowId)
     {
         var reader = new CatalogReader();

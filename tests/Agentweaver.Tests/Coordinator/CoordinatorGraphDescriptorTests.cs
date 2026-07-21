@@ -93,6 +93,34 @@ public sealed class CoordinatorGraphDescriptorTests
     }
 
     [Fact]
+    public void Build_BuildTestGate_RendersAsPlannedBeforeExecution()
+    {
+        // #386: when the coordinator's plan includes a Build & Test gate, it must appear in the run
+        // tree as a `planned` node from the start (assemblyStage == null == not started), exactly like
+        // the other planned assembly gates — not only once assembly execution reaches it.
+        var (subtasks, deps) = SamplePlan();
+        var gates = new[]
+        {
+            new CoordinatorGraphDescriptor.AssemblyGateNode("rai", "RAI", "rai"),
+            new CoordinatorGraphDescriptor.AssemblyGateNode("build-test", "Build & Test", "build-test", "qa-engineer"),
+            new CoordinatorGraphDescriptor.AssemblyGateNode("review", "Human Review", "human-review"),
+        };
+
+        var d = CoordinatorGraphDescriptor.Build(
+            "coord_run", subtasks, deps, assemblyStage: null, assemblyGates: gates);
+
+        var buildTest = d.Nodes.Single(n => n.Id == "planned:assembly-build-test");
+        buildTest.Kind.Should().Be("planned");
+        buildTest.NodeType.Should().Be("gate");
+        buildTest.Role.Should().Be("review");
+        buildTest.Label.Should().Be("Build & Test");
+
+        // The gate is wired into the planned assembly chain: RAI -> Build & Test -> Human Review.
+        d.Edges.Should().Contain(e => e.From == "planned:assembly-rai" && e.To == "planned:assembly-build-test");
+        d.Edges.Should().Contain(e => e.From == "planned:assembly-build-test" && e.To == "planned:assembly-review");
+    }
+
+    [Fact]
     public void Build_PlannedAssemblyNodes_HaveExpectedTaxonomy()
     {
         var (subtasks, deps) = SamplePlan();

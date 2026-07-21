@@ -1478,6 +1478,28 @@ public sealed class CoordinatorRunService
     }
 
     /// <summary>
+    /// Resolves the collective-assembly gate nodes (RAI / Build &amp; Test / rubberduck / human-review)
+    /// for the coordinator run's work plan, so the graph endpoint can render them as <c>planned</c> in
+    /// the run tree BEFORE assembly execution reaches them (#386). Returns <c>null</c> when there is no
+    /// work plan yet (pre-decomposition) — the caller then uses the empty coordinator graph.
+    /// </summary>
+    public async Task<IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode>?> GetAssemblyGatesAsync(
+        string coordinatorRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var workPlanId = await db.WorkPlans.AsNoTracking()
+            .Where(w => w.CoordinatorRunId == coordinatorRunId)
+            .Select(w => (int?)w.Id)
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        if (workPlanId is null) return null;
+
+        return await CoordinatorAssemblyGateResolver
+            .ResolveAsync(scope.ServiceProvider, workPlanId.Value, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Children view for <c>GET /children</c>: one row per subtask that has a dispatched child run,
     /// pairing the child run's persisted lifecycle (status, worktree branch, tree hash, step count)
     /// with the subtask's coordinator-side status. Returns an empty list when nothing has been
