@@ -36,7 +36,7 @@ npm run dev</code></pre>
           <h3>Deploy to Azure</h3>
           <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
-npm run azure:deploy</code></pre>
+npm run azure:provision-infra</code></pre>
         </div>
       </div>
       <p class="aw-hero-quickstart-note">

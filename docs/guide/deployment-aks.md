@@ -26,7 +26,7 @@ Required local tools:
 | `kubectl` | cluster apply/verify |
 | `git` | default image tag = short commit SHA |
 | Node.js 20+ with `npm` or `pnpm` | run the deployment commands |
-| `gh` CLI, authenticated (`gh auth status`) | only for `azure:release`'s changelog + GitHub Release creation |
+| `gh` CLI, authenticated (`gh auth status`) | release publication and published-release validation |
 
 Create a GitHub OAuth App, then either export the credentials as environment
 variables or supply them as flags/params-file values (see below):
@@ -62,7 +62,7 @@ with the same script name is equivalent.
 ### First deployment
 
 ```bash
-npm run azure:deploy
+npm run azure:provision-infra
 ```
 
 With no arguments (and a TTY), this launches an interactive installer that
@@ -76,13 +76,13 @@ For non-interactive use, pass flags, environment variables, and/or a params
 file (see [`scripts/azure/params.example.json`](../../scripts/azure/params.example.json)):
 
 ```bash
-npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
+npm run azure:provision-infra -- --params-file scripts/azure/params.my-env.json
 ```
 
 or
 
 ```bash
-npm run azure:deploy -- --resource-group agentweaver-rg --cluster-name agentweaver-aks \
+npm run azure:provision-infra -- --resource-group agentweaver-rg --cluster-name agentweaver-aks \
   --acr-name agentweaverregistry --location westus2 --keyvault-name agentweaver-kv \
   --github-client-id "$GITHUB_CLIENT_ID" --github-client-secret "$GITHUB_CLIENT_SECRET"
 ```
@@ -90,31 +90,35 @@ npm run azure:deploy -- --resource-group agentweaver-rg --cluster-name agentweav
 Config precedence: flags > env > params file > detected defaults > prompt.
 Optional flags: `--skip-postgres`, `--skip-oauth-key`, `--image-tag <tag>`.
 
-### Upgrading an existing deployment
+### Deploying local work to an existing environment
 
 ```bash
-npm run azure:upgrade
+npm run azure:deploy-from-local
 ```
 
 Mints a new immutable image tag from `HEAD` (refuses a dirty working tree),
-builds and pushes images, verifies provenance, redeploys, and cycles the
+builds and pushes images, redeploys, verifies provenance, and cycles the
 AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
 never manual pod deletion).
 
-### Cutting a release
+### Publishing and deploying a release
 
 ```bash
-npm run azure:release -- patch   # or: minor | major
-npm run azure:release -- patch --dry-run   # preview without making changes
+npm run release:publish
+npm run azure:deploy-from-release -- vX.Y.Z
+
+# First shipment convenience orchestration:
+npm run azure:release
 ```
 
 See the [operations guide](./operations.md#release-process) for the full
-release mechanics (semver bump, changelog, GitHub Release, build/deploy/verify).
+release preparation, publication, deployment, and recovery mechanics.
 
 ## Running an individual step
 
 `scripts/azure/cli.mjs` composes the same step modules under `scripts/azure/steps/`
-that `deploy`/`upgrade`/`release` use. To re-run just verification:
+that infrastructure provisioning, local deployment, and release deployment use.
+To re-run just verification:
 
 ```bash
 npm run azure:verify
@@ -122,7 +126,7 @@ npm run azure:verify
 
 ## Verify
 
-`npm run azure:deploy` and `npm run azure:upgrade` verify as their final step.
+All three deployment paths perform verification as part of their workflow.
 To re-run only verification:
 
 ```bash
@@ -142,10 +146,10 @@ kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver
 ## Redeploy
 
 ```bash
-npm run azure:upgrade
+npm run azure:deploy-from-local
 ```
 
-`azure:upgrade` mints a new image tag from the current `HEAD` short SHA,
+`azure:deploy-from-local` mints a new image tag from the current `HEAD` short SHA,
 builds/pushes/verifies it, and redeploys — this is the canonical redeploy path
 described above.
 
@@ -154,7 +158,7 @@ described above.
 | Symptom | Check |
 |---|---|
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
-| ImagePullBackOff | confirm ACR attach and image tag was pushed (`azure:deploy`/`azure:upgrade` build+push this step) |
+| ImagePullBackOff | confirm ACR attach and image tag was pushed (`azure:provision-infra`/`azure:deploy-from-local` build+push this step) |
 | API/MCP auth failures | confirm Key Vault has `github-client-id`, `github-client-secret`, `mcp-oauth-signing-key` |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

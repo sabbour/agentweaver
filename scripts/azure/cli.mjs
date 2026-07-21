@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 // cli.mjs -- Single Node entry point for the Agentweaver Azure toolchain.
-// Routes `deploy | upgrade | release | verify | dev` subcommands to their
-// respective module's run(). This is what the root package.json's
-// azure:deploy/azure:upgrade/azure:release/azure:verify (and, optionally,
-// azure:dev) scripts invoke.
+// Routes the repository's local, infrastructure, and release deployment
+// commands to their respective modules.
 
 import { pathToFileURL } from "node:url";
 import * as logDefault from "./lib/log.mjs";
 
-const SUBCOMMANDS = Object.freeze(["deploy", "upgrade", "release", "verify", "dev"]);
+const SUBCOMMANDS = Object.freeze([
+  "provision-infra",
+  "deploy-from-local",
+  "deploy-from-release",
+  "publish-release",
+  "release",
+  "verify",
+  "dev",
+]);
 
 export const HELP_TEXT = `Agentweaver Azure toolchain
 
@@ -16,11 +22,13 @@ Usage:
   node scripts/azure/cli.mjs <command> [args...]
 
 Commands:
-  deploy    Interactive/non-interactive installer (replaces install.sh/.ps1).
-  upgrade   Build a new image tag, redeploy, and cycle the AgentHost warm pool.
-  release   Validate prepared version, tag/publish/deploy through the shared build/deploy engine.
-  verify    Post-deploy health verification (port of 40-verify.sh/.ps1).
-  dev       Local dev orchestration (port of start-dev.ps1).
+  provision-infra      Provision/reconcile Azure infrastructure and perform its initial deployment.
+  deploy-from-local    Deploy current local HEAD using a SHA image identifier.
+  deploy-from-release  Deploy an existing published vX.Y.Z release.
+  publish-release      Tag and publish a prepared exact-main release without deploying.
+  release              Publish, then deploy, a prepared exact-main release.
+  verify               Post-deploy health verification.
+  dev                  Local dev orchestration.
 
 Run 'node scripts/azure/cli.mjs <command> --help' for command-specific options.
 `;
@@ -56,10 +64,14 @@ export async function run(argv = [], opts = {}) {
   const moduleForCommand = async () => {
     if (modules[command]) return modules[command];
     switch (command) {
-      case "deploy":
-        return importFn("./deploy.mjs");
-      case "upgrade":
-        return importFn("./upgrade.mjs");
+      case "provision-infra":
+        return importFn("./provision-infra.mjs");
+      case "deploy-from-local":
+        return importFn("./deploy-from-local.mjs");
+      case "deploy-from-release":
+        return importFn("./deploy-from-release.mjs");
+      case "publish-release":
+        return importFn("./release-publish.mjs");
       case "release":
         return importFn("./release.mjs");
       case "verify":
@@ -89,11 +101,7 @@ export async function run(argv = [], opts = {}) {
     return mod.run(cfg, { log });
   }
 
-  if (command === "upgrade") {
-    // upgrade.mjs's run(cfg, opts) also takes a resolved config (unlike
-    // deploy/release/dev's run({argv, log})) -- resolve variables here and
-    // parse the one upgrade-specific flag (--allow-dirty) from argv so
-    // `cli.mjs upgrade` works standalone, matching how `verify` is handled.
+  if (command === "deploy-from-local") {
     if (rest.includes("-h") || rest.includes("--help")) {
       log.info(mod.HELP_TEXT ?? HELP_TEXT);
       return { ok: true, help: true };

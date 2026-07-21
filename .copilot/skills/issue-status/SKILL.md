@@ -39,7 +39,7 @@ If the script isn't available or fails, collect the data manually:
 2. `git log --oneline -50` — scan for `#N` references to find commits
 3. `gh pr list --state all --json number,title,state,mergedAt,headRefName` — find PRs per issue
 4. Check the live deployment's image tag and provenance with the current Node.js
-   toolchain (`scripts/azure/variables.mjs`, `scripts/azure/deploy.mjs`) or the
+   toolchain (`scripts/azure/variables.mjs`, `scripts/azure/provision-infra.mjs`) or the
    cluster's workload metadata. Do not use the removed `scripts/aks/` shell scripts.
    Resolve the deployed tag to its Git ref, then run
    `git log {deployed_sha}..HEAD --oneline` — issues whose commits appear here are

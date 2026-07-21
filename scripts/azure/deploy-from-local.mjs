@@ -1,4 +1,4 @@
-// upgrade.mjs -- The Phase 4 core deliverable: build a NEW immutable image
+// deploy-from-local.mjs -- The Phase 4 core deliverable: build a NEW immutable image
 // tag, redeploy, and cycle the AgentHost warm pool by REAPPLYING the
 // SandboxTemplate/SandboxWarmPool and WAITING for readiness -- never by
 // deleting pods.
@@ -9,7 +9,7 @@
 //
 //   1. Mints a NEW immutable tag: defaults to the current HEAD short git SHA
 //      (via lib/git.mjs's currentGitSha()). NEVER reuses the VERSION-file-
-//      derived semver tag -- that belongs to `release`, not `upgrade`.
+//      derived semver tag -- that belongs to published releases, not local deployment.
 //      Reusing it can no-op the ACR retag-vs-build decision and ship a stale
 //      AgentHost image (this is the exact #251 failure class).
 //   2. Refuses a dirty working tree by default (uncommitted changes present)
@@ -25,7 +25,7 @@
 //      running live in the cluster), so it must run after the new image is
 //      deployed, not before -- otherwise it always compares the still-old
 //      live pods against the new target commit and reports a false STALE
-//      IMAGE failure on every real upgrade (found + fixed during Phase 7
+//      IMAGE failure on every real deployment (found + fixed during Phase 7
 //      staging verification).
 //   5. Delegates to steps/25-verify-image-provenance.mjs's run(cfg) with
 //      VERIFY_GIT_REF left UNSET (defaults to HEAD inside that module) --
@@ -56,19 +56,19 @@ import { validateImageTag } from "./variables.mjs";
 
 const AGENTHOST_IMAGE_NAME = "agentweaver-agent-host";
 
-export const HELP_TEXT = `upgrade -- Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool
+export const HELP_TEXT = `deploy-from-local -- Build a SHA-identified image, redeploy, and cycle the AgentHost warm pool
 
 Usage:
-  node scripts/azure/cli.mjs upgrade [--allow-dirty]
+  node scripts/azure/cli.mjs deploy-from-local [--allow-dirty]
 
 Mints a new image tag from the current HEAD short SHA (never reuses the
 VERSION-derived semver tag -- that belongs to 'release'), builds+pushes
-images, verifies provenance, redeploys, then reapplies and waits for the
+images, redeploys, verifies provenance, then reapplies and waits for the
 AgentHost warm pool to become ready (never deletes pods manually).
 
 Flags:
   --allow-dirty   Dev/test escape hatch: skip the dirty-working-tree check.
-                  Do not use for a real staging/production upgrade.
+                  Do not use for a published release deployment.
 `;
 
 export const WARM_POOL_NAME = "agentweaver-agent-host";
@@ -85,14 +85,14 @@ export async function isWorkingTreeDirty({ cwd, capture } = {}) {
 }
 
 /**
- * Mints the new immutable upgrade tag: the current HEAD short git SHA.
+ * Mints the new immutable local deployment tag: the current HEAD short git SHA.
  * Never derives from the VERSION file (that is `release`'s tag, not
- * `upgrade`'s) -- see the module header's binding decision #1.
+ * local deployment's) -- see the module header's binding decision #1.
  */
-export async function mintUpgradeTag({ cwd, git = gitDefault } = {}) {
+export async function mintLocalDeployTag({ cwd, git = gitDefault } = {}) {
   const { short } = await git.currentGitSha({ cwd });
   if (!short) {
-    throw new Error("Could not resolve the current HEAD git SHA to mint an upgrade image tag.");
+    throw new Error("Could not resolve the current HEAD git SHA to mint a local deployment image tag.");
   }
   validateImageTag(short, "IMAGE_TAG");
   return short;
@@ -206,7 +206,7 @@ export async function resolveAcrDigestForTag(acrName, image, tag, { exec = execD
  * SAME manifest digest under a NEW tag string; warm pods that haven't
  * churned yet may still show the OLD tag string while running byte-identical
  * content. Comparing tag strings alone would falsely report these as
- * mismatched/stale and abort a correct upgrade. Only fall back to tag-string
+ * mismatched/stale and abort a correct deployment. Only fall back to tag-string
  * comparison if the expected digest can't be resolved from ACR (e.g. offline
  * test doubles, or a transient ACR read failure) -- log clearly when that
  * happens since it's a weaker check.
@@ -285,25 +285,25 @@ export async function run(cfg, opts = {}) {
     cwd = cfg.repoRoot,
   } = opts;
 
-  log.section("Agentweaver upgrade: build + redeploy + warm-pool cycle");
+  log.section("Agentweaver local deployment: build + redeploy + warm-pool cycle");
 
   if (!allowDirty) {
     const dirty = await isWorkingTreeDirty({ cwd, capture: exec.capture });
     if (dirty) {
       throw new DirtyWorkingTreeError(
-        "Refusing to upgrade from a dirty working tree (uncommitted changes present). " +
+        "Refusing to deploy from a dirty working tree (uncommitted changes present). " +
           "Commit or stash your changes, or pass --allow-dirty to explicitly opt out of this safety check " +
-          "(dev/test escape hatch only -- do not use for a real staging upgrade).",
+          "(dev/test escape hatch only -- do not use for a published release deployment).",
       );
     }
   } else {
-    log.warn("--allow-dirty was passed: skipping the dirty-working-tree safety check. This is a dev/test escape hatch, not for real upgrades.");
+    log.warn("--allow-dirty was passed: skipping the dirty-working-tree safety check. This is a dev/test escape hatch, not for release deployments.");
   }
 
-  const newTag = await mintUpgradeTag({ cwd, git });
-  log.field("Minted upgrade tag", newTag);
+  const newTag = await mintLocalDeployTag({ cwd, git });
+  log.field("Local deployment tag", newTag);
 
-  const upgradeCfg = {
+  const localDeployCfg = {
     ...cfg,
     IMAGE_TAG: newTag,
     AGENTHOST_IMAGE_TAG: newTag,
@@ -312,11 +312,11 @@ export async function run(cfg, opts = {}) {
 
   log.info("");
   log.info("Step 1/4: Building + pushing images...");
-  const buildResult = await buildStep.run(upgradeCfg, { exec, git, kubectl });
+  const buildResult = await buildStep.run(localDeployCfg, { exec, git, kubectl });
 
   log.info("");
   log.info("Step 2/4: Redeploying (re-applies SandboxTemplate + SandboxWarmPool)...");
-  const deployResult = await deployStep.run(upgradeCfg, { run: exec.run, capture: exec.capture, log, repoRoot: cwd });
+  const deployResult = await deployStep.run(localDeployCfg, { run: exec.run, capture: exec.capture, log, repoRoot: cwd });
 
   log.info("");
   log.info("Step 3/4: Verifying image provenance...");
@@ -327,20 +327,20 @@ export async function run(cfg, opts = {}) {
   // IMAGE failures. VERIFY_GIT_REF is deliberately left unset here so
   // steps/25 defaults it to HEAD -- never default it to IMAGE_TAG (see
   // module header, decision #4).
-  const provenanceResult = await provenanceStep.run({ ...upgradeCfg, VERIFY_GIT_REF: undefined }, { exec, git, kubectl });
+  const provenanceResult = await provenanceStep.run({ ...localDeployCfg, VERIFY_GIT_REF: undefined }, { exec, git, kubectl });
 
   log.info("");
   log.info("Step 4/4: Cycling the AgentHost warm pool (reapply-and-wait; no manual pod deletion)...");
-  const warmPoolStatus = await waitForWarmPoolReady(upgradeCfg.NAMESPACE, { exec, log });
+  const warmPoolStatus = await waitForWarmPoolReady(localDeployCfg.NAMESPACE, { exec, log });
   const warmPoolImageCheck = warmPoolStatus.skipped
     ? { ok: true, pods: [], mismatched: [] }
-    : await verifyWarmPoolImage(upgradeCfg.NAMESPACE, newTag, { kubectl, log, exec, acrName: upgradeCfg.ACR_NAME });
+    : await verifyWarmPoolImage(localDeployCfg.NAMESPACE, newTag, { kubectl, log, exec, acrName: localDeployCfg.ACR_NAME });
 
   log.info("");
-  log.section("UPGRADE SUMMARY");
+  log.section("LOCAL DEPLOYMENT SUMMARY");
   log.field("Image tag", newTag);
   log.field("AgentHost tag", newTag);
-  log.field("ACR", upgradeCfg.ACR_LOGIN_SERVER);
+  log.field("ACR", localDeployCfg.ACR_LOGIN_SERVER);
   log.field("Target commit", buildResult?.targetCommit ?? "<unknown>");
   log.field("Provenance", `${provenanceResult.results.filter((r) => r.status === "ok").length}/${provenanceResult.results.length} images verified`);
   log.field("Deployed host", deployResult?.HOST ?? "<unknown>");
@@ -354,7 +354,7 @@ export async function run(cfg, opts = {}) {
     throw new Error(
       `Warm pool is ready but ${warmPoolImageCheck.mismatched.length} pod(s) do not run the expected AgentHost tag '${newTag}'. ` +
         "The SandboxWarmPool controller (updateStrategy: Recreate) should replace these automatically as they cycle -- " +
-        "re-run the upgrade's warm-pool wait step if this persists, but do NOT manually delete these pods.",
+        "re-run the local deployment's warm-pool wait step if this persists, but do NOT manually delete these pods.",
     );
   }
 

@@ -1,4 +1,4 @@
-// deploy.test.mjs -- Tests for deploy.mjs: argv parsing, help output, the
+// provision-infra.test.mjs -- Tests for provision-infra.mjs: argv parsing, help output, the
 // non-interactive config-resolution path (flags/env/params-file precedence
 // and TTY-fallback error behavior), params-file loading, guided-installer
 // flow with fully stubbed prompt/az, and pipeline delegation call order.
@@ -16,7 +16,7 @@ import {
   runInteractiveInstaller,
   shouldRunInteractiveInstaller,
   run,
-} from "../deploy.mjs";
+} from "../provision-infra.mjs";
 import { NonInteractiveError } from "../lib/prompt.mjs";
 
 function noopLog() {
@@ -82,7 +82,7 @@ test("run: --help prints HELP_TEXT and returns without doing work", async () => 
   log.info = (m) => messages.push(m);
   const result = await run({ argv: ["--help"], log });
   assert.equal(result.help, true);
-  assert.ok(messages.some((m) => m.includes("Agentweaver Azure installer")));
+  assert.ok(messages.some((m) => m.includes("Agentweaver Azure infrastructure installer")));
 });
 
 test("run: non-interactive path throws a clear error when GITHUB_CLIENT_ID/SECRET are missing and no TTY", async () => {
@@ -232,7 +232,7 @@ test("run: --skip-postgres and --skip-oauth-key omit those steps from the call s
 });
 
 // Local dev setup (--local / runLocalSetup) moved to dev.mjs's `--setup` flag
-// -- see tests/dev.test.mjs. deploy.mjs is Azure-only now.
+// -- see tests/dev.test.mjs. provision-infra.mjs is Azure-only.
 
 test("run: loads GITHUB_CLIENT_ID/SECRET from a params-file (JSONC) when no flags/env are set", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-test-"));

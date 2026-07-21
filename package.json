@@ -5,8 +5,9 @@
     "start": "node scripts/azure/cli.mjs dev --no-browser",
     "dev": "node scripts/azure/cli.mjs dev --no-browser",
     "setup": "node scripts/azure/cli.mjs dev --setup",
-    "azure:deploy": "node scripts/azure/cli.mjs deploy",
-    "azure:upgrade": "node scripts/azure/cli.mjs upgrade",
+    "azure:provision-infra": "node scripts/azure/cli.mjs provision-infra",
+    "azure:deploy-from-local": "node scripts/azure/cli.mjs deploy-from-local",
+    "azure:deploy-from-release": "node scripts/azure/cli.mjs deploy-from-release",
     "azure:release": "node scripts/azure/cli.mjs release",
     "azure:verify": "node scripts/azure/cli.mjs verify",
     "azure:dev": "node scripts/azure/cli.mjs dev",
@@ -21,8 +22,8 @@
     "version:check": "node scripts/changesets/check-version.mjs",
     "release:plan": "node scripts/changesets/plan-release.mjs",
     "release:prepare": "node scripts/changesets/prepare-release.mjs",
-    "release:sync-dev": "node scripts/changesets/sync-dev.mjs",
-    "release:stable": "node scripts/azure/cli.mjs release"
+    "release:publish": "node scripts/azure/cli.mjs publish-release",
+    "release:sync-dev": "node scripts/changesets/sync-dev.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",

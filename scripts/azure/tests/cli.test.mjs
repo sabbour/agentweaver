@@ -34,20 +34,20 @@ test("run: unknown command throws and logs an error", async () => {
   assert.ok(errors.some((e) => e.includes("bogus")));
 });
 
-test("run: routes 'deploy' to deploy.mjs's run() with argv + log", async () => {
+test("run: routes 'provision-infra' with argv + log", async () => {
   let received;
-  const modules = { deploy: { run: async (opts) => { received = opts; return { ok: true }; } } };
-  const result = await run(["deploy", "--skip-postgres"], { log: noopLog(), modules });
+  const modules = { "provision-infra": { run: async (opts) => { received = opts; return { ok: true }; } } };
+  const result = await run(["provision-infra", "--skip-postgres"], { log: noopLog(), modules });
   assert.equal(result.ok, true);
   assert.deepEqual(received.argv, ["--skip-postgres"]);
 });
 
-test("run: routes 'upgrade' by resolving variables first, then calling run(cfg, opts) -- NOT run({argv, log})", async () => {
+test("run: routes 'deploy-from-local' by resolving variables first", async () => {
   let receivedCfg;
   let receivedOpts;
   const fakeCfg = { NAMESPACE: "agentweaver" };
   const modules = {
-    upgrade: {
+    "deploy-from-local": {
       run: async (cfg, opts) => {
         receivedCfg = cfg;
         receivedOpts = opts;
@@ -56,39 +56,39 @@ test("run: routes 'upgrade' by resolving variables first, then calling run(cfg, 
     },
     variables: { resolveVariables: async () => fakeCfg },
   };
-  const result = await run(["upgrade", "--allow-dirty"], { log: noopLog(), modules });
+  const result = await run(["deploy-from-local", "--allow-dirty"], { log: noopLog(), modules });
   assert.equal(result.ok, true);
   assert.deepEqual(receivedCfg, fakeCfg);
   assert.ok("log" in receivedOpts);
   assert.equal(receivedOpts.allowDirty, true);
-  // Crucially: upgrade's run() is called with (cfg, opts), never {argv, log}.
+  // The local deployment run() is called with (cfg, opts), never {argv, log}.
   assert.equal(receivedCfg.argv, undefined);
 });
 
-test("run: 'upgrade' without --allow-dirty passes allowDirty:false", async () => {
+test("run: 'deploy-from-local' without --allow-dirty passes allowDirty:false", async () => {
   let receivedOpts;
   const modules = {
-    upgrade: { run: async (_cfg, opts) => { receivedOpts = opts; return { ok: true }; } },
+    "deploy-from-local": { run: async (_cfg, opts) => { receivedOpts = opts; return { ok: true }; } },
     variables: { resolveVariables: async () => ({}) },
   };
-  await run(["upgrade"], { log: noopLog(), modules });
+  await run(["deploy-from-local"], { log: noopLog(), modules });
   assert.equal(receivedOpts.allowDirty, false);
 });
 
-test("run: 'upgrade --help' prints help without resolving variables or calling run()", async () => {
+test("run: 'deploy-from-local --help' prints help without resolving variables or calling run()", async () => {
   const messages = [];
   const log = { ...noopLog(), info: (m) => messages.push(m) };
   let variablesResolved = false;
   let runCalled = false;
   const modules = {
-    upgrade: { run: async () => { runCalled = true; return { ok: true }; }, HELP_TEXT: "UPGRADE HELP" },
+    "deploy-from-local": { run: async () => { runCalled = true; return { ok: true }; }, HELP_TEXT: "LOCAL DEPLOY HELP" },
     variables: { resolveVariables: async () => { variablesResolved = true; return {}; } },
   };
-  const result = await run(["upgrade", "--help"], { log, modules });
+  const result = await run(["deploy-from-local", "--help"], { log, modules });
   assert.equal(result.help, true);
   assert.equal(runCalled, false);
   assert.equal(variablesResolved, false);
-  assert.ok(messages.includes("UPGRADE HELP"));
+  assert.ok(messages.includes("LOCAL DEPLOY HELP"));
 });
 
 test("run: routes 'release' to release.mjs's run()", async () => {
@@ -97,6 +97,20 @@ test("run: routes 'release' to release.mjs's run()", async () => {
   const result = await run(["release", "patch"], { log: noopLog(), modules });
   assert.equal(result.ok, true);
   assert.deepEqual(received.argv, ["patch"]);
+});
+
+test("run: routes 'publish-release' and 'deploy-from-release' with argv", async () => {
+  const received = [];
+  const modules = {
+    "publish-release": { run: async (opts) => { received.push(["publish", opts.argv]); return { ok: true }; } },
+    "deploy-from-release": { run: async (opts) => { received.push(["deploy", opts.argv]); return { ok: true }; } },
+  };
+  await run(["publish-release", "--dry-run"], { log: noopLog(), modules });
+  await run(["deploy-from-release", "v1.2.3"], { log: noopLog(), modules });
+  assert.deepEqual(received, [
+    ["publish", ["--dry-run"]],
+    ["deploy", ["v1.2.3"]],
+  ]);
 });
 
 test("run: routes 'dev' to dev.mjs's run()", async () => {
@@ -136,9 +150,9 @@ test("run: falls back to dynamic import via importFn when no module override is 
     importedSpecifiers.push(specifier);
     return fakeModule;
   };
-  const result = await run(["deploy"], { log: noopLog(), importFn });
+  const result = await run(["provision-infra"], { log: noopLog(), importFn });
   assert.equal(result.ok, true);
-  assert.ok(importedSpecifiers.includes("./deploy.mjs"));
+  assert.ok(importedSpecifiers.includes("./provision-infra.mjs"));
 });
 
 test("run: 'verify --help' prints help without resolving variables or calling run()", async () => {

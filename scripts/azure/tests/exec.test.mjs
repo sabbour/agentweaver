@@ -7,7 +7,7 @@
 // unconditionally rejected regardless of `allowFailure`, so a
 // genuinely-missing binary (e.g. `dotnet` not on PATH) crashed with a raw
 // ExecError instead of returning a non-zero code for the caller to handle
-// gracefully. Reproduced live via `npm run azure:deploy -- --local` (now
+// gracefully. Reproduced live via `npm run azure:provision-infra -- --local` (now
 // `npm run setup` / `dev --setup`) on a machine without .NET installed.
 
 import test from "node:test";

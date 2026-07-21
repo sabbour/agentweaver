@@ -12,7 +12,7 @@ You need these tools before you start:
 | Node.js 20.19+ (or 22.12+) — required by Vite 8 | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
 | git | `winget install --id Git.Git -e` | `brew install git` | `sudo apt-get update && sudo apt-get install -y git` |
 | **WSL2 + bubblewrap** — **Windows local dev only** (macOS/Linux run the sandbox natively; see [Why WSL2 on Windows?](#why-wsl2-on-windows) below) | `wsl --install` in an **elevated** PowerShell, then reboot; then inside the distro: `sudo apt-get install -y bubblewrap` | *Not required* | *Not required* |
-| Azure CLI (`az`), logged in via `az login` — only needed for `azure:deploy`/`azure:upgrade`/`azure:verify` (not for local dev) | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
+| Azure CLI (`az`), logged in via `az login` — only needed for `azure:provision-infra`/`azure:deploy-from-local`/`azure:verify` (not for local dev) | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
 
 `npm run setup` (`dev --setup`) checks the local-dev tools (git/.NET/Node)
 itself and prints the matching install command above for your platform if
@@ -218,8 +218,8 @@ whatever commit is checked out in the current branch/worktree; it does not
 contact GitHub or update protected `dev`. Use it freely for
 pure local iteration before a PR exists.
 
-Azure dev/test is also available **before merge**. Run `npm run azure:deploy`
-or `npm run azure:upgrade` from any feature branch/worktree to validate that
+Azure dev/test is also available **before merge**. Run `npm run azure:provision-infra`
+or `npm run azure:deploy-from-local` from any feature branch/worktree to validate that
 exact `HEAD` on a personal or shared real cluster. The Azure cluster is the
 integration/staging **environment**; there is intentionally no integration or
 staging **git branch**.
@@ -227,13 +227,14 @@ staging **git branch**.
 ```text
 feature branch/worktree
   ├─ npm run dev                         local-only test, at any time
-  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test/staging environment
+  ├─ azure:provision-infra / azure:deploy-from-local ─────> Azure dev/test/staging environment
   │                                      (optional manual verification at any time)
   └─ PR CI ─> update to latest dev ─> required CI rerun ─> protected dev
                                                                │
                                                                └─ green SHA ─> release/vX.Y.Z soak ─> promotion to main
                                                                                                       └─ exact main SHA
-                                                                                                           └─ tag/publish/deploy
+                                                                                                           └─ publish vX.Y.Z
+                                                                                                                └─ deploy from release
 ```
 
 GitHub Merge Queue is unavailable while this repository is owned by the
@@ -255,23 +256,24 @@ Prefer a live Azure deployment over local dev? Skip local setup entirely and run
 ```bash
 git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
-npm run azure:deploy
+npm run azure:provision-infra
 ```
 
-Use `azure:deploy` for the **first or full idempotent provisioning** of a
+Use `azure:provision-infra` for the **first or full idempotent provisioning** of a
 personal, shared dev/test, or staging environment. Once that environment
-exists, use `npm run azure:upgrade` for the normal edit → build → redeploy
+exists, use `npm run azure:deploy-from-local` for the normal edit → build → redeploy
 loop from the current `HEAD` — including an unmerged feature-branch `HEAD` —
 then `npm run azure:verify` if you want to rerun only the live checks. For a
 shared environment, coordinate ownership and prefer a clean commit;
-`azure:upgrade -- --allow-dirty` is only a personal/throwaway test escape hatch.
+`azure:deploy-from-local -- --allow-dirty` is only a personal/throwaway test escape hatch.
 
-> **This is a dev/test/staging deploy — not a release.** `azure:deploy` (and
-> `azure:upgrade`) stand up or update a live Azure environment for development,
+> **This is a dev/test/staging deploy — not a release.** `azure:provision-infra` (and
+> `azure:deploy-from-local`) stand up or update a live Azure environment for development,
 > testing, or staging use. They do **not** bump the version, create a git tag,
 > or publish a GitHub Release, and you can run them as often as you like.
-> Cutting an official, versioned release of the project is a *separate* command
-> (`npm run azure:release`) with its own process — see
+> Publishing and deploying an official version use `release:publish` and
+> `azure:deploy-from-release`; `azure:release` composes both for the first
+> shipment. See
 > [RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md).
 
 With no flags, in an interactive terminal, this prompts you through Azure
@@ -300,7 +302,7 @@ client secret.
 >   and Azure.
 
 For non-interactive deploys (flags, environment variables, or a
-`--params-file`), upgrading an existing deployment (`npm run azure:upgrade`),
+`--params-file`), upgrading an existing deployment (`npm run azure:deploy-from-local`),
 and the full flag reference, see the [README's Deploy to Azure
 section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
 [npm script reference](#npm-script-reference) below.
@@ -309,27 +311,32 @@ section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
 
 ## npm script reference
 
-Every build/deploy/upgrade/release/dev workflow runs through one cross-platform Node CLI (`scripts/azure/cli.mjs`) — no bash or PowerShell required on any platform. The root `package.json` exposes these scripts:
+Every provisioning/deployment/release/dev workflow runs through one
+cross-platform Node CLI (`scripts/azure/cli.mjs`) — no bash or PowerShell
+required on any platform. The root `package.json` exposes these scripts:
 
 | Script | What it does |
 |---|---|
 | `npm start` / `npm run dev` | Local dev orchestration (API + web), browser auto-open disabled. Alias for `azure:dev -- --no-browser`. |
 | `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
-| `npm run azure:deploy` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
-| `npm run azure:upgrade` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
-| `npm run azure:release` | Current semver publication workflow: bumps `VERSION`, tags, generates a GitHub release, and composes over the shared deploy engine. Its direct commit/push behavior must be split into protected release-PR preparation + exact-SHA publication before protected-branch enforcement; see [RELEASING.md](../../RELEASING.md#cutting-a-release). `--dry-run` remains safe. |
+| `npm run azure:provision-infra` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
+| `npm run azure:deploy-from-local` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
+| `npm run release:publish` | From a prepared exact-main checkout, creates the annotated tag and GitHub Release without deploying. |
+| `npm run azure:deploy-from-release -- vX.Y.Z` | Deploys an existing published release from an exact checkout of its tag commit. |
+| `npm run azure:release` | Composes `release:publish` and `azure:deploy-from-release` for the first shipment. |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |
 | `npm run azure:dev` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). |
 | `npm run dev:web` | Builds and starts only the web UI (Vite dev server) against an API you're already running separately. |
 | `npm run dev:api` | Builds and runs only the .NET API. |
 | `npm run docs:dev` / `docs:build` / `docs:preview` | This documentation site (VitePress). |
 
-Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full flag list, for example `npm run azure:deploy -- --help`. Useful flags across commands:
+Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full flag list, for example `npm run azure:provision-infra -- --help`. Useful flags across commands:
 
-- **`azure:deploy`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--keyvault-name`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`.
-- **`azure:upgrade`**: `--allow-dirty` to bypass the clean-working-tree check (dev/test escape hatch only — never use for a real upgrade).
+- **`azure:provision-infra`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--keyvault-name`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`.
+- **`azure:deploy-from-local`**: `--allow-dirty` to bypass the clean-working-tree check (personal/throwaway testing only).
+- **`azure:deploy-from-release`**: positional existing `vX.Y.Z` tag; the checkout must be clean and at that tag commit.
 - **`azure:dev` / `dev` / `setup`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step), `--setup` (local-only setup, no servers started — this is what `npm run setup` runs).
-- **`azure:release`**: positional `major|minor|patch` bump argument, `--dry-run` (or `DRY_RUN=true`) to preview without tagging/publishing.
+- **`release:publish` / `azure:release`**: `--dry-run`; `azure:release -- --resume vX.Y.Z` resumes a partially completed first shipment.
 
 ## 1. Configure local authentication and model access
 

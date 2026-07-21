@@ -150,7 +150,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | --- | --- |
 | `postgresql` | Postgres connectivity |
 | `github_installation_token` | GitHub token-store validity for the configured scope |
-| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means the signing-key step in `npm run azure:deploy` was skipped. |
+| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means the signing-key step in `npm run azure:provision-infra` was skipped. |
 | `agent_pod_quota` | CPU headroom in the sandbox namespace. Since #217 removed the `ResourceQuota` CPU cap, there is no hard limit to measure against, so this check reports `unknown` where it once judged headroom against a 2-core threshold. |
 | `warm_pool` | Warm-pool agent-sandbox availability for the live AgentHost pool `agentweaver-agent-host` (`replicas: 2`) |
 | `kubernetes_api` | Kubernetes API server reachability |
