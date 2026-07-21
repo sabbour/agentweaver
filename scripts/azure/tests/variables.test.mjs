@@ -13,19 +13,6 @@ import {
 
 const FAKE_REPO_ROOT = "C:\\fake\\repo";
 
-function stubReadFileVersion(version) {
-  return (filePath) => {
-    if (filePath.endsWith("VERSION")) return version;
-    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-  };
-}
-
-function stubReadFileMissing() {
-  return () => {
-    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-  };
-}
-
 test("validateImageTag: rejects 'latest' and 'latest-release'", () => {
   assert.throws(() => validateImageTag("latest", "IMAGE_TAG"), InvalidImageTagError);
   assert.throws(() => validateImageTag("latest-release", "IMAGE_TAG"), InvalidImageTagError);
@@ -46,43 +33,30 @@ test("validateImageTag: rejects anything else", () => {
   assert.throws(() => validateImageTag("1.2.3", "IMAGE_TAG"), InvalidImageTagError); // missing 'v' prefix
 });
 
-test("deriveImageTag: env IMAGE_TAG takes precedence over VERSION file and git", async () => {
+test("deriveImageTag: env IMAGE_TAG takes precedence over git", async () => {
   const tag = await deriveImageTag({
     env: { IMAGE_TAG: "v9.9.9" },
     repoRoot: FAKE_REPO_ROOT,
-    readFile: stubReadFileVersion("1.2.3"),
     gitShortSha: async () => "deadbee",
   });
   assert.equal(tag, "v9.9.9");
 });
 
-test("deriveImageTag: prefers VERSION file over git short SHA when IMAGE_TAG unset", async () => {
+test("deriveImageTag: defaults to git short SHA instead of VERSION", async () => {
   const tag = await deriveImageTag({
     env: {},
     repoRoot: FAKE_REPO_ROOT,
-    readFile: stubReadFileVersion("0.9.70\n"),
     gitShortSha: async () => "deadbee",
   });
-  assert.equal(tag, "v0.9.70");
+  assert.equal(tag, "deadbee");
 });
 
-test("deriveImageTag: falls back to git short SHA when no VERSION file exists", async () => {
-  const tag = await deriveImageTag({
-    env: {},
-    repoRoot: FAKE_REPO_ROOT,
-    readFile: stubReadFileMissing(),
-    gitShortSha: async () => "330b2adb",
-  });
-  assert.equal(tag, "330b2adb");
-});
-
-test("deriveImageTag: throws when neither VERSION file nor git resolves anything", async () => {
+test("deriveImageTag: throws when git cannot resolve and no override is supplied", async () => {
   await assert.rejects(
     () =>
       deriveImageTag({
         env: {},
         repoRoot: FAKE_REPO_ROOT,
-        readFile: stubReadFileMissing(),
         gitShortSha: async () => "",
       }),
     InvalidImageTagError,
@@ -95,7 +69,6 @@ test("deriveImageTag: rejects IMAGE_TAG='latest' supplied explicitly via env", a
       deriveImageTag({
         env: { IMAGE_TAG: "latest" },
         repoRoot: FAKE_REPO_ROOT,
-        readFile: stubReadFileMissing(),
         gitShortSha: async () => "deadbee",
       }),
     InvalidImageTagError,
@@ -107,7 +80,6 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
     env: {},
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
-    readFile: stubReadFileVersion("1.0.0"),
     gitShortSha: async () => "deadbee",
   });
   assert.equal(vars.RESOURCE_GROUP, DEFAULTS.RESOURCE_GROUP);
@@ -120,8 +92,8 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.APP_POOL_NAME, DEFAULTS.APP_POOL_NAME);
   assert.equal(vars.ACR_LOGIN_SERVER, `${DEFAULTS.ACR_NAME}.azurecr.io`);
   assert.equal(vars.AGENTHOST_KEYVAULT_URI, `https://${DEFAULTS.KEYVAULT_NAME}.vault.azure.net/`);
-  assert.equal(vars.IMAGE_TAG, "v1.0.0");
-  assert.equal(vars.AGENTHOST_IMAGE_TAG, "v1.0.0", "AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG");
+  assert.equal(vars.IMAGE_TAG, "deadbee");
+  assert.equal(vars.AGENTHOST_IMAGE_TAG, "deadbee", "AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG");
 });
 
 test("resolveVariables: env overrides beat defaults for every field", async () => {
@@ -139,7 +111,6 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
     },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
-    readFile: stubReadFileMissing(),
     gitShortSha: async () => "deadbee",
   });
   assert.equal(vars.RESOURCE_GROUP, "custom-rg");
@@ -171,7 +142,6 @@ test("resolveVariables: resolveLive=false skips az entirely (no Azure needed for
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
     az,
-    readFile: stubReadFileVersion("1.0.0"),
     gitShortSha: async () => "deadbee",
   });
   assert.equal(vars.TENANT_ID, "");
@@ -200,7 +170,6 @@ test("resolveVariables: resolveLive=true calls stubbed az helpers with the right
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: true,
     az,
-    readFile: stubReadFileVersion("1.0.0"),
     gitShortSha: async () => "deadbee",
   });
   assert.equal(vars.TENANT_ID, "tenant-123");
@@ -234,7 +203,6 @@ test("resolveVariables: env-supplied live fields short-circuit az (lazy resoluti
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: true,
     az,
-    readFile: stubReadFileVersion("1.0.0"),
     gitShortSha: async () => "deadbee",
   });
   assert.equal(vars.TENANT_ID, "env-tenant");
@@ -249,7 +217,6 @@ test("resolveVariables: AGENTHOST_IMAGE_TAG explicit override is validated indep
         env: { IMAGE_TAG: "v1.0.0", AGENTHOST_IMAGE_TAG: "latest" },
         repoRoot: FAKE_REPO_ROOT,
         resolveLive: false,
-        readFile: stubReadFileMissing(),
         gitShortSha: async () => "deadbee",
       }),
     InvalidImageTagError,

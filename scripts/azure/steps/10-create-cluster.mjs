@@ -323,7 +323,7 @@ export async function run(cfg, opts = {}) {
   log.field("ACR", cfg.ACR_LOGIN_SERVER);
   log.info("");
   log.info("  Next step:");
-  log.info("    node scripts/azure/cli.mjs deploy   (or: scripts/azure/steps/15-setup-identity.mjs)");
+  log.info("    node scripts/azure/cli.mjs provision-infra   (or: scripts/azure/steps/15-setup-identity.mjs)");
 
   return { acrId };
 }

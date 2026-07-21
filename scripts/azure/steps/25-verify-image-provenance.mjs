@@ -85,7 +85,7 @@ export async function liveDigestStateForSelector(
       // allowEphemeralPods -- treating it as fatal here caused a real
       // false-positive race in Phase 7 staging verification: provenance now
       // runs immediately post-deploy, so this window is hit on every real
-      // upgrade, not just occasionally.
+      // deployment, not just occasionally.
       log.info(`${label}: ignoring terminating (old-generation) pod ${pod.name}`);
       continue;
     }

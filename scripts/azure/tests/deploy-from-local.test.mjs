@@ -1,4 +1,4 @@
-// upgrade.test.mjs -- Tests for upgrade.mjs: dirty-tree rejection (+
+// deploy-from-local.test.mjs -- Tests for deploy-from-local.mjs: dirty-tree rejection (+
 // allowDirty override), tag minting (HEAD short SHA, never the VERSION-
 // derived tag), the orchestration call sequence (20 -> 25 -> 30 -> warm-pool
 // wait), and the warm-pool wait/verify logic (not-ready-then-ready polling,
@@ -10,14 +10,14 @@ import assert from "node:assert/strict";
 import {
   run,
   isWorkingTreeDirty,
-  mintUpgradeTag,
+  mintLocalDeployTag,
   getWarmPoolStatus,
   waitForWarmPoolReady,
   verifyWarmPoolImage,
   DirtyWorkingTreeError,
   WARM_POOL_NAME,
   WARM_POOL_POD_SELECTOR,
-} from "../upgrade.mjs";
+} from "../deploy-from-local.mjs";
 
 const CFG = Object.freeze({
   RESOURCE_GROUP: "agentweaver-rg",
@@ -47,10 +47,10 @@ function noopLog() {
   };
 }
 
-// -------------------- isWorkingTreeDirty / mintUpgradeTag --------------------
+// -------------------- isWorkingTreeDirty / mintLocalDeployTag --------------------
 
 test("isWorkingTreeDirty: true when `git status --porcelain` reports changes", async () => {
-  const capture = async () => ({ stdout: " M scripts/azure/upgrade.mjs\n", stderr: "", code: 0 });
+  const capture = async () => ({ stdout: " M scripts/azure/deploy-from-local.mjs\n", stderr: "", code: 0 });
   assert.equal(await isWorkingTreeDirty({ cwd: "/repo", capture }), true);
 });
 
@@ -59,23 +59,23 @@ test("isWorkingTreeDirty: false on a clean tree (empty porcelain output)", async
   assert.equal(await isWorkingTreeDirty({ cwd: "/repo", capture }), false);
 });
 
-test("mintUpgradeTag: mints the HEAD short SHA, never a VERSION-derived semver tag", async () => {
+test("mintLocalDeployTag: mints the HEAD short SHA, never a VERSION-derived semver tag", async () => {
   const git = {
     currentGitSha: async () => ({ full: "a".repeat(40), short: "aaaaaaa" }),
   };
-  const tag = await mintUpgradeTag({ cwd: "/repo", git });
+  const tag = await mintLocalDeployTag({ cwd: "/repo", git });
   assert.equal(tag, "aaaaaaa");
   assert.notEqual(tag, "v0.9.71"); // never the VERSION-file semver tag
 });
 
-test("mintUpgradeTag: throws if HEAD cannot be resolved", async () => {
+test("mintLocalDeployTag: throws if HEAD cannot be resolved", async () => {
   const git = { currentGitSha: async () => ({ full: null, short: null }) };
-  await assert.rejects(() => mintUpgradeTag({ cwd: "/repo", git }), /HEAD git SHA/);
+  await assert.rejects(() => mintLocalDeployTag({ cwd: "/repo", git }), /HEAD git SHA/);
 });
 
-test("mintUpgradeTag: rejects an invalid/short-of-7-chars SHA via validateImageTag", async () => {
+test("mintLocalDeployTag: rejects an invalid/short-of-7-chars SHA via validateImageTag", async () => {
   const git = { currentGitSha: async () => ({ full: "abc", short: "abc" }) };
-  await assert.rejects(() => mintUpgradeTag({ cwd: "/repo", git }));
+  await assert.rejects(() => mintLocalDeployTag({ cwd: "/repo", git }));
 });
 
 // -------------------- getWarmPoolStatus / waitForWarmPoolReady --------------------
@@ -335,7 +335,7 @@ test("run(): calls steps in order 20 -> 30 -> 25 -> warm-pool-wait, passing the 
   // 30 (deploy) must run BEFORE 25 (provenance verify): steps/25 is a
   // post-deploy safety net that checks the digest actually running live in
   // the cluster, so it must observe the NEW deployment, not the stale
-  // pre-upgrade one. Reordering this was a real bug found in Phase 7 staging
+  // pre-local deployment one. Reordering this was a real bug found in Phase 7 staging
   // verification (running 25 before 30 always reported false STALE IMAGE
   // failures against the still-old live pods).
   const fakes = makeOrchestrationFakes();

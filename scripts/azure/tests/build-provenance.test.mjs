@@ -280,7 +280,7 @@ test("liveDigestStateForSelector: excludes terminating (deletionTimestamp) old-g
   // Found in Phase 7 staging re-verification: `kubectl rollout status` only
   // waits for the NEW ReplicaSet to become available; the OLD ReplicaSet's
   // pods terminate asynchronously afterward (standard k8s behavior). Since
-  // provenance now runs immediately post-deploy (see upgrade.mjs reorder
+  // provenance now runs immediately post-deploy (see deploy-from-local.mjs reorder
   // fix), a leftover terminating old pod must NOT be treated as an
   // unavailable replica -- it must simply be excluded from the live count.
   const digest = "sha256:" + "3".repeat(64);

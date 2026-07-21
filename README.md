@@ -20,8 +20,8 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 | [.NET SDK 10](https://dot.net/download) | building/running the API and MCP server locally | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
 | **WSL2 + `bubblewrap`** | **Windows local dev only** — `npm run dev` runs the API's sandbox executor inside WSL2 for real isolation ([why](https://sabbour.me/agentweaver/guide/getting-started#why-wsl2-on-windows)); macOS/Linux sandbox natively | `wsl --install` (elevated PowerShell, then reboot), then `sudo apt-get install -y bubblewrap` inside the distro | *Not required* | *Not required* |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in via `az login` | everything under `npm run azure:*` | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during `azure:deploy`/`azure:upgrade`/`azure:verify` | `winget install Kubernetes.kubectl` | `brew install kubectl` | `sudo snap install kubectl --classic` |
-| [`gh` CLI](https://cli.github.com/), authenticated via `gh auth status` | `npm run azure:release` only (changelog generation + creating the GitHub Release) | `winget install GitHub.cli` | `brew install gh` | `sudo apt-get update && sudo apt-get install -y gh` (or see [cli.github.com](https://cli.github.com/) if `gh` isn't in your distro's repos) |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during Azure deployment commands | `winget install Kubernetes.kubectl` | `brew install kubectl` | `sudo snap install kubectl --classic` |
+| [`gh` CLI](https://cli.github.com/), authenticated via `gh auth status` | `release:publish`, `azure:deploy-from-release`, and `azure:release` release validation/publication | `winget install GitHub.cli` | `brew install gh` | `sudo apt-get update && sudo apt-get install -y gh` (or see [cli.github.com](https://cli.github.com/) if `gh` isn't in your distro's repos) |
 
 `node scripts/azure/cli.mjs dev --setup` (aliased as `npm run setup`) checks
 git/.NET/Node itself and prints the matching install command above for your
@@ -174,9 +174,11 @@ Local and Azure testing do not require a staging branch:
 ```text
 feature worktree
   ├─ npm run dev ───────────────────────> local test (no GitHub interaction)
-  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test environment (any branch)
+  ├─ azure:provision-infra / azure:deploy-from-local ─────> Azure dev/test environment
+  ├─ azure:deploy-from-commit <ref> ──────────────────────> exact committed ref, without checkout switching
   └─ PR CI ─> update to latest dev ─> CI rerun ─> squash-merge to protected dev
-                                                        └─ green SHA ─> release/vX.Y.Z soak ─> promotion to main ─> tag/release/deploy
+                                                        └─ green SHA ─> release/vX.Y.Z soak ─> promotion to main
+                                                                                                      └─ publish vX.Y.Z ─> deploy from release
 ```
 
 `npm run dev` uses whatever is checked out locally. Azure dev/test commands
@@ -198,27 +200,25 @@ From a cloned checkout:
 
 ```bash
 # First/full provisioning of a personal or shared dev/test environment:
-npm run azure:deploy
+npm run azure:provision-infra
 ```
 
-This is **environment validation, not a release**. Use `azure:deploy` to
+This is **environment validation, not a release**. Use `azure:provision-infra` to
 provision or idempotently reconcile the full environment; after it exists,
-use `npm run azure:upgrade` to ship the current clean `HEAD` — even from an
+use `npm run azure:deploy-from-local` to ship the current clean `HEAD` — even from an
 unmerged feature branch/worktree — during normal development, and
 `npm run azure:verify` to rerun live checks. Only the release workflow changes
-`VERSION`, creates a `vX.Y.Z` tag, and publishes a GitHub Release. Its current
-script still needs the documented protected-release-PR split before
-protected-branch enforcement. See the
-[deploy/upgrade/release decision table](RELEASING.md#deploying-to-azure-is-not-the-same-as-cutting-a-release).
+`VERSION`, creates a `vX.Y.Z` tag, and publishes a GitHub Release. See the
+[release and deployment command model](RELEASING.md#command-model).
 
-With no arguments, `azure:deploy` launches an interactive installer that prompts
+With no arguments, `azure:provision-infra` launches an interactive installer that prompts
 for: the Azure subscription (defaulting to your current `az` default), a
 resource group (pick an existing one or create a new one), a location, the
 AKS cluster / ACR / Key Vault names (prefilled with sensible defaults,
 editable), and a GitHub OAuth client ID + secret (the secret is entered with
 no echo). It then provisions the cluster, identity, monitoring, the MCP OAuth
 signing key, PostgreSQL, builds and pushes images, verifies image provenance,
-and deploys and verifies the release. At the end it prints an **outputs
+and performs an initial SHA-identified deployment. At the end it prints an **outputs
 summary** (resource group, cluster, ACR, namespace, image tags, gateway
 host/IP, **GitHub OAuth callback URL**, verification pass/fail counts) — it
 never prints the OAuth client secret or any other credential.
@@ -244,7 +244,7 @@ non-interactive run — no TTY, or any flags passed — never blocks on a prompt
 and fails fast naming any missing required field):
 
 ```bash
-npm run azure:deploy -- \
+npm run azure:provision-infra -- \
   --resource-group agentweaver-rg \
   --cluster-name agentweaver-aks \
   --acr-name agentweaverregistry \
@@ -273,7 +273,7 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
 ```
 
 ```bash
-npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
+npm run azure:provision-infra -- --params-file scripts/azure/params.my-env.json
 ```
 
 > Never commit a params file containing a real `GITHUB_CLIENT_SECRET` — prefer
@@ -281,24 +281,36 @@ npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
 > prompt; the params file field exists only for unattended CI use against
 > disposable/test environments.
 
-**Upgrading an existing deployment:**
+**Deploying current local work to an existing environment:**
 
 ```bash
-npm run azure:upgrade
+npm run azure:deploy-from-local
 ```
 
-`azure:upgrade` is for updating an *existing* deployment to newer code,
-distinct from `azure:deploy` (initial/full setup). It mints a new immutable
-image tag from `HEAD` (the short git SHA; it refuses to run against a dirty
-working tree), builds and pushes the images, verifies image provenance,
-redeploys, and cycles the AgentHost warm-pool sandboxes (reapplies the
-SandboxTemplate/SandboxWarmPool and waits for the pool to become ready —
-never by deleting pods).
+`azure:deploy-from-local` deploys current local work without assigning release
+identity. It is distinct from `azure:provision-infra` (initial/full setup) and
+from `azure:deploy-from-release` (an existing published semver release). It
+mints an immutable short-SHA tag from `HEAD`, builds and pushes images,
+redeploys, performs post-deploy provenance verification, and waits for the
+AgentHost warm pool.
+
+To deploy a teammate's branch, PR ref, or older commit without switching your
+own checkout:
+
+```bash
+npm run azure:deploy-from-commit -- origin/feature-branch
+```
+
+The command resolves the ref to an exact commit, creates a temporary detached
+worktree, and runs the same short-SHA deployment pipeline. It never includes
+uncommitted local state.
 
 **Related commands** (see the [operations guide](docs/guide/operations.md) and
 [AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
 
-- `npm run azure:release` — current semver publication command; it still commits/tags/pushes directly and must be split into protected release-PR preparation plus exact-SHA publication before protected-branch enforcement (see `RELEASING.md`).
+- `npm run release:publish` — create the tag and GitHub Release only.
+- `npm run azure:deploy-from-release -- vX.Y.Z` — deploy an existing published release.
+- `npm run azure:release` — publish and perform the first deployment as one resumable orchestration.
 - `npm run azure:verify` — runs the post-deploy health verification checks on their own.
 
 ### Local development
@@ -352,9 +364,12 @@ From the repository root, run these with `npm run <script>` (or `pnpm run <scrip
 | Script | Purpose |
 | --- | --- |
 | `setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages. No Azure calls. |
-| `azure:deploy` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
-| `azure:upgrade` | Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool. |
-| `azure:release` | Current semver bump/tag/GitHub release + deploy command; queue-compatible preparation/publication split is pending. |
+| `azure:provision-infra` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
+| `azure:deploy-from-local` | Deploy current local HEAD using a short-SHA image identifier; no release identity. |
+| `azure:deploy-from-commit` | Deploy an arbitrary exact committed ref through a temporary detached worktree. |
+| `azure:deploy-from-release` | Deploy an existing published `vX.Y.Z` release to the configured environment. |
+| `release:publish` | Create an annotated tag and GitHub Release from a prepared exact-main checkout; no deploy. |
+| `azure:release` | Publish and deploy a prepared release by composing the two commands above. |
 | `azure:verify` | Post-deploy health verification checks. |
 | `azure:dev` | Start the local API + Web UI dev environment. |
 | `dev:web` | Build the web frontend, then start Vite. |
@@ -441,3 +456,8 @@ block-beta
 - [AKS architecture](docs/guide/architecture-aks.md)
 - [Contributing](CONTRIBUTING.md)
 - [Releasing](RELEASING.md)
+
+## Skills
+
+- [Agentweaver changelog](.copilot/skills/agentweaver-changelog/SKILL.md) —
+  Changesets, release publication, release notes, and release deployment identity.
