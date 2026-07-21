@@ -121,7 +121,10 @@ export function ProjectSwitcher({
 
   // Keep the combobox display in sync with the active project.
   useEffect(() => {
-    setComboValue(currentName);
+    const syncComboValue = async () => {
+      setComboValue(currentName);
+    };
+    void syncComboValue();
   }, [currentName]);
 
   const allSorted = useMemo(

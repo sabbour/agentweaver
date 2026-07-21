@@ -751,9 +751,12 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
   // Runs when isResolved or resolvedScopeProp change — covers the case where the SSE event
   // arrives after the card is already mounted with isResolved=false.
   useEffect(() => {
-    if (isResolved && resolvedScope === null) {
-      setResolvedScope(resolvedScopeProp ?? 'expired');
-    }
+    const syncResolvedScope = async () => {
+      if (isResolved && resolvedScope === null) {
+        setResolvedScope(resolvedScopeProp ?? 'expired');
+      }
+    };
+    void syncResolvedScope();
   // resolvedScope is intentionally omitted: we only want to fire once when isResolved flips.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isResolved, resolvedScopeProp]);

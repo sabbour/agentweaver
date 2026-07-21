@@ -207,16 +207,25 @@ export function WorkspaceFilePicker({ projectId, workspaceRef, selectedPath, onS
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    apiClient.getProjectWorkspace(projectId, workspaceRef)
-      .then((flat) => { if (!cancelled) { setNodes(buildFileTree(flat)); setLoading(false); } })
-      .catch((err) => {
+    const loadWorkspace = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const flat = await apiClient.getProjectWorkspace(projectId, workspaceRef);
+        if (!cancelled) {
+          setNodes(buildFileTree(flat));
+        }
+      } catch (err) {
         if (!cancelled) {
           setError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (!cancelled) {
           setLoading(false);
         }
-      });
+      }
+    };
+    void loadWorkspace();
     return () => { cancelled = true; };
   }, [projectId, workspaceRef]);
 

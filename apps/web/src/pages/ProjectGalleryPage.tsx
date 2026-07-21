@@ -510,20 +510,17 @@ function useGitHubData(open: boolean) {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setAccountsLoading(true);
-    setAuthRequired(false);
-    setAccountsError(null);
-    apiClient.listGitHubAccounts()
-      .then((data) => {
+    const loadAccounts = async () => {
+      setAccountsLoading(true);
+      setAuthRequired(false);
+      setAccountsError(null);
+      try {
+        const data = await apiClient.listGitHubAccounts();
         if (cancelled) return;
         setAccounts(data);
-        setAccountsLoading(false);
-        // Auto-select the authenticated user (first entry).
         if (data.length > 0) setSelectedAccount(data[0]);
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
-        setAccountsLoading(false);
         if (err instanceof ApiError && err.status === 401) {
           setAuthRequired(true);
         } else {
@@ -533,30 +530,37 @@ function useGitHubData(open: boolean) {
               : err instanceof Error ? err.message : String(err),
           );
         }
-      });
+      } finally {
+        if (!cancelled) setAccountsLoading(false);
+      }
+    };
+    void loadAccounts();
     return () => { cancelled = true; };
   }, [open, accountsKey]);
 
   // Load repos whenever the selected account changes.
   useEffect(() => {
-    if (!selectedAccount) { setRepos([]); return; }
     let cancelled = false;
-    setReposLoading(true);
-    setReposError(null);
-    apiClient.listGitHubRepos(selectedAccount.login)
-      .then((data) => {
-        if (!cancelled) { setRepos(data); setReposLoading(false); }
-      })
-      .catch((err: unknown) => {
+    const loadRepos = async () => {
+      if (!selectedAccount) { setRepos([]); return; }
+      setReposLoading(true);
+      setReposError(null);
+      try {
+        const data = await apiClient.listGitHubRepos(selectedAccount.login);
+        if (!cancelled) setRepos(data);
+      } catch (err: unknown) {
         if (cancelled) return;
-        setReposLoading(false);
         setReposError(
           err instanceof ApiError
             ? `Error ${err.status}: ${err.body}`
             : err instanceof Error ? err.message : String(err),
         );
         setRepos([]);
-      });
+      } finally {
+        if (!cancelled) setReposLoading(false);
+      }
+    };
+    void loadRepos();
     return () => { cancelled = true; };
   }, [selectedAccount, reposKey]);
 
@@ -821,17 +825,15 @@ export function ProjectGalleryPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setAuthError(false);
-    setLoadError(false);
-    setErrorMessage(null);
-
-    apiClient
-      .listProjects({ page, pageSize, signal: controller.signal })
-      .then((result) => {
+    const loadProjects = async () => {
+      setLoading(true);
+      setAuthError(false);
+      setLoadError(false);
+      setErrorMessage(null);
+      try {
+        const result = await apiClient.listProjects({ page, pageSize, signal: controller.signal });
         if (!controller.signal.aborted) setProjectPage(result);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (controller.signal.aborted) return;
         if (err instanceof ApiError && err.status === 401) {
           setAuthError(true);
@@ -845,24 +847,29 @@ export function ProjectGalleryPage() {
               ? err.message
               : String(err),
         );
-      })
-      .finally(() => {
+      } finally {
         if (!controller.signal.aborted) setLoading(false);
-      });
+      }
+    };
+    void loadProjects();
 
     return () => controller.abort();
   }, [page, pageSize, reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
-    apiClient.getServerInfo()
-      .then((info) => {
+    const loadServerInfo = async () => {
+      try {
+        const info = await apiClient.getServerInfo();
         if (!cancelled) {
           setDataDir(info.data_directory);
           setWorkspaceAutoAssigned(info.workspace_auto_assigned ?? false);
         }
-      })
-      .catch(() => {});
+      } catch {
+        return undefined;
+      }
+    };
+    void loadServerInfo();
     return () => { cancelled = true; };
   }, []);
 

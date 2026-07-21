@@ -94,7 +94,10 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   useEffect(() => armAudioUnlock(), []);
 
   useEffect(() => {
-    void poll();
+    const startPolling = async () => {
+      await poll();
+    };
+    void startPolling();
     timerRef.current = setInterval(() => void poll(), pollIntervalMs);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);

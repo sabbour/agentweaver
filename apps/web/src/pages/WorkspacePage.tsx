@@ -240,16 +240,16 @@ export function WorkspacePage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    setProject(null);
-    apiClient
-      .getProject(projectId)
-      .then((p) => {
-        if (!cancelled) setProject(p);
-      })
-      .catch(() => {});
-    apiClient
-      .getProjectWorkspaceRefs(projectId)
-      .then((res) => {
+    const loadRefs = async () => {
+      setProject(null);
+      void apiClient
+        .getProject(projectId)
+        .then((p) => {
+          if (!cancelled) setProject(p);
+        })
+        .catch(() => {});
+      try {
+        const res = await apiClient.getProjectWorkspaceRefs(projectId);
         if (cancelled) return;
         setRefs(res.refs);
         setCurrentBranch(res.current_branch);
@@ -258,13 +258,14 @@ export function WorkspacePage() {
           (requestedRef && res.refs.some((r) => r.branch === requestedRef) ? requestedRef : undefined);
         const base = res.refs.find((r) => r.kind === 'base')?.branch ?? res.current_branch;
         setSelectedRef(queryRef ?? base);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) {
           setRefs([]);
           setCurrentBranch('');
         }
-      });
+      }
+    };
+    void loadRefs();
     return () => {
       cancelled = true;
     };
@@ -274,22 +275,23 @@ export function WorkspacePage() {
   useEffect(() => {
     if (!projectId || selectedRef === undefined) return;
     let cancelled = false;
-    setNodesLoading(true);
-    setNodesError(null);
-    setSelectedPath(null);
-    apiClient
-      .getProjectWorkspace(projectId, selectedRef)
-      .then((list) => {
+    const loadNodes = async () => {
+      setNodesLoading(true);
+      setNodesError(null);
+      setSelectedPath(null);
+      try {
+        const list = await apiClient.getProjectWorkspace(projectId, selectedRef);
         if (cancelled) return;
         setNodes(list);
-        setNodesLoading(false);
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
         setNodes([]);
         setNodesError(err instanceof Error ? err.message : String(err));
-        setNodesLoading(false);
-      });
+      } finally {
+        if (!cancelled) setNodesLoading(false);
+      }
+    };
+    void loadNodes();
     return () => {
       cancelled = true;
     };

@@ -1338,16 +1338,25 @@ export function WorkflowDefinitionInlinePanel({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    apiClient.getWorkflowGraph(projectId, workflowId)
-      .then((g) => { if (!cancelled) { setGraph(g); setLoading(false); } })
-      .catch((err: unknown) => {
+    const loadGraph = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const g = await apiClient.getWorkflowGraph(projectId, workflowId);
+        if (!cancelled) {
+          setGraph(g);
+        }
+      } catch (err: unknown) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (!cancelled) {
           setLoading(false);
         }
-      });
+      }
+    };
+    void loadGraph();
     return () => { cancelled = true; };
   }, [projectId, workflowId]);
 

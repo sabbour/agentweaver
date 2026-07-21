@@ -2037,12 +2037,11 @@ export function AgentSessionPanel({
   const selectedIdentity = useMemo(() => participantIdentityForNode(selectedItem), [selectedItem]);
 
   useEffect(() => {
-    if (docked) {
-      setIsVisible(true);
-      return undefined;
-    }
-    if (open) {
-      setIsVisible(true);
+    if (docked || open) {
+      const syncVisibility = async () => {
+        setIsVisible(true);
+      };
+      void syncVisibility();
       return undefined;
     }
     const timeoutId = window.setTimeout(() => setIsVisible(false), 220);
@@ -2084,9 +2083,12 @@ export function AgentSessionPanel({
 
   useEffect(() => {
     if (composerFocusSignal > 0) {
-      if (selectedItem?.nodeId === 'outcome-plan') {
-        setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
-      }
+      const syncComposerState = async () => {
+        if (selectedItem?.nodeId === 'outcome-plan') {
+          setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
+        }
+      };
+      void syncComposerState();
       focusComposer();
     }
   }, [composerFocusSignal, selectedItem?.nodeId, focusComposer]);
@@ -2103,15 +2105,8 @@ export function AgentSessionPanel({
   }, []);
 
   useEffect(() => {
-    if (!open || !canBrowseSelectedRun) {
-      setRunDetail(null);
-      setRunDetailError(null);
-      setRunDetailLoading(false);
-      return;
-    }
     let cancelled = false;
     let intervalId: ReturnType<typeof setInterval> | undefined;
-    setRunDetailError(null);
     const cached = lastKnownByRunRef.current.get(selectedRunId);
 
     const startRunDetailPolling = (initialStatus?: string | null) => {
@@ -2129,53 +2124,56 @@ export function AgentSessionPanel({
       }, RUN_DETAIL_POLL_INTERVAL_MS);
     };
 
-    if (cached?.runDetail) {
-      settledRunIdRef.current = selectedRunId;
-      setRunDetailLoading(false);
-      startRunDetailPolling(cached.runDetail.status);
-      return () => {
-        cancelled = true;
-        clearInterval(intervalId);
-      };
-    }
+    const loadRunDetail = async () => {
+      if (!open || !canBrowseSelectedRun) {
+        setRunDetail(null);
+        setRunDetailError(null);
+        setRunDetailLoading(false);
+        return;
+      }
+      setRunDetailError(null);
+      if (cached?.runDetail) {
+        settledRunIdRef.current = selectedRunId;
+        setRunDetailLoading(false);
+        startRunDetailPolling(cached.runDetail.status);
+        return;
+      }
 
-    setRunDetailLoading(true);
-    apiClient.getRun(selectedRunId)
-      .then((detail) => {
+      setRunDetailLoading(true);
+      try {
+        const detail = await apiClient.getRun(selectedRunId);
         if (cancelled) return;
         setRunDetail(detail);
-        return apiClient.getRunEvents(selectedRunId)
-          .then((persisted) => {
-            if (cancelled) return;
-            setSeedEvents(persisted.map((event) => ({
-              sequence: event.sequence,
-              type: event.type as EventType,
-              payload: event.payload,
-            })));
-          })
-          .catch(() => {
-            if (!cancelled) setSeedEvents([]);
-          })
-          .finally(() => {
-            if (!cancelled) settledRunIdRef.current = selectedRunId;
-          });
-      })
-      .catch((err: unknown) => {
+        try {
+          const persisted = await apiClient.getRunEvents(selectedRunId);
+          if (cancelled) return;
+          setSeedEvents(persisted.map((event) => ({
+            sequence: event.sequence,
+            type: event.type as EventType,
+            payload: event.payload,
+          })));
+        } catch {
+          if (!cancelled) setSeedEvents([]);
+        } finally {
+          if (!cancelled) settledRunIdRef.current = selectedRunId;
+        }
+      } catch (err: unknown) {
         if (cancelled) return;
         setRunDetail(null);
         setRunDetailError(formatApiErrorMessage(err, 'Could not load run metadata.'));
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setRunDetailLoading(false);
-      });
+      }
 
-    // Refresh the run's status in the background while the pane is open (#280). The
-    // fetch above is a one-shot snapshot taken when the pane opens/switches run — without
-    // this poll, `runDetail.status` (which drives useArtifactBrowser's Changes/Files
-    // polling via the `isLive` gate) never advances from e.g. "queued" to "in_progress",
-    // so Changes/Files can show "None" for the whole lifetime of an actively-running
-    // subtask. Polling stops once the run reaches a truly terminal status.
-    startRunDetailPolling();
+      // Refresh the run's status in the background while the pane is open (#280). The
+      // fetch above is a one-shot snapshot taken when the pane opens/switches run — without
+      // this poll, `runDetail.status` (which drives useArtifactBrowser's Changes/Files
+      // polling via the `isLive` gate) never advances from e.g. "queued" to "in_progress",
+      // so Changes/Files can show "None" for the whole lifetime of an actively-running
+      // subtask. Polling stops once the run reaches a truly terminal status.
+      startRunDetailPolling();
+    };
+    void loadRunDetail();
 
     return () => {
       cancelled = true;

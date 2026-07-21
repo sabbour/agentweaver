@@ -34,11 +34,8 @@ import {
 } from './WorkflowGraphPanel';
 import {
   initialRunState,
-  nextScenarioId,
   runReducer,
-  type Phase,
   type RunAction,
-  type RunState,
 } from './LandingWorkflowDemo.state';
 
 // ---------------------------------------------------------------------------
@@ -393,13 +390,18 @@ export function ScenarioTheater() {
     [state.activeId],
   );
 
-  // Latest token/phase/visibility for the scheduler's double-guard.
+  // Latest token/phase/visibility for the scheduler's double-guard. Only ever
+  // read asynchronously (inside setTimeout callbacks), never during render,
+  // so it's safe -- and required by the rules of React -- to write these
+  // after commit via an effect rather than directly in the render body.
   const tokenRef = useRef(state.token);
   const phaseRef = useRef(state.phase);
   const inViewRef = useRef(inView);
-  tokenRef.current = state.token;
-  phaseRef.current = state.phase;
-  inViewRef.current = inView;
+  useEffect(() => {
+    tokenRef.current = state.token;
+    phaseRef.current = state.phase;
+    inViewRef.current = inView;
+  });
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);

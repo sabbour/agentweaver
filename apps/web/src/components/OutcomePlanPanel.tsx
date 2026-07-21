@@ -447,17 +447,20 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
 
   // Compose the revise feedback from the per-question answers plus any free-form feedback.
   // Each answered question becomes a "Q: …\nA: …" block the coordinator re-drafts from.
-  const composedFeedback = useMemo(() => {
+  const composedFeedback = (() => {
     const qa = clarifying
       .map((q, i) => ({ q, a: (answers[i] ?? '').trim() }))
       .filter((x) => x.a.length > 0)
       .map((x) => `Q: ${x.q}\nA: ${x.a}`)
       .join('\n\n');
     return [qa, extraFeedback.trim()].filter((s) => s.length > 0).join('\n\n');
-  }, [clarifying, answers, extraFeedback]);
+  })();
 
   useEffect(() => {
-    setAllowTaskPromotion(spec?.allowTaskPromotion ?? false);
+    const syncAllowTaskPromotion = async () => {
+      setAllowTaskPromotion(spec?.allowTaskPromotion ?? false);
+    };
+    void syncAllowTaskPromotion();
   }, [spec?.allowTaskPromotion, spec?.status]);
 
   // Clear the revising spinner when the spec content changes — this fires when the coordinator
@@ -471,7 +474,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
       setRevising(false);
       revisingSnapshotRef.current = null;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [revising, specContentKey]);
 
   // 30-second safety-net: clear the spinner even if the content hasn't changed (e.g. the

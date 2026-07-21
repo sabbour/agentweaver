@@ -26,20 +26,18 @@ export function ProjectListProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setAuthError(false);
-    setLoadError(false);
-    setErrorMessage(null);
-    collectPagedItems((options) => apiClient.listProjects(options))
-      .then((result) => {
+    const loadProjects = async () => {
+      setLoading(true);
+      setAuthError(false);
+      setLoadError(false);
+      setErrorMessage(null);
+      try {
+        const result = await collectPagedItems((options) => apiClient.listProjects(options));
         if (!cancelled) {
           setProjects(result);
-          setLoading(false);
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!cancelled) {
-          setLoading(false);
           if (err instanceof ApiError && err.status === 401) {
             setAuthError(true);
           } else {
@@ -53,7 +51,13 @@ export function ProjectListProvider({ children }: { children: ReactNode }) {
             );
           }
         }
-      });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadProjects();
     return () => {
       cancelled = true;
     };

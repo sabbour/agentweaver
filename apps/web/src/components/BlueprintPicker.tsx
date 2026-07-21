@@ -197,19 +197,23 @@ function useBlueprintCatalog(active: boolean) {
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    apiClient.listBlueprints()
-      .then((list) => {
+    const loadBlueprints = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const list = await apiClient.listBlueprints();
         if (cancelled) return;
         setBlueprints(normalizeBlueprintList(list));
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadBlueprints();
     return () => { cancelled = true; };
   }, [active]);
 
@@ -487,13 +491,31 @@ export function SuggestedBlueprintPanel({
   const normalizedRepo = repository.trim();
 
   useEffect(() => {
-    if (!active || !normalizedRepo) { setSuggestion(null); return; }
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    apiClient.suggestBlueprint(normalizedRepo)
-      .then((res) => { if (!cancelled) { setSuggestion(res); setLoading(false); } })
-      .catch((err: unknown) => { if (!cancelled) { setError(err instanceof Error ? err.message : String(err)); setSuggestion(null); setLoading(false); } });
+    const loadSuggestion = async () => {
+      if (!active || !normalizedRepo) {
+        setSuggestion(null);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await apiClient.suggestBlueprint(normalizedRepo);
+        if (!cancelled) {
+          setSuggestion(res);
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setSuggestion(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadSuggestion();
     return () => { cancelled = true; };
   }, [active, normalizedRepo]);
 
@@ -612,11 +634,8 @@ export function BlueprintPanel({
 }) {
   const styles = useStyles();
   const catalog = useBlueprintCatalog(active);
-  const [selectedTab, setSelectedTab] = useState<BlueprintPanelTab>(tabs[0]);
-
-  useEffect(() => {
-    if (!tabs.includes(selectedTab)) setSelectedTab(tabs[0]);
-  }, [selectedTab, tabs]);
+  const [selectedTabState, setSelectedTab] = useState<BlueprintPanelTab>(tabs[0]);
+  const selectedTab = tabs.includes(selectedTabState) ? selectedTabState : tabs[0];
 
   const viewTemplates = () => setSelectedTab('templates');
   const viewGenerate = () => setSelectedTab('generate');
@@ -689,4 +708,3 @@ export function BlueprintPicker({ active, value, onChange, targetRepository }: {
     />
   );
 }
-

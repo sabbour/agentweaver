@@ -48,7 +48,7 @@ import {
   PageHeader,
 } from '../components/ui';
 import { collectFilesFromDataTransfer, supportsEntryApi } from '../utils/skillDrop';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type {
   BlueprintSkillDefaultsPreviewResponse,
@@ -267,11 +267,10 @@ export function SkillsPage() {
   const defaultsApplyPreviews = useRef(new Map<string, BlueprintSkillDefaultsPreviewResponse>());
   const defaultsTransportSequence = useRef(0);
   const defaultsBusyProject = useRef<string | null>(null);
+  const lastDefaultsProjectId = useRef(projectId);
   const defaultsTriggerRef = useRef<HTMLButtonElement>(null);
   const defaultsCloseButtonRef = useRef<HTMLButtonElement>(null);
   const restoreDefaultsFocus = useRef(false);
-
-  currentProjectId.current = projectId;
 
   const mdFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -281,17 +280,30 @@ export function SkillsPage() {
     setReloadKey((k) => k + 1);
   }, []);
 
+  useLayoutEffect(() => {
+    currentProjectId.current = projectId;
+  }, [projectId]);
+
   useEffect(() => {
     if (!projectId) return;
-    setLoading(true);
-    setLoadError(null);
-    Promise.all([
-      apiClient.listSkills(projectId),
-      apiClient.getTeam(projectId).then((t) => t.members).catch(() => [] as TeamMemberDto[]),
-    ])
-      .then(([s, m]) => { setSkills(s); setMembers(m); })
-      .catch((err: unknown) => { setSkills([]); setLoadError(formatApiError(err)); })
-      .finally(() => setLoading(false));
+    const loadSkills = async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const [s, m] = await Promise.all([
+          apiClient.listSkills(projectId),
+          apiClient.getTeam(projectId).then((t) => t.members).catch(() => [] as TeamMemberDto[]),
+        ]);
+        setSkills(s);
+        setMembers(m);
+      } catch (err: unknown) {
+        setSkills([]);
+        setLoadError(formatApiError(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadSkills();
   }, [projectId, reloadKey]);
 
   const runAcquisition = async (label: string, action: () => Promise<SkillAcquisitionResponse>) => {
@@ -345,7 +357,11 @@ export function SkillsPage() {
     }
   }, [busy, defaultsOpen]);
 
-  useEffect(() => {
+  // This layout effect reconciles the modal with route-driven project changes before paint so
+  // navigating between projects cannot flash stale defaults UI or lose an in-flight apply restore.
+  useLayoutEffect(() => {
+    if (lastDefaultsProjectId.current === projectId) return;
+    lastDefaultsProjectId.current = projectId;
     closeDefaults(false);
     setNotice(null);
     if (projectId && defaultsApplyTransports.current.has(projectId)) {
@@ -362,18 +378,19 @@ export function SkillsPage() {
   useEffect(() => {
     if (!projectId) return;
     let current = true;
-    setDefaultsProject(null);
-    setDefaultsProjectResolved(false);
-    void apiClient.getProject(projectId)
-      .then((project) => {
+    const loadDefaultsProject = async () => {
+      setDefaultsProject(null);
+      setDefaultsProjectResolved(false);
+      try {
+        const project = await apiClient.getProject(projectId);
         if (current) setDefaultsProject(project);
-      })
-      .catch(() => {
+      } catch {
         // A preview refreshes metadata before it calls the defaults endpoint.
-      })
-      .finally(() => {
+      } finally {
         if (current) setDefaultsProjectResolved(true);
-      });
+      }
+    };
+    void loadDefaultsProject();
     return () => { current = false; };
   }, [projectId]);
 

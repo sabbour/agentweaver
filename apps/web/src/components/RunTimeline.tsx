@@ -25,7 +25,7 @@ import {
   WrenchRegular,
 } from '@fluentui/react-icons';
 import { SafeMarkdown } from './SafeMarkdown';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Body, EmptyState, Label } from './ui';
 import type {
@@ -701,12 +701,16 @@ export function RunTimeline({
   // open items ourselves and auto-open any step id we haven't seen before, while still letting a
   // user manually collapse a step (we only ever ADD ids here, never remove one the user closed).
   const [openItems, setOpenItems] = useState<string[]>(() => steps.map((s) => s.id));
-  const knownStepIds = useRef(new Set(steps.map((s) => s.id)));
-  const newIds = steps.map((s) => s.id).filter((id) => !knownStepIds.current.has(id));
-  if (newIds.length > 0) {
-    newIds.forEach((id) => knownStepIds.current.add(id));
-    setOpenItems((prev) => [...prev, ...newIds]);
-  }
+  useEffect(() => {
+    const syncOpenItems = async () => {
+      setOpenItems((prev) => {
+        const known = new Set(prev);
+        const newIds = steps.map((s) => s.id).filter((id) => !known.has(id));
+        return newIds.length > 0 ? [...prev, ...newIds] : prev;
+      });
+    };
+    void syncOpenItems();
+  }, [steps]);
 
   // Mirrors the old `defaultExpanded` behavior: the "Messages · N steps" toggle starts open
   // and the user can collapse the whole activities list independently of individual steps.
