@@ -381,3 +381,29 @@ The smoke script (scripts/mcp-harness/smoke/mcp-cli-smoke.mjs) had no logic to h
 - status: fixed
 
 generated-artifacts-seam (kind: 'generation-seam') is a structural, non-persona scenario -- loadPersona() correctly returns null for it. run-persona.mjs previously set metadata.adapterVersion/personaCoreVersion to null in that case, which failed scripts/harness-judge/core.mjs validateEvidenceShape (REQUIRED_JOIN_KEY_FIELDS requires non-empty strings for every surface), crashing with 'invalid normalized evidence: metadata.adapterVersion/personaCoreVersion must be a non-empty string' instead of producing a verdict. Fixed by falling back to the same 'unknown' sentinel already used for this exact no-persona case in scripts/mcp-harness/run-persona.mjs (adapterVersion/personaCoreVersion) and scripts/ui-harness/agent-driver-ui/tools.mjs (targetRevision), via a new NO_PERSONA_VERSION_SENTINEL constant in scripts/api-harness/run-persona.mjs. Real persona scenarios are unaffected -- they still report their genuine content-hash-derived versions; the shared verdict-schema.mjs validation itself was left unchanged.
+
+---
+
+## Staging Operator Assistant binds AgentHost but fails on A2A None stream event before any tool call
+
+- date: 2026-07-21
+- category: bug
+- surface: api
+- status: fixed (PR #376)
+
+Verified live against staging on 2026-07-21 immediately after the McpEndpoint/network-policy hotfix (PR #375). POST /api/assistant/runs with an initial message, and POST /api/assistant/runs/{id}/messages on an empty run, both now create/bind real Operator runs and warm AgentHost pods (events include sandbox.execution_pod.bound; AgentHost log shows /configure for purpose=OperatorAssistant) with NO observed 'AgentHost:McpEndpoint must be configured' errors in recent AgentHost logs. However the first turn still fails before any tool.call/tool.result event with run.error agenthost_unavailable: RemoteAgentProxy rejects an unsupported A2A stream event 'None' ('Only message, task, task update events are supported from A2A agents. Received: None'). Example run ids: 5ce61ce2-7590-4583-b4d7-e11c5d390751, ca8906f1-d423-483c-9b48-3d1dd24e3411, aa36d689-3b14-4b65-bd3a-8d5d900a17de.
+
+Root cause: `A2ATurnBridgeAgent` (DelegatingAIAgent wrapping the singleton `CopilotAIAgent`) never overrode session creation, so MAF's A2A session store called `CopilotAIAgent.CreateSessionCoreAsync` on every new message regardless of `AgentHostPurpose` -- and `AgentHostStartupService` deliberately skips `CopilotAIAgent.SetupAsync` for `OperatorAssistant` purpose, so it threw `SetupAsync must be called before CreateSessionAsync` before every turn, which the A2A proxy then surfaced as the bare, unclassified `Received: None` stream event. Fixed in PR #376 (`apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs`): `CreateSessionCoreAsync` now bypasses the inner agent for `OperatorAssistant` purpose.
+
+**Re-verified live on 2026-07-21 (post redeploy of commit `4f57729b861f`)** via a dedicated Harness/PersonaActor E2E run (Oracle persona) cross-checked directly against AgentHost pod logs (not just API responses): confirmed pod logs now show `AgentHostStartupService: operator assistant purpose configured...; skipping sandbox provisioning` -> `RemoteAgentProxy: SetupAsync complete` with **no exception**, and the bare `Received: None` error did not reproduce in any of 3 runs. This specific defect is CONFIRMED FIXED. See the new entry below for a *different*, still-open bug (NetworkPolicy egress) that now blocks Operator Assistant end-to-end for an unrelated reason.
+
+---
+
+## Staging Operator Assistant still non-functional end-to-end: AgentHost cannot reach in-cluster MCP service (NetworkPolicy egress gap)
+
+- date: 2026-07-21
+- category: bug
+- surface: api
+- status: open
+
+Discovered while re-verifying the PR #376 SetupAsync fix (see entry above) against a fresh staging redeploy of commit `4f57729b861f`. With the original bare `Received: None` bug confirmed fixed, Operator Assistant first turns still fail 100% (3/3 runs), now with a different, structured error: `agenthost_unavailable` / `ProviderUnavailable` / "Initialization timed out". Root cause confirmed via direct `kubectl exec ... curl` from a live AgentHost pod to the in-cluster MCP service: both the DNS name (`agentweaver-mcp`) and the ClusterIP (`10.0.215.29:8080`) time out at the TCP layer (curl exit 28) -- `AgentweaverMcpToolProvider.ConnectAsync` -> `McpClient.ConnectAsync` blocks for ~60s before failing. Two NetworkPolicies selecting agent-host pods (`agenthost-egress-allowlist`, `agentweaver-agent-host-network-policy`) explicitly exclude `10.0.0.0/8` (which contains the MCP ClusterIP) from egress. A third, more permissive policy (`sandbox-egress-allowlist`) also selects the same pods but does not appear to actually permit the traffic in practice -- the precedence/interaction between these 3 overlapping NetworkPolicies is unclear and needs investigation. Net effect: Operator Assistant is completely non-functional end-to-end on staging, purely due to this network policy gap (unrelated to PR #376's session-creation fix, which is independently confirmed working). Example failing run ids: `0c3dd3bc-1ee7-4c6e-9ead-67ea51312d7e`, `4338a887-c072-47f9-a98f-e9d6f6d88d48`, `820aaff3-20fa-46ba-a783-8726fe0d4f5d`. Evidence: `scripts/api-harness/verdicts/agenthost-fix-validation-evidence.json`, `scripts/api-harness/verdicts/agenthost-fix-validation-verdict.json`.
