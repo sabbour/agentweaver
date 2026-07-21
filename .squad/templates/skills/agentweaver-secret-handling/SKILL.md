@@ -1,5 +1,5 @@
 ---
-name: secret-handling
+name: agentweaver-secret-handling
 description: Never read .env files or write secrets to .squad/ committed files
 domain: security, file-operations, team-collaboration
 confidence: high

@@ -1,5 +1,5 @@
 ---
-name: "session-recovery"
+name: "agentweaver-session-recovery"
 description: "Find and resume interrupted Copilot CLI sessions using session_store queries"
 domain: "workflow-recovery"
 confidence: "high"

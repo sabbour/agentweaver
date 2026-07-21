@@ -1,5 +1,5 @@
 ---
-name: "reviewer-protocol"
+name: "agentweaver-reviewer-protocol"
 description: "Reviewer rejection workflow and strict lockout semantics"
 domain: "orchestration"
 confidence: "high"

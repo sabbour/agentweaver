@@ -1,5 +1,5 @@
 ---
-name: "test-discipline"
+name: "agentweaver-test-discipline"
 description: "Update tests when changing APIs — no exceptions"
 domain: "quality"
 confidence: "high"
