@@ -16,6 +16,7 @@ namespace Agentweaver.Tests.Sandbox;
 public sealed class AgentPreviewGateTests
 {
     private const string RunId = "run-preview-1";
+    private static readonly TimeSpan ExpirationTimeout = TimeSpan.FromMilliseconds(250);
 
     private static AgentPreviewGate CreateGate(
         bool autoApproveConfigured,
@@ -106,7 +107,7 @@ public sealed class AgentPreviewGateTests
     public async Task RequestApproval_Timeout_ReturnsDenied()
     {
         var gate = CreateGate(autoApproveConfigured: false, out _, out _, out _,
-            timeout: TimeSpan.FromMilliseconds(50));
+            timeout: ExpirationTimeout);
 
         var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
 
