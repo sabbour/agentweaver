@@ -24,6 +24,61 @@ AGENTWEAVER_API_URL=http://localhost:5000
 
 The `.mcp.json` at the repository root registers the server automatically for MCP hosts that support auto-discovery (Copilot CLI ≥1.0.59 and equivalents). No manual registration is required beyond setting the environment variable.
 
+### Using with GitHub Copilot CLI
+
+**Local (stdio), working in this repo.** No setup beyond the environment variable above —
+`copilot` auto-discovers the workspace `.mcp.json` and starts
+`dotnet run --project apps/Agentweaver.Mcp -- --stdio` on demand. Confirm the tools are
+live with `copilot mcp list` or `/mcp` inside an interactive session.
+
+**Hosted/remote (HTTP), e.g. a staging or production deployment.** Register the server
+explicitly with a bearer token, since there is no `.mcp.json` entry for a remote host:
+
+```bash
+copilot mcp add aw-remote \
+  --transport http \
+  --url https://<your-agentweaver-host>/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+Use `copilot mcp get aw-remote` / `copilot mcp remove aw-remote` to inspect or remove it.
+This registration is saved to `~/.copilot/mcp-config.json` and persists across sessions.
+
+**Session-scoped override**, e.g. for a one-off run against a different host without
+touching persisted config, use `--additional-mcp-config` with an inline JSON string or an
+`@<path-to-json>` file:
+
+```bash
+copilot -p "..." --allow-all-tools --additional-mcp-config @aw-mcp-config.json
+```
+
+```json
+{
+  "mcpServers": {
+    "aw-remote": {
+      "type": "http",
+      "url": "https://<your-agentweaver-host>/mcp",
+      "headers": { "Authorization": "Bearer <token>" },
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+`--additional-mcp-config` augments (does not replace) whatever config already exists for
+that session only.
+
+::: tip Server-name collisions
+Copilot CLI resolves MCP servers by **name**, merging `~/.copilot/mcp-config.json` (user),
+`.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in that
+order. If your personal `~/.copilot/settings.json` has `agentweaver` listed under
+`disabledMcpServers` (e.g. because you disabled the workspace stdio server), naming a
+session override `agentweaver` will be silently skipped — check
+`~/.copilot/logs/process-*.log` for `Skipping disabled MCP server: <name>` if a
+registered server discovers zero tools. Use a distinct name (like `aw-remote` above) to
+avoid the collision.
+:::
+
 ## Authentication
 
 The MCP server forwards every tool call to the Agentweaver API as an authenticated HTTP request using a **bearer token** (`Authorization: Bearer <key>`).
