@@ -12,26 +12,27 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 
 ## Component diagram
 
-![AKS component diagram (simplified overview): Client through the Gateway to Frontend, API, MCP; API and Worker to the AgentHost warm pool; shared Workspace PVC and CSI SecretProviderClass; PostgreSQL, Key Vault, ACR, and GitHub](../diagrams/aks-component-simplified.svg)
+![AKS component diagram (simplified overview): Client through the Gateway to Frontend, API, MCP; API and Worker to the AgentHost warm pool; shared Workspace PVC and CSI SecretProviderClass; PostgreSQL, Key Vault, ACR, and GitHub](../diagrams/aks-component-simplified.png)
 
 <!--
-  Pre-rendered from ../diagrams/specs/aks-component-simplified.json (React Flow +
-  dagre layout) -- GitHub's live Mermaid renderer clipped long subgraph/node
-  labels on this diagram. To edit: change the JSON source, run
-  `npm run docs:render-diagrams`, and commit the regenerated SVG. CI fails if
-  the SVG's source hash drifts from docs/diagrams/manifest.json.
+  Pre-rendered as a static PNG from ../diagrams/src/aks-component-simplified.json
+  by docs/diagram-renderer (a Fluent-styled React Flow app) + Playwright, so
+  it matches the same card/icon/badge look used live in the product UI
+  instead of generic Mermaid/mermaid-cli output. To edit: change the
+  graph-spec JSON, run `npm run docs:render-diagrams`, and commit the
+  regenerated PNG + .hash.txt. CI fails if the spec's content hash drifts
+  from the committed .hash.txt (see scripts/docs/capture-diagrams.mjs).
 -->
 
 > This is a simplified overview. See the detailed diagram below for the full request/data flow.
 
-![AKS component diagram (detailed): full request/data flow between the Browser/AI client, AKS Gateway, Frontend, API, Worker, MCP, the Kata VM AgentHost warm pool, Workspace PVC, CSI SecretProviderClass, Azure Key Vault, Azure PostgreSQL, Azure Container Registry, and GitHub](../diagrams/aks-component-detailed.svg)
+![AKS component diagram (detailed): full request/data flow between the Browser/AI client, AKS Gateway, Frontend, API, Worker, MCP, the Kata VM AgentHost warm pool, Workspace PVC, CSI SecretProviderClass, Azure Key Vault, Azure PostgreSQL, Azure Container Registry, and GitHub](../diagrams/aks-component-detailed.png)
 
 <!--
-  Pre-rendered from ../diagrams/specs/aks-component-detailed.json -- same
-  clipping issue as above, at even greater severity given this diagram's
-  size. To edit: change the JSON source, run `npm run docs:render-diagrams`,
-  and commit the regenerated SVG. CI fails if the SVG's source hash drifts
-  from docs/diagrams/manifest.json.
+  Pre-rendered the same way as the simplified diagram above, from
+  ../diagrams/src/aks-component-detailed.json. To edit: change the
+  graph-spec JSON, run `npm run docs:render-diagrams`, and commit the
+  regenerated PNG + .hash.txt.
 -->
 
 ---

@@ -373,15 +373,16 @@ project's maintained harness workflows:
 
 ### Block diagram
 
-![AKS block diagram: Client and GitHub reach the AKS Cluster's core services (Frontend, API, Worker, MCP), which use the Kata VM Pool AgentHost warm pool, shared storage (Workspace PVC, CSI SecretProvider), PostgreSQL, Key Vault, and ACR](docs/diagrams/aks-block-diagram.svg)
+![AKS block diagram: Client and GitHub reach the AKS Cluster's core services (Frontend, API, Worker, MCP), which use the Kata VM Pool AgentHost warm pool, shared storage (Workspace PVC, CSI SecretProvider), PostgreSQL, Key Vault, and ACR](docs/diagrams/aks-block-diagram.png)
 
 <!--
-  This diagram is pre-rendered from docs/diagrams/specs/aks-block-diagram.json
-  (React Flow + dagre layout) to a static SVG, because GitHub's live Mermaid
-  renderer clipped long subgraph and node labels on this diagram (e.g.
-  "AKS Cluster" -> "AKS Cluste"). To edit the diagram: change the JSON source,
-  then run `npm run docs:render-diagrams` and commit the regenerated SVG.
-  CI fails if the SVG's source hash drifts from docs/diagrams/manifest.json.
+  Pre-rendered as a static PNG from docs/diagrams/src/aks-block-diagram.json
+  by docs/diagram-renderer (a Fluent-styled React Flow app) + Playwright, so
+  it matches the same card/icon/badge look used live in the product UI
+  instead of generic Mermaid/mermaid-cli output. To edit the diagram: change
+  the graph-spec JSON, then run `npm run docs:render-diagrams` and commit the
+  regenerated PNG + .hash.txt. CI fails if the spec's content hash drifts from
+  the committed .hash.txt (see scripts/docs/capture-diagrams.mjs).
 -->
 
 > Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/guide/architecture-aks.md)

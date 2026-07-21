@@ -80,6 +80,7 @@ jobs:
               - '.github/workflows/**'
             diagrams:
               - 'docs/diagrams/**'
+              - 'docs/diagram-renderer/**'
               - 'README.md'
               - 'docs/guide/architecture-aks.md'
               - 'scripts/docs/**'
@@ -219,12 +220,18 @@ jobs:
         run: npm ci
 
       # README.md's "Block diagram" and architecture-aks.md's "Component
-      # diagram" are pre-rendered from docs/diagrams/specs/*.json (React Flow +
-      # dagre layout) to static SVG (GitHub's live Mermaid renderer clipped
-      # long subgraph/node labels on those diagrams). This check is a pure
-      # SHA-256 hash comparison against docs/diagrams/manifest.json -- no
-      # rendering/browser involved -- so it can't drift between OSes; it
-      # fails if a source JSON was edited without regenerating its SVG.
+      # diagram"s are pre-rendered as static PNGs from Fluent-styled React
+      # Flow graph-specs (docs/diagrams/src/*.json) via docs/diagram-renderer
+      # + Playwright, so they match the same card/icon/badge look used live
+      # in the product UI instead of generic Mermaid/mermaid-cli output. This
+      # check only compares each spec's content hash against the committed
+      # <name>.hash.txt sidecar -- it deliberately does NOT re-render and
+      # diff pixels/SVG geometry, since that approach (used by an earlier
+      # mermaid-cli version of this pipeline) broke across OSes: rendering
+      # geometry depends on the host's installed font metrics, which differ
+      # between Windows and Linux even for byte-identical input. A hash
+      # check only fails when the spec's actual content (nodes/edges/labels)
+      # changed since the PNG was last built, and needs no browser here.
       - name: Check rendered diagrams match source
         run: npm run docs:check-diagrams
 

@@ -1,0 +1,27 @@
+{
+  "name": "@agentweaver/diagram-renderer",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Standalone Vite + React Flow app that renders docs/diagrams/src/*.json graph-specs as Fluent-styled node/edge diagrams for headless capture by scripts/docs/capture-diagrams.mjs. Not part of the shipped product build.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --strictPort --port 4173"
+  },
+  "dependencies": {
+    "@fluentui/react-icons": "^2.0.245",
+    "@xyflow/react": "^12.11.0",
+    "dagre": "^0.8.5",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@types/dagre": "^0.7.53",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.12"
+  }
+}
