@@ -1,4 +1,4 @@
-// deploy.mjs -- The `azure:deploy` interactive smart installer, replacing
+// provision-infra.mjs -- The `azure:provision-infra` interactive smart installer, replacing
 // install.sh/install.ps1. Faithful behavior parity for the underlying steps
 // and their pipeline ordering; the prompt-driven UX itself is new (not a 1:1
 // script port), per specs/006-memory-and-decision-inbox/plan.md's P5 scope.
@@ -7,8 +7,8 @@
 // checks + npm/dotnet restore, no Azure calls at all) lives in dev.mjs's
 // `--setup` flag (`npm run setup` / `node scripts/azure/cli.mjs dev
 // --setup`) instead -- it was originally a `--local` flag here, but nesting
-// a "skip Azure entirely" mode under the `azure:deploy` command was
-// confusing (deploy.mjs's own name says Azure). dev.mjs is already the
+// a "skip Azure entirely" mode under the `azure:provision-infra` command was
+// confusing (provision-infra.mjs's own name says Azure infrastructure). dev.mjs is already the
 // canonical "local dev" entry point, so local setup belongs there.
 //
 // MODES:
@@ -30,7 +30,7 @@
 //            pipeline's ordering an honest, literal match of install.sh's
 //            documented step order.)
 //
-// INTERACTIVE SMART INSTALLER: triggered only when `deploy` is invoked with
+// INTERACTIVE SMART INSTALLER: triggered only when `provision-infra` is invoked with
 // NO CLI arguments at all AND stdin/stdout are a TTY (prompt.isInteractive()).
 // It prompts for Azure subscription (lib/az.mjs, current default shown
 // first), resource group (existing list, or "Create new..."), location
@@ -73,7 +73,7 @@ import * as deployStepDefault from "./steps/30-deploy.mjs";
 import * as verifyStepDefault from "./steps/40-verify.mjs";
 
 /**
- * Parses `deploy` subcommand argv into a flags object plus a paramsFile path.
+ * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
  * Recognizes: --skip-postgres, --skip-oauth-key, --image-tag <tag>
  * (or --image-tag=<tag>), --params-file/--config <path>, --resource-group,
  * --cluster-name, --acr-name, --location, --keyvault-name, --namespace,
@@ -142,18 +142,18 @@ export function parseArgs(argv = []) {
       flags.GITHUB_CLIENT_SECRET = value;
       i += consumed;
     } else {
-      throw new Error(`Unknown argument: ${arg}. Run 'deploy --help' for usage.`);
+      throw new Error(`Unknown argument: ${arg}. Run 'provision-infra --help' for usage.`);
     }
   }
 
   return { flags, paramsFile, help };
 }
 
-export const HELP_TEXT = `deploy -- Agentweaver Azure installer (replaces install.sh/install.ps1's install_aks())
+export const HELP_TEXT = `provision-infra -- Agentweaver Azure infrastructure installer (replaces install.sh/install.ps1's install_aks())
 
 Usage:
-  node scripts/azure/cli.mjs deploy                 Interactive smart installer (TTY only)
-  node scripts/azure/cli.mjs deploy [flags]          Non-interactive Azure deploy
+  node scripts/azure/cli.mjs provision-infra                 Interactive smart installer (TTY only)
+  node scripts/azure/cli.mjs provision-infra [flags]          Non-interactive Azure deploy
 
 Local dev environment setup (no Azure) lives under 'dev --setup' instead:
   node scripts/azure/cli.mjs dev --setup             Checks prereqs, installs deps (no Azure)
@@ -264,16 +264,16 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   return collected;
 }
 
-/** True only when `deploy` was invoked with zero CLI arguments and a TTY is available. */
+/** True only when `provision-infra` was invoked with zero CLI arguments and a TTY is available. */
 export function shouldRunInteractiveInstaller(argv, { prompt = promptDefault } = {}) {
   return argv.length === 0 && prompt.isInteractive();
 }
 
 /**
- * Main entry point for the `deploy` subcommand.
+ * Main entry point for the `provision-infra` subcommand.
  *
  * @param {object} [opts]
- * @param {string[]} [opts.argv] Raw CLI args following `deploy` (defaults to none).
+ * @param {string[]} [opts.argv] Raw CLI args following `provision-infra` (defaults to none).
  * @param {Record<string,string>} [opts.env] Defaults to process.env.
  * @param {string} [opts.repoRoot] Defaults to DEFAULT_REPO_ROOT.
  * @param {typeof promptDefault} [opts.prompt]

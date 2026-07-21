@@ -60,6 +60,21 @@ squad/{issue-number}-{kebab-case-slug}
 6. After confirming the above, squash-merge.
 7. Remove a local agent worktree after merge.
 
+## Release and Deployment Identity
+
+- `release:prepare` generates version metadata on `release/vX.Y.Z`.
+- `release:publish` runs only from the exact promoted `main` SHA and creates
+  the annotated tag plus GitHub Release; it performs no Azure deployment.
+- `azure:deploy-from-release -- vX.Y.Z` requires an existing published tag
+  and a clean checkout at that tag commit.
+- `azure:deploy-from-local` ships the current local HEAD under a short-SHA
+  image identifier and never creates release identity.
+- `azure:deploy-from-commit -- <sha-or-ref>` deploys any exact committed ref
+  through a temporary detached worktree without switching the caller's checkout.
+- `azure:provision-infra` is the full Azure infrastructure installer and
+  reconciler, not the command for deploying a published release.
+- `azure:release` composes publication and the first release deployment.
+
 ## Anti-Patterns
 
 - ❌ Branching from or opening a normal PR to `main`

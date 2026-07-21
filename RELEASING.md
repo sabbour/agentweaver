@@ -1,95 +1,137 @@
 # Releasing Agentweaver
 
-Agentweaver uses a protected `dev → release/vX.Y.Z → main` promotion flow. Azure deploys from arbitrary SHAs for validation; only an exact protected-`main` SHA becomes a stable tagged release.
+Agentweaver uses a protected `dev → release/vX.Y.Z → main` promotion flow.
+Repository release identity and Azure deployment are separate operations.
 
-## Deploying is not releasing
+## Command model
 
-| Command | Purpose | Release artifacts |
+| Command | Identifier | Purpose |
 |---|---|---|
-| `npm run azure:deploy` / `npm run azure:upgrade` | Dev/test Azure deployment of a SHA | None; changesets are never consumed. |
-| `npm run azure:verify` | Read-only deployment verification | None. |
-| `npm run azure:release` | Publish a prepared release from exact `origin/main` | Annotated tag, GitHub Release, build/deploy/verify. |
+| `npm run azure:provision-infra` | Current HEAD short SHA by default | Provision or reconcile Azure infrastructure and perform its initial deployment. |
+| `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
+| `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
+| `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag and GitHub Release from the exact protected-`main` SHA. No Azure work. |
+| `npm run azure:deploy-from-release -- vX.Y.Z` | Existing published semver tag | Build/retag and deploy that exact release to the configured environment. |
+| `npm run azure:release` | Prepared `vX.Y.Z` | First-shipment convenience command: publish, then deploy the same release. |
+| `npm run azure:verify` | Running environment | Read-only health verification. |
+
+```text
+local HEAD SHA
+  └─ azure:deploy-from-local
+       └─ image:<short-SHA> → running dev/test environment
+
+arbitrary branch / PR tip / commit
+  └─ azure:deploy-from-commit -- <sha-or-ref>
+       └─ detached exact-commit worktree → image:<short-SHA> → running environment
+
+prepared exact main SHA
+  └─ release:publish
+       └─ annotated vX.Y.Z tag + GitHub Release
+            └─ azure:deploy-from-release -- vX.Y.Z
+                 └─ image:vX.Y.Z → running versioned environment
+```
 
 ## Versioning
 
-`VERSION` remains the product version. The root private `agentweaver` package is Changesets' single package adapter; `package.json.version` and `package-lock.json.packages[""].version` must always equal `VERSION`. Run `npm run version:check` to verify this invariant. Do not add workspaces or change `apps/web`'s decorative version.
+`VERSION` remains the product version. The root private `agentweaver` package is
+Changesets' single-package adapter; `package.json.version` and
+`package-lock.json.packages[""].version` must always equal `VERSION`. Run
+`npm run version:check` to verify this invariant.
 
-At `0.x`, use a `patch` changeset only for compatible fixes and a `minor` changeset for features or breaking changes. `major` is reserved for the deliberate `release/v1.0.0` transition. Contributors add intent with `npm run changeset`; only `npm run release:prepare` changes version mirrors or `CHANGELOG.md`.
+At `0.x`, use a `patch` changeset for compatible fixes and a `minor` changeset
+for features or breaking changes. `major` is reserved for the deliberate
+`release/v1.0.0` transition. Contributors add intent with `npm run changeset`;
+only `npm run release:prepare` changes version mirrors or `CHANGELOG.md`.
 
-## Changelog and GitHub Release notes
+`CHANGELOG.md` is durable repository history. GitHub Release notes are copied
+from its exact matching section; do not run another changelog generator.
 
-| Artifact | Role | Source |
-|---|---|---|
-| `CHANGELOG.md` | Durable in-repository history | Changesets fragments consumed by `release:prepare` |
-| GitHub Release notes | Per-release Releases UI projection | Exact matching `CHANGELOG.md` section |
+## Preparing a release
 
-Changesets replaces the former commit/PR-title reconstruction process. Do not run another changelog generator after tagging.
+1. Select a green `dev` SHA and run `npm run changeset:status` plus
+   `npm run release:plan`.
+2. Create `release/vX.Y.Z` from that SHA and soak it.
+3. On the clean release branch run:
 
-## Before you cut a release
+   ```bash
+   npm run release:prepare -- --expected X.Y.Z
+   ```
 
-Select a green `dev` SHA, then run `npm run changeset:status` and `npm run release:plan`. The planned version determines the provisional `release/vX.Y.Z` branch name. Keep the publication checkout clean.
+4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
+   fragments as `chore(release): prepare vX.Y.Z`.
+5. Promote the prepared branch to `main` through a green PR.
 
-## Cutting a release
+## Publishing and deploying
 
-1. Create and push `release/vX.Y.Z` from the selected green `origin/dev` SHA.
-2. Soak it; stabilization PRs include changesets when user-facing and are immediately forward-ported to `dev`.
-3. On the clean release branch run `npm run release:prepare -- --expected X.Y.Z`, review the generated metadata, commit it as `chore(release): prepare vX.Y.Z`, and record that preparation SHA.
-4. Promote the prepared branch to `main` through a green PR and squash-merge; record the exact resulting `main` SHA.
-5. From a clean checkout at that exact SHA run `npm run azure:release` (or its `release:stable` alias). It validates the prepared mirrors/changelog, tags, creates the GitHub Release, then builds, deploys, and verifies. It accepts no bump argument and never commits version files.
-6. Before deleting the release branch, create a short-lived branch from current `dev` and run `npm run release:sync-dev -- <prepare-sha>`; merge its PR so the prepared version/changelog and consumed fragments return to `dev` without deleting newer fragments.
-
-## If a release fails partway through
-
-Preparation and publication are separate. If preparation fails, fix the release branch or re-cut it; do not hand-edit generated metadata. If tag/release/deploy work fails after preparation, retain the same clean exact-`main` checkout and run `npm run azure:release -- --resume vX.Y.Z` (use `--dry-run` to preview). Resume validates the prepared version and tag and never versions again; it can create a missing GitHub Release before completing build/deploy/verify.
-## Upgrading a running environment (no version bump)
-
-`upgrade` is for shipping a code change to a live environment (e.g. staging) **without**
-cutting a semver release — it's the day-to-day "ship what's on `HEAD`" command:
+From a clean checkout at the exact resulting `origin/main` SHA:
 
 ```bash
-npm run azure:upgrade
-npm run azure:upgrade -- --allow-dirty   # dev/test escape hatch only -- never for real upgrades
+# Repository identity only: tag + GitHub Release, no Azure deployment
+npm run release:publish
+
+# Deploy that already-published release now or later
+npm run azure:deploy-from-release -- vX.Y.Z
 ```
 
-Key differences from `release`:
-- Mints a **new immutable image tag from the current HEAD short git SHA** — it never
-  reuses `VERSION`'s semver tag (that belongs to `release` only). Reusing it can cause
-  the image build step to no-op the build-vs-retag decision and ship a stale image.
-- **Refuses a dirty working tree by default** — fails fast with an actionable error.
-  `--allow-dirty` is an explicit opt-in for local dev/testing, never for a real upgrade.
-- Runs deploy **before** provenance verification (`steps/25` is a post-deploy safety net
-  that checks the digest actually running live in the cluster — running it before
-  deploy always compares old live pods against the new target and falsely reports a
-  stale-image failure).
-- Cycles the AgentHost warm pool by **reapplying `SandboxTemplate`/`SandboxWarmPool` and
-  waiting** for `status.readyReplicas == spec.replicas` (timeout ~180s) — it never
-  manually deletes pods.
-
-The same "green CI on the commit you are shipping" convention applies to an `upgrade` that
-targets a shared or production environment; for a throwaway dev/test environment it is your
-call.
-
-## Other useful commands
+For the normal first shipment to the default environment, the composite command
+performs both operations:
 
 ```bash
-npm run azure:deploy    # first-time / idempotent deploy to a fresh or existing Azure environment
-npm run azure:verify    # post-deploy health/provenance verification only
-npm run azure:dev       # local dev orchestration (see npm run dev)
+npm run azure:release
 ```
 
-Run any command with `--help` for its full flag reference, and read the module header
-comment at the top of the corresponding `scripts/azure/*.mjs` file for the detailed
-design rationale and binding semantics behind its behavior — several non-obvious
-ordering/timing decisions (documented inline) exist specifically to avoid past
-regressions (e.g. the stale-image and warm-pool-teardown issues referenced above).
+The composite is resumable orchestration, not a transaction. If deployment
+fails after publication, the tag and GitHub Release remain durable:
 
-## After a release or upgrade ships
+```bash
+npm run azure:release -- --resume vX.Y.Z
+```
 
-- `release:prepare` has already generated the matching changelog section. Do not regenerate or hand-edit it after tagging.
-- Confirm the new tag/image is actually running in the target environment
-  (`npm run azure:verify`, or check via `kubectl`/Application Insights) before
-  considering any related GitHub issue closeable. Merging to `main`, tagging, or a
-  passing peer review alone are **not** sufficient — only live confirmation that the
-  commit has shipped counts.
-- If the release includes infra/schema changes, double-check `k8s/` manifests and EF
-  Core migrations were included in the tagged commit.
+To deploy the same release to another configured environment, check out the
+exact tag commit and run `azure:deploy-from-release` with that tag. The command
+requires a clean checkout whose `HEAD` equals the annotated tag, verifies that
+the GitHub Release and prepared metadata exist, and then builds/deploys/verifies
+the release without publishing anything new.
+
+Before deleting the release branch, create a short-lived branch from current
+`dev` and forward-port the preparation commit:
+
+```bash
+npm run release:sync-dev -- <release-preparation-sha>
+```
+
+## Local and infrastructure deployment
+
+Use `azure:provision-infra` for first/full idempotent infrastructure setup. Its
+default image identifier is the current HEAD short SHA, never the repository
+`VERSION`.
+
+Use `azure:deploy-from-local` for day-to-day deployment to an existing
+environment:
+
+```bash
+npm run azure:deploy-from-local
+npm run azure:deploy-from-local -- --allow-dirty
+```
+
+It mints a short-SHA image tag, builds, deploys, performs post-deploy provenance
+verification, reapplies and waits for the AgentHost warm pool, and never creates
+or consumes a semver release. `--allow-dirty` is only for personal/throwaway
+testing; the tag identifies the base HEAD commit, not uncommitted content.
+
+Use `azure:deploy-from-commit` to deploy an already-committed branch, PR tip, or
+older commit without switching the current checkout:
+
+```bash
+npm run azure:deploy-from-commit -- origin/teammate-branch
+npm run azure:deploy-from-commit -- pull/123/head
+npm run azure:deploy-from-commit -- abc1234
+```
+
+It fetches and resolves the argument to an exact commit, creates a temporary
+detached worktree, runs the same SHA deployment pipeline as
+`azure:deploy-from-local`, and removes the worktree afterward. It never includes
+uncommitted changes and has no dirty-tree override.
+
+After any deployment, use `npm run azure:verify` or inspect the cluster directly
+before considering the change shipped.

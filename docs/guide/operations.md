@@ -9,59 +9,29 @@ and individual-step instructions.
 
 ## Release Process
 
-Agentweaver uses [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`). The current version is tracked in the [`VERSION`](../../VERSION) file at the repo root. All container images and GitHub releases are tagged with this version.
+Agentweaver uses Changesets and the protected
+`dev → release/vX.Y.Z → main` flow. `release:prepare` generates the version
+mirrors and changelog on the release branch.
 
-### When to cut a release
-
-| Change type | Command |
-|---|---|
-| Bug fix | `npm run azure:release -- patch` |
-| New feature (backward-compatible) | `npm run azure:release -- minor` |
-| Breaking change | `npm run azure:release -- major` |
-
-### Prerequisites
-
-- Clean working tree (no uncommitted changes)
-- `gh` CLI authenticated (`gh auth status`)
-- `az` CLI authenticated with access to `agentweaverregistry` ACR
-- `kubectl` configured to point at the target cluster
-- `IDENTITY_CLIENT_ID` and `TENANT_ID` set (or exported) in your environment
-
-### Running a release
+From the exact promoted `main` SHA, publication and deployment are independent:
 
 ```bash
-# Patch release (e.g. 0.6.0 -> 0.6.1)
-npm run azure:release -- patch
-
-# Minor release (e.g. 0.6.0 -> 0.7.0)
-npm run azure:release -- minor
-
-# Major release (e.g. 0.6.0 -> 1.0.0)
-npm run azure:release -- major
+npm run release:publish
+npm run azure:deploy-from-release -- vX.Y.Z
 ```
 
-To preview actions without making changes:
+`release:publish` creates the annotated tag and GitHub Release only.
+`azure:deploy-from-release` requires that existing published tag, builds or
+retags its images, deploys them, and verifies the live environment.
+
+For the normal first shipment to the default environment:
 
 ```bash
-npm run azure:release -- patch --dry-run
+npm run azure:release
 ```
 
-### What `azure:release` does
-
-[`scripts/azure/release.mjs`](../../scripts/azure/release.mjs) (invoked via `node scripts/azure/cli.mjs release`) automates the full release cycle, delegating build/deploy/verify to the same step modules `azure:deploy` and `azure:upgrade` use:
-
-1. **Validates clean working tree** — aborts if there are uncommitted changes.
-2. **Bumps the version** — reads `VERSION`, increments the appropriate component, writes the new value.
-3. **Commits the version bump** — `chore(release): bump version to vX.Y.Z`.
-4. **Creates an annotated git tag** — `vX.Y.Z`.
-5. **Generates a changelog** — queries merged pull requests since the last release using `gh pr list`.
-6. **Creates a GitHub Release** — publishes the changelog to the GitHub Releases page via `gh release create`.
-7. **Identifies changed images** — compares file paths against the previous tag using `git diff`.
-8. **Builds changed images** — uses `az acr build` (no local Docker daemon required).
-9. **Retags unchanged images** — uses `az acr import` for a server-side copy (fast, no rebuild).
-10. **Deploys** — applies the release with its selected immutable image tag.
-11. **Verifies** — runs the post-deploy verification checks.
-12. **Pushes** — pushes the commit and tag to `origin`.
+This composes publication and deployment. It never calculates or commits a
+version. See [RELEASING.md](../../RELEASING.md) for preparation and recovery.
 
 ### Image tags
 
@@ -110,13 +80,11 @@ Each image is built with the following OCI labels:
 
 ## Rolling back a release
 
-To roll back to a previous version, redeploy with the old tag using
-`azure:deploy`'s `--image-tag` flag (the deploy pipeline is idempotent, so
-re-running it against an existing environment just redeploys/verifies rather
-than re-provisioning from scratch):
+To roll back to a previous published version, check out its exact tag commit and
+deploy that release:
 
 ```bash
-npm run azure:deploy -- --image-tag v0.6.0
+npm run azure:deploy-from-release -- v0.6.0
 ```
 
 All previous semver tags remain in ACR and are not deleted by the release process.
@@ -124,11 +92,17 @@ All previous semver tags remain in ACR and are not deleted by the release proces
 ## Manual image builds (development)
 
 To build and push images without cutting a release (e.g. for a staging
-environment), use `azure:upgrade`, which builds using the current git SHA as
+environment), use `azure:deploy-from-local`, which builds using the current git SHA as
 the tag and then redeploys:
 
 ```bash
-npm run azure:upgrade
+npm run azure:deploy-from-local
+```
+
+To deploy another committed ref without switching the current checkout:
+
+```bash
+npm run azure:deploy-from-commit -- <sha-or-ref>
 ```
 
 ## Observability notes
@@ -143,8 +117,11 @@ npm run azure:upgrade
 | Command | Purpose |
 |---|---|
 | `npm run azure:release` | Full semver release (see above) |
-| `npm run azure:deploy` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
-| `npm run azure:upgrade` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
+| `npm run release:publish` | Create the annotated tag and GitHub Release without deploying |
+| `npm run azure:deploy-from-release -- vX.Y.Z` | Deploy an existing published release |
+| `npm run azure:provision-infra` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
+| `npm run azure:deploy-from-local` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
+| `npm run azure:deploy-from-commit -- <sha-or-ref>` | Deploy an arbitrary exact commit through a temporary detached worktree |
 | `npm run azure:verify` | Verify the current deployment |
 
 Use `pnpm run` in place of `npm run` if pnpm is your selected package runner.
@@ -157,7 +134,7 @@ Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry 
 
 ### Provisioning monitoring resources
 
-Monitoring is provisioned as part of `npm run azure:deploy`. To rerun only
+Monitoring is provisioned as part of `npm run azure:provision-infra`. To rerun only
 that step, see the runbook's [individual-step section](./deployment-aks.md#running-an-individual-step)
 (`scripts/azure/steps/15-provision-monitoring.mjs`).
 
