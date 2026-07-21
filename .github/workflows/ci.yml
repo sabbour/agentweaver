@@ -12,6 +12,15 @@ name: CI
 #   - npm --prefix apps/web run test
 #   - npm --prefix apps/web run lint
 #   - npm run docs:build
+#
+# A `changes` job classifies the PR/push diff by path group first, and every
+# suite job below only runs `if:` its group actually changed (a change to this
+# workflow file itself always trips every group). A job whose `if:` is false is
+# reported to GitHub as "skipped", which required-status-checks rulesets treat
+# as passing, so this stays safe for branch protection while saving CI minutes
+# on diffs (e.g. docs-only PRs) that can't affect the skipped suites.
+# `Changeset advisory` always runs regardless of paths, since it must evaluate
+# every PR for whether a changeset was needed.
 
 on:
   pull_request:
@@ -28,8 +37,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      dotnet: ${{ steps.filter.outputs.dotnet }}
+      web: ${{ steps.filter.outputs.web }}
+      node-toolchain: ${{ steps.filter.outputs.node-toolchain }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      # dorny/paths-filter classifies the PR/push diff into named groups below.
+      # Every group includes .github/workflows/** so a change to this pipeline
+      # itself always trips every downstream job, never leaving a suite skipped
+      # just because the workflow that runs it changed.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            dotnet:
+              - 'apps/**/*.cs'
+              - 'packages/**/*.cs'
+              - 'tests/**'
+              - '**/*.csproj'
+              - '**/*.sln'
+              - 'global.json'
+              - 'nuget.config'
+              - '.github/workflows/**'
+            web:
+              - 'apps/web/**'
+              - '.github/workflows/**'
+            node-toolchain:
+              - 'scripts/azure/**'
+              - 'scripts/changesets/**'
+              - '.github/workflows/**'
+            docs:
+              - 'docs/**'
+              - '.github/workflows/**'
+
   dotnet-tests:
     name: .NET tests
+    needs: changes
+    if: needs.changes.outputs.dotnet == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +108,8 @@ jobs:
 
   node-toolchain-tests:
     name: Node toolchain tests
+    needs: changes
+    if: needs.changes.outputs.node-toolchain == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +126,8 @@ jobs:
 
   web-tests:
     name: Web tests
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +149,8 @@ jobs:
 
   web-lint:
     name: Web lint
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,6 +172,8 @@ jobs:
 
   docs-build:
     name: Docs build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
