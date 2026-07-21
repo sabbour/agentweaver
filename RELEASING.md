@@ -24,6 +24,8 @@ At `0.x`, use a `patch` changeset only for compatible fixes and a `minor` change
 | GitHub Release notes | Per-release Releases UI projection | Exact matching `CHANGELOG.md` section |
 
 Changesets replaces the former commit/PR-title reconstruction process. Do not run another changelog generator after tagging.
+For the full Changesets lifecycle and recovery playbook, see
+[`.copilot/skills/agentweaver-changelog/SKILL.md`](.copilot/skills/agentweaver-changelog/SKILL.md).
 
 ## Before you cut a release
 
@@ -33,7 +35,7 @@ Select a green `dev` SHA, then run `npm run changeset:status` and `npm run relea
 
 1. Create and push `release/vX.Y.Z` from the selected green `origin/dev` SHA.
 2. Soak it; stabilization PRs include changesets when user-facing and are immediately forward-ported to `dev`.
-3. On the clean release branch run `npm run release:prepare -- --expected X.Y.Z`, review the generated metadata, commit it as `chore(release): prepare vX.Y.Z`, and record that preparation SHA.
+3. On the clean release branch run `npm run release:prepare -- --expected X.Y.Z`, review the generated metadata, commit it as `chore(release): prepare vX.Y.Z`, and record that preparation SHA. See the [changelog skill](.copilot/skills/agentweaver-changelog/SKILL.md) for the full playbook.
 4. Promote the prepared branch to `main` through a green PR and squash-merge; record the exact resulting `main` SHA.
 5. From a clean checkout at that exact SHA run `npm run azure:release` (or its `release:stable` alias). It validates the prepared mirrors/changelog, tags, creates the GitHub Release, then builds, deploys, and verifies. It accepts no bump argument and never commits version files.
 6. Before deleting the release branch, create a short-lived branch from current `dev` and run `npm run release:sync-dev -- <prepare-sha>`; merge its PR so the prepared version/changelog and consumed fragments return to `dev` without deleting newer fragments.

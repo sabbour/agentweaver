@@ -26,7 +26,7 @@ Required local tools:
 | `kubectl` | cluster apply/verify |
 | `git` | default image tag = short commit SHA |
 | Node.js 20+ with `npm` or `pnpm` | run the deployment commands |
-| `gh` CLI, authenticated (`gh auth status`) | only for `azure:release`'s changelog + GitHub Release creation |
+| `gh` CLI, authenticated (`gh auth status`) | only for `azure:release`'s GitHub Release creation from the prepared changelog section |
 
 Create a GitHub OAuth App, then either export the credentials as environment
 variables or supply them as flags/params-file values (see below):
@@ -103,13 +103,11 @@ never manual pod deletion).
 
 ### Cutting a release
 
-```bash
-npm run azure:release -- patch   # or: minor | major
-npm run azure:release -- patch --dry-run   # preview without making changes
-```
-
-See the [operations guide](./operations.md#release-process) for the full
-release mechanics (semver bump, changelog, GitHub Release, build/deploy/verify).
+Use the protected `dev → release/vX.Y.Z → main` workflow: preview pending Changesets,
+prepare the release branch, promote it to `main`, then run `npm run azure:release` from
+the clean exact-`main` SHA. See [RELEASING.md](../../RELEASING.md) and the
+[Agentweaver changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md) for
+the full procedure, including publication recovery.
 
 ## Running an individual step
 

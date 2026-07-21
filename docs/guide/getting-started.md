@@ -317,7 +317,7 @@ Every build/deploy/upgrade/release/dev workflow runs through one cross-platform 
 | `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
 | `npm run azure:deploy` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:upgrade` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
-| `npm run azure:release` | Current semver publication workflow: bumps `VERSION`, tags, generates a GitHub release, and composes over the shared deploy engine. Its direct commit/push behavior must be split into protected release-PR preparation + exact-SHA publication before protected-branch enforcement; see [RELEASING.md](../../RELEASING.md#cutting-a-release). `--dry-run` remains safe. |
+| `npm run azure:release` | Publishes a prepared release from the exact protected-`main` SHA: validates metadata, tags, creates the GitHub Release from the matching changelog section, then builds, deploys, and verifies. Follow [RELEASING.md](../../RELEASING.md#cutting-a-release) and the [changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md). |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |
 | `npm run azure:dev` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). |
 | `npm run dev:web` | Builds and starts only the web UI (Vite dev server) against an API you're already running separately. |
@@ -329,7 +329,9 @@ Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full
 - **`azure:deploy`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--keyvault-name`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`.
 - **`azure:upgrade`**: `--allow-dirty` to bypass the clean-working-tree check (dev/test escape hatch only — never use for a real upgrade).
 - **`azure:dev` / `dev` / `setup`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step), `--setup` (local-only setup, no servers started — this is what `npm run setup` runs).
-- **`azure:release`**: positional `major|minor|patch` bump argument, `--dry-run` (or `DRY_RUN=true`) to preview without tagging/publishing.
+- **`azure:release`**: publishes only prepared, exact-`main` releases; use
+  `--resume vX.Y.Z` to recover a partially completed publication. See the
+  [changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md).
 
 ## 1. Configure local authentication and model access
 

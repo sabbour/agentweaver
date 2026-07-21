@@ -9,59 +9,16 @@ and individual-step instructions.
 
 ## Release Process
 
-Agentweaver uses [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`). The current version is tracked in the [`VERSION`](../../VERSION) file at the repo root. All container images and GitHub releases are tagged with this version.
+Agentweaver uses Changesets with the protected
+`dev → release/vX.Y.Z → main` flow. Contributors add a changeset, maintainers preview
+the calculated version, and `release:prepare` writes version metadata and the durable
+changelog section on the release branch. After the prepared branch is promoted to `main`,
+`azure:release` tags, creates a GitHub Release from that exact changelog section, builds,
+deploys, and verifies.
 
-### When to cut a release
-
-| Change type | Command |
-|---|---|
-| Bug fix | `npm run azure:release -- patch` |
-| New feature (backward-compatible) | `npm run azure:release -- minor` |
-| Breaking change | `npm run azure:release -- major` |
-
-### Prerequisites
-
-- Clean working tree (no uncommitted changes)
-- `gh` CLI authenticated (`gh auth status`)
-- `az` CLI authenticated with access to `agentweaverregistry` ACR
-- `kubectl` configured to point at the target cluster
-- `IDENTITY_CLIENT_ID` and `TENANT_ID` set (or exported) in your environment
-
-### Running a release
-
-```bash
-# Patch release (e.g. 0.6.0 -> 0.6.1)
-npm run azure:release -- patch
-
-# Minor release (e.g. 0.6.0 -> 0.7.0)
-npm run azure:release -- minor
-
-# Major release (e.g. 0.6.0 -> 1.0.0)
-npm run azure:release -- major
-```
-
-To preview actions without making changes:
-
-```bash
-npm run azure:release -- patch --dry-run
-```
-
-### What `azure:release` does
-
-[`scripts/azure/release.mjs`](../../scripts/azure/release.mjs) (invoked via `node scripts/azure/cli.mjs release`) automates the full release cycle, delegating build/deploy/verify to the same step modules `azure:deploy` and `azure:upgrade` use:
-
-1. **Validates clean working tree** — aborts if there are uncommitted changes.
-2. **Bumps the version** — reads `VERSION`, increments the appropriate component, writes the new value.
-3. **Commits the version bump** — `chore(release): bump version to vX.Y.Z`.
-4. **Creates an annotated git tag** — `vX.Y.Z`.
-5. **Generates a changelog** — queries merged pull requests since the last release using `gh pr list`.
-6. **Creates a GitHub Release** — publishes the changelog to the GitHub Releases page via `gh release create`.
-7. **Identifies changed images** — compares file paths against the previous tag using `git diff`.
-8. **Builds changed images** — uses `az acr build` (no local Docker daemon required).
-9. **Retags unchanged images** — uses `az acr import` for a server-side copy (fast, no rebuild).
-10. **Deploys** — applies the release with its selected immutable image tag.
-11. **Verifies** — runs the post-deploy verification checks.
-12. **Pushes** — pushes the commit and tag to `origin`.
+Follow [RELEASING.md](../../RELEASING.md) for the canonical release procedure and the
+[Agentweaver changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md) for
+the full fragment lifecycle, recovery commands, and changelog/release-notes rules.
 
 ### Image tags
 

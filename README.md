@@ -408,3 +408,8 @@ block-beta
 - [AKS architecture](docs/guide/architecture-aks.md)
 - [Contributing](CONTRIBUTING.md)
 - [Releasing](RELEASING.md)
+
+## Skills
+
+- [Agentweaver changelog](.copilot/skills/agentweaver-changelog/SKILL.md) — Changesets,
+  release preparation, durable changelog history, and GitHub Release notes.
