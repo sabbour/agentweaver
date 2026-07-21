@@ -1510,37 +1510,21 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         int workPlanId,
         CancellationToken ct)
     {
-        if (_projectStore is null || _workflowRegistry is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var plan = await db.WorkPlans.AsNoTracking()
-            .Where(w => w.Id == workPlanId)
-            .Select(w => new { w.ProjectId, w.WorkflowId })
-            .FirstOrDefaultAsync(ct)
+        return await CoordinatorAssemblyGateResolver
+            .ResolveAsync(db, _projectStore, _workflowRegistry, workPlanId, ct)
             .ConfigureAwait(false);
-        if (plan is null || !ProjectId.TryParse(plan.ProjectId, out var projectId))
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
-        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
-        var workflow = !string.IsNullOrWhiteSpace(plan.WorkflowId)
-            ? _workflowRegistry.Get(project, plan.WorkflowId!)?.Definition
-            : _workflowRegistry.ResolveDefault(project).Definition;
-        workflow ??= _workflowRegistry.ResolveDefault(project).Definition;
-        if (workflow is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
-        var gates = ResolveAssemblyGates(workflow);
-
-        return gates;
     }
 
+    /// <param name="producesCode">
+    /// When <c>false</c> the platform <c>build_test</c> gate is dropped because the work plan produces
+    /// no buildable/testable code (all-planning outcome) — see #387. Defaults to <c>true</c> so callers
+    /// that only care about the authored gate order (e.g. tests) keep the gate.
+    /// </param>
     internal static IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode> ResolveAssemblyGates(
-        WorkflowDefinition workflow)
+        WorkflowDefinition workflow,
+        bool producesCode = true)
     {
         var traversalOrder = ComputeWorkflowTraversalOrder(workflow);
 
@@ -1570,6 +1554,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .GroupBy(g => g.StageId)
             .Select(grp => grp.First())
             .ToList();
+
+        // #387: a non-code-producing work plan (all-planning outcome) has nothing to build or test, so
+        // the platform build_test gate would find no code, request changes, and loop. Drop it rather
+        // than scheduling it — the coordinator decides applicability from the actual task.
+        if (!producesCode)
+            gates = gates.Where(g => g.GateKind != "build-test").ToList();
 
         return gates;
     }

@@ -2451,6 +2451,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (RunId.TryParse(coordinatorRunId, out var coordinatorRun))
             coordinatorModel = (await _runStore.GetAsync(coordinatorRun, ct).ConfigureAwait(false))?.ModelId;
 
+        // #386: resolve the ACTUAL assembly gates (including the platform Build & Test gate) from the
+        // selected workflow so they render as `planned` in the run tree from the start, instead of the
+        // RAI + Human Review defaults that omit build_test until assembly execution reaches it.
+        var gates = await CoordinatorAssemblyGateResolver
+            .ResolveAsync(scope.ServiceProvider, workPlanId, ct)
+            .ConfigureAwait(false);
+
         var descriptor = CoordinatorGraphDescriptor.Build(
             coordinatorRunId,
             subtasks,
@@ -2459,6 +2466,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             state?.Status,
             state?.AssemblyTerminalStage,
             state?.AssemblyStatusReason,
+            assemblyGates: gates,
             coordinatorModel: coordinatorModel);
         entry.RecordNext(EventTypes.CoordinatorGraph, descriptor);
     }
