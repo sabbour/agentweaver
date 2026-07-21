@@ -1,0 +1,54 @@
+# Kustomize base — every manifest that steps/30-deploy.mjs applies to AKS.
+#
+# This base intentionally contains NO environment-specific values: image tags,
+# the public HOST, Key Vault/Tenant/Identity IDs, and the AppInsights workspace
+# ID are all generic placeholders here ("latest", "agentweaver.example.com",
+# "changeme", ...). The k8s/overlays/<env> layer supplies the real values via
+# Kustomize's `images:` transformer, `configMapGenerator`, and `replacements` —
+# see k8s/overlays/production/kustomization.yaml.
+#
+# Manifests that are NOT part of the routine automated deploy (one-off
+# migration Jobs, example-only Secret manifests, and the app-code
+# SandboxClaim template) live in k8s/reference/ instead and are deliberately
+# excluded from this resource list.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: agentweaver
+
+resources:
+  - namespace.yaml
+  - serviceaccount-api.yaml
+  - serviceaccount-agenthost.yaml
+  - secret-provider-class.yaml
+  - rbac-api.yaml
+  - quota.yaml
+  - storageclass-workspace.yaml
+  - pvc-data.yaml
+  - pvc-workspace.yaml
+  - networkpolicy-default-deny.yaml
+  - networkpolicy-mcp.yaml
+  - networkpolicy-sandbox.yaml
+  - networkpolicy-agenthost.yaml
+  - networkpolicy-agenthost-api-egress.yaml
+  - networkpolicy-agenthost-egress.yaml
+  - cilium-network-policy-sandbox.yaml
+  - serviceentry-telemetry.yaml
+  - networkpolicy-postgres-egress.yaml
+  - networkpolicy-worker.yaml
+  - configmap-agenthost.yaml
+  - api-service.yaml
+  - frontend-service.yaml
+  - mcp-service.yaml
+  - gateway.yaml
+  - gateway-preview.yaml
+  - httproute-api.yaml
+  - httproute-frontend.yaml
+  - mcp-httproute.yaml
+  - sandbox-template-agenthost.yaml
+  - sandbox-warmpool-agenthost.yaml
+  - api-deployment.yaml
+  - frontend-deployment.yaml
+  - mcp-deployment.yaml
+  - worker-deployment.yaml
+  - worker-hpa.yaml

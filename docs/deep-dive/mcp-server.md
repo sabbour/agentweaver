@@ -156,7 +156,7 @@ sequenceDiagram
 - `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
 - `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`
 - `docs/mcp-oauth.md`
-- `k8s/mcp-httproute.yaml`
+- `k8s/base/mcp-httproute.yaml`
 
 ## 4. Bearer tokens: what is accepted, why, and how identity survives
 
@@ -232,8 +232,8 @@ The fix is to pin issuer and audience to public values in Production on both ser
 - `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
 - `apps/Agentweaver.Api/Auth/OAuth`
 - `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
-- `k8s/mcp-deployment.yaml`
-- `k8s/api-deployment.yaml`
+- `k8s/base/mcp-deployment.yaml`
+- `k8s/base/api-deployment.yaml`
 
 ## 5. The MCP tool surface: a protocol adapter over Agentweaver capabilities
 
@@ -316,10 +316,10 @@ report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
 **Where this lives**
 
-- `k8s/mcp-service.yaml`
-- `k8s/mcp-httproute.yaml`
-- `k8s/mcp-deployment.yaml`
-- `k8s/secret-provider-class.yaml`
+- `k8s/base/mcp-service.yaml`
+- `k8s/base/mcp-httproute.yaml`
+- `k8s/base/mcp-deployment.yaml`
+- `k8s/base/secret-provider-class.yaml`
 
 ## 7. Rebuild checklist
 

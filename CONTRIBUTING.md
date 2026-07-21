@@ -46,7 +46,7 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 | `scripts/azure` | The Node.js provisioning/deployment/release toolchain (no bash/PowerShell) |
 | `tests/Agentweaver.Tests` | .NET test suite |
 | `tests/e2e` | End-to-end tests |
-| `k8s/` | Kubernetes manifests (AKS deployment) |
+| `k8s/` | Kustomize-based Kubernetes manifests (AKS deployment): `k8s/base/` (generic manifests), `k8s/overlays/production/` (image tags, ConfigMap/replacements patches), `k8s/reference/` (non-deployed examples/one-off jobs) |
 
 ## Making a change
 

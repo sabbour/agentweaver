@@ -236,9 +236,9 @@ whole agent turn) runs in a pod the agent-sandbox controller bound for the run. 
 
 The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecutor` targets the `v1beta1` storage version — [`SandboxClaimConventions.cs:23`](#source)) Agentweaver applies are:
 
-- **`SandboxTemplate`** (`k8s/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) — the live AgentHost pod shape and hardening:
+- **`SandboxTemplate`** (`k8s/base/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) — the live AgentHost pod shape and hardening:
   `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, and the A2A listener on container port `8088`.
-- **`SandboxWarmPool`** — keeps AgentHost pods pre-built from a template so a claim binds without a cold start. The live pool is `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). It pre-warms the .NET process and Copilot SDK; per-run context arrives later via `/configure`.
+- **`SandboxWarmPool`** — keeps AgentHost pods pre-built from a template so a claim binds without a cold start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). It pre-warms the .NET process and Copilot SDK; per-run context arrives later via `/configure`.
 - **`SandboxClaim`** — created per run by `KubernetesSandboxExecutor` with `spec.warmPoolRef.name`
   (the pool to bind), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and
   `spec.env[]` for static values only on the AgentHost path (`AgentHost__KeyVaultUri`, paths, port, mTLS settings). `RunId`, `UserId`, `TurnBearerToken`, and `KvUserSecretName` are delivered after binding by `POST /configure`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
@@ -300,7 +300,7 @@ The retry wrapper must only wrap idempotent calls: the non-idempotent AgentHost 
 A bound claim means the controller assigned a pod; it does **not** mean the run-specific AgentHost
 is ready to serve turns. AgentHost warm pods start with no `RunId`, enter standby, and log that
 they are waiting for `/configure`. This lets
-`k8s/sandbox-warmpool-agenthost.yaml` run at `replicas: 2` without CrashLooping: the .NET process
+`k8s/base/sandbox-warmpool-agenthost.yaml` run at `replicas: 2` without CrashLooping: the .NET process
 and Copilot SDK host are already warm, but no run context is required until a claim binds. With the
 Worker now in `pod-per-run`, those two standby pods are the hot path for coordinator child turns.
 
@@ -464,7 +464,7 @@ az aks nodepool add \
 | `apppool`   | User   | *(standard)*    | 1–5 nodes   | *(none)*                          | —                           | api, worker, mcp, frontend, jobs |
 | `katapool`  | User   | KataVmIsolation | 1–5 nodes   | `sandbox=kata:NoSchedule`         | `agentweaver.io/kata=true`  | Sandbox / AgentHost pods       |
 
-The Kata `SandboxTemplate` pod spec (`k8s/sandbox-template-agenthost.yaml`) wires pods to `katapool` — the CRD `podTemplate.spec` is a full PodSpec,
+The Kata `SandboxTemplate` pod spec (`k8s/base/sandbox-template-agenthost.yaml`) wires pods to `katapool` — the CRD `podTemplate.spec` is a full PodSpec,
 so `tolerations`/`affinity` pass straight through to the rendered pod:
 
 - a **toleration** for `sandbox=kata:NoSchedule` admits pods onto the tainted `katapool`; and
@@ -642,7 +642,7 @@ at 3 per run and 20 globally, and cleaned up explicitly.
 
 Neither path widens the pod's own egress allowlist; both are inbound tunnels the operator/agent opens, not
 capabilities the sandboxed code can grant itself. The AKS NetworkPolicy
-`sandbox-allow-preview-ingress` (`k8s/networkpolicy-sandbox.yaml`) admits TCP 3000–9000 exclusively from
+`sandbox-allow-preview-ingress` (`k8s/base/networkpolicy-sandbox.yaml`) admits TCP 3000–9000 exclusively from
 `agentweaver-preview-gateway` pods — no other source can reach those ports.
 
 > **Dedicated pages:** the browser preview has its own first-class docs —
@@ -785,7 +785,7 @@ Where this lives:
 | Local-writable launch coordinates | `apps/Agentweaver.Api/Sandbox/IRunAgentHostContextResolver.cs:65-99` |
 | API-side descriptor validation and authoritative fast-forward | `apps/Agentweaver.Api/Git/WorktreeManager.cs:482-644` |
 | HOME propagation through WSL/bubblewrap | `packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-158` |
-| Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/sandbox-template-agenthost.yaml:139-175` |
+| Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/base/sandbox-template-agenthost.yaml:139-175` |
 
 ## Related reading
 

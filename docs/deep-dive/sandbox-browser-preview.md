@@ -72,7 +72,7 @@ The API returns `preview_url` and a relative `keepalive_url`; the browser opens 
 `referrerPolicy="no-referrer"`) and pings keepalive every 60 s. The API does **not** prove readiness by
 connecting to `podIP:{target_port}`. `StartPreviewAsync` deliberately skips that TCP preflight because the
 sandbox NetworkPolicy admits preview ports only from the preview Gateway, not from API pods
-([`SandboxPreviewService.cs:134`](#source), [`k8s/networkpolicy-sandbox.yaml`](#source)). End-to-end data-path
+([`SandboxPreviewService.cs:134`](#source), [`k8s/base/networkpolicy-sandbox.yaml`](#source)). End-to-end data-path
 reachability is therefore exercised at the Gateway hostname (`preview_url`), while registration readiness comes
 from the in-pod AgentHost observation described next.
 
@@ -87,7 +87,7 @@ listens on `0.0.0.0:{publicPort}` and pumps TCP to `127.0.0.1:{appPort}`
 ([`apps/Agentweaver.AgentHost/TcpPortForwarder.cs`](#source),
 [`apps/Agentweaver.AgentHost/PreviewRunner.cs:315`](#source)). The public port is chosen by scanning the
 allowed preview range `3000-9000`, matching both `SandboxPreviewOptions.AllowedPortMin/Max` and
-`k8s/networkpolicy-sandbox.yaml`, and that public port is the value registered with the Gateway
+`k8s/base/networkpolicy-sandbox.yaml`, and that public port is the value registered with the Gateway
 ([`PreviewRunner.cs:21`](#source), [`SandboxPreviewOptions.cs:56`](#source)).
 
 This closes the loopback failure mode: previously an app that listened only on `127.0.0.1:3000` could pass the
@@ -302,9 +302,9 @@ governs unattended runs; production stays human-gated.
 | HITL approval primitive (shared with `web_fetch`) | `apps/Agentweaver.Api/Runs/DurableToolApprovalGate.cs` |
 | Agent capability note injection | `apps/Agentweaver.Api/Runs/RunOrchestrator.cs` |
 | Build & Test preview activation prompt | `packages/Agentweaver.AgentRuntime/Workflow/BuildTestTurnExecutor.cs` |
-| Shared preview Gateway | `k8s/gateway-preview.yaml` |
-| Sandbox NetworkPolicy (preview ingress range) | `k8s/networkpolicy-sandbox.yaml` |
-| API RBAC (claims read, service/route write) | `k8s/rbac-api.yaml` |
+| Shared preview Gateway | `k8s/base/gateway-preview.yaml` |
+| Sandbox NetworkPolicy (preview ingress range) | `k8s/base/networkpolicy-sandbox.yaml` |
+| API RBAC (claims read, service/route write) | `k8s/base/rbac-api.yaml` |
 | Preview button, iframe, keepalive ping | `apps/web/src/pages/CoordinatorRunPage.tsx` |
 | API client (`startPortForward` / `pingKeepalive`) | `apps/web/src/api/client.ts` |
 | `PortForwardSessionDto` (DTO fields) | `apps/web/src/api/types.ts` |

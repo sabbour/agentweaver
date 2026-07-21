@@ -214,7 +214,7 @@ rate(agentweaver_token_usage_total[5m])
 
 ### Worker autoscaling (queue depth vs. CPU)
 
-`k8s/worker-hpa.yaml` currently scales `agentweaver-worker` on **CPU utilization** (70% target),
+`k8s/base/worker-hpa.yaml` currently scales `agentweaver-worker` on **CPU utilization** (70% target),
 which is a poor proxy for actual backlog — the worker is I/O-bound, not CPU-bound.
 
 The `agentweaver_run_queued` gauge above (issue #108) exists specifically to provide a real
