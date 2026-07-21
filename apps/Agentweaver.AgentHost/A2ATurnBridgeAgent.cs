@@ -129,6 +129,42 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
         _forcedCleanupTimeout = forcedCleanupTimeout ?? DefaultForcedCleanupTimeout;
     }
 
+    /// <summary>
+    /// MAF session-creation entry point. <see cref="DelegatingAIAgent"/>'s default implementation
+    /// forwards unconditionally to <see cref="DelegatingAIAgent.InnerAgent"/> — the singleton
+    /// <c>CopilotAIAgent</c> in production. <c>MapA2AHttpJson</c>'s
+    /// <c>IsolationKeyScopedAgentSessionStore</c> calls this on every new A2A message
+    /// <b>regardless of <see cref="AgentHostPurpose"/></b>. For
+    /// <see cref="AgentHostPurpose.OperatorAssistant"/>, <c>AgentHostStartupService.RunSetupAsync</c>
+    /// deliberately never calls <c>CopilotAIAgent.SetupAsync</c> (this purpose never drives
+    /// <c>CopilotAIAgent</c> at all — <c>RoutingPodTurnRunner</c> routes it to
+    /// <c>IOperatorAssistantAgent</c> instead), so <c>CopilotAIAgent</c>'s inner SDK agent is never
+    /// provisioned and the default delegated session creation throws
+    /// <c>InvalidOperationException("SetupAsync must be called before CreateSessionAsync.")</c> —
+    /// before the turn ever reaches <see cref="RunCoreStreamingAsync"/>/<see cref="RunCoreAsync"/>.
+    /// Bypass the inner agent entirely for this purpose and hand back a trivial placeholder session
+    /// instead, mirroring how turn execution already routes around <c>CopilotAIAgent</c> for
+    /// OperatorAssistant. <c>_runtimeState</c> can be null in test-seam constructor overloads that
+    /// don't pass one — treat that as "not OperatorAssistant" so existing callers keep delegating to
+    /// the inner agent unchanged.
+    /// </summary>
+    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken)
+    {
+        if (_runtimeState?.Purpose == AgentHostPurpose.OperatorAssistant)
+            return new ValueTask<AgentSession>(new OperatorAssistantBridgeSession());
+
+        return base.CreateSessionCoreAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Trivial placeholder <see cref="AgentSession"/> for OperatorAssistant turns. This purpose runs
+    /// a single-shot turn through <c>IOperatorAssistantAgent</c> with no MAF checkpoint/serialize
+    /// durability requirement, so an empty session is sufficient — it exists purely to satisfy the
+    /// A2A session store's mandatory <c>CreateSessionAsync</c> call without touching
+    /// <c>CopilotAIAgent</c>.
+    /// </summary>
+    private sealed class OperatorAssistantBridgeSession : AgentSession;
+
     /// <inheritdoc />
     protected override IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
         IEnumerable<ChatMessage> messages,
