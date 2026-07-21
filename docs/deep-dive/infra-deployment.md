@@ -212,7 +212,7 @@ AgentHost user tokens are fetched at runtime, not mounted through per-run Secret
 
 Rotation constraint: the CSI driver can refresh mounted API files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
-OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `npm run azure:deploy` before the first `npm run azure:upgrade`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
+OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `npm run azure:deploy` before the first `npm run azure:devtest`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
 Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `scripts/azure/steps/16-provision-oauth-signing-key.mjs`, `k8s/serviceaccount-api.yaml`, `k8s/serviceaccount-agenthost.yaml`, `k8s/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
 
@@ -355,7 +355,7 @@ To stand up an equivalent deployment:
 - **Pods fail to start after secret rotation:** CSI files updated, but process environment variables did not; restart pods or change the app to re-read files.
 - **Workspace writes fail with permission errors:** Azure Files mounted with root ownership or wrong mount options; use a uid/gid-aware StorageClass and recreate affected PVCs if needed.
 - **Docs changes are not visible:** docs are baked into the frontend image; rebuild and roll out frontend.
-- **Cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`:** the required OAuth signing-key provisioning step was skipped; run `npm run azure:deploy`, then `npm run azure:upgrade`.
+- **Cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`:** the required OAuth signing-key provisioning step was skipped; run `npm run azure:deploy`, then `npm run azure:devtest`.
 - **AgentHost pod crashes with missing Copilot runtime:** rebuild the AgentHost image with the Dockerfile's `dotnet publish --runtime linux-x64 --self-contained false` so the `GitHub.Copilot.SDK` native binary is copied to `/app/runtimes/linux-x64/native/copilot`.
 - **API rollout hangs on volume attach:** RWO disk is still attached to the old pod/node; Recreate reduces this risk, but node/storage delays can still happen.
 - **Sandbox cannot reach package/model endpoints:** Cilium FQDN policy or DNS allowance is missing, stale, or not supported by the cluster dataplane.

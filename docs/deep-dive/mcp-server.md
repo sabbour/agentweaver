@@ -308,7 +308,7 @@ The deployment pins Resource Server identity configuration:
 
 This distinction is crucial: issuer and audience describe token identity and must be public/stable; JWKS URI is just where the pod fetches signing keys and may be internal.
 
-In AKS, run `npm run azure:deploy` before the first `npm run azure:upgrade`;
+In AKS, run `npm run azure:deploy` before the first `npm run azure:devtest`;
 the infrastructure workflow creates the Authorization Server's private signing-key secret
 `mcp-oauth-signing-key`. Do not use the installer `--skip-oauth-key` flag for
 production first-deploys unless that secret already exists; otherwise cluster diagnostics

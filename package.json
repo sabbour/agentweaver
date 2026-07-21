@@ -6,6 +6,7 @@
     "dev": "node scripts/azure/cli.mjs dev --no-browser",
     "setup": "node scripts/azure/cli.mjs dev --setup",
     "azure:deploy": "node scripts/azure/cli.mjs deploy",
+    "azure:devtest": "node scripts/azure/cli.mjs upgrade",
     "azure:upgrade": "node scripts/azure/cli.mjs upgrade",
     "azure:release": "node scripts/azure/cli.mjs release",
     "azure:verify": "node scripts/azure/cli.mjs verify",

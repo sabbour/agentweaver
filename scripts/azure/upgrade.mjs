@@ -56,19 +56,26 @@ import { validateImageTag } from "./variables.mjs";
 
 const AGENTHOST_IMAGE_NAME = "agentweaver-agent-host";
 
-export const HELP_TEXT = `upgrade -- Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool
+export const HELP_TEXT = `dev/test-to-Azure shipping -- build, redeploy, and cycle the AgentHost warm pool
 
-Usage:
+Primary package command:
+  npm run azure:devtest [-- --allow-dirty]
+
+Compatibility alias:
+  npm run azure:upgrade [-- --allow-dirty]
+
+Direct CLI usage:
   node scripts/azure/cli.mjs upgrade [--allow-dirty]
 
-Mints a new image tag from the current HEAD short SHA (never reuses the
-VERSION-derived semver tag -- that belongs to 'release'), builds+pushes
-images, verifies provenance, redeploys, then reapplies and waits for the
-AgentHost warm pool to become ready (never deletes pods manually).
+Ships current local work to an existing Azure dev/test environment without a
+PR. A clean HEAD is required by default; --allow-dirty explicitly permits
+uncommitted dev/test work. This does not version, tag, or publish a release:
+use azure:deploy for provisioning and azure:release for a real versioned
+release from merged main.
 
 Flags:
   --allow-dirty   Dev/test escape hatch: skip the dirty-working-tree check.
-                  Do not use for a real staging/production upgrade.
+                  Do not use for a shared/production environment.
 `;
 
 export const WARM_POOL_NAME = "agentweaver-agent-host";

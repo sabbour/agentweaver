@@ -90,16 +90,20 @@ npm run azure:deploy -- --resource-group agentweaver-rg --cluster-name agentweav
 Config precedence: flags > env > params file > detected defaults > prompt.
 Optional flags: `--skip-postgres`, `--skip-oauth-key`, `--image-tag <tag>`.
 
-### Upgrading an existing deployment
+### Dev/test-to-Azure shipping (existing environment, no PR)
 
 ```bash
-npm run azure:upgrade
+npm run azure:devtest
 ```
 
-Mints a new immutable image tag from `HEAD` (refuses a dirty working tree),
-builds and pushes images, verifies provenance, redeploys, and cycles the
-AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
-never manual pod deletion).
+This is the primary **dev/test-to-Azure shipping** command: it ships your
+current local `HEAD` to an existing Azure environment without a PR. It mints
+a new immutable image tag, builds and pushes images, verifies provenance,
+redeploys, and cycles the AgentHost warm-pool sandboxes (never manual pod
+deletion). Use `-- --allow-dirty` only for uncommitted dev/test work.
+`azure:upgrade` remains a compatibility alias; use `azure:deploy` for
+first-time provisioning and `azure:release` for a versioned release from
+merged `main`.
 
 ### Cutting a release
 
@@ -122,7 +126,7 @@ npm run azure:verify
 
 ## Verify
 
-`npm run azure:deploy` and `npm run azure:upgrade` verify as their final step.
+`npm run azure:deploy` and `npm run azure:devtest` verify as their final step.
 To re-run only verification:
 
 ```bash
@@ -142,10 +146,10 @@ kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver
 ## Redeploy
 
 ```bash
-npm run azure:upgrade
+npm run azure:devtest
 ```
 
-`azure:upgrade` mints a new image tag from the current `HEAD` short SHA,
+`azure:devtest` mints a new image tag from the current `HEAD` short SHA,
 builds/pushes/verifies it, and redeploys — this is the canonical redeploy path
 described above.
 
@@ -154,7 +158,7 @@ described above.
 | Symptom | Check |
 |---|---|
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
-| ImagePullBackOff | confirm ACR attach and image tag was pushed (`azure:deploy`/`azure:upgrade` build+push this step) |
+| ImagePullBackOff | confirm ACR attach and image tag was pushed (`azure:deploy`/`azure:devtest` build+push this step) |
 | API/MCP auth failures | confirm Key Vault has `github-client-id`, `github-client-secret`, `mcp-oauth-signing-key` |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

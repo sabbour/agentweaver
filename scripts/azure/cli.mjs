@@ -2,8 +2,9 @@
 // cli.mjs -- Single Node entry point for the Agentweaver Azure toolchain.
 // Routes `deploy | upgrade | release | verify | dev` subcommands to their
 // respective module's run(). This is what the root package.json's
-// azure:deploy/azure:upgrade/azure:release/azure:verify (and, optionally,
-// azure:dev) scripts invoke.
+// azure:deploy/azure:devtest/azure:upgrade/azure:release/azure:verify (and,
+// optionally, azure:dev) scripts invoke. azure:devtest is the primary package
+// script for dev/test-to-Azure shipping; azure:upgrade is its compatibility alias.
 
 import { pathToFileURL } from "node:url";
 import * as logDefault from "./lib/log.mjs";
@@ -17,7 +18,9 @@ Usage:
 
 Commands:
   deploy    Interactive/non-interactive installer (replaces install.sh/.ps1).
-  upgrade   Build a new image tag, redeploy, and cycle the AgentHost warm pool.
+  upgrade   Direct CLI command behind npm run azure:devtest (primary) and
+            npm run azure:upgrade (compatibility alias): ship current local work
+            to an existing Azure dev/test environment without a PR.
   release   Validate prepared version, tag/publish/deploy through the shared build/deploy engine.
   verify    Post-deploy health verification (port of 40-verify.sh/.ps1).
   dev       Local dev orchestration (port of start-dev.ps1).

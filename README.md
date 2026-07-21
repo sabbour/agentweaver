@@ -20,7 +20,7 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 | [.NET SDK 10](https://dot.net/download) | building/running the API and MCP server locally | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
 | **WSL2 + `bubblewrap`** | **Windows local dev only** — `npm run dev` runs the API's sandbox executor inside WSL2 for real isolation ([why](https://sabbour.me/agentweaver/guide/getting-started#why-wsl2-on-windows)); macOS/Linux sandbox natively | `wsl --install` (elevated PowerShell, then reboot), then `sudo apt-get install -y bubblewrap` inside the distro | *Not required* | *Not required* |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in via `az login` | everything under `npm run azure:*` | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during `azure:deploy`/`azure:upgrade`/`azure:verify` | `winget install Kubernetes.kubectl` | `brew install kubectl` | `sudo snap install kubectl --classic` |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during `azure:deploy`/`azure:devtest`/`azure:verify` | `winget install Kubernetes.kubectl` | `brew install kubectl` | `sudo snap install kubectl --classic` |
 | [`gh` CLI](https://cli.github.com/), authenticated via `gh auth status` | `npm run azure:release` only (changelog generation + creating the GitHub Release) | `winget install GitHub.cli` | `brew install gh` | `sudo apt-get update && sudo apt-get install -y gh` (or see [cli.github.com](https://cli.github.com/) if `gh` isn't in your distro's repos) |
 
 `node scripts/azure/cli.mjs dev --setup` (aliased as `npm run setup`) checks
@@ -174,7 +174,7 @@ Local and Azure testing do not require a staging branch:
 ```text
 feature worktree
   ├─ npm run dev ───────────────────────> local test (no GitHub interaction)
-  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test environment (any branch)
+  ├─ azure:deploy / azure:devtest ─────> Azure dev/test environment (any branch)
   └─ PR CI ─> update to latest dev ─> CI rerun ─> squash-merge to protected dev
                                                         └─ green SHA ─> release/vX.Y.Z soak ─> promotion to main ─> tag/release/deploy
 ```
@@ -203,7 +203,7 @@ npm run azure:deploy
 
 This is **environment validation, not a release**. Use `azure:deploy` to
 provision or idempotently reconcile the full environment; after it exists,
-use `npm run azure:upgrade` to ship the current clean `HEAD` — even from an
+use `npm run azure:devtest` to ship the current clean `HEAD` — even from an
 unmerged feature branch/worktree — during normal development, and
 `npm run azure:verify` to rerun live checks. Only the release workflow changes
 `VERSION`, creates a `vX.Y.Z` tag, and publishes a GitHub Release. Its current
@@ -281,19 +281,22 @@ npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
 > prompt; the params file field exists only for unattended CI use against
 > disposable/test environments.
 
-**Upgrading an existing deployment:**
+**Dev/test-to-Azure shipping (existing environment, no PR):**
 
 ```bash
-npm run azure:upgrade
+npm run azure:devtest
+# Compatibility alias: npm run azure:upgrade
 ```
 
-`azure:upgrade` is for updating an *existing* deployment to newer code,
-distinct from `azure:deploy` (initial/full setup). It mints a new immutable
-image tag from `HEAD` (the short git SHA; it refuses to run against a dirty
-working tree), builds and pushes the images, verifies image provenance,
-redeploys, and cycles the AgentHost warm-pool sandboxes (reapplies the
-SandboxTemplate/SandboxWarmPool and waits for the pool to become ready —
-never by deleting pods).
+`azure:devtest` is the primary command for shipping your current local work
+straight to an **existing** Azure dev/test environment without a PR. It ships
+a clean `HEAD` by default, or uncommitted work only with `-- --allow-dirty`;
+it does not version, tag, or publish a release. It mints a new immutable image
+tag from `HEAD`, builds and pushes the images, verifies provenance, redeploys,
+and cycles the AgentHost warm-pool sandboxes. `azure:upgrade` remains a
+compatibility alias with the exact same behavior; use `azure:deploy` for
+first-time/full idempotent provisioning and `azure:release` only for a real
+versioned release from merged `main`.
 
 **Related commands** (see the [operations guide](docs/guide/operations.md) and
 [AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
@@ -353,7 +356,8 @@ From the repository root, run these with `npm run <script>` (or `pnpm run <scrip
 | --- | --- |
 | `setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages. No Azure calls. |
 | `azure:deploy` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
-| `azure:upgrade` | Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool. |
+| `azure:devtest` | **Primary dev/test-to-Azure shipping command:** ship current local work to an existing Azure environment without a PR; builds an immutable image, redeploys, and cycles the warm pool. |
+| `azure:upgrade` | Compatibility alias for `azure:devtest`; same underlying command and behavior. |
 | `azure:release` | Current semver bump/tag/GitHub release + deploy command; queue-compatible preparation/publication split is pending. |
 | `azure:verify` | Post-deploy health verification checks. |
 | `azure:dev` | Start the local API + Web UI dev environment. |

@@ -6,7 +6,7 @@ Agentweaver uses a protected `dev → release/vX.Y.Z → main` promotion flow. A
 
 | Command | Purpose | Release artifacts |
 |---|---|---|
-| `npm run azure:deploy` / `npm run azure:upgrade` | Dev/test Azure deployment of a SHA | None; changesets are never consumed. |
+| `npm run azure:deploy` / `npm run azure:devtest` | Dev/test Azure deployment of a SHA | None; changesets are never consumed. |
 | `npm run azure:verify` | Read-only deployment verification | None. |
 | `npm run azure:release` | Publish a prepared release from exact `origin/main` | Annotated tag, GitHub Release, build/deploy/verify. |
 
@@ -41,14 +41,18 @@ Select a green `dev` SHA, then run `npm run changeset:status` and `npm run relea
 ## If a release fails partway through
 
 Preparation and publication are separate. If preparation fails, fix the release branch or re-cut it; do not hand-edit generated metadata. If tag/release/deploy work fails after preparation, retain the same clean exact-`main` checkout and run `npm run azure:release -- --resume vX.Y.Z` (use `--dry-run` to preview). Resume validates the prepared version and tag and never versions again; it can create a missing GitHub Release before completing build/deploy/verify.
-## Upgrading a running environment (no version bump)
+## Dev/test-to-Azure shipping (existing environment, no PR)
 
-`upgrade` is for shipping a code change to a live environment (e.g. staging) **without**
-cutting a semver release — it's the day-to-day "ship what's on `HEAD`" command:
+`azure:devtest` is the primary command for shipping your current local work to an
+**existing** Azure dev/test environment without a PR or semver release. It ships a
+clean `HEAD` by default; `--allow-dirty` explicitly permits uncommitted local work
+for personal/throwaway dev/test validation. `azure:upgrade` remains a compatibility
+alias for the exact same command.
 
 ```bash
-npm run azure:upgrade
-npm run azure:upgrade -- --allow-dirty   # dev/test escape hatch only -- never for real upgrades
+npm run azure:devtest
+npm run azure:devtest -- --allow-dirty   # uncommitted work: dev/test only
+# Compatibility alias: npm run azure:upgrade
 ```
 
 Key differences from `release`:
@@ -65,14 +69,16 @@ Key differences from `release`:
   waiting** for `status.readyReplicas == spec.replicas` (timeout ~180s) — it never
   manually deletes pods.
 
-The same "green CI on the commit you are shipping" convention applies to an `upgrade` that
-targets a shared or production environment; for a throwaway dev/test environment it is your
-call.
+The same "green CI on the commit you are shipping" convention applies to `azure:devtest`
+for a shared environment; for a throwaway dev/test environment it is your call. This is
+not a release path: `azure:release` requires the exact merged `origin/main` SHA.
 
 ## Other useful commands
 
 ```bash
-npm run azure:deploy    # first-time / idempotent deploy to a fresh or existing Azure environment
+npm run azure:deploy    # first-time / idempotent provisioning of a fresh or existing Azure environment
+npm run azure:devtest   # primary: ship current local work to an existing dev/test Azure environment without a PR
+npm run azure:upgrade   # compatibility alias for azure:devtest
 npm run azure:verify    # post-deploy health/provenance verification only
 npm run azure:dev       # local dev orchestration (see npm run dev)
 ```

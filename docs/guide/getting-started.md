@@ -12,7 +12,7 @@ You need these tools before you start:
 | Node.js 20.19+ (or 22.12+) — required by Vite 8 | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
 | git | `winget install --id Git.Git -e` | `brew install git` | `sudo apt-get update && sudo apt-get install -y git` |
 | **WSL2 + bubblewrap** — **Windows local dev only** (macOS/Linux run the sandbox natively; see [Why WSL2 on Windows?](#why-wsl2-on-windows) below) | `wsl --install` in an **elevated** PowerShell, then reboot; then inside the distro: `sudo apt-get install -y bubblewrap` | *Not required* | *Not required* |
-| Azure CLI (`az`), logged in via `az login` — only needed for `azure:deploy`/`azure:upgrade`/`azure:verify` (not for local dev) | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
+| Azure CLI (`az`), logged in via `az login` — only needed for `azure:deploy`/`azure:devtest`/`azure:verify` (not for local dev) | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
 
 `npm run setup` (`dev --setup`) checks the local-dev tools (git/.NET/Node)
 itself and prints the matching install command above for your platform if
@@ -219,7 +219,7 @@ contact GitHub or update protected `dev`. Use it freely for
 pure local iteration before a PR exists.
 
 Azure dev/test is also available **before merge**. Run `npm run azure:deploy`
-or `npm run azure:upgrade` from any feature branch/worktree to validate that
+or `npm run azure:devtest` from any feature branch/worktree to validate that
 exact `HEAD` on a personal or shared real cluster. The Azure cluster is the
 integration/staging **environment**; there is intentionally no integration or
 staging **git branch**.
@@ -227,7 +227,7 @@ staging **git branch**.
 ```text
 feature branch/worktree
   ├─ npm run dev                         local-only test, at any time
-  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test/staging environment
+  ├─ azure:deploy / azure:devtest ─────> Azure dev/test/staging environment
   │                                      (optional manual verification at any time)
   └─ PR CI ─> update to latest dev ─> required CI rerun ─> protected dev
                                                                │
@@ -260,14 +260,16 @@ npm run azure:deploy
 
 Use `azure:deploy` for the **first or full idempotent provisioning** of a
 personal, shared dev/test, or staging environment. Once that environment
-exists, use `npm run azure:upgrade` for the normal edit → build → redeploy
-loop from the current `HEAD` — including an unmerged feature-branch `HEAD` —
-then `npm run azure:verify` if you want to rerun only the live checks. For a
-shared environment, coordinate ownership and prefer a clean commit;
-`azure:upgrade -- --allow-dirty` is only a personal/throwaway test escape hatch.
+exists, use `npm run azure:devtest` for **dev/test-to-Azure shipping**: ship
+your current local work (a clean `HEAD`, or uncommitted work with
+`-- --allow-dirty`) straight to that existing environment **without a PR**.
+It is the normal edit → build → redeploy loop, including for an unmerged
+feature branch; `azure:upgrade` is its compatibility alias. Use
+`npm run azure:verify` to rerun only the live checks. `azure:release` is
+separate: it creates a real versioned release from merged `main`.
 
 > **This is a dev/test/staging deploy — not a release.** `azure:deploy` (and
-> `azure:upgrade`) stand up or update a live Azure environment for development,
+> `azure:devtest`) stand up or update a live Azure environment for development,
 > testing, or staging use. They do **not** bump the version, create a git tag,
 > or publish a GitHub Release, and you can run them as often as you like.
 > Cutting an official, versioned release of the project is a *separate* command
@@ -300,7 +302,7 @@ client secret.
 >   and Azure.
 
 For non-interactive deploys (flags, environment variables, or a
-`--params-file`), upgrading an existing deployment (`npm run azure:upgrade`),
+`--params-file`), upgrading an existing deployment (`npm run azure:devtest`),
 and the full flag reference, see the [README's Deploy to Azure
 section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
 [npm script reference](#npm-script-reference) below.
@@ -316,7 +318,8 @@ Every build/deploy/upgrade/release/dev workflow runs through one cross-platform 
 | `npm start` / `npm run dev` | Local dev orchestration (API + web), browser auto-open disabled. Alias for `azure:dev -- --no-browser`. |
 | `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
 | `npm run azure:deploy` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
-| `npm run azure:upgrade` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
+| `npm run azure:devtest` | **Primary dev/test-to-Azure shipping command:** sends current local work to an existing Azure environment without a PR. Builds a new immutable image tag, redeploys, and cycles the warm pool; `-- --allow-dirty` permits uncommitted work only for dev/test. |
+| `npm run azure:upgrade` | Compatibility alias for `azure:devtest`; same underlying command and behavior. |
 | `npm run azure:release` | Current semver publication workflow: bumps `VERSION`, tags, generates a GitHub release, and composes over the shared deploy engine. Its direct commit/push behavior must be split into protected release-PR preparation + exact-SHA publication before protected-branch enforcement; see [RELEASING.md](../../RELEASING.md#cutting-a-release). `--dry-run` remains safe. |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |
 | `npm run azure:dev` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). |
@@ -327,7 +330,7 @@ Every build/deploy/upgrade/release/dev workflow runs through one cross-platform 
 Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full flag list, for example `npm run azure:deploy -- --help`. Useful flags across commands:
 
 - **`azure:deploy`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--keyvault-name`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`.
-- **`azure:upgrade`**: `--allow-dirty` to bypass the clean-working-tree check (dev/test escape hatch only — never use for a real upgrade).
+- **`azure:devtest`**: `--allow-dirty` to bypass the clean-working-tree check (dev/test escape hatch only — never use for a real upgrade).
 - **`azure:dev` / `dev` / `setup`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step), `--setup` (local-only setup, no servers started — this is what `npm run setup` runs).
 - **`azure:release`**: positional `major|minor|patch` bump argument, `--dry-run` (or `DRY_RUN=true`) to preview without tagging/publishing.
 

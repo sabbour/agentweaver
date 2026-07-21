@@ -48,7 +48,7 @@ npm run azure:release -- patch --dry-run
 
 ### What `azure:release` does
 
-[`scripts/azure/release.mjs`](../../scripts/azure/release.mjs) (invoked via `node scripts/azure/cli.mjs release`) automates the full release cycle, delegating build/deploy/verify to the same step modules `azure:deploy` and `azure:upgrade` use:
+[`scripts/azure/release.mjs`](../../scripts/azure/release.mjs) (invoked via `node scripts/azure/cli.mjs release`) automates the full release cycle, delegating build/deploy/verify to the same step modules `azure:deploy` and `azure:devtest` use:
 
 1. **Validates clean working tree** — aborts if there are uncommitted changes.
 2. **Bumps the version** — reads `VERSION`, increments the appropriate component, writes the new value.
@@ -123,12 +123,14 @@ All previous semver tags remain in ACR and are not deleted by the release proces
 
 ## Manual image builds (development)
 
-To build and push images without cutting a release (e.g. for a staging
-environment), use `azure:upgrade`, which builds using the current git SHA as
-the tag and then redeploys:
+For **dev/test-to-Azure shipping**, use `azure:devtest` to ship current local
+work to an existing Azure environment without a PR. It builds from the current
+git SHA and redeploys; `azure:upgrade` is a compatibility alias. Use
+`azure:deploy` for provisioning and `azure:release` only for a real versioned
+release from merged `main`:
 
 ```bash
-npm run azure:upgrade
+npm run azure:devtest
 ```
 
 ## Observability notes
@@ -144,7 +146,8 @@ npm run azure:upgrade
 |---|---|
 | `npm run azure:release` | Full semver release (see above) |
 | `npm run azure:deploy` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
-| `npm run azure:upgrade` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
+| `npm run azure:devtest` | **Primary dev/test-to-Azure shipping:** build/push current local work to an existing environment without a PR, then redeploy and cycle the warm pool |
+| `npm run azure:upgrade` | Compatibility alias for `azure:devtest` |
 | `npm run azure:verify` | Verify the current deployment |
 
 Use `pnpm run` in place of `npm run` if pnpm is your selected package runner.
