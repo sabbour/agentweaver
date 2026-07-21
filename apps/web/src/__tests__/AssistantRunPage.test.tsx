@@ -233,6 +233,30 @@ describe('AssistantRunPage', () => {
     createRequest.resolve(REAL_CREATE_RESPONSE);
   });
 
+  it('keeps the textarea enabled and focused while a send is in flight (#item-1, #item-2)', async () => {
+    const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
+    vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    const textarea = screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement;
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+
+    typeAndSend('hello there');
+
+    // While the request is still pending, the textarea must stay enabled (not
+    // force-blurred by a `disabled` attribute) and keep focus so the user can
+    // immediately start typing their next message.
+    await waitFor(() => expect(textarea.value).toBe(''));
+    expect(textarea.disabled).toBe(false);
+    expect(document.activeElement).toBe(textarea);
+
+    createRequest.resolve(REAL_CREATE_RESPONSE);
+    await waitFor(() => expect(screen.queryByTestId('assistant-empty-state')).toBeNull());
+    expect(textarea.disabled).toBe(false);
+    expect(document.activeElement).toBe(textarea);
+  });
+
   it('renders the tool-approval UI when a permission-required event is streamed', async () => {
     // Seed a pending tool approval on the live stream before the run is created.
     mockRunStreamState.current = {

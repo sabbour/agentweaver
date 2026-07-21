@@ -46,7 +46,7 @@ public class AppVersionProvider : IAppVersionProvider
 
         var normalizedGitSha = string.IsNullOrWhiteSpace(gitSha) || gitSha.Equals("unknown", StringComparison.OrdinalIgnoreCase)
             ? null
-            : gitSha;
+            : ShortenSha(gitSha);
 
         if (IsRelease)
         {
@@ -67,6 +67,13 @@ public class AppVersionProvider : IAppVersionProvider
             GitSha = normalizedGitSha;
         }
     }
+
+    // GIT_SHA is plumbed in as the full 40-char commit SHA (see
+    // scripts/azure/steps/20-build-push-images.mjs -> git.currentGitSha({ cwd }).full),
+    // but the repo's established convention (e.g. IMAGE_TAG) is the 7-char short SHA
+    // (lib/git.mjs's currentGitSha() -> short: full.slice(0, 7)). Truncate here so the
+    // version badge matches that convention; leave shorter values untouched.
+    private static string ShortenSha(string sha) => sha.Length > 7 ? sha[..7] : sha;
 
     private static string ReadVersionFile(IWebHostEnvironment env)
     {
