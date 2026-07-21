@@ -34,7 +34,13 @@ const DIAGRAMS = ['aks-block-diagram', 'aks-component-simplified', 'aks-componen
 const checkMode = process.argv.includes('--check');
 
 function hashFile(contents) {
-  return createHash('sha256').update(contents).digest('hex');
+  // Normalize CRLF -> LF before hashing. Git's autocrlf normalization means a
+  // source file can be CRLF on a Windows dev machine but LF once committed/
+  // checked out (e.g. on Linux CI); hashing raw bytes would make the drift
+  // check itself line-ending-sensitive, repeating the exact class of
+  // cross-platform flakiness this hash-based check was built to avoid.
+  const normalized = contents.toString('utf8').replace(/\r\n/g, '\n');
+  return createHash('sha256').update(normalized).digest('hex');
 }
 
 async function loadManifest() {
