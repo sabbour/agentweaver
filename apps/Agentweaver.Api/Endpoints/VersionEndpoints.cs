@@ -7,7 +7,12 @@ public static class VersionEndpoints
     public static void MapVersionEndpoints(this WebApplication app)
     {
         app.MapGet("/api/version", (IAppVersionProvider versionProvider) =>
-            Results.Ok(new { version = versionProvider.Version }))
+            Results.Ok(new
+            {
+                version = versionProvider.Version,
+                gitSha = versionProvider.GitSha,
+                isRelease = versionProvider.IsRelease,
+            }))
             .AllowAnonymous()
             .WithName("GetVersion");
     }

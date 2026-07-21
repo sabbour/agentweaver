@@ -12,14 +12,44 @@ describe('useAppVersion', () => {
     expect(result.current).toBe('');
   });
 
-  it('returns the version string after a successful fetch', async () => {
+  it('returns the version string after a successful fetch for a real release build', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ version: '0.6.0' }),
+      json: () => Promise.resolve({ version: '0.6.0', gitSha: null, isRelease: true }),
     } as Response);
 
     const { result } = renderHook(() => useAppVersion());
     await waitFor(() => expect(result.current).toBe('0.6.0'));
+  });
+
+  it('returns version+gitSha for a SHA-tagged local/upgrade build', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ version: '0.9.71', gitSha: 'a1c11f1', isRelease: false }),
+    } as Response);
+
+    const { result } = renderHook(() => useAppVersion());
+    await waitFor(() => expect(result.current).toBe('0.9.71-dev+a1c11f1'));
+  });
+
+  it('does not double-append "-dev" when the base version already has a suffix', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ version: '0.9.71-dev', gitSha: 'a1c11f1', isRelease: false }),
+    } as Response);
+
+    const { result } = renderHook(() => useAppVersion());
+    await waitFor(() => expect(result.current).toBe('0.9.71-dev+a1c11f1'));
+  });
+
+  it('falls back to the plain version when no gitSha is present (e.g. local dotnet run)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ version: '0.9.70', gitSha: null, isRelease: false }),
+    } as Response);
+
+    const { result } = renderHook(() => useAppVersion());
+    await waitFor(() => expect(result.current).toBe('0.9.70'));
   });
 
   it('remains empty when the fetch response is not ok', async () => {

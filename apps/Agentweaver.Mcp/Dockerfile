@@ -20,6 +20,10 @@ ARG IMAGE_TAG=dev
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
+# Surface build provenance to the running process (LABELs are image metadata only and
+# are not readable via Environment.GetEnvironmentVariable at runtime).
+ENV IMAGE_TAG=${IMAGE_TAG}
+ENV GIT_SHA=${GIT_SHA}
 
 RUN getent group 1000 || groupadd --gid 1000 appgroup; \
     id -u 1000 >/dev/null 2>&1 || useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home appuser
