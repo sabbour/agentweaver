@@ -8,6 +8,10 @@ import {
   run,
 } from "../deploy-from-commit.mjs";
 
+const TEST_REPO_ROOT = path.resolve("test-fixtures", "aw-deploy-from-commit-test-repo");
+const TEST_CALLER_WORKTREE = path.join(TEST_REPO_ROOT, "caller-worktree");
+const TEST_GIT_COMMON_DIR = path.join(TEST_REPO_ROOT, ".git");
+
 const log = {
   info() {}, section() {}, field() {}, ok() {}, skip() {}, warn() {},
   error() {}, debug() {}, command() {},
@@ -36,7 +40,7 @@ test("resolveCommitRef resolves after the general origin fetch", async () => {
   };
 
   const commit = await resolveCommitRef("origin/feature", {
-    repoRoot: "C:\\repo",
+    repoRoot: TEST_REPO_ROOT,
     exec,
     git,
   });
@@ -57,7 +61,7 @@ test("resolveCommitRef fetches a specific unresolved ref and uses FETCH_HEAD", a
   };
 
   const commit = await resolveCommitRef("pull/123/head", {
-    repoRoot: "C:\\repo",
+    repoRoot: TEST_REPO_ROOT,
     exec,
     git,
   });
@@ -71,7 +75,7 @@ test("resolveCommitRef refuses an unresolvable ref", async () => {
   };
   const git = { revParseCommit: async () => null };
   await assert.rejects(
-    resolveCommitRef("missing", { repoRoot: "C:\\repo", exec, git }),
+    resolveCommitRef("missing", { repoRoot: TEST_REPO_ROOT, exec, git }),
     CommitResolutionError,
   );
 });
@@ -87,7 +91,7 @@ test("run deploys from a detached temporary worktree and removes it", async () =
     capture: async (cmd, args, opts) => {
       calls.push({ type: "capture", cmd, args, opts });
       if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
-        return { code: 0, stdout: "C:\\repo\\.git" };
+        return { code: 0, stdout: TEST_GIT_COMMON_DIR };
       }
       return { code: 0, stdout: "" };
     },
@@ -99,7 +103,7 @@ test("run deploys from a detached temporary worktree and removes it", async () =
   let deployed;
   const result = await run({
     argv: ["origin/feature"],
-    repoRoot: "C:\\repo\\caller-worktree",
+    repoRoot: TEST_CALLER_WORKTREE,
     exec,
     git,
     log,
@@ -116,7 +120,7 @@ test("run deploys from a detached temporary worktree and removes it", async () =
   });
 
   const expectedWorktree = path.join(
-    "C:\\repo",
+    TEST_REPO_ROOT,
     ".worktrees",
     `deploy-from-commit-ccccccc-${process.pid}`,
   );
@@ -146,7 +150,7 @@ test("run removes the temporary worktree when deployment fails", async () => {
     capture: async (cmd, args) => {
       calls.push([cmd, args]);
       if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
-        return { code: 0, stdout: "C:\\repo\\.git" };
+        return { code: 0, stdout: TEST_GIT_COMMON_DIR };
       }
       return { code: 0, stdout: "" };
     },
@@ -156,7 +160,7 @@ test("run removes the temporary worktree when deployment fails", async () => {
   await assert.rejects(
     run({
       argv: ["deadbeef"],
-      repoRoot: "C:\\repo",
+      repoRoot: TEST_REPO_ROOT,
       exec,
       git,
       log,
