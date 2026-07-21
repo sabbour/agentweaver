@@ -71,3 +71,8 @@ tests/e2e/test-results/
 
 # Local-only security assessment findings (not to be committed/published)
 .security/
+
+# Azure toolchain params files (may contain resource names/secrets); the
+# tracked template is scripts/azure/params.example.json
+scripts/azure/params.*.json
+!scripts/azure/params.example.json

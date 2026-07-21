@@ -15,6 +15,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
@@ -58,7 +59,16 @@ export async function run(cfg, opts = {}) {
     fsImpl.mkdirSync(scratchDir, { recursive: true });
     const tmpKeyFile = path.join(scratchDir, `mcp-oauth-signing-key-${process.pid}.pem`);
     try {
-      await exec.run("openssl", ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-outform", "PEM", "-out", tmpKeyFile]);
+      // Uses Node's built-in crypto module (no external 'openssl' process) so
+      // this works identically on every platform, including Windows machines
+      // without openssl on PATH. PKCS8 PEM output matches what 'openssl
+      // genpkey' produced -- both start with '-----BEGIN PRIVATE KEY-----'.
+      const { privateKey } = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: "spki", format: "pem" },
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      });
+      fsImpl.writeFileSync(tmpKeyFile, privateKey);
       log.info(`  Storing private key as Key Vault secret '${SIGNING_KEY_SECRET_NAME}'...`);
       await exec.capture("az", [
         "keyvault",
@@ -92,7 +102,7 @@ export async function run(cfg, opts = {}) {
     log.skip(`Secret '${API_KEY_SECRET_NAME}' already exists in Key Vault '${cfg.KEYVAULT_NAME}'.`);
   } else {
     log.info("  Generating 32-byte random hex key...");
-    const { stdout: generatedApiKey } = await exec.capture("openssl", ["rand", "-hex", "32"]);
+    const generatedApiKey = randomBytes(32).toString("hex");
     await exec.capture("az", [
       "keyvault",
       "secret",
