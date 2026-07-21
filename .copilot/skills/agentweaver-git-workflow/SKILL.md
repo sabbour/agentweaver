@@ -79,8 +79,10 @@ Separate worktrees prevent that collision.
    `apps/`, `packages/`, `scripts/azure/`, or `k8s/` with a real user-facing
    behavior change (not just lint/refactor/test-only), run `npm run changeset`
    (see the [changelog skill](../agentweaver-changelog/SKILL.md)). The
-   `Changeset advisory` CI job only emits a warning — it never blocks merge —
-   so this is easy to silently skip; don't rely on CI to catch it.
+   `Changeset advisory` CI job now fails the build (a required, blocking check)
+   when it detects a release-relevant change with no changeset and no
+   `changeset:not-required` exemption — but running `npm run changeset` locally
+   before pushing still keeps the feedback loop short.
 3. Push and open a draft or ready PR against `dev`:
    ```bash
    git push -u origin "squad/{issue-number}-{slug}"
@@ -92,8 +94,10 @@ Separate worktrees prevent that collision.
      --jq '{mergeable, mergeState: .mergeStateStatus, checks: [.statusCheckRollup[] | {name, status, conclusion}]}'
    ```
    Confirm `mergeable` is `MERGEABLE` (no conflicts) and every required check
-   (`.NET tests`, `Node toolchain tests`, `Web tests`, `Docs build`) shows
-   `conclusion: SUCCESS`. Re-run any failed required check once
+   (`.NET tests`, `Node toolchain tests`, `Web tests`, `Docs build`, `Web lint`,
+   `Changeset advisory`) shows `conclusion: SUCCESS` or `SKIPPED` (path-conditional
+   jobs report `SKIPPED` when their path group didn't change, which still satisfies
+   the required check). Re-run any failed required check once
    (`gh run rerun {run-id} --failed`) to rule out known CPU-contention flakes
    before treating a real failure as caused by the PR's own changes.
 5. After confirming the above, squash-merge.
@@ -114,5 +118,6 @@ worktree naming convention above, run relevant tests, and open a PR against `dev
 - ❌ Creating a local worktree for a hosted agent
 - ❌ Merging or trusting a PR without checking its live `mergeable`/`mergeStateStatus` and each required check's actual `conclusion`
 - ❌ Opening a PR with a real user-facing fix/feature under `apps/`, `packages/`,
-  `scripts/azure/`, or `k8s/` without adding a changeset, and assuming the
-  non-blocking `Changeset advisory` job would have caught it if one were needed
+  `scripts/azure/`, or `k8s/` without adding a changeset — the required
+  `Changeset advisory` check now fails the build for this, but don't rely on CI
+  to catch it; add the changeset (or a documented exemption) before pushing

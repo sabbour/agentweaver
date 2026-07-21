@@ -61,6 +61,31 @@ test("changeset relevance and exemption policy distinguishes advisory cases", ()
   assert.equal(hasChangesetExemption(["changeset:not-required"], "No rationale"), false);
 });
 
+test("isReleaseRelevant excludes test-only paths under release-relevant prefixes", () => {
+  assert.equal(
+    isReleaseRelevant(["apps/web/src/__tests__/App.test.tsx", "packages/foo/src/bar.spec.ts"]),
+    false,
+  );
+  assert.equal(
+    isReleaseRelevant(["apps/web/src/__tests__/App.test.tsx", "apps/web/src/App.tsx"]),
+    true,
+  );
+  assert.equal(isReleaseRelevant(["scripts/azure/tests/deploy.test.mjs"]), false);
+});
+
+test("isReleaseRelevant ignores doc-only and CI/config-only paths", () => {
+  assert.equal(isReleaseRelevant(["docs/guide.md", "README.md"]), false);
+  assert.equal(isReleaseRelevant([".github/workflows/ci.yml", ".squad/decisions.md", ".copilot/skills/x/SKILL.md"]), false);
+});
+
+test("isReleaseMetadataOnly still holds for release-prep-only diffs", () => {
+  assert.equal(
+    isReleaseMetadataOnly(["VERSION", "package.json", "package-lock.json", "CHANGELOG.md", ".changeset/note.md"]),
+    true,
+  );
+  assert.equal(isReleaseMetadataOnly(["VERSION", "apps/web/src/App.tsx"]), false);
+});
+
 test("release preparation validates expected version, branch, and 0.x policy", () => {
   assert.doesNotThrow(() => validateReleasePreparation("0.10.0", "release/v0.10.0", "0.10.0"));
   assert.doesNotThrow(() => validateReleasePreparation("1.0.0", "release/v1.0.0", "1.0.0"));
