@@ -11,7 +11,7 @@ namespace Agentweaver.AgentRuntime;
 public sealed class InMemoryToolApprovalGate : IToolApprovalGate
 {
     // Two-level dictionary: runId → requestId → TCS
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, TaskCompletionSource<bool>>> _pending = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, PendingApproval>> _pending = new();
 
     // runId → requestId → (toolName, url) — populated by SetRequestContext
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, (string ToolName, string? Url)>> _requestContext = new();
@@ -51,33 +51,34 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         var runCtx = _requestContext.GetOrAdd(runId, _ => new ConcurrentDictionary<string, (string, string?)>());
         runCtx[requestId] = (toolName, url);
 
-        var runPending = _pending.GetOrAdd(runId, _ => new ConcurrentDictionary<string, TaskCompletionSource<bool>>());
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runPending = _pending.GetOrAdd(runId, _ => new ConcurrentDictionary<string, PendingApproval>());
+        var pending = new PendingApproval(
+            resolutionState => MarkResolved(runId, requestId, resolutionState));
 
         // Atomically register or replace an existing entry for this requestId.
         // If a duplicate arrives (retry), the previous TCS is resolved as denied so it doesn't leak.
         runPending.AddOrUpdate(requestId,
-            addValueFactory: _ => tcs,
-            updateValueFactory: (_, existing) => { existing.TrySetResult(false); return tcs; });
+            addValueFactory: _ => pending,
+            updateValueFactory: (_, existing) =>
+            {
+                existing.TryResolve(ToolApprovalRequestState.Denied);
+                return pending;
+            });
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
 
         try
         {
-            using var reg = cts.Token.Register(() =>
-            {
-                if (tcs.TrySetResult(false))
-                    MarkResolved(runId, requestId, ToolApprovalRequestState.Expired);
-            });
+            using var reg = cts.Token.Register(() => pending.TryResolve(ToolApprovalRequestState.Expired));
 
-            var result = await tcs.Task.ConfigureAwait(false);
-            MarkResolved(runId, requestId, result ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied);
+            var result = await pending.Completion.Task.ConfigureAwait(false);
             return result;
         }
         finally
         {
-            runPending.TryRemove(requestId, out _);
+            ((ICollection<KeyValuePair<string, PendingApproval>>)runPending)
+                .Remove(new KeyValuePair<string, PendingApproval>(requestId, pending));
         }
     }
 
@@ -167,12 +168,15 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     /// <inheritdoc />
     public ToolApprovalRequestState GetRequestState(string runId, string requestId)
     {
+        if (_pending.TryGetValue(runId, out var runPending) &&
+            runPending.TryGetValue(requestId, out var pending))
+        {
+            return pending.ResolutionState ?? ToolApprovalRequestState.Pending;
+        }
+
         if (_resolved.TryGetValue(runId, out var runResolved) &&
             runResolved.TryGetValue(requestId, out var state))
             return state;
-
-        if (_pending.TryGetValue(runId, out var runPending) && runPending.ContainsKey(requestId))
-            return ToolApprovalRequestState.Pending;
 
         return IsKnownRequest(runId, requestId)
             ? ToolApprovalRequestState.Denied
@@ -188,8 +192,8 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     {
         if (_pending.TryRemove(runId, out var runPending))
         {
-            foreach (var tcs in runPending.Values)
-                tcs.TrySetResult(false);
+            foreach (var pending in runPending.Values)
+                pending.TryResolve(ToolApprovalRequestState.Denied);
         }
 
         _requestContext.TryRemove(runId, out _);
@@ -202,11 +206,8 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     private bool Resolve(string runId, string requestId, bool result)
     {
         if (!_pending.TryGetValue(runId, out var runPending)) return false;
-        if (!runPending.TryGetValue(requestId, out var tcs)) return false;
-        var resolved = tcs.TrySetResult(result);
-        if (resolved)
-            MarkResolved(runId, requestId, result ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied);
-        return resolved;
+        if (!runPending.TryGetValue(requestId, out var pending)) return false;
+        return pending.TryResolve(result ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied);
     }
 
     private void MarkResolved(string runId, string requestId, ToolApprovalRequestState state)
@@ -257,6 +258,44 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         string.Equals(policy.Owner, owner, StringComparison.Ordinal)
         && string.Equals(policy.ToolId, toolName, StringComparison.Ordinal)
         && string.Equals(policy.RiskSemantics, risk, StringComparison.Ordinal);
+
+    private sealed class PendingApproval
+    {
+        private readonly object _sync = new();
+        private readonly Action<ToolApprovalRequestState> _markResolved;
+        private ToolApprovalRequestState? _resolutionState;
+
+        internal PendingApproval(Action<ToolApprovalRequestState> markResolved) =>
+            _markResolved = markResolved;
+
+        internal TaskCompletionSource<bool> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal ToolApprovalRequestState? ResolutionState
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _resolutionState;
+                }
+            }
+        }
+
+        internal bool TryResolve(ToolApprovalRequestState resolutionState)
+        {
+            lock (_sync)
+            {
+                if (_resolutionState is not null)
+                    return false;
+
+                _resolutionState = resolutionState;
+                _markResolved(resolutionState);
+                Completion.TrySetResult(resolutionState == ToolApprovalRequestState.Approved);
+                return true;
+            }
+        }
+    }
 
     private sealed record ApprovalPolicy(string Owner, string ToolId, string RiskSemantics);
 }
