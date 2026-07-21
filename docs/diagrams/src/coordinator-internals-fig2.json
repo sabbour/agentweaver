@@ -1,0 +1,93 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "How drafting works",
+  "alt": "How drafting works: coordinator-draft, await-confirmation RequestPort, autopilot auto-confirm, finalize spec, revise input, orchestrate confirmed spec",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Draft",
+      "label": "coordinator-draft",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "await-confirmation RequestPort",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Auto",
+      "label": "autopilot auto-confirm",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      },
+      "subLabel": "ScheduleUnattendedConfirm"
+    },
+    {
+      "id": "Finalize",
+      "label": "finalize spec",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Revise",
+      "label": "revise input",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Orchestrate",
+      "label": "orchestrate confirmed spec",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Draft",
+      "to": "Gate"
+    },
+    {
+      "from": "Auto",
+      "to": "Gate",
+      "label": "auto-confirm defineOutcome",
+      "dashed": true
+    },
+    {
+      "from": "Gate",
+      "to": "Revise",
+      "label": "revise"
+    },
+    {
+      "from": "Revise",
+      "to": "Draft"
+    },
+    {
+      "from": "Gate",
+      "to": "Finalize",
+      "label": "confirm / decline"
+    },
+    {
+      "from": "Finalize",
+      "to": "Orchestrate"
+    }
+  ]
+}

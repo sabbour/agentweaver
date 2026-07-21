@@ -68,6 +68,33 @@ To add a 4th diagram: add one `docs/diagrams/src/<name>.json` graph-spec (see
 `npm run docs:render-diagrams`, and commit the new `.png` + `.hash.txt`. No
 per-diagram code is needed anywhere in the pipeline.
 
+## Migrating Mermaid flowcharts into this pipeline
+
+Docs that still embed raw ```mermaid ``` fences can be migrated onto this
+pipeline with `scripts/docs/migrate-mermaid.mjs`, which:
+
+* extracts each Mermaid block, and for **flowchart/graph** blocks converts it
+  to a graph-spec JSON (`scripts/docs/mermaid-to-graphspec.mjs`) written to
+  `docs/diagrams/src/<doc>-figN.json`, then replaces the fence in the `.md`
+  with the standard image embed + provenance comment;
+* lifts semantics the Mermaid source already carries — `class <id> <cat>`
+  assignments (client/svc/core/data/ext/runtime/evt), node shapes (`[( )]`
+  cylinder, `{ }` decision, `([ ])` terminal, …) and nested `subgraph`
+  clusters — into card icons/badges and graph-spec groups;
+* leaves **non-flowchart** Mermaid (`sequenceDiagram`, `stateDiagram`,
+  `classDiagram`, `erDiagram`) untouched — those are not representable by the
+  node/edge/group graph-spec and keep rendering via `vitepress-plugin-mermaid`.
+
+```
+node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive   # migrate a folder
+node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive --dry   # preview only
+```
+
+After migrating, run `npm run docs:render-diagrams` to generate the PNGs +
+`.hash.txt`, and eyeball each regenerated PNG. Edges between two `subgraph`
+clusters are approximated to the cluster's first member card (reported as a
+warning), since graph-spec edges connect leaf cards only.
+
 ## Editing an existing diagram
 
 1. Edit the relevant `docs/diagrams/src/<name>.json`.

@@ -1,0 +1,162 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose and Mental Model",
+  "alt": "Purpose and Mental Model: Human operator / reviewer, MCP client, Web UI, Agentweaver API, Agent runtime, Sandboxed tools, Git repo, Durable events, Decisions + memory, Model providers",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Human",
+      "label": "Human operator / reviewer",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "MCPClient",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "Copilot CLI / VS Code / assistants"
+    },
+    {
+      "id": "Web",
+      "label": "Web UI",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "control plane"
+    },
+    {
+      "id": "Runtime",
+      "label": "Agent runtime",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "workflow agents"
+    },
+    {
+      "id": "Sandbox",
+      "label": "Sandboxed tools",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "files + shell"
+    },
+    {
+      "id": "Git",
+      "label": "Git repo",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "worktrees + branches"
+    },
+    {
+      "id": "Events",
+      "label": "Durable events",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Memory",
+      "label": "Decisions + memory",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Providers",
+      "label": "Model providers",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "Copilot / Foundry paths"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Human",
+      "to": "Web"
+    },
+    {
+      "from": "Human",
+      "to": "MCPClient"
+    },
+    {
+      "from": "Web",
+      "to": "API"
+    },
+    {
+      "from": "MCPClient",
+      "to": "API"
+    },
+    {
+      "from": "API",
+      "to": "Runtime"
+    },
+    {
+      "from": "Runtime",
+      "to": "Providers"
+    },
+    {
+      "from": "Runtime",
+      "to": "Sandbox"
+    },
+    {
+      "from": "Sandbox",
+      "to": "Git"
+    },
+    {
+      "from": "API",
+      "to": "Events"
+    },
+    {
+      "from": "API",
+      "to": "Memory"
+    },
+    {
+      "from": "API",
+      "to": "Git"
+    },
+    {
+      "from": "Events",
+      "to": "Web"
+    },
+    {
+      "from": "Events",
+      "to": "MCPClient"
+    },
+    {
+      "from": "Memory",
+      "to": "Runtime"
+    }
+  ]
+}

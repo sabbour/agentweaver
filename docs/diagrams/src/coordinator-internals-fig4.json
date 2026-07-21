@@ -1,0 +1,316 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Collective assembly",
+  "alt": "Collective assembly: CAS awaiting_assembly, All subtasks eligible?, Topological branch order, Build integration branch, GateOrder, by, Collective RAI over aggregate diff, RAI flagged?, Optional Rubberduck critique, BuildTest, Test, detached, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Claim",
+      "label": "CAS awaiting_assembly",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "to assembling"
+    },
+    {
+      "id": "Eligible",
+      "label": "All subtasks eligible?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Order",
+      "label": "Topological branch order",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Integration",
+      "label": "Build integration branch",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "GateOrder",
+      "label": "GateOrder",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "by",
+      "label": "by",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Rai",
+      "label": "Collective RAI over aggregate diff",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "RaiFlag",
+      "label": "RAI flagged?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Rubberduck",
+      "label": "Optional Rubberduck critique",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "BuildTest",
+      "label": "BuildTest",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Test",
+      "label": "Test",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "detached",
+      "label": "detached",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Preview",
+      "label": "Preview",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ready",
+      "label": "ready",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "Collective human review",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Decision",
+      "label": "Decision",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge integration branch",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Scribe",
+      "label": "Collective scribe",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Complete",
+      "label": "Complete parent run",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "RequestChanges",
+      "label": "Infer affected subtasks",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "reset to pending"
+    },
+    {
+      "id": "AlreadyClaimed",
+      "label": "Already claimed",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "skip"
+    },
+    {
+      "id": "Blocked",
+      "label": "Blocked / needs resolution / failed",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Dispatching",
+      "label": "Back to dispatch",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Claim",
+      "to": "AlreadyClaimed",
+      "label": "lost"
+    },
+    {
+      "from": "Claim",
+      "to": "Eligible",
+      "label": "won"
+    },
+    {
+      "from": "Eligible",
+      "to": "Blocked",
+      "label": "no"
+    },
+    {
+      "from": "Eligible",
+      "to": "Order",
+      "label": "yes"
+    },
+    {
+      "from": "Order",
+      "to": "Integration"
+    },
+    {
+      "from": "Integration",
+      "to": "GateOrder",
+      "label": "auto-resolve / ok"
+    },
+    {
+      "from": "GateOrder",
+      "to": "Rai"
+    },
+    {
+      "from": "Rai",
+      "to": "RaiFlag"
+    },
+    {
+      "from": "RaiFlag",
+      "to": "Blocked",
+      "label": "yes"
+    },
+    {
+      "from": "RaiFlag",
+      "to": "Rubberduck",
+      "label": "no"
+    },
+    {
+      "from": "Rubberduck",
+      "to": "BuildTest"
+    },
+    {
+      "from": "BuildTest",
+      "to": "Preview"
+    },
+    {
+      "from": "Preview",
+      "to": "Review"
+    },
+    {
+      "from": "Review",
+      "to": "Decision"
+    },
+    {
+      "from": "Decision",
+      "to": "Merge",
+      "label": "approve"
+    },
+    {
+      "from": "Decision",
+      "to": "RequestChanges",
+      "label": "request changes"
+    },
+    {
+      "from": "Decision",
+      "to": "Blocked",
+      "label": "decline"
+    },
+    {
+      "from": "Merge",
+      "to": "Blocked",
+      "label": "conflict or failure"
+    },
+    {
+      "from": "Merge",
+      "to": "Scribe",
+      "label": "merged"
+    },
+    {
+      "from": "Scribe",
+      "to": "Complete"
+    },
+    {
+      "from": "RequestChanges",
+      "to": "Dispatching"
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Sandbox and Tool Governance",
+  "alt": "Sandbox and Tool Governance: Model requests tool call, Registered Agentweaver tool, Governance policy, Tool-specific backend checks, Path containment, Sandbox executor gate, Run worktree, Denied",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Model",
+      "label": "Model requests tool call",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Tool",
+      "label": "Registered Agentweaver tool",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Policy",
+      "label": "Governance policy",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "default deny"
+    },
+    {
+      "id": "Backend",
+      "label": "Tool-specific backend checks",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Path",
+      "label": "Path containment",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "open then verify"
+    },
+    {
+      "id": "Exec",
+      "label": "Sandbox executor gate",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Workspace",
+      "label": "Run worktree",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Deny",
+      "label": "Denied",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Model",
+      "to": "Tool"
+    },
+    {
+      "from": "Tool",
+      "to": "Policy"
+    },
+    {
+      "from": "Policy",
+      "to": "Deny",
+      "label": "unknown / disallowed"
+    },
+    {
+      "from": "Policy",
+      "to": "Backend",
+      "label": "allowed"
+    },
+    {
+      "from": "Backend",
+      "to": "Deny",
+      "label": "invalid args"
+    },
+    {
+      "from": "Backend",
+      "to": "Path",
+      "label": "file tool"
+    },
+    {
+      "from": "Backend",
+      "to": "Exec",
+      "label": "shell tool"
+    },
+    {
+      "from": "Path",
+      "to": "Workspace",
+      "label": "safe"
+    },
+    {
+      "from": "Exec",
+      "to": "Workspace",
+      "label": "isolated"
+    }
+  ]
+}

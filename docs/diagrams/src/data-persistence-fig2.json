@@ -1,0 +1,71 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Decisions, Memory, and Context Assembly",
+  "alt": "Decisions, Memory, and Context Assembly: Accepted architectural/scope decisions, Agent core context, High-importance learnings and patterns, Current open session, Compiled prompt context",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Accepted architectural/scope decisions",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Agent core context",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "C",
+      "label": "High-importance learnings and patterns",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Current open session",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Compiled prompt context",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    }
+  ]
+}

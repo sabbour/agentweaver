@@ -1,0 +1,80 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The phased rollout",
+  "alt": "The phased rollout: P1 — Agent execution in pods, P2 — Azure PostgreSQL, P3 — Web/worker split + run leasing, stops OOM, horizontal scale",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "P1",
+      "label": "P1 — Agent execution in pods",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "THE OOM fix",
+      "meta": "stays on SQLite, replicas:1"
+    },
+    {
+      "id": "P2",
+      "label": "P2 — Azure PostgreSQL",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "multi-writer data layer",
+      "meta": "drop RWO PVC, allow replicas above 1"
+    },
+    {
+      "id": "P3",
+      "label": "P3 — Web/worker split + run leasing",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "horizontal scale of both tiers"
+    },
+    {
+      "id": "Done1",
+      "label": "stops OOM",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Done2",
+      "label": "horizontal scale",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "P1",
+      "to": "P2"
+    },
+    {
+      "from": "P2",
+      "to": "P3"
+    },
+    {
+      "from": "P1",
+      "to": "Done1",
+      "label": "OOM relieved here",
+      "dashed": true
+    },
+    {
+      "from": "P3",
+      "to": "Done2",
+      "label": "scale-out here",
+      "dashed": true
+    }
+  ]
+}

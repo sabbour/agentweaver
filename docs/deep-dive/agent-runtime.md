@@ -187,24 +187,12 @@ This is the key nuance:
 
 > The dispatcher can route to Foundry, but the live project/coordinator run path builds the Copilot workflow agent. Foundry is wired behind the dispatcher, not selected by the app-level live workflow factory.
 
-```mermaid
-flowchart TD
-    A[Caller wants model execution] --> B{Which seam?}
+![Seam 2: the live workflow turn-agent seam: Caller wants model execution, Which seam?, AgentRunnerDispatcher, ModelSource, GitHub Copilot runner, Foundry runner, Fail fast, RunWorkflowFactory, AgentTurnExecutor, CopilotAIAgent, SetupAsync + RunTurnAsync, Casting / model-assisted generation, …](../diagrams/agent-runtime-fig1.png)
 
-    B -->|IAgentRunner one-shot seam| C[AgentRunnerDispatcher]
-    C --> D{ModelSource}
-    D -->|GitHubCopilot| E[GitHub Copilot runner]
-    D -->|MicrosoftFoundry| F[Foundry runner]
-    D -->|Unknown| G[Fail fast]
-
-    B -->|Live project/coordinator workflow| H[RunWorkflowFactory]
-    H --> I[AgentTurnExecutor]
-    I --> J[CopilotAIAgent]
-    J --> K[SetupAsync + RunTurnAsync]
-
-    L[Casting / model-assisted generation] --> C
-    M[Project runs / coordinator child runs] --> H
-```
+<!-- Rendered from ../diagrams/src/agent-runtime-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why keep both seams?
 
@@ -326,24 +314,12 @@ replica.
 
 The tool should always produce a useful result even when the gate is unavailable or times out: either a denial, a fallback instruction to use best judgment, or an explicit explanation. Silent blocking is not acceptable.
 
-```mermaid
-flowchart LR
-    M[Model requests capability] --> R{Runtime classification}
-    R -->|Native file/shell/fetch| P[Permission handler]
-    R -->|Registered AIFunction| F[Function invocation]
-    R -->|Agentweaver API tool| A[Loopback API call]
+![Human-in-the-loop tools: Model requests capability, Runtime classification, Permission handler, Function invocation, Loopback API call, Governance evaluation, Project API authorization/scope, Execute, Return denial + emit tool.error, String result, Normalized run events](../diagrams/agent-runtime-fig2.png)
 
-    P --> G[Governance evaluation]
-    F --> G
-    A --> S[Project API authorization/scope]
-
-    G -->|Allowed| X[Execute]
-    G -->|Denied| D[Return denial + emit tool.error]
-    X --> O[String result]
-    D --> O
-    O --> E[Normalized run events]
-    E --> M
-```
+<!-- Rendered from ../diagrams/src/agent-runtime-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Where this lives:
 

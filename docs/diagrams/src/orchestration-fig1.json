@@ -1,0 +1,113 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose & Mental Model",
+  "alt": "Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Request",
+      "label": "Human request or Ready backlog task",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator orchestration",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "understand, confirm, decompose"
+    },
+    {
+      "id": "Plan",
+      "label": "OutcomeSpec + WorkPlan DAG",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Dispatch",
+      "label": "Dispatch ready subtasks",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ChildRuns",
+      "label": "Child runs",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "agent work + safety gate"
+    },
+    {
+      "id": "Assembly",
+      "label": "Collective assembly",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Workflow",
+      "label": "Run workflow orchestration",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "review, merge, scribe"
+    },
+    {
+      "id": "Result",
+      "label": "Reviewed merged outcome + recorded learnings",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Request",
+      "to": "Coordinator"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Plan"
+    },
+    {
+      "from": "Plan",
+      "to": "Dispatch"
+    },
+    {
+      "from": "Dispatch",
+      "to": "ChildRuns"
+    },
+    {
+      "from": "ChildRuns",
+      "to": "Assembly"
+    },
+    {
+      "from": "Assembly",
+      "to": "Workflow"
+    },
+    {
+      "from": "Workflow",
+      "to": "Result"
+    }
+  ]
+}

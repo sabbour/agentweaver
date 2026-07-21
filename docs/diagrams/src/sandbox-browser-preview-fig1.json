@@ -1,0 +1,131 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "End-to-end flow",
+  "alt": "End-to-end flow: Browser, Preview Gateway, API orchestrator, HTTPRoute, ClusterIP Service, Sandbox pod, TcpPortForwarder, Preview app",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "User",
+      "label": "Browser",
+      "icon": "box",
+      "badge": {
+        "text": "Terminal",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "GW",
+      "label": "Preview Gateway",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "agentweaver-preview-gateway"
+    },
+    {
+      "id": "API",
+      "label": "API orchestrator",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "creates objects only"
+    },
+    {
+      "id": "Route",
+      "label": "HTTPRoute",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "preview-token"
+    },
+    {
+      "id": "Svc",
+      "label": "ClusterIP Service",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "subLabel": "preview-token"
+    },
+    {
+      "id": "Pub",
+      "label": "Sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "0.0.0.0:{publicPort}",
+      "meta": "3000-9000"
+    },
+    {
+      "id": "Fwd",
+      "label": "TcpPortForwarder",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "inside sandbox pod"
+    },
+    {
+      "id": "App",
+      "label": "Preview app",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "127.0.0.1:{appPort}",
+      "meta": "or framework bind"
+    }
+  ],
+  "edges": [
+    {
+      "from": "User",
+      "to": "GW",
+      "label": "https://{token}-preview.{ZoneSuffix}"
+    },
+    {
+      "from": "API",
+      "to": "Route",
+      "dashed": true
+    },
+    {
+      "from": "API",
+      "to": "Svc",
+      "dashed": true
+    },
+    {
+      "from": "GW",
+      "to": "Route",
+      "label": "hostname match"
+    },
+    {
+      "from": "Route",
+      "to": "Svc",
+      "label": "backendRef :80"
+    },
+    {
+      "from": "Svc",
+      "to": "Pub",
+      "label": "selector preview-run"
+    },
+    {
+      "from": "Pub",
+      "to": "Fwd",
+      "label": "accepted in pod"
+    },
+    {
+      "from": "Fwd",
+      "to": "App",
+      "label": "pump TCP"
+    }
+  ]
+}

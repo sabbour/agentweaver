@@ -1,0 +1,104 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Mid-turn drop: re-drive from the last checkpoint",
+  "alt": "Mid-turn drop: re-drive from the last checkpoint: Turn starts, Worker CheckpointManager, A2A message:stream in flight, Commit turn output, Worker re-claims run, Restore latest checkpoint blob, Re-claim warm pod + /configure, replay session",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Start",
+      "label": "Turn starts",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "CK1",
+      "label": "Worker CheckpointManager",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "session blob + superstep state"
+    },
+    {
+      "id": "Stream",
+      "label": "A2A message:stream in flight",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Done",
+      "label": "Commit turn output",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Reclaim",
+      "label": "Worker re-claims run",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Restore",
+      "label": "Restore latest checkpoint blob",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Respawn",
+      "label": "Re-claim warm pod + /configure, replay session",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Start",
+      "to": "CK1"
+    },
+    {
+      "from": "CK1",
+      "to": "Stream"
+    },
+    {
+      "from": "Stream",
+      "to": "Done",
+      "label": "stream completes"
+    },
+    {
+      "from": "Stream",
+      "to": "Reclaim",
+      "label": "mid-turn drop — no Last-Event-ID replay"
+    },
+    {
+      "from": "Reclaim",
+      "to": "Restore"
+    },
+    {
+      "from": "Restore",
+      "to": "Respawn"
+    },
+    {
+      "from": "Respawn",
+      "to": "Stream"
+    }
+  ]
+}

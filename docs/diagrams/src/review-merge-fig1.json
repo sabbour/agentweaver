@@ -1,0 +1,135 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose & Mental Model",
+  "alt": "Purpose & Mental Model: Agent-produced work, Project review policy, Effective workflow, Automated review gates, Human review gate, Decision, Return to producer, Merge gate, Terminal outcome",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Work",
+      "label": "Agent-produced work",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Policy",
+      "label": "Project review policy",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Compose",
+      "label": "Effective workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Auto",
+      "label": "Automated review gates",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "RAI / rubberduck"
+    },
+    {
+      "id": "Human",
+      "label": "Human review gate",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Decision",
+      "label": "Decision",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Revise",
+      "label": "Return to producer",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Terminal",
+      "label": "Terminal outcome",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Policy",
+      "to": "Compose"
+    },
+    {
+      "from": "Work",
+      "to": "Compose"
+    },
+    {
+      "from": "Compose",
+      "to": "Auto"
+    },
+    {
+      "from": "Auto",
+      "to": "Human"
+    },
+    {
+      "from": "Human",
+      "to": "Decision"
+    },
+    {
+      "from": "Decision",
+      "to": "Merge",
+      "label": "approve"
+    },
+    {
+      "from": "Merge",
+      "to": "Terminal"
+    },
+    {
+      "from": "Decision",
+      "to": "Revise",
+      "label": "request changes"
+    },
+    {
+      "from": "Revise",
+      "to": "Work"
+    },
+    {
+      "from": "Decision",
+      "to": "Terminal",
+      "label": "decline"
+    }
+  ]
+}

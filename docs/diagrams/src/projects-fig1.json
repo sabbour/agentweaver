@@ -1,0 +1,155 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Workspace provisioning",
+  "alt": "Workspace provisioning: Create project request, Workspace provider, Use caller-supplied path, Create directory if absent, Check writable, Use project id as storage identity, MountRoot / projectId, Create per-project directory, Write/delete probe, Workspace ready, Initialize or clone Git repository",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Request",
+      "label": "Create project request",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Provider",
+      "label": "Workspace provider",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "LocalPath",
+      "label": "Use caller-supplied path",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "LocalEnsure",
+      "label": "Create directory if absent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "LocalProbe",
+      "label": "Check writable",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ProjectId",
+      "label": "Use project id as storage identity",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "PvcPath",
+      "label": "MountRoot / projectId",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "PvcEnsure",
+      "label": "Create per-project directory",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "PvcProbe",
+      "label": "Write/delete probe",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "WorkspaceReady",
+      "label": "Workspace ready",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Git",
+      "label": "Initialize or clone Git repository",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Request",
+      "to": "Provider"
+    },
+    {
+      "from": "Provider",
+      "to": "LocalPath",
+      "label": "local"
+    },
+    {
+      "from": "LocalPath",
+      "to": "LocalEnsure"
+    },
+    {
+      "from": "LocalEnsure",
+      "to": "LocalProbe"
+    },
+    {
+      "from": "Provider",
+      "to": "ProjectId",
+      "label": "persistent-volume"
+    },
+    {
+      "from": "ProjectId",
+      "to": "PvcPath"
+    },
+    {
+      "from": "PvcPath",
+      "to": "PvcEnsure"
+    },
+    {
+      "from": "PvcEnsure",
+      "to": "PvcProbe"
+    },
+    {
+      "from": "LocalProbe",
+      "to": "WorkspaceReady"
+    },
+    {
+      "from": "PvcProbe",
+      "to": "WorkspaceReady"
+    },
+    {
+      "from": "WorkspaceReady",
+      "to": "Git"
+    }
+  ]
+}

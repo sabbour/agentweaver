@@ -1,0 +1,173 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Coordinator Orchestration Flow",
+  "alt": "Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Goal",
+      "label": "User goal",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Coord",
+      "label": "Coordinator run",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Spec",
+      "label": "Outcome spec",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Plan",
+      "label": "Work plan",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Topology",
+      "label": "Server-authored topology",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ChildA",
+      "label": "Child run A",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "ChildB",
+      "label": "Child run B",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "ChildN",
+      "label": "Child run N",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "CoordStream",
+      "label": "Coordinator event stream",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "All-up coordinator page",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Steer",
+      "label": "Steering / answers / approvals",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Goal",
+      "to": "Coord"
+    },
+    {
+      "from": "Coord",
+      "to": "Spec"
+    },
+    {
+      "from": "Spec",
+      "to": "Plan"
+    },
+    {
+      "from": "Plan",
+      "to": "Topology"
+    },
+    {
+      "from": "Topology",
+      "to": "ChildA"
+    },
+    {
+      "from": "Topology",
+      "to": "ChildB"
+    },
+    {
+      "from": "Topology",
+      "to": "ChildN"
+    },
+    {
+      "from": "ChildA",
+      "to": "CoordStream"
+    },
+    {
+      "from": "ChildB",
+      "to": "CoordStream"
+    },
+    {
+      "from": "ChildN",
+      "to": "CoordStream"
+    },
+    {
+      "from": "CoordStream",
+      "to": "UI"
+    },
+    {
+      "from": "UI",
+      "to": "Steer"
+    },
+    {
+      "from": "Steer",
+      "to": "Coord"
+    },
+    {
+      "from": "Steer",
+      "to": "ChildA"
+    },
+    {
+      "from": "Steer",
+      "to": "ChildB"
+    },
+    {
+      "from": "Steer",
+      "to": "ChildN"
+    }
+  ]
+}

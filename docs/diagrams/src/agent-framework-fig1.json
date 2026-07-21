@@ -1,0 +1,134 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The Workflow graph: typed executors and edges",
+  "alt": "The Workflow graph: typed executors and edges: agent-turn, rai gate, review-adapter, review-gate, merge-adapter, merge, scribe, terminal",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Agent",
+      "label": "agent-turn",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "AgentTurnExecutor (AIAgent leaf)"
+    },
+    {
+      "id": "Rai",
+      "label": "rai gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "RaiTurnExecutor"
+    },
+    {
+      "id": "RAdapter",
+      "label": "review-adapter",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "(type adapter)"
+    },
+    {
+      "id": "Gate",
+      "label": "review-gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "RequestPort"
+    },
+    {
+      "id": "MAdapter",
+      "label": "merge-adapter",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "(type adapter)"
+    },
+    {
+      "id": "Merge",
+      "label": "merge",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "MergeExecutor"
+    },
+    {
+      "id": "Scribe",
+      "label": "scribe",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "ScribeTurnExecutor"
+    },
+    {
+      "id": "Done",
+      "label": "terminal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Agent",
+      "to": "Rai"
+    },
+    {
+      "from": "Rai",
+      "to": "Agent",
+      "label": "revise"
+    },
+    {
+      "from": "Rai",
+      "to": "RAdapter",
+      "label": "review"
+    },
+    {
+      "from": "RAdapter",
+      "to": "Gate"
+    },
+    {
+      "from": "Gate",
+      "to": "MAdapter",
+      "label": "approved"
+    },
+    {
+      "from": "MAdapter",
+      "to": "Merge"
+    },
+    {
+      "from": "Merge",
+      "to": "Scribe"
+    },
+    {
+      "from": "Scribe",
+      "to": "Done"
+    },
+    {
+      "from": "Gate",
+      "to": "Agent",
+      "label": "request-changes"
+    },
+    {
+      "from": "Gate",
+      "to": "Done",
+      "label": "declined"
+    }
+  ]
+}

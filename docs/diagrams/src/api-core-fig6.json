@@ -1,0 +1,136 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Diagnostics model",
+  "alt": "Diagnostics model: Diagnostics request, Diagnostics service, SQLite reachability, Data directory write probe, Built-in workflow availability, Built-in review policy availability, Coordinator heartbeat status, Project store read, GitHub CLI/auth surface, Diagnostic DTO with pass/fail/details/duration",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "D",
+      "label": "Diagnostics request",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "S",
+      "label": "Diagnostics service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "DB",
+      "label": "SQLite reachability",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Disk",
+      "label": "Data directory write probe",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Workflow",
+      "label": "Built-in workflow availability",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Policy",
+      "label": "Built-in review policy availability",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Heartbeat",
+      "label": "Coordinator heartbeat status",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Projects",
+      "label": "Project store read",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "GitHub",
+      "label": "GitHub CLI/auth surface",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Result",
+      "label": "Diagnostic DTO with pass/fail/details/duration",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "D",
+      "to": "S"
+    },
+    {
+      "from": "S",
+      "to": "DB"
+    },
+    {
+      "from": "S",
+      "to": "Disk"
+    },
+    {
+      "from": "S",
+      "to": "Workflow"
+    },
+    {
+      "from": "S",
+      "to": "Policy"
+    },
+    {
+      "from": "S",
+      "to": "Heartbeat"
+    },
+    {
+      "from": "S",
+      "to": "Projects"
+    },
+    {
+      "from": "S",
+      "to": "GitHub"
+    },
+    {
+      "from": "S",
+      "to": "Result"
+    }
+  ]
+}

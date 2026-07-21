@@ -1,0 +1,110 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Source Precedence",
+  "alt": "Source Precedence: Built-in default, Catalog workflow library, Project .agentweaver/workflows, Parse YAML, Structural validation, Bindability validation, Blueprint allowed set filter, Project workflow cache",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "BuiltIn",
+      "label": "Built-in default",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Catalog",
+      "label": "Catalog workflow library",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ProjectFiles",
+      "label": "Project .agentweaver/workflows",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Load",
+      "label": "Parse YAML",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Validate",
+      "label": "Structural validation",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "BindDryRun",
+      "label": "Bindability validation",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Allowed",
+      "label": "Blueprint allowed set filter",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Cache",
+      "label": "Project workflow cache",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "BuiltIn",
+      "to": "Load"
+    },
+    {
+      "from": "Catalog",
+      "to": "Load"
+    },
+    {
+      "from": "ProjectFiles",
+      "to": "Load"
+    },
+    {
+      "from": "Load",
+      "to": "Validate"
+    },
+    {
+      "from": "Validate",
+      "to": "BindDryRun"
+    },
+    {
+      "from": "BindDryRun",
+      "to": "Allowed"
+    },
+    {
+      "from": "Allowed",
+      "to": "Cache"
+    }
+  ]
+}

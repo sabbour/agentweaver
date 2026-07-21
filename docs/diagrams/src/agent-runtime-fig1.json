@@ -1,0 +1,180 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Seam 2: the live workflow turn-agent seam",
+  "alt": "Seam 2: the live workflow turn-agent seam: Caller wants model execution, Which seam?, AgentRunnerDispatcher, ModelSource, GitHub Copilot runner, Foundry runner, Fail fast, RunWorkflowFactory, AgentTurnExecutor, CopilotAIAgent, SetupAsync + RunTurnAsync, Casting / model-assisted generation, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Caller wants model execution",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Which seam?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "C",
+      "label": "AgentRunnerDispatcher",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "ModelSource",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "E",
+      "label": "GitHub Copilot runner",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Foundry runner",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Fail fast",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "H",
+      "label": "RunWorkflowFactory",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "I",
+      "label": "AgentTurnExecutor",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "J",
+      "label": "CopilotAIAgent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "K",
+      "label": "SetupAsync + RunTurnAsync",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "L",
+      "label": "Casting / model-assisted generation",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "M",
+      "label": "Project runs / coordinator child runs",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "label": "IAgentRunner one-shot seam"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E",
+      "label": "GitHubCopilot"
+    },
+    {
+      "from": "D",
+      "to": "F",
+      "label": "MicrosoftFoundry"
+    },
+    {
+      "from": "D",
+      "to": "G",
+      "label": "Unknown"
+    },
+    {
+      "from": "B",
+      "to": "H",
+      "label": "Live project/coordinator workflow"
+    },
+    {
+      "from": "H",
+      "to": "I"
+    },
+    {
+      "from": "I",
+      "to": "J"
+    },
+    {
+      "from": "J",
+      "to": "K"
+    },
+    {
+      "from": "L",
+      "to": "C"
+    },
+    {
+      "from": "M",
+      "to": "H"
+    }
+  ]
+}

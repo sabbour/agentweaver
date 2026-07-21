@@ -1,0 +1,210 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "GitHub org authorization and the SAML nuance",
+  "alt": "GitHub org authorization and the SAML nuance: Non-exempt request, Caller context exists?, 401 unauthenticated, Agentweaver OAuth JWT?, JWT org claim matches allowed org?, Allow, 403, Use caller GitHub token + login, Authenticated private org membership check, Team restriction configured?, Unauthenticated public-membership check, 403 retry later; do not cache, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Non-exempt request",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Caller context exists?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "U",
+      "label": "401 unauthenticated",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Agentweaver OAuth JWT?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "D",
+      "label": "JWT org claim matches allowed org?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ALLOW",
+      "label": "Allow",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "DENY",
+      "label": "403",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Use caller GitHub token + login",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "P",
+      "label": "Authenticated private org membership check",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "T",
+      "label": "Team restriction configured?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "PUB",
+      "label": "Unauthenticated public-membership check",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "RETRY",
+      "label": "403 retry later; do not cache",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "TEAM",
+      "label": "Authenticated team membership check",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "U",
+      "label": "no"
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "label": "yes"
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "label": "yes"
+    },
+    {
+      "from": "D",
+      "to": "ALLOW",
+      "label": "yes"
+    },
+    {
+      "from": "D",
+      "to": "DENY",
+      "label": "no"
+    },
+    {
+      "from": "C",
+      "to": "E",
+      "label": "no"
+    },
+    {
+      "from": "E",
+      "to": "P"
+    },
+    {
+      "from": "P",
+      "to": "T",
+      "label": "member"
+    },
+    {
+      "from": "P",
+      "to": "PUB",
+      "label": "SAML blocked / not member / inconclusive"
+    },
+    {
+      "from": "PUB",
+      "to": "T",
+      "label": "public member"
+    },
+    {
+      "from": "PUB",
+      "to": "RETRY",
+      "label": "private check inconclusive"
+    },
+    {
+      "from": "PUB",
+      "to": "DENY",
+      "label": "not public and private check definitive"
+    },
+    {
+      "from": "T",
+      "to": "ALLOW",
+      "label": "no"
+    },
+    {
+      "from": "T",
+      "to": "TEAM",
+      "label": "yes"
+    },
+    {
+      "from": "TEAM",
+      "to": "ALLOW",
+      "label": "member"
+    },
+    {
+      "from": "TEAM",
+      "to": "DENY",
+      "label": "not member or SAML blocked"
+    }
+  ]
+}

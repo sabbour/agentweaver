@@ -1,0 +1,151 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose and mental model",
+  "alt": "Purpose and mental model: Unit and component tests, In-process API integration, Deterministic workflow tests, Security and sandbox tests, Opt-in / staging e2e, No network, In-process host, Temp git repos, Sandbox boundary, Staging deployment",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Unit",
+      "label": "Unit and component tests",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "pure rules, validators, stores"
+    },
+    {
+      "id": "Integration",
+      "label": "In-process API integration",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "WebApplicationFactory + real Program"
+    },
+    {
+      "id": "Workflow",
+      "label": "Deterministic workflow tests",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "fake agents + real gates + real git"
+    },
+    {
+      "id": "Security",
+      "label": "Security and sandbox tests",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "escape attempts, path rules, races"
+    },
+    {
+      "id": "E2E",
+      "label": "Opt-in / staging e2e",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Playwright + live provider smoke"
+    },
+    {
+      "id": "Local",
+      "label": "No network",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ApiHost",
+      "label": "In-process host",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Git",
+      "label": "Temp git repos",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Boundary",
+      "label": "Sandbox boundary",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Staging",
+      "label": "Staging deployment",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Unit",
+      "to": "Integration"
+    },
+    {
+      "from": "Integration",
+      "to": "Workflow"
+    },
+    {
+      "from": "Workflow",
+      "to": "Security"
+    },
+    {
+      "from": "Security",
+      "to": "E2E"
+    },
+    {
+      "from": "Unit",
+      "to": "Local",
+      "label": "fast, hermetic",
+      "dashed": true
+    },
+    {
+      "from": "Integration",
+      "to": "ApiHost",
+      "label": "real SQLite + HTTP",
+      "dashed": true
+    },
+    {
+      "from": "Workflow",
+      "to": "Git",
+      "label": "real worktrees",
+      "dashed": true
+    },
+    {
+      "from": "Security",
+      "to": "Boundary",
+      "label": "canary + denial oracles",
+      "dashed": true
+    },
+    {
+      "from": "E2E",
+      "to": "Staging",
+      "label": "explicit opt-in",
+      "dashed": true
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "How Merge Actually Happens",
+  "alt": "How Merge Actually Happens: Approved reviewed tree, Repository lock?, CAS to merging?, Git merge, Merged, Merge failed, Blocked, Internal error",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Approved",
+      "label": "Approved reviewed tree",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Lock",
+      "label": "Repository lock?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "Postgres advisory or local semaphore"
+    },
+    {
+      "id": "Cas",
+      "label": "CAS to merging?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "GitMerge",
+      "label": "Git merge",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Success",
+      "label": "Merged",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Conflict",
+      "label": "Merge failed",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "conflict preserved"
+    },
+    {
+      "id": "Blocked",
+      "label": "Blocked",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "return to review"
+    },
+    {
+      "id": "Error",
+      "label": "Internal error",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "explicit failure/retry state"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Approved",
+      "to": "Lock"
+    },
+    {
+      "from": "Lock",
+      "to": "Blocked",
+      "label": "no"
+    },
+    {
+      "from": "Lock",
+      "to": "Cas",
+      "label": "yes"
+    },
+    {
+      "from": "Cas",
+      "to": "Blocked",
+      "label": "no"
+    },
+    {
+      "from": "Cas",
+      "to": "GitMerge",
+      "label": "yes"
+    },
+    {
+      "from": "GitMerge",
+      "to": "Success",
+      "label": "success"
+    },
+    {
+      "from": "GitMerge",
+      "to": "Conflict",
+      "label": "conflict"
+    },
+    {
+      "from": "GitMerge",
+      "to": "Blocked",
+      "label": "blocked"
+    },
+    {
+      "from": "GitMerge",
+      "to": "Error",
+      "label": "error"
+    }
+  ]
+}

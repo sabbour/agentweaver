@@ -1,0 +1,77 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Review Policy as a Safety Overlay",
+  "alt": "Review Policy as a Safety Overlay: Producer, Existing pre-merge gates, Injected policy gates, Merge, Terminal",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Agent",
+      "label": "Producer",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Existing",
+      "label": "Existing pre-merge gates",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Injected",
+      "label": "Injected policy gates",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Terminal",
+      "label": "Terminal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Agent",
+      "to": "Existing"
+    },
+    {
+      "from": "Existing",
+      "to": "Injected"
+    },
+    {
+      "from": "Injected",
+      "to": "Merge"
+    },
+    {
+      "from": "Injected",
+      "to": "Agent",
+      "label": "revise / request-changes"
+    },
+    {
+      "from": "Injected",
+      "to": "Terminal",
+      "label": "safety-failed / declined"
+    }
+  ]
+}

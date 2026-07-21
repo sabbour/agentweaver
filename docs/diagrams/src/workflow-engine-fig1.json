@@ -1,0 +1,220 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose & Mental Model",
+  "alt": "Purpose & Mental Model: RunOrchestrator launches run, WorkflowDefinition policy graph, RunWorkflowFactory builds MAF Workflow, AgentTurnExecutor, RaiTurnExecutor, RequestPort review-gate, MergeExecutor, ScribeTurnExecutor, Executor lifecycle events, RunWatchLoopService, SSE stream: workflow.step, FileSystemJsonCheckpointStore, …",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "MAF",
+      "label": "MAF Workflow graph",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Orch",
+      "label": "RunOrchestrator launches run",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Def",
+      "label": "WorkflowDefinition policy graph",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Factory",
+      "label": "RunWorkflowFactory builds MAF Workflow",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Agent",
+      "label": "AgentTurnExecutor",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "MAF"
+    },
+    {
+      "id": "Rai",
+      "label": "RaiTurnExecutor",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "MAF"
+    },
+    {
+      "id": "Gate",
+      "label": "RequestPort review-gate",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "MAF"
+    },
+    {
+      "id": "Merge",
+      "label": "MergeExecutor",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "MAF"
+    },
+    {
+      "id": "Scribe",
+      "label": "ScribeTurnExecutor",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "MAF"
+    },
+    {
+      "id": "Events",
+      "label": "Executor lifecycle events",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Watch",
+      "label": "RunWatchLoopService",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "SSE",
+      "label": "SSE stream: workflow.step",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Ckpt",
+      "label": "FileSystemJsonCheckpointStore",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Pending",
+      "label": "PendingRequestStore",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Restart",
+      "label": "WorkflowRestartService",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Orch",
+      "to": "Def"
+    },
+    {
+      "from": "Def",
+      "to": "Factory"
+    },
+    {
+      "from": "Factory",
+      "to": "Agent"
+    },
+    {
+      "from": "Agent",
+      "to": "Rai"
+    },
+    {
+      "from": "Rai",
+      "to": "Gate"
+    },
+    {
+      "from": "Gate",
+      "to": "Merge",
+      "label": "approved"
+    },
+    {
+      "from": "Merge",
+      "to": "Scribe"
+    },
+    {
+      "from": "Agent",
+      "to": "Events",
+      "label": "Invoked / Completed / Failed / RequestInfo / WorkflowOutput"
+    },
+    {
+      "from": "Events",
+      "to": "Watch"
+    },
+    {
+      "from": "Watch",
+      "to": "SSE"
+    },
+    {
+      "from": "Agent",
+      "to": "Ckpt",
+      "label": "checkpoints",
+      "dashed": true
+    },
+    {
+      "from": "Watch",
+      "to": "Pending",
+      "label": "pending review"
+    },
+    {
+      "from": "Gate",
+      "to": "Pending",
+      "label": "suspend",
+      "dashed": true
+    },
+    {
+      "from": "Pending",
+      "to": "Restart"
+    },
+    {
+      "from": "Ckpt",
+      "to": "Restart"
+    },
+    {
+      "from": "Restart",
+      "to": "Agent",
+      "label": "ResumeAsync"
+    }
+  ]
+}

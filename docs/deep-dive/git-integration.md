@@ -57,27 +57,12 @@ The originating branch is the branch the run started from and eventually merges 
 
 ## Per-run worktree model
 
-```mermaid
-flowchart LR
-  Project[Project record] --> Base[Base workspace / repository]
-  Project --> RunA[Run A]
-  Project --> RunB[Run B]
+![Per-run worktree model: Project record, Base workspace / repository, Run A, Run B, originating branch tip, agentweaver/run-A, agentweaver/run-B, worktrees/run-A, worktrees/run-B, Agent A reads/writes here, Agent B reads/writes here, ReviewA, …](../diagrams/git-integration-fig1.png)
 
-  Base --> Main[originating branch tip]
-  Main --> BranchA[agentweaver/run-A]
-  Main --> BranchB[agentweaver/run-B]
-
-  BranchA --> WorktreeA[worktrees/run-A]
-  BranchB --> WorktreeB[worktrees/run-B]
-
-  WorktreeA --> AgentA[Agent A reads/writes here]
-  WorktreeB --> AgentB[Agent B reads/writes here]
-
-  WorktreeA -.candidate diff.-> ReviewA[Review gate]
-  WorktreeB -.candidate diff.-> ReviewB[Review gate]
-  ReviewA --> MergeA[Merge to originating branch]
-  ReviewB --> MergeB[Merge to originating branch]
-```
+<!-- Rendered from ../diagrams/src/git-integration-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The important invariant is that the base workspace and the run workspace are different surfaces. A run can be abandoned, revised, inspected, merged, or cleaned up without requiring the project checkout itself to be the mutable scratchpad.
 
@@ -208,19 +193,12 @@ agentweaver/integration/{coordinatorRunId}
 
 It builds that branch headlessly from the originating branch tip and merges eligible child branches in dependency order. "Headless" means it operates on git trees and refs without checking out the integration branch into a working directory.
 
-```mermaid
-flowchart TD
-  Origin[Originating branch] --> Integration[agentweaver/integration/coordinatorRunId]
-  ChildA[Child branch A] --> Integration
-  ChildB[Child branch B] --> Integration
-  ChildC[Child branch C] --> Integration
+![Coordinator integration branches: Originating branch, agentweaver/integration/coordinatorRunId, Child branch A, Child branch B, Child branch C, Aggregate diff + tree hash, Collective RAI, One human review gate, Merge integration branch](../diagrams/git-integration-fig2.png)
 
-  Integration --> AggregateDiff[Aggregate diff + tree hash]
-  AggregateDiff --> RAI[Collective RAI]
-  RAI --> Review[One human review gate]
-  Review --> Merge[Merge integration branch]
-  Merge --> Origin
-```
+<!-- Rendered from ../diagrams/src/git-integration-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The coordinator assembly rule is "no partial assembly." If any eligible child branch conflicts while building the integration branch, assembly stops and reports the conflicting branch/files instead of producing a partly assembled result.
 
@@ -247,25 +225,12 @@ A token scope provider decides whether credentials are installation-wide or call
 
 Before consumers use GitHub, they ask `IGitHubAccessTokenProvider` for a valid token. The refresh service returns non-expiring tokens as-is, refreshes near-expiry tokens with the stored refresh token, serializes refreshes per scope, and signs the scope out if refresh cannot succeed. With the Key Vault token store, the refresh serialization is a short-lived distributed lease so concurrent requests on different API replicas wait for and reuse the replica that wins token rotation; local stores use an in-process gate.
 
-```mermaid
-flowchart TD
-  User[User or browser] --> Flow{Sign-in flow}
-  Flow --> Device[Device code flow]
-  Flow --> OAuth[OAuth redirect callback]
+![GitHub credentials and API usage: User or browser, Sign-in flow, Device code flow, OAuth redirect callback, IGitHubTokenStore, API request, Resolve token scope, IGitHubAccessTokenProvider, GitHub REST API, 401 / sign-in required, /api/github/accounts, /api/github/repos, …](../diagrams/git-integration-fig3.png)
 
-  Device --> TokenStore[IGitHubTokenStore]
-  OAuth --> TokenStore
-
-  Caller[API request] --> Scope[Resolve token scope]
-  Scope --> Refresh[IGitHubAccessTokenProvider]
-  TokenStore --> Refresh
-  Refresh -->|valid/rotated token| GitHubApi[GitHub REST API]
-  Refresh -->|null| Unauthorized[401 / sign-in required]
-
-  GitHubApi --> Accounts["/api/github/accounts"]
-  GitHubApi --> Repos["/api/github/repos"]
-  GitHubApi --> Clone["Project clone credential"]
-```
+<!-- Rendered from ../diagrams/src/git-integration-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The checked-in API uses raw `HttpClient` calls with `Bearer` tokens, `Agentweaver/1.0` user agent, and GitHub JSON accept headers. The implemented REST calls include:
 

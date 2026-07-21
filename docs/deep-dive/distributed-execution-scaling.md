@@ -30,65 +30,23 @@ Separately, each run's tool, shell, and model execution wants its own isolation 
 
 The key insight is that **memory relief and isolation are the same move**. Relocating the heavy execution — the model SDK session, the in-pod runner, and tool/shell/file execution — into a per-run [sandbox pod](./sandbox-pod-execution.md) simultaneously evicts the dominant per-run footprint from the API process *and* gives each run its own isolated boundary. After the move, the API tier becomes a thin orchestrator: HTTP, event relay, and database. This is the foundation everything else builds on.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    subgraph Before["Single API pod — replicas:1, fixed memory"]
-        H1["HTTP + SSE"] --> G1["Orchestration graph"]
-        G1 --> S1["Model SDK session + tool exec<br/>HEAVY, in-process"]
-        G1 --> D1[("SQLite — single writer")]
-    end
-    subgraph After["Thin orchestrator + sandbox pods"]
-        H2["HTTP + SSE"] --> G2["Orchestration graph"]
-        G2 -. bridge .-> P2["Sandbox pod<br/>SDK session + tool exec"]
-        G2 --> D2[("Postgres — multi-writer")]
-    end
-    Before ==>|"evict heavy state"| After
+![Isolation: the security boundary: HTTP + SSE, Orchestration graph, Model SDK session + tool exec, SQLite — single writer, HTTP + SSE, Orchestration graph, Sandbox pod, Postgres — multi-writer](../diagrams/distributed-execution-scaling-fig1.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class H1 svc;
-    class G1 core;
-    class S1 runtime;
-    class D1 data;
-    class H2 svc;
-    class G2 core;
-    class P2 runtime;
-    class D2 data;
-```
+<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## The phased rollout
 
 The scaling story did not land in one release. It is **three phases that are now implemented in the codebase**, each independently shippable and each gated by a flag (`Sandbox:AgentExecutionMode`, `Database:Provider`, `App:Role`) that defaults to the simple single-process shape, so any step can be reverted instantly.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    P1["P1 — Agent execution in pods<br/>THE OOM fix<br/>stays on SQLite, replicas:1"]
-    P2["P2 — Azure PostgreSQL<br/>multi-writer data layer<br/>drop RWO PVC, allow replicas above 1"]
-    P3["P3 — Web/worker split + run leasing<br/>horizontal scale of both tiers"]
-    P1 --> P2 --> P3
-    P1 -. "OOM relieved here" .-> Done1(["stops OOM"])
-    P3 -. "scale-out here" .-> Done2(["horizontal scale"])
+![The phased rollout: P1 — Agent execution in pods, P2 — Azure PostgreSQL, P3 — Web/worker split + run leasing, stops OOM, horizontal scale](../diagrams/distributed-execution-scaling-fig2.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class P1 svc;
-    class P2 svc;
-    class P3 core;
-    class Done1 evt;
-    class Done2 evt;
-```
+<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### P1 — agent execution in pods (the OOM fix)
 
@@ -118,52 +76,12 @@ Once SQLite is gone, the orchestrator's two jobs have very different scaling sha
 
 The division of labor is the important idea: **web pods touch clients but never own runs; worker pods own runs but are not on the request hot path.** A client can connect to any web pod and still observe a run that a completely different worker pod is executing — which is exactly what the event fan-out (below) has to make true.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    Client["Clients<br/>browser · API"]
+![The web/worker deployment split: Clients, Web pod A, Web pod B, Worker pod A, Worker pod B, Warm AgentHost + CopilotAIAgent, Warm AgentHost + CopilotAIAgent, Azure PostgreSQL](../diagrams/distributed-execution-scaling-fig3.png)
 
-    subgraph WebTier["Web tier — stateless, scales on request load"]
-        WebA["Web pod A<br/>REST · auth · SSE relay"]
-        WebB["Web pod B<br/>REST · auth · SSE relay"]
-    end
-    subgraph WorkerTier["Worker tier — owns runs, scales on backlog depth"]
-        W1["Worker pod A<br/>orchestration graph"]
-        W2["Worker pod B<br/>orchestration graph"]
-    end
-    subgraph Pods["Sandbox pods — one per run"]
-        Pod1["Warm AgentHost + CopilotAIAgent<br/>configured at launch"]
-        Pod2["Warm AgentHost + CopilotAIAgent<br/>configured at launch"]
-    end
-    DB[("Azure PostgreSQL<br/>runs · run-event log · leases")]
-
-    Client -->|HTTP + SSE| WebA
-    Client -->|HTTP + SSE| WebB
-    WebA -->|enqueue · read events| DB
-    WebB -->|enqueue · read events| DB
-    W1 -->|claim+reserve · checkpoint · event writes| DB
-    W2 -->|claim+reserve · checkpoint · event writes| DB
-    W1 -. "agent bridge — A2A\nBearer {per-run token}" .-> Pod1
-    W2 -. "agent bridge — A2A\nBearer {per-run token}" .-> Pod2
-    DB -. events tailed by cursor .-> WebA
-    DB -. events tailed by cursor .-> WebB
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class Client client;
-    class WebA svc;
-    class WebB svc;
-    class W1 core;
-    class W2 core;
-    class Pod1 runtime;
-    class Pod2 runtime;
-    class DB data;
-```
+<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Durable run leasing
 
@@ -211,19 +129,12 @@ The live event stream is what makes a run watchable in real time. In a single pr
 
 `EfRunEventStream` is registered as the Postgres `IRunEventStream` implementation (`Program.cs:534`). Its append path writes through to `RunEvents` before acknowledging, using a serializable transaction and retrying sequence conflicts. Its subscribe path repeatedly loads rows with `Sequence > lastSeen`, yields them in order, and sleeps for `250 ms` only when no new row was emitted. That gives every replica the same live floor: it can stream any run as long as it can read the shared database. Source: `apps/Agentweaver.Api/Program.cs:534`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:89`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:97`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:114`.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    W["Worker replica<br/>owns run"] -->|RecordNext / Record| L["RunStreamEntry<br/>local history"]
-    L -->|AppendAsync mirror| E["EfRunEventStream"]
-    E -->|INSERT RunEvents| DB[("Shared RunEvents table")]
-    A["Web replica A<br/>SSE"] -->|SubscribeAsync after cursor| DB
-    B["Web replica B<br/>SSE"] -->|SubscribeAsync after cursor| DB
-    DB -->|ordered rows| A
-    DB -->|ordered rows| B
-    A --> C["Browser / MCP watcher"]
-    B --> C
-```
+![Current mechanism: durable write-through + cursor polling: Worker replica, RunStreamEntry, EfRunEventStream, Shared RunEvents table, Web replica A, Web replica B, Browser / MCP watcher](../diagrams/distributed-execution-scaling-fig4.png)
+
+<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The process-local `RunStreamStore` still matters for same-replica compatibility and low-latency waiters, but it is no longer a horizontal-scale boundary. If a web replica does not have a local stream entry, `/api/runs/{id}/stream` falls back to `IRunEventStream.SubscribeAsync` with the `Last-Event-ID` cursor and writes the replayed rows as SSE frames. Source: `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:416`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:431`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:443`.
 

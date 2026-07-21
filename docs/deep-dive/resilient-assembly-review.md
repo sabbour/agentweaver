@@ -34,42 +34,12 @@ complementary: Fix-A raises the in-place convergence rate; Fix-B guarantees the 
 
 ## End-to-end resilient assembly flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    AS([Assembling])
-    Gate{{Assembly gate\nautonomy loop}}
-    InPlace[In-place revision\nsame agent + worktree]
-    FreshDispatch[Conscious dispatch_fresh\naccumulated feedback carried]
-    LockoutDispatch[Lockout handoff\nDIFFERENT agent\nprior worktree reused]
-    RejRoute{Alternate eligible\nagent in domain?}
-    DegradeDispatch[Degrade to same-author\nfresh re-dispatch\nfull context — no lockout mutation]
-    BudgetOK{Budget OK?}
-    Escalate[Escalate to\nhuman-review gate\nInReview / stage=review]
-    HumanActs{{Human reviews\nassembled work}}
-    Approve[Approve → merge]
-    Decline[Decline → terminal\nassembly_declined]
-    HumanChanges[Human request-changes\nBudget ALWAYS reset\nround-trip ++ = telemetry only]
-    Done([assembly_complete])
+![End-to-end resilient assembly flow: Assembling, Assembly gate, In-place revision, Conscious dispatch_fresh, Lockout handoff, Alternate eligible, Degrade to same-author, Budget OK?, Escalate to, Human reviews, Approve → merge, Decline → terminal, …](../diagrams/resilient-assembly-review-fig1.png)
 
-    AS --> Gate
-    Gate -- advisory/steer\nnon-rejection --> InPlace
-    Gate -- REJECTION\nimplicated authors locked out\ndependents rebuilt, no lockout --> RejRoute
-    Gate -- in-place terminal failure --> FreshDispatch
-    RejRoute -- yes\nrotate to different agent --> LockoutDispatch
-    RejRoute -- no + context\nsingle-eligible degrade --> DegradeDispatch
-    RejRoute -- no + no context\nlockout_no_context --> Escalate
-    InPlace --> BudgetOK
-    FreshDispatch --> BudgetOK
-    LockoutDispatch --> BudgetOK
-    DegradeDispatch --> BudgetOK
-    BudgetOK -- yes --> Gate
-    BudgetOK -- no --> Escalate
-    Escalate --> HumanActs
-    HumanActs --> Approve --> Done
-    HumanActs --> Decline
-    HumanActs --> HumanChanges --> Gate
-```
+<!-- Rendered from ../diagrams/src/resilient-assembly-review-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Fix-B: budget-exhausted escalation (the headline change)
 

@@ -1,0 +1,86 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Review Policy as a Safety Overlay",
+  "alt": "Review Policy as a Safety Overlay: Selected workflow, Active review policy, Compose policy onto workflow, All required gates bound?, Start run, Fail submission / fail closed",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Workflow",
+      "label": "Selected workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Policy",
+      "label": "Active review policy",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Compose",
+      "label": "Compose policy onto workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Bound",
+      "label": "All required gates bound?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Run",
+      "label": "Start run",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Fail",
+      "label": "Fail submission / fail closed",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Workflow",
+      "to": "Compose"
+    },
+    {
+      "from": "Policy",
+      "to": "Compose"
+    },
+    {
+      "from": "Compose",
+      "to": "Bound"
+    },
+    {
+      "from": "Bound",
+      "to": "Run",
+      "label": "yes"
+    },
+    {
+      "from": "Bound",
+      "to": "Fail",
+      "label": "no"
+    }
+  ]
+}

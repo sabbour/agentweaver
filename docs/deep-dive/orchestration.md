@@ -11,19 +11,12 @@ The engine is intentionally split into two layers:
 
 The split matters. Planning and decomposition need durable state, idempotency, and team-level reasoning. Individual run execution needs streaming, review gates, restart loops, and terminal status handling. Keeping those concerns separate lets Agentweaver recover from partial progress without re-asking the model to re-invent the plan.
 
-```mermaid
-flowchart TD
-    Request[Human request or Ready backlog task]
-    Coordinator[Coordinator orchestration<br/>understand, confirm, decompose]
-    Plan[(OutcomeSpec + WorkPlan DAG)]
-    Dispatch[Dispatch ready subtasks]
-    ChildRuns[Child runs<br/>agent work + safety gate]
-    Assembly[Collective assembly]
-    Workflow[Run workflow orchestration<br/>review, merge, scribe]
-    Result[Reviewed merged outcome + recorded learnings]
+![Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings](../diagrams/orchestration-fig1.png)
 
-    Request --> Coordinator --> Plan --> Dispatch --> ChildRuns --> Assembly --> Workflow --> Result
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A useful rebuilding rule is: **the coordinator owns intent and coordination; workflows own execution gates.**
 
@@ -104,16 +97,12 @@ Each subtask includes its assigned agent, model choice, charter/context, isolati
 
 The plan is a DAG because ordering is a correctness constraint. If subtask B depends on subtask A, B should not start merely because an agent is free. This allows safe parallelism: every tick can dispatch all currently-ready nodes while preserving required sequencing.
 
-```mermaid
-flowchart LR
-    Spec[(Confirmed OutcomeSpec)] --> Plan[(WorkPlan)]
-    Plan --> A[Subtask A<br/>no dependencies]
-    Plan --> B[Subtask B<br/>no dependencies]
-    A --> C[Subtask C<br/>depends on A]
-    B --> D[Subtask D<br/>depends on B]
-    C --> E[Assembly]
-    D --> E
-```
+![WorkPlan: The Execution Contract: Confirmed OutcomeSpec, WorkPlan, Subtask A, Subtask B, Subtask C, Subtask D, Assembly](../diagrams/orchestration-fig2.png)
+
+<!-- Rendered from ../diagrams/src/orchestration-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Rebuild guidance: store the plan before dispatch. If the coordinator crashes after planning but before child runs start, it should resume from the persisted WorkPlan rather than ask a model to decompose again.
 
@@ -171,22 +160,12 @@ For each ready subtask, it launches a child run in its own git worktree and bran
 
 When a child reaches assemble-ready/completed, the dispatcher rebuilds the coordinator integration branch from the successful child branches in dependency order. Dependents are then branched from that integration branch, so they can read files produced by their prerequisites without concurrent siblings sharing one mutable git index.
 
-```mermaid
-flowchart TD
-    Pending[Pending subtasks]
-    Frontier[Ready frontier<br/>all dependencies complete]
-    Launch[Launch child runs]
-    Safety[Child safety gate]
-    AssembleReady[Assemble-ready child outputs]
-    Integration[Rebuild integration branch]
-    AllSettled{All subtasks settled?}
-    Assembly[Parent assembly]
-    ParentReview[Parent review and merge]
+![Dispatch and Assembly: Pending subtasks, Ready frontier, Launch child runs, Child safety gate, Assemble-ready child outputs, Rebuild integration branch, All subtasks settled?, Parent assembly, Parent review and merge](../diagrams/orchestration-fig3.png)
 
-    Pending --> Frontier --> Launch --> Safety --> AssembleReady --> Integration --> AllSettled
-    AllSettled -- no / dependents branch from integration --> Pending
-    AllSettled -- yes --> Assembly --> ParentReview
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Assembly is where the coordinator turns independent child outputs into one coherent result. This is also where conflicts, missing pieces, and cross-subtask inconsistencies should be detected before the parent enters review and merge gates.
 
@@ -212,20 +191,12 @@ A workflow definition answers:
 
 The default conceptual workflow is:
 
-```mermaid
-flowchart LR
-    Agent[Agent work] --> Rai[Responsible AI gate]
-    Rai -- revise --> Agent
-    Rai -- safety failed --> SafetyFailed[Terminal: safety failed]
-    Rai -- no changes --> Scribe[Scribe]
-    Rai -- needs review --> Human[Human review]
-    Human -- request changes --> Agent
-    Human -- declined --> Declined[Terminal: declined]
-    Human -- approved --> Merge[Merge]
-    Merge -- blocked --> Human
-    Merge -- merged --> Scribe
-    Scribe --> Done[Done]
-```
+![Workflow as Policy Graph: Agent work, Responsible AI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/orchestration-fig4.png)
+
+<!-- Rendered from ../diagrams/src/orchestration-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The important idea is that loops are first-class. Safety or review can return work to the producer. Merge can return to review if blocked. Terminal failures are explicit exits, not exceptions swallowed by the runtime.
 
@@ -241,24 +212,12 @@ Agentweaver distinguishes these invocation modes conceptually:
 
 Selection must filter by trigger before model selection or defaults are applied. A manual-only workflow should not run unattended from the heartbeat loop. A heartbeat-only workflow should not be chosen by a direct user run unless explicitly allowed.
 
-```mermaid
-flowchart TD
-    Invocation[Invocation context]
-    Manual{Manual start?}
-    Heartbeat{Heartbeat pickup?}
-    ManualEligible[Manual workflows only]
-    HeartbeatEligible[Heartbeat workflows + matching event workflows]
-    Override[Optional workflow override]
-    Default[Project default fallback]
-    Selector[Selector if multiple eligible]
-    Selected[Selected workflow]
+![Trigger Eligibility: Invocation context, Manual start?, Heartbeat pickup?, Manual workflows only, Heartbeat workflows + matching event workflows, Optional workflow override, Project default fallback, Selector if multiple eligible, Selected workflow](../diagrams/orchestration-fig5.png)
 
-    Invocation --> Manual
-    Invocation --> Heartbeat
-    Manual -- yes --> ManualEligible --> Override
-    Heartbeat -- yes --> HeartbeatEligible --> Override
-    Override --> Default --> Selector --> Selected
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A backlog task may request a workflow override, but the override is only honored if it exists and is trigger-eligible. This preserves safety: metadata on a backlog item cannot force a manual-only workflow to run unattended.
 
@@ -388,20 +347,12 @@ Run events have two purposes:
 
 The conceptual design is replay-then-tail:
 
-```mermaid
-flowchart LR
-    Runtime[Runtime events]
-    Durable[(Durable event log)]
-    Live[Live bounded channel]
-    Client[SSE client]
-    LastId[Last-Event-ID]
+![Event Streaming: Runtime events, Durable event log, Live bounded channel, SSE client, Last-Event-ID](../diagrams/orchestration-fig6.png)
 
-    Runtime --> Durable
-    Runtime --> Live
-    LastId --> Durable
-    Durable --> Client
-    Live --> Client
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig6.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A robust rebuild should write events durably before publishing them live. Then a reconnecting client can provide the last seen event id, replay missed events from storage, and continue tailing live updates. The stream should end with an explicit done marker so clients do not infer completion from connection closure alone.
 
@@ -505,21 +456,12 @@ A review policy is an ordered list of review steps. Conceptually common steps ar
 
 The composer injects missing required gates before merge. It should not duplicate gates already present in a workflow, and it should fail if a required gate has no runtime executor.
 
-```mermaid
-flowchart TD
-    Workflow[Selected workflow]
-    Policy[Active review policy]
-    Compose[Compose policy onto workflow]
-    Bound{All required gates bound?}
-    Run[Start run]
-    Fail[Fail submission / fail closed]
+![Review Policy as a Safety Overlay: Selected workflow, Active review policy, Compose policy onto workflow, All required gates bound?, Start run, Fail submission / fail closed](../diagrams/orchestration-fig7.png)
 
-    Workflow --> Compose
-    Policy --> Compose
-    Compose --> Bound
-    Bound -- yes --> Run
-    Bound -- no --> Fail
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig7.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Human Review as a Pause Point
 

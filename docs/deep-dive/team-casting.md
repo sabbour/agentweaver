@@ -16,23 +16,12 @@ The design keeps creative choice and persistent state separate. Model-assisted s
 
 Runtime workflow execution is intentionally out of scope here; see [Orchestration](./orchestration.md) for how cast teams are run.
 
-```mermaid
-flowchart LR
-    A[Intent\nscenario, blueprint, manual roster, free text, project analysis] --> B[Load project casting state\npolicy, registry, history]
-    B --> C[Resolve role roster]
-    C --> D[Select or validate universe]
-    D --> E[Allocate names]
-    E --> F[Compile charters]
-    F --> G[Store pending proposal\nread-only]
-    G --> H{Confirm?}
-    H -->|reject/expire| I[No workspace changes]
-    H -->|new / augment / recast| J[Merge proposal with existing team]
-    J --> K[Add built-in agents]
-    K --> L[Write .squad workspace]
-    L --> M[Append registry/history events]
-    M --> N[Regenerate canonical JSON]
-    N --> O[Seed memory/session]
-```
+![Purpose and mental model: Intent, Load project casting state, Resolve role roster, Select or validate universe, Allocate names, Compile charters, Store pending proposal, Confirm?, No workspace changes, Merge proposal with existing team, Add built-in agents, Write .squad workspace, …](../diagrams/team-casting-fig1.png)
+
+<!-- Rendered from ../diagrams/src/team-casting-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Where this lives:
 
@@ -198,16 +187,12 @@ If no signals are found, the model is asked for a small general-purpose starting
 
 Universe selection remains deterministic from policy, history, optional override, and seed. Project signals feed only the role-selection prompt; they never influence which universe a team draws its names from.
 
-```mermaid
-flowchart TD
-    A[Repository workspace] --> B[Bounded signal scan]
-    B --> C[Language/framework/test/docs/CI/size summary]
-    C --> D[Prompt with catalog role menu]
-    D --> E[Model returns JSON role IDs]
-    E --> F[Resolve IDs against catalog]
-    F -->|valid roles| G[Allocate names + compile charters]
-    F -->|no valid roles| H[Fail proposal generation]
-```
+![Analysis casting: Repository workspace, Bounded signal scan, Language/framework/test/docs/CI/size summary, Prompt with catalog role menu, Model returns JSON role IDs, Resolve IDs against catalog, Allocate names + compile charters, Fail proposal generation](../diagrams/team-casting-fig2.png)
+
+<!-- Rendered from ../diagrams/src/team-casting-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Where this lives:
 
@@ -420,27 +405,12 @@ Built-ins are not part of the user proposal. They are provisioned automatically 
 
 ### Confirmation flow
 
-```mermaid
-flowchart TD
-    A[Load pending proposal] --> B[Resolve intent]
-    B --> C[Read existing team and registry]
-    C --> D{Intent}
-    D -->|new| E[Final members = proposal\nRetire old members]
-    D -->|augment| F[Final members = existing + new proposal names\nRetire none]
-    D -->|recast| G[Final members = proposal\nRetire missing old members]
-    E --> H[Ensure built-ins]
-    F --> H
-    G --> H
-    H --> I[Write team.md and routing.md]
-    I --> J[Write charters and histories]
-    J --> K[Archive retired charters]
-    K --> L[Append registry events]
-    L --> M[Append cast history snapshot]
-    M --> N[Regenerate canonical JSON]
-    N --> O[Write coordinator agent]
-    O --> P[Remove proposal]
-    P --> Q[Seed initial memory/session]
-```
+![Confirmation flow: Load pending proposal, Resolve intent, Read existing team and registry, Intent, Final members = proposal, Final members = existing + new proposal names, Final members = proposal, Ensure built-ins, Write team.md and routing.md, Write charters and histories, Archive retired charters, Append registry events, …](../diagrams/team-casting-fig3.png)
+
+<!-- Rendered from ../diagrams/src/team-casting-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### What confirmation writes
 

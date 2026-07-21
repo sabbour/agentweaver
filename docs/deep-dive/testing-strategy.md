@@ -12,22 +12,12 @@ The test strategy therefore mirrors the architecture from the system overview:
 
 The philosophy is conservative: keep the default suite fast and hermetic, but exercise real infrastructure boundaries wherever correctness depends on them. Tests replace live model calls and external GitHub/network dependencies with deterministic seams, while still using real HTTP routing, real SQLite databases, real git repositories, real workflow state machines, and real sandbox path logic.
 
-```mermaid
-flowchart TD
-    Unit[Unit and component tests<br/>pure rules, validators, stores]
-    Integration[In-process API integration<br/>WebApplicationFactory + real Program]
-    Workflow[Deterministic workflow tests<br/>fake agents + real gates + real git]
-    Security[Security and sandbox tests<br/>escape attempts, path rules, races]
-    E2E[Opt-in / staging e2e<br/>Playwright + live provider smoke]
+![Purpose and mental model: Unit and component tests, In-process API integration, Deterministic workflow tests, Security and sandbox tests, Opt-in / staging e2e, No network, In-process host, Temp git repos, Sandbox boundary, Staging deployment](../diagrams/testing-strategy-fig1.png)
 
-    Unit --> Integration --> Workflow --> Security --> E2E
-
-    Unit -. fast, hermetic .-> Local[(No network)]
-    Integration -. real SQLite + HTTP .-> ApiHost[(In-process host)]
-    Workflow -. real worktrees .-> Git[(Temp git repos)]
-    Security -. canary + denial oracles .-> Boundary[(Sandbox boundary)]
-    E2E -. explicit opt-in .-> Staging[(Staging deployment)]
-```
+<!-- Rendered from ../diagrams/src/testing-strategy-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Where this lives: `tests/Agentweaver.Tests`, `tests/Agentweaver.Tests/Helpers`, `tests/e2e`, `docs/deep-dive/00-system-overview.md`.
 
@@ -97,19 +87,12 @@ Where this lives: `tests/Agentweaver.Tests/Helpers`.
 
 Agentweaver tests use fakes deliberately, not casually. A fake is acceptable when it stands at a nondeterministic or external boundary and preserves the shape of the production contract. A fake is not used to skip the behavior being tested.
 
-```mermaid
-flowchart LR
-    Test[Test case] --> Host[Real API host]
-    Host --> Stores[Real stores<br/>SQLite / EF]
-    Host --> Workflows[Real workflow services]
-    Host --> Git[Real temp git repos]
-    Host --> Sandbox[Real validators and policy code]
+![Fakes, fixtures, and real dependencies: Test case, Real API host, Real stores, Real workflow services, Real temp git repos, Real validators and policy code, Deterministic agent fake, In-memory GitHub token store, Fake HTTP handler, No-op project initializer](../diagrams/testing-strategy-fig2.png)
 
-    Host -. external seam .-> AgentFake[Deterministic agent fake]
-    Host -. external seam .-> TokenStore[In-memory GitHub token store]
-    Host -. external seam .-> HttpFake[Fake HTTP handler]
-    Host -. external seam .-> GitInit[No-op project initializer]
-```
+<!-- Rendered from ../diagrams/src/testing-strategy-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Key patterns:
 
@@ -254,14 +237,12 @@ Coordinator tests use the same idea. The drafter is deterministic, but the persi
 
 The suite uses a simple decision rule:
 
-```mermaid
-flowchart TD
-    Need[Test needs a dependency] --> IsInvariant{Is this dependency part of<br/>the invariant being tested?}
-    IsInvariant -- yes --> Real[Use the real dependency<br/>SQLite, git repo, path resolver, host middleware]
-    IsInvariant -- no --> External{Would real use require<br/>network, credentials, time, or nondeterminism?}
-    External -- yes --> Fake[Use deterministic fake/stub<br/>at the boundary]
-    External -- no --> Real
-```
+![In-memory versus real dependencies: Test needs a dependency, Is this dependency part of, Use the real dependency, Would real use require, Use deterministic fake/stub](../diagrams/testing-strategy-fig3.png)
+
+<!-- Rendered from ../diagrams/src/testing-strategy-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Examples:
 

@@ -1,0 +1,154 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Ready frontier",
+  "alt": "Ready frontier: Load WorkPlan, Read subtask statuses, Pending and all dependencies satisfied?, Conflicts with in-flight work?, Launch child run, Observe child stream, Child terminal?, Update subtask status, More ready or in-flight?, Awaiting assembly",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Load",
+      "label": "Load WorkPlan",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Status",
+      "label": "Read subtask statuses",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Ready",
+      "label": "Pending and all dependencies satisfied?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Conflict",
+      "label": "Conflicts with in-flight work?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Launch",
+      "label": "Launch child run",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Observe",
+      "label": "Observe child stream",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Terminal",
+      "label": "Child terminal?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Update",
+      "label": "Update subtask status",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "More",
+      "label": "More ready or in-flight?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Assembly",
+      "label": "Awaiting assembly",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Load",
+      "to": "Status"
+    },
+    {
+      "from": "Status",
+      "to": "Ready"
+    },
+    {
+      "from": "Ready",
+      "to": "More",
+      "label": "no"
+    },
+    {
+      "from": "Ready",
+      "to": "Conflict",
+      "label": "yes"
+    },
+    {
+      "from": "Conflict",
+      "to": "More",
+      "label": "yes, defer"
+    },
+    {
+      "from": "Conflict",
+      "to": "Launch",
+      "label": "no"
+    },
+    {
+      "from": "Launch",
+      "to": "Observe"
+    },
+    {
+      "from": "Observe",
+      "to": "Terminal"
+    },
+    {
+      "from": "Terminal",
+      "to": "Update"
+    },
+    {
+      "from": "Update",
+      "to": "More"
+    },
+    {
+      "from": "More",
+      "to": "Status",
+      "label": "yes"
+    },
+    {
+      "from": "More",
+      "to": "Assembly",
+      "label": "no"
+    }
+  ]
+}

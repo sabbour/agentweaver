@@ -1,0 +1,122 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Binding Declarative Nodes to Runtime Execution",
+  "alt": "Binding Declarative Nodes to Runtime Execution: WorkflowDefinition, Node classifier, Executor registry, Transition expansion, Adapters, storers, ports, predicates, Terminal output binding, Executable MAF workflow graph, WorkflowBindException",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Def",
+      "label": "WorkflowDefinition",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Classifier",
+      "label": "Node classifier",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "type + gate_kind"
+    },
+    {
+      "id": "Factory",
+      "label": "Executor registry",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "EdgeMap",
+      "label": "Transition expansion",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "from kind, to kind, when"
+    },
+    {
+      "id": "Plumbing",
+      "label": "Adapters, storers, ports, predicates",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Outputs",
+      "label": "Terminal output binding",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Graph",
+      "label": "Executable MAF workflow graph",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Error",
+      "label": "WorkflowBindException",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Def",
+      "to": "Classifier"
+    },
+    {
+      "from": "Classifier",
+      "to": "Factory"
+    },
+    {
+      "from": "Def",
+      "to": "EdgeMap"
+    },
+    {
+      "from": "Factory",
+      "to": "Plumbing"
+    },
+    {
+      "from": "EdgeMap",
+      "to": "Plumbing"
+    },
+    {
+      "from": "Plumbing",
+      "to": "Outputs"
+    },
+    {
+      "from": "Outputs",
+      "to": "Graph"
+    },
+    {
+      "from": "Classifier",
+      "to": "Error",
+      "label": "unsupported"
+    },
+    {
+      "from": "EdgeMap",
+      "to": "Error",
+      "label": "no transition mapping"
+    }
+  ]
+}

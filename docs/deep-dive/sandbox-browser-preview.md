@@ -20,27 +20,12 @@ environments where `Sandbox:Preview:Enabled` is `false`, the Gateway path is a n
 A preview is just three small Kubernetes objects the API creates at runtime, chaining the shared gateway to
 the run's pod:
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    User([Browser]) -->|"https://{token}-preview.{ZoneSuffix}"| GW[Preview Gateway<br/>agentweaver-preview-gateway]
-    API[API orchestrator<br/>creates objects only] -.-> Route[HTTPRoute<br/>preview-token]
-    API -.-> Svc[ClusterIP Service<br/>preview-token]
-    GW -->|hostname match| Route
-    Route -->|backendRef :80| Svc
-    Svc -->|selector preview-run| Pub[Sandbox pod<br/>0.0.0.0:{publicPort}<br/>3000-9000]
-    Pub -->|accepted in pod| Fwd[TcpPortForwarder<br/>inside sandbox pod]
-    Fwd -->|pump TCP| App[Preview app<br/>127.0.0.1:{appPort}<br/>or framework bind]
-    subgraph cluster["namespace: agentweaver"]
-        API
-        GW
-        Route
-        Svc
-        Pub
-        Fwd
-        App
-    end
-```
+![End-to-end flow: Browser, Preview Gateway, API orchestrator, HTTPRoute, ClusterIP Service, Sandbox pod, TcpPortForwarder, Preview app](../diagrams/sandbox-browser-preview-fig1.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-browser-preview-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 When the user clicks **Preview** and picks a port, `StartPreviewAsync`
 ([`SandboxPreviewService.cs:100`](#source)) does the following:

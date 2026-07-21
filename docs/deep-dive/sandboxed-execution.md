@@ -12,51 +12,12 @@ The general principle: the system confirms real isolation is available before pe
 
 Once a backend is selected (see the [sandbox deep dive](./sandbox.md)), a `run_command` invocation flows through the triple-layer governance gate, into the chosen executor, and back out as redacted output events:
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-  Model("Model requests run_command"):::client
-  Gov["Triple-layer governance gate"]:::svc
-  Exec["ISandboxExecutor.ExecuteAsync"]:::core
-  Model --> Gov --> Exec
-  Exec --> Branch{{"Selected backend?"}}:::svc
-  Work[("Run worktree / workspace")]:::data
+![Overview: Model, Gov, Exec, Branch, Work, Wxc, Spawn, Pool, Claim, Bound, Kata, Local, …](../diagrams/sandboxed-execution-fig1.png)
 
-  subgraph mxc["MXC executor — processcontainer"]
-    direction TB
-    Branch -->|"processcontainer"| Wxc("wxc-exec probe → tier"):::runtime
-    Wxc --> Spawn("MxcSdk.SpawnSandboxAsync<br/>AppContainer, policy 0.5.0-alpha"):::runtime
-  end
-
-  subgraph k8s["Kubernetes sandbox-claim"]
-    direction TB
-    Branch -->|"kubernetes-sandbox-claim"| Pool[("SandboxWarmPool<br/>pre-warmed pods")]:::data
-    Pool --> Claim("Per-run SandboxClaim"):::runtime
-    Claim --> Bound{{"Ready condition True?"}}:::svc
-    Bound -->|"pod name"| Kata("Kata VM pod<br/>pod-exec /bin/sh"):::runtime
-  end
-
-  Branch -->|"bwrap / wsl / direct"| Local("Local isolated process"):::runtime
-
-  Work --> Spawn
-  Work --> Kata
-  Work --> Local
-
-  Spawn --> Out["stdout / stderr / exit code"]:::svc
-  Kata --> Out
-  Local --> Out
-  Out --> Redact("SandboxOutputRedactor"):::svc
-  Redact --> Events("tool.result + output events"):::evt
-  Events --> Model
-
-  classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-  classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-  classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-  classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-  classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-  classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-  classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-```
+<!-- Rendered from ../diagrams/src/sandboxed-execution-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Executor selection
 

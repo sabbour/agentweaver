@@ -14,21 +14,12 @@ Agentweaver treats a run as an ordered stream of facts. The run's state is not j
 
 The foundational mental model is **everything important is an event**. An event says "this happened" rather than "the screen should look like this." Clients and dashboards then project those facts into timelines, graphs, approvals, health summaries, and operational metrics.
 
-```mermaid
-flowchart LR
-    Runtime[Agent runtime and workflow executors] -->|emit facts| Stream[Run event stream]
-    Coordinator[Coordinator services] -->|emit orchestration facts| Stream
-    Stream --> Store[(Durable RunEvents table)]
-    Stream --> Live[In-process fan-out channel]
-    Store --> Replay[Replay by sequence]
-    Live --> Tail[Live tail]
-    Replay --> SSE[SSE run stream]
-    Tail --> SSE
-    SSE --> UI[Frontend reducers]
-    UI --> Projection[Timeline, graph, approvals, status]
-    Store --> Seeds[REST seed snapshots]
-    Seeds --> UI
-```
+![Purpose and Mental Model: Agent runtime and workflow executors, Run event stream, Coordinator services, Durable RunEvents table, In-process fan-out channel, Replay by sequence, Live tail, SSE run stream, Frontend reducers, Timeline, graph, approvals, status, REST seed snapshots](../diagrams/events-observability-fig1.png)
+
+<!-- Rendered from ../diagrams/src/events-observability-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This is why run observability is not bolted on after execution. The event stream is part of execution. A run that cannot explain itself is operationally incomplete.
 
@@ -191,21 +182,12 @@ Subscribing to a run is not "start listening from now." It is:
 
 This order prevents the classic replay race. If the stream read SQLite first and only then created the live channel, an event appended between those operations could be lost to the subscriber. Agentweaver creates the channel before the database read, so anything not found in the replay is captured by the tail.
 
-```mermaid
-flowchart TD
-    A[Subscriber provides last seen sequence] --> B[Create or get live channel]
-    B --> C[Read persisted events with sequence greater than cursor]
-    C --> D[Yield replayed events in order]
-    D --> E{Replay batch contained terminal?}
-    E -->|yes| Done[Complete after draining batch]
-    E -->|no| F[Tail channel]
-    F --> G{Event sequence already replayed?}
-    G -->|yes| F
-    G -->|no| H[Yield live event]
-    H --> I{Terminal event or channel closed?}
-    I -->|yes| Done
-    I -->|no| F
-```
+![Replay-Then-Tail: Subscriber provides last seen sequence, Create or get live channel, Read persisted events with sequence greater than cursor, Yield replayed events in order, Replay batch contained terminal?, Complete after draining batch, Tail channel, Event sequence already replayed?, Yield live event, Terminal event or channel closed?](../diagrams/events-observability-fig2.png)
+
+<!-- Rendered from ../diagrams/src/events-observability-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The boundary guarantees are:
 
@@ -371,32 +353,12 @@ It derives:
 
 It deliberately omits metrics that Agentweaver does not have a real source for. Cost is not reported. Per-workflow health is not invented when run rows do not record a workflow definition identity.
 
-```mermaid
-flowchart TD
-    Runs[(runs table)] --> Metrics[MetricsService]
-    Backlog[(backlog_tasks table)] --> Metrics
-    Projects[(projects store)] --> Metrics
-    Heartbeat[HeartbeatStatusStore] --> Metrics
+![Metrics and Dashboard Stack: runs table, MetricsService, backlog_tasks table, projects store, HeartbeatStatusStore, /api/projects/{id}/dashboard, /api/overview, SQLite, disk, workflow registry, review policy registry, gh auth, workspace, DiagnosticsService, /api/diagnostics, /api/projects/{id}/diagnostics, /api/diagnostics/heartbeat, …](../diagrams/events-observability-fig3.png)
 
-    Metrics --> Dashboard["/api/projects/{id}/dashboard"]
-    Metrics --> Overview["/api/overview"]
-
-    DiagnosticsInputs[SQLite, disk, workflow registry, review policy registry, gh auth, workspace] --> Diagnostics[DiagnosticsService]
-    Heartbeat --> Diagnostics
-    Diagnostics --> SystemDiag["/api/diagnostics"]
-    Diagnostics --> ProjectDiag["/api/projects/{id}/diagnostics"]
-    Diagnostics --> HeartbeatDiag["/api/diagnostics/heartbeat"]
-
-    Dashboard --> Web[Web UI]
-    Overview --> Web
-    SystemDiag --> Web
-    HeartbeatDiag --> Web
-    ProjectDiag --> Web
-    SystemDiag --> MCP[MCP parity surface]
-    HeartbeatDiag --> MCP
-
-    ApiPod[API pod logs/runtime telemetry] --> OTLP[OTLP collector]
-```
+<!-- Rendered from ../diagrams/src/events-observability-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### OTEL export
 

@@ -1,0 +1,135 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Workflow as Policy Graph",
+  "alt": "Workflow as Policy Graph: Agent work, Responsible AI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Agent",
+      "label": "Agent work",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Rai",
+      "label": "Responsible AI gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SafetyFailed",
+      "label": "Terminal: safety failed",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Scribe",
+      "label": "Scribe",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Human",
+      "label": "Human review",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Declined",
+      "label": "Terminal: declined",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Done",
+      "label": "Done",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Agent",
+      "to": "Rai"
+    },
+    {
+      "from": "Rai",
+      "to": "Agent",
+      "label": "revise"
+    },
+    {
+      "from": "Rai",
+      "to": "SafetyFailed",
+      "label": "safety failed"
+    },
+    {
+      "from": "Rai",
+      "to": "Scribe",
+      "label": "no changes"
+    },
+    {
+      "from": "Rai",
+      "to": "Human",
+      "label": "needs review"
+    },
+    {
+      "from": "Human",
+      "to": "Agent",
+      "label": "request changes"
+    },
+    {
+      "from": "Human",
+      "to": "Declined",
+      "label": "declined"
+    },
+    {
+      "from": "Human",
+      "to": "Merge",
+      "label": "approved"
+    },
+    {
+      "from": "Merge",
+      "to": "Human",
+      "label": "blocked"
+    },
+    {
+      "from": "Merge",
+      "to": "Scribe",
+      "label": "merged"
+    },
+    {
+      "from": "Scribe",
+      "to": "Done"
+    }
+  ]
+}

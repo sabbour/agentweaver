@@ -1,0 +1,141 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose and mental model",
+  "alt": "Purpose and mental model: Agent A turn, Agent B turn, Shared brain, Coordinator, Worker, Sandbox pod",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "TEAM",
+      "label": "Team-level coordination",
+      "tier": 1
+    },
+    {
+      "id": "EXEC",
+      "label": "Execution transport",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Agent A turn",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "TEAM"
+    },
+    {
+      "id": "B",
+      "label": "Agent B turn",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "TEAM"
+    },
+    {
+      "id": "L",
+      "label": "Shared brain",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "decisions ledger + AgentMemory",
+      "group": "TEAM"
+    },
+    {
+      "id": "C",
+      "label": "Coordinator",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "TEAM"
+    },
+    {
+      "id": "W",
+      "label": "Worker",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "orchestration graph",
+      "group": "EXEC"
+    },
+    {
+      "id": "P",
+      "label": "Sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "AgentHost",
+      "group": "EXEC"
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "L",
+      "label": "inbox proposal"
+    },
+    {
+      "from": "B",
+      "to": "L",
+      "label": "inbox proposal"
+    },
+    {
+      "from": "L",
+      "to": "A",
+      "label": "compiled into prompt"
+    },
+    {
+      "from": "L",
+      "to": "B",
+      "label": "compiled into prompt"
+    },
+    {
+      "from": "C",
+      "to": "A",
+      "label": "dispatch / handoff"
+    },
+    {
+      "from": "C",
+      "to": "B",
+      "label": "dispatch / handoff"
+    },
+    {
+      "from": "A",
+      "to": "C",
+      "label": "result up"
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "label": "result up"
+    },
+    {
+      "from": "W",
+      "to": "P",
+      "label": "one agent turn over A2A Authorization: Bearer {per-run token}"
+    },
+    {
+      "from": "P",
+      "to": "W",
+      "label": "turn output stream"
+    },
+    {
+      "from": "A",
+      "to": "W",
+      "label": "a single agent turn is remoted",
+      "dashed": true
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Mental model",
+  "alt": "Mental model: Feedback source, SteeringSignal, coordinator.steering_received, CoordinatorSteeringDecider, coordinator.steering_decision, In-place steer, Dispatch fresh, Proceed / terminal, Advisory no-op",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Source",
+      "label": "Feedback source",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "review / RAI / test / agent"
+    },
+    {
+      "id": "Signal",
+      "label": "SteeringSignal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "source + severity + scope"
+    },
+    {
+      "id": "Received",
+      "label": "coordinator.steering_received",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Decider",
+      "label": "CoordinatorSteeringDecider",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Decision",
+      "label": "coordinator.steering_decision",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "A",
+      "label": "In-place steer",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "same child session"
+    },
+    {
+      "id": "B",
+      "label": "Dispatch fresh",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "explicit reset"
+    },
+    {
+      "id": "C",
+      "label": "Proceed / terminal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Advisory no-op",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Source",
+      "to": "Signal"
+    },
+    {
+      "from": "Signal",
+      "to": "Received"
+    },
+    {
+      "from": "Received",
+      "to": "Decider"
+    },
+    {
+      "from": "Decider",
+      "to": "Decision"
+    },
+    {
+      "from": "Decision",
+      "to": "A"
+    },
+    {
+      "from": "Decision",
+      "to": "B"
+    },
+    {
+      "from": "Decision",
+      "to": "C"
+    },
+    {
+      "from": "Decision",
+      "to": "D"
+    }
+  ]
+}

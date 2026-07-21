@@ -1,0 +1,137 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Runtime Configuration and Static Hosting",
+  "alt": "Runtime Configuration and Static Hosting: Vite build, Static SPA assets, VitePress docs build, Static docs, ASP.NET Core publish, Agentweaver.Web, Container entrypoint, /env-config.js, Browser, Agentweaver API",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Build",
+      "label": "Vite build",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Dist",
+      "label": "Static SPA assets",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Docs",
+      "label": "VitePress docs build",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "DocsDist",
+      "label": "Static docs",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Publish",
+      "label": "ASP.NET Core publish",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Host",
+      "label": "Agentweaver.Web",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Entrypoint",
+      "label": "Container entrypoint",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "EnvConfig",
+      "label": "/env-config.js",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Browser",
+      "label": "Browser",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Build",
+      "to": "Dist"
+    },
+    {
+      "from": "Docs",
+      "to": "DocsDist"
+    },
+    {
+      "from": "Publish",
+      "to": "Host"
+    },
+    {
+      "from": "Dist",
+      "to": "Host"
+    },
+    {
+      "from": "DocsDist",
+      "to": "Host"
+    },
+    {
+      "from": "Entrypoint",
+      "to": "EnvConfig"
+    },
+    {
+      "from": "Browser",
+      "to": "Host"
+    },
+    {
+      "from": "Browser",
+      "to": "EnvConfig"
+    },
+    {
+      "from": "Browser",
+      "to": "API",
+      "label": "API_URL, usually /api"
+    }
+  ]
+}

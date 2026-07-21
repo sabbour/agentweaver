@@ -1,0 +1,120 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Current mechanism: durable write-through + cursor polling",
+  "alt": "Current mechanism: durable write-through + cursor polling: Worker replica, RunStreamEntry, EfRunEventStream, Shared RunEvents table, Web replica A, Web replica B, Browser / MCP watcher",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "W",
+      "label": "Worker replica",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "owns run"
+    },
+    {
+      "id": "L",
+      "label": "RunStreamEntry",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "local history"
+    },
+    {
+      "id": "E",
+      "label": "EfRunEventStream",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "DB",
+      "label": "Shared RunEvents table",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "A",
+      "label": "Web replica A",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      },
+      "subLabel": "SSE"
+    },
+    {
+      "id": "B",
+      "label": "Web replica B",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      },
+      "subLabel": "SSE"
+    },
+    {
+      "id": "C",
+      "label": "Browser / MCP watcher",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "W",
+      "to": "L",
+      "label": "RecordNext / Record"
+    },
+    {
+      "from": "L",
+      "to": "E",
+      "label": "AppendAsync mirror"
+    },
+    {
+      "from": "E",
+      "to": "DB",
+      "label": "INSERT RunEvents"
+    },
+    {
+      "from": "A",
+      "to": "DB",
+      "label": "SubscribeAsync after cursor"
+    },
+    {
+      "from": "B",
+      "to": "DB",
+      "label": "SubscribeAsync after cursor"
+    },
+    {
+      "from": "DB",
+      "to": "A",
+      "label": "ordered rows"
+    },
+    {
+      "from": "DB",
+      "to": "B",
+      "label": "ordered rows"
+    },
+    {
+      "from": "A",
+      "to": "C"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    }
+  ]
+}

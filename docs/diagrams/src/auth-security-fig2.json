@@ -1,0 +1,124 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "API bearer authentication: accepting tokens safely",
+  "alt": "API bearer authentication: accepting tokens safely: Bearer token arrives on protected API route, Looks like valid Agentweaver JWT?, jti deny-listed?, 401, Caller = JWT subject + GitHub login + org, Call GitHub /user, Caller = GitHub login, Org authorization middleware",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Bearer token arrives on protected API route",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Looks like valid Agentweaver JWT?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "C",
+      "label": "jti deny-listed?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "X",
+      "label": "401",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Caller = JWT subject + GitHub login + org",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Call GitHub /user",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Caller = GitHub login",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Org authorization middleware",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "label": "yes"
+    },
+    {
+      "from": "C",
+      "to": "X",
+      "label": "yes"
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "label": "no"
+    },
+    {
+      "from": "B",
+      "to": "E",
+      "label": "no"
+    },
+    {
+      "from": "E",
+      "to": "F",
+      "label": "valid"
+    },
+    {
+      "from": "E",
+      "to": "X",
+      "label": "invalid"
+    },
+    {
+      "from": "D",
+      "to": "G"
+    },
+    {
+      "from": "F",
+      "to": "G"
+    }
+  ]
+}

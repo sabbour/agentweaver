@@ -1,0 +1,243 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Routing and Information Architecture",
+  "alt": "Routing and Information Architecture: App root, Auth checked?, Loading screen, Sign-in page, Persistent AppShell, Global routes, Project routes, / and /overview, /projects, /projects/:projectId, /board, /flow, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "App",
+      "label": "App root",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Auth",
+      "label": "Auth checked?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Spinner",
+      "label": "Loading screen",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "SignIn",
+      "label": "Sign-in page",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Shell",
+      "label": "Persistent AppShell",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Global",
+      "label": "Global routes",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Project",
+      "label": "Project routes",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Overview",
+      "label": "/ and /overview",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Projects",
+      "label": "/projects",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Dashboard",
+      "label": "/projects/:projectId",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Board",
+      "label": "/board",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Flow",
+      "label": "/flow",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Orchestrations",
+      "label": "/orchestrations",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Workspace",
+      "label": "/workspace",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Squad",
+      "label": "/team, /team/cast, /memories",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Operations",
+      "label": "/workflows, /settings",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "System",
+      "label": "/diagnostics, /heartbeat",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Runs",
+      "label": "/orchestrations/:runId",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "App",
+      "to": "Auth"
+    },
+    {
+      "from": "Auth",
+      "to": "Spinner",
+      "label": "no"
+    },
+    {
+      "from": "Auth",
+      "to": "SignIn",
+      "label": "signed out"
+    },
+    {
+      "from": "Auth",
+      "to": "Shell",
+      "label": "signed in"
+    },
+    {
+      "from": "Shell",
+      "to": "Global"
+    },
+    {
+      "from": "Shell",
+      "to": "Project"
+    },
+    {
+      "from": "Global",
+      "to": "Overview"
+    },
+    {
+      "from": "Global",
+      "to": "Projects"
+    },
+    {
+      "from": "Project",
+      "to": "Dashboard"
+    },
+    {
+      "from": "Project",
+      "to": "Board"
+    },
+    {
+      "from": "Project",
+      "to": "Flow"
+    },
+    {
+      "from": "Project",
+      "to": "Orchestrations"
+    },
+    {
+      "from": "Project",
+      "to": "Workspace"
+    },
+    {
+      "from": "Project",
+      "to": "Squad"
+    },
+    {
+      "from": "Project",
+      "to": "Operations"
+    },
+    {
+      "from": "Project",
+      "to": "System"
+    },
+    {
+      "from": "Project",
+      "to": "Runs"
+    }
+  ]
+}
