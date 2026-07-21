@@ -19,7 +19,7 @@ before invoking it. Supply each surface command as a JSON argv array and use
 `{batchId}`, `{scenarioId}`, and `{verdictDir}` placeholders so every harness writes
 its canonical verdict into the isolated verdict directory.
 
-Use `api-harness`, `ui-harness`, or `mcp-harness` instead for targeted investigation
+Use `agentweaver-api-harness`, `agentweaver-ui-harness`, or `agentweaver-mcp-harness` instead for targeted investigation
 of one surface. This launcher does not recreate any surface driver or judging logic.
 
 Before running, check `scripts/harness-shared/learnings.md` (surface: `all`, plus

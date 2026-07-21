@@ -105,7 +105,7 @@ jobs:
               '</details>',
               '',
               '**How to update fast**',
-              '- Invoke the `docs-sync` skill (`.copilot/skills/docs-sync/SKILL.md`) for the playbook.',
+              '- Invoke the `agentweaver-docs-sync` skill (`.copilot/skills/agentweaver-docs-sync/SKILL.md`) for the playbook.',
               '- Regenerate auto-derived reference: `node scripts/gen-docs.mjs` then commit.',
               '- Build to verify: `cd docs && npm ci && npm run build`.',
               '',
