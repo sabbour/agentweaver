@@ -17,11 +17,11 @@ The canonical workflow provisions and deploys the sandbox pieces through the
 root package scripts (`npm run` shown; `pnpm run` is equivalent):
 
 ```bash
-npm run azure:deploy      # installs the controller + CRDs, builds/pushes images, applies the template/warm pool, and verifies it
+npm run azure:provision-infra      # installs the controller + CRDs, builds/pushes images, applies the template/warm pool, and verifies it
 ```
 
-For an existing cluster, `npm run azure:upgrade` builds/pushes images, redeploys, and
-cycles the warm pool without re-provisioning the cluster. `azure:deploy`/`azure:upgrade`
+For an existing cluster, `npm run azure:deploy-from-local` builds/pushes images, redeploys, and
+cycles the warm pool without re-provisioning the cluster. `azure:provision-infra`/`azure:deploy-from-local`
 apply `sandbox-template-agenthost.yaml` before
 `sandbox-warmpool-agenthost.yaml`; the warm pool depends on the template by
 name. For targeted recovery, the [AKS deployment runbook](../guide/deployment-aks.md#running-an-individual-step)
@@ -49,7 +49,7 @@ Per-run context is not injected through `SandboxClaim.spec.env`; doing so bypass
 | Key Vault URI | `https://${KEYVAULT_NAME}.vault.azure.net/` |
 | Workspace | PVC `agentweaver-workspace`, mounted at `/workspace` |
 
-The AgentHost image is built by `npm run azure:upgrade` (or `azure:deploy`) from
+The AgentHost image is built by `npm run azure:deploy-from-local` (or `azure:provision-infra`) from
 `apps/Agentweaver.AgentHost/Dockerfile`. It must publish with `--runtime
 linux-x64 --self-contained false` so the Copilot native runtime is included.
 
