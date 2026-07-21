@@ -1,5 +1,5 @@
 ---
-name: "agentweaver-error-recovery"
+name: "error-recovery"
 description: "Standard recovery patterns for all squad agents. When something fails, adapt — don't just report the failure."
 domain: "reliability, agent-coordination"
 confidence: "high"
