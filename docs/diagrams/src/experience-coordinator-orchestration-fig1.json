@@ -1,0 +1,180 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Coordinator orchestration experience",
+  "alt": "Coordinator orchestration experience: Plain-language goal, Start coordinator orchestration, Draft OutcomeSpec, Confirm gate, Request revision, Confirm OutcomeSpec, Create work plan, Dispatch ready children, Watch topology, Steer or recover, Collective assembly, Done",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Goal",
+      "label": "Plain-language goal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Start",
+      "label": "Start coordinator orchestration",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      },
+      "subLabel": "UI Start task or coordinator_start"
+    },
+    {
+      "id": "Draft",
+      "label": "Draft OutcomeSpec",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "Confirm gate",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "run suspended"
+    },
+    {
+      "id": "Revise",
+      "label": "Request revision",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "coordinator_outcome_spec_revise"
+    },
+    {
+      "id": "Confirm",
+      "label": "Confirm OutcomeSpec",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "coordinator_outcome_spec_confirm"
+    },
+    {
+      "id": "Plan",
+      "label": "Create work plan",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "subtasks + agents + models + dependencies"
+    },
+    {
+      "id": "Dispatch",
+      "label": "Dispatch ready children",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Watch",
+      "label": "Watch topology",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "coordinator.topology + subtask.*"
+    },
+    {
+      "id": "Steer",
+      "label": "Steer or recover",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "coordinator_steer"
+    },
+    {
+      "id": "Assemble",
+      "label": "Collective assembly",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "RAI + review + merge + scribe"
+    },
+    {
+      "id": "Done",
+      "label": "Done",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Goal",
+      "to": "Start"
+    },
+    {
+      "from": "Start",
+      "to": "Draft"
+    },
+    {
+      "from": "Draft",
+      "to": "Gate"
+    },
+    {
+      "from": "Gate",
+      "to": "Revise",
+      "label": "revise"
+    },
+    {
+      "from": "Revise",
+      "to": "Draft"
+    },
+    {
+      "from": "Gate",
+      "to": "Confirm",
+      "label": "confirm"
+    },
+    {
+      "from": "Confirm",
+      "to": "Plan"
+    },
+    {
+      "from": "Plan",
+      "to": "Dispatch"
+    },
+    {
+      "from": "Dispatch",
+      "to": "Watch"
+    },
+    {
+      "from": "Watch",
+      "to": "Steer"
+    },
+    {
+      "from": "Steer",
+      "to": "Watch"
+    },
+    {
+      "from": "Watch",
+      "to": "Assemble"
+    },
+    {
+      "from": "Assemble",
+      "to": "Done"
+    }
+  ]
+}

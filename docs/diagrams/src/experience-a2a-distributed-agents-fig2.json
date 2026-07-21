@@ -1,0 +1,124 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "4. How to reason about it as an operator",
+  "alt": "4. How to reason about it as an operator: Agent turn starts, Claim warm AgentHost pod, POST /configure, Stream turn over A2A, Turn output committed, Checkpoint + release pod, Re-launch per-run pod, rehydrate, Re-drive from last checkpoint",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Turn",
+      "label": "Agent turn starts",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Claim warm AgentHost pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Configure",
+      "label": "POST /configure",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "subLabel": "RunId/UserId/token/KV secret"
+    },
+    {
+      "id": "Run",
+      "label": "Stream turn over A2A",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "subLabel": "Bearer {per-run token}"
+    },
+    {
+      "id": "Commit",
+      "label": "Turn output committed",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Release",
+      "label": "Checkpoint + release pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Rehydrate",
+      "label": "Re-launch per-run pod, rehydrate",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Redrive",
+      "label": "Re-drive from last checkpoint",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Turn",
+      "to": "Pod"
+    },
+    {
+      "from": "Pod",
+      "to": "Configure"
+    },
+    {
+      "from": "Configure",
+      "to": "Run"
+    },
+    {
+      "from": "Run",
+      "to": "Commit",
+      "label": "completes"
+    },
+    {
+      "from": "Run",
+      "to": "Release",
+      "label": "suspend on review gate"
+    },
+    {
+      "from": "Release",
+      "to": "Rehydrate",
+      "label": "human resumes"
+    },
+    {
+      "from": "Rehydrate",
+      "to": "Run"
+    },
+    {
+      "from": "Run",
+      "to": "Redrive",
+      "label": "mid-turn drop"
+    },
+    {
+      "from": "Redrive",
+      "to": "Pod"
+    }
+  ]
+}

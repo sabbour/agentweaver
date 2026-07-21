@@ -13,14 +13,12 @@ the [Agent Communication deep dive](../deep-dive/agent-communication.md); for th
 exact tools and endpoints, see the
 [Agent Communication reference](../reference/agent-communication.md).
 
-```mermaid
-flowchart LR
-    U[You, watching] --> D[Decisions page\ninbox → ledger]
-    U --> M[Team Memory page\nlearnings accumulate]
-    U --> G[Coordinator graph\nhandoffs + status]
-    D -. "team boundaries" .-> G
-    M -. "shared knowledge" .-> G
-```
+![Agent Communication — Experience: You, watching, Decisions page, Team Memory page, Coordinator graph](../diagrams/experience-agent-communication-fig1.png)
+
+<!-- Rendered from ../diagrams/src/experience-agent-communication-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ---
 
@@ -109,15 +107,12 @@ and pause at a confirmation gate; nothing fans out until you confirm. After
 confirmation, the goal **decomposes into subtask nodes** connected by dependency
 edges, laid out left-to-right as a DAG.
 
-```mermaid
-flowchart LR
-    C[Coordinator] --> S1[Subtask: API]
-    C --> S2[Subtask: UI]
-    S1 --> S3[Subtask: tests\ndepends on API]
-    S1 -- result up --> C
-    S2 -- result up --> C
-    S3 -- result up --> C
-```
+![The coordinator graph: handoffs you can see: Coordinator, Subtask: API, Subtask: UI, Subtask: tests](../diagrams/experience-agent-communication-fig2.png)
+
+<!-- Rendered from ../diagrams/src/experience-agent-communication-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 As work runs, the graph animates:
 

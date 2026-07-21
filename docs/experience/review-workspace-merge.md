@@ -12,21 +12,12 @@ The review surface is intentionally local-first. Agentweaver can complete review
 
 The most important product contract is: **approval binds to content, not to a mutable branch name**. The reviewed tree hash identifies the candidate filesystem. Merge checks that the candidate branch still matches that tree hash before advancing the originating branch.
 
-```mermaid
-flowchart TD
-    Work[Agent works in run worktree] --> Candidate[Candidate commit + tree hash]
-    Candidate --> Diff[Diff against originating branch]
-    Diff --> Review[Human Review]
-    Review --> Decision{Reviewer decision}
-    Decision -- Commit and Merge / approve --> Verify[Verify reviewed tree hash]
-    Verify --> LocalMerge[Local git merge]
-    LocalMerge --> Merged[Merged]
-    Decision -- Change / request changes --> Feedback[Reviewer feedback]
-    Feedback --> Revise[Agent revises same run worktree]
-    Revise --> Candidate
-    Decision -- Decline / reject --> Declined[Declined]
-    Verify -- tree changed, conflict, or repository blocked --> MergeProblem[Merge failed or returns to review]
-```
+![The mental model: Agent works in run worktree, Candidate commit + tree hash, Diff against originating branch, Human Review, Reviewer decision, Verify reviewed tree hash, Local git merge, Merged, Reviewer feedback, Agent revises same run worktree, Declined, Merge failed or returns to review](../diagrams/experience-review-workspace-merge-fig1.png)
+
+<!-- Rendered from ../diagrams/src/experience-review-workspace-merge-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Human Review in the web UI
 
@@ -263,18 +254,12 @@ The tool returns paths and file/folder metadata. MCP clients can use the flat li
 
 The path is relative to the workspace and should use forward slashes, such as `src/main.cs`. The response includes content metadata, including binary or too-large signals, so an MCP client can avoid rendering content that is not suitable for inline display.
 
-```mermaid
-flowchart LR
-    Workspace[Workspace page or MCP client]
-    Refs[list_project_workspace_refs]
-    PickRef[Choose base branch or run worktree]
-    Tree[list_project_workspace]
-    PickFile[Select file]
-    Content[get_project_workspace_file]
-    Viewer[Read-only source / preview]
+![`get_project_workspace_file`: Workspace page or MCP client, list_project_workspace_refs, Choose base branch or run worktree, list_project_workspace, Select file, get_project_workspace_file, Read-only source / preview](../diagrams/experience-review-workspace-merge-fig2.png)
 
-    Workspace --> Refs --> PickRef --> Tree --> PickFile --> Content --> Viewer
-```
+<!-- Rendered from ../diagrams/src/experience-review-workspace-merge-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Merge experience
 

@@ -146,6 +146,12 @@ function normaliseMiddleLabels(stmt) {
 
 const CONNECTOR_RE = /(-\.->|-\.-|-->|---|==>|===)\s*(?:\|([^|]*)\|)?\s*/g;
 
+// Split a chunk on Mermaid's `A & B` multi-node separator, but NOT on `&`
+// that begins an HTML entity (&gt; &amp; &#39; ...) inside a label.
+function splitNodeList(chunk) {
+  return chunk.split(/&(?!#?[a-zA-Z0-9]+;)/);
+}
+
 /**
  * Convert a single Mermaid flowchart string to a graph-spec object.
  * @returns {{ spec: object, warnings: string[] } | null} null if not a flowchart.
@@ -248,7 +254,7 @@ export function convertFlowchart(src, { title, name } = {}) {
     CONNECTOR_RE.lastIndex = 0;
     if (!CONNECTOR_RE.test(stmt)) {
       // standalone node definition (possibly `A & B`)
-      for (const part of stmt.split('&')) {
+      for (const part of splitNodeList(stmt)) {
         const ref = parseNodeRef(part);
         if (ref) ensureNode(ref);
       }
@@ -267,7 +273,7 @@ export function convertFlowchart(src, { title, name } = {}) {
     }
     chainNodes.push(stmt.slice(last).trim());
 
-    const parsedGroups = chainNodes.map((c) => c.split('&').map((p) => parseNodeRef(p)).filter(Boolean));
+    const parsedGroups = chainNodes.map((c) => splitNodeList(c).map((p) => parseNodeRef(p)).filter(Boolean));
     for (const grp of parsedGroups) for (const ref of grp) ensureNode(ref);
 
     for (let c = 0; c < conns.length; c += 1) {

@@ -6,17 +6,12 @@ Scope: this page covers workflow definition management, backlog intake, Ready pi
 
 Related docs: [Overview](./00-overview.md), [Runs & board](./runs-board-watch.md), [Coordinator & orchestration](./coordinator-orchestration.md), [Operations](./operations.md), [Workflow generation](../workflow-generation.md), [Workflow selection](../workflow-selection.md), [Workflow library](../workflow-library.md), [Workflow binder](../workflow-binder.md), and [Workflow engine](../deep-dive/workflow-engine.md).
 
-```mermaid
-flowchart LR
-    Capture[Capture task] --> Backlog[Backlog]
-    Backlog -->|promote / Send all to Ready| Ready[Ready]
-    Ready -->|heartbeat pickup| Active[Active]
-    Active --> HumanReview[Human Review]
-    HumanReview -->|approve| Done[Done]
-    HumanReview -->|request changes| Active
-    Active -->|fail / block / decline| Problems[Problems]
-    Problems -->|retry or fix| Active
-```
+![Workflows and backlog experience: Capture task, Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/experience-workflows-backlog-fig1.png)
+
+<!-- Rendered from ../diagrams/src/experience-workflows-backlog-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## The mental model
 
@@ -107,15 +102,12 @@ If sync finds invalid workflows, they remain visible under **Invalid workflows**
 
 Workflow generation is draft-first. The user clicks **Generate workflow**, describes the pipeline, and receives YAML for review. Nothing is saved to `.agentweaver/workflows/` until the user saves.
 
-```mermaid
-flowchart TD
-    Intent[Describe the workflow you need] --> Generate[workflow_generate]
-    Generate --> Draft[YAML draft]
-    Draft --> Review[Review in editor]
-    Review --> Save[workflow_save]
-    Save --> Registry[Registry refresh]
-    Registry --> Workflows[Workflow appears on Workflows page]
-```
+![Generating and saving workflows: Describe the workflow you need, workflow_generate, YAML draft, Review in editor, workflow_save, Registry refresh, Workflow appears on Workflows page](../diagrams/experience-workflows-backlog-fig2.png)
+
+<!-- Rendered from ../diagrams/src/experience-workflows-backlog-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Web UI generation flow
 

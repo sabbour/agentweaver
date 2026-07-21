@@ -17,22 +17,12 @@ Scaling unwinds that pod into independent, repeatable pieces:
 
 The operator's job after scaling is mostly about the second and third points: making sure enough web pods exist for request load, enough worker pods exist for run backlog, and that runs are being leased and renewed cleanly.
 
-```mermaid
-flowchart TD
-    Dev[Developer] -->|submit run / watch stream| Web
+![The mental model: Developer, Web pods (many), Worker pods (many), Managed Postgres, Per-run sandbox pods](../diagrams/experience-scaling-operations-fig1.png)
 
-    subgraph WhatYouRun["What you operate"]
-        Web["Web pods (many)<br/>API + live event relay"]
-        Worker["Worker pods (many)<br/>own runs via lease"]
-        DB[(Managed Postgres<br/>HA, managed backups)]
-        Pods[Per-run sandbox pods]
-    end
-
-    Web --> DB
-    Worker --> DB
-    Worker -. dispatch .-> Pods
-    DB -. events .-> Web
-```
+<!-- Rendered from ../diagrams/src/experience-scaling-operations-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## What scaling looks like in practice
 
@@ -119,13 +109,12 @@ When you operate a scaled Agentweaver, these are the things worth watching:
 
 You will not flip everything at once. The change arrives in phases, each reversible by a flag that defaults to today's behavior, so you can advance and roll back deliberately:
 
-```mermaid
-flowchart LR
-    P1["P1 · Agent execution in pods<br/>still one pod, still SQLite<br/>(stops the OOM)"]
-    P2["P2 · Postgres cutover<br/>flip Database:Provider<br/>drop /data disk, allow replicas &gt; 1"]
-    P3["P3 · Web/worker split + leasing<br/>two roles, autoscaling, run leasing"]
-    P1 --> P2 --> P3
-```
+![The rollout, from an operator's seat: P1 · Agent execution in pods, P2 · Postgres cutover, P3 · Web/worker split + leasing](../diagrams/experience-scaling-operations-fig2.png)
+
+<!-- Rendered from ../diagrams/src/experience-scaling-operations-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 - **P1** moves the heavy per-run execution into sandbox pods. It runs on the existing single pod and SQLite, and its whole purpose is to stop the out-of-memory crashes. Rollback is the `Sandbox:AgentExecutionMode` flag back to in-process.
 - **P2** cuts the data layer over to Postgres. Once reads and writes are verified you drop the single-writer disk, switch to a rolling update, and allow more than one replica. Rollback is the `Database:Provider` flag back to SQLite (take a backup first — this step is data-loss-aware).

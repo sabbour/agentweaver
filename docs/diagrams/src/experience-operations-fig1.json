@@ -1,0 +1,262 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Mental model",
+  "alt": "Mental model: Human operator, Web UI, MCP client, MCP tools, Settings, Diagnostics, Heartbeat, Flow, Project Settings, diagnostics_get, heartbeat_status, sandbox_policy_get, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Human",
+      "label": "Human operator",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Web",
+      "label": "Web UI",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Assistant",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "MCP tools",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Settings",
+      "label": "Settings",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Diagnostics",
+      "label": "Diagnostics",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Heartbeat",
+      "label": "Heartbeat",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Flow",
+      "label": "Flow",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ProjectSettings",
+      "label": "Project Settings",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "Sandbox policy"
+    },
+    {
+      "id": "DG",
+      "label": "diagnostics_get",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "HS",
+      "label": "heartbeat_status",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SPG",
+      "label": "sandbox_policy_get",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SPS",
+      "label": "sandbox_policy_set",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Policy",
+      "label": "Repository sandbox policy",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Health",
+      "label": "API, storage, projects,",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "runs, heartbeat, checkpoint GC"
+    },
+    {
+      "id": "Tick",
+      "label": "Tick state and automation history",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Ready",
+      "label": "Ready backlog pickup",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Runs",
+      "label": "Active coordinator runs",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Human",
+      "to": "Web"
+    },
+    {
+      "from": "Assistant",
+      "to": "MCP"
+    },
+    {
+      "from": "Web",
+      "to": "Settings"
+    },
+    {
+      "from": "Web",
+      "to": "Diagnostics"
+    },
+    {
+      "from": "Web",
+      "to": "Heartbeat"
+    },
+    {
+      "from": "Web",
+      "to": "Flow"
+    },
+    {
+      "from": "Web",
+      "to": "ProjectSettings"
+    },
+    {
+      "from": "MCP",
+      "to": "DG"
+    },
+    {
+      "from": "MCP",
+      "to": "HS"
+    },
+    {
+      "from": "MCP",
+      "to": "SPG"
+    },
+    {
+      "from": "MCP",
+      "to": "SPS"
+    },
+    {
+      "from": "Settings",
+      "to": "Policy"
+    },
+    {
+      "from": "ProjectSettings",
+      "to": "Policy"
+    },
+    {
+      "from": "SPG",
+      "to": "Policy"
+    },
+    {
+      "from": "SPS",
+      "to": "Policy"
+    },
+    {
+      "from": "Diagnostics",
+      "to": "Health"
+    },
+    {
+      "from": "DG",
+      "to": "Health"
+    },
+    {
+      "from": "Heartbeat",
+      "to": "Tick"
+    },
+    {
+      "from": "HS",
+      "to": "Tick"
+    },
+    {
+      "from": "Tick",
+      "to": "Ready"
+    },
+    {
+      "from": "Ready",
+      "to": "Runs"
+    },
+    {
+      "from": "Runs",
+      "to": "Flow"
+    }
+  ]
+}

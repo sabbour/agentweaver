@@ -73,40 +73,12 @@ The action is **Sign in with GitHub**. This is not the same as an unavailable pr
 
 Creation starts from the gallery. Users choose a blank repository or a GitHub-backed repository, then optionally apply a blueprint. Both dialogs now use the same shell: project and repository fields on the left, one shared **Blueprint** panel on the right, and a single footer **No blueprint** action for the empty-project path (`apps/web/src/pages/ProjectGalleryPage.tsx:486`, `:532`, `:665`, `:815`).
 
-```mermaid
-flowchart TD
-  Start[Project Gallery] --> Choice{Create path}
-  Choice --> Blank[Create blank project]
-  Choice --> GitHub[Create from GitHub]
+![Creating a project in the web UI: Project Gallery, Create path, Create blank project, Create from GitHub, Enter Name, Workspace auto-assigned?, Enter Repository folder, No folder field; server manages workspace, Enter or autofill Name, GitHub connected?, Choose Organization, Connect GitHub or type manually, …](../diagrams/experience-projects-fig1.png)
 
-  Blank --> BlankName[Enter Name]
-  BlankName --> BlankWorkspace{Workspace auto-assigned?}
-  BlankWorkspace -->|No| BlankFolder[Enter Repository folder]
-  BlankWorkspace -->|Yes| ManagedBlank[No folder field; server manages workspace]
-
-  GitHub --> GitName[Enter or autofill Name]
-  GitName --> Account{GitHub connected?}
-  Account -->|Yes| Org[Choose Organization]
-  Account -->|No| Manual[Connect GitHub or type manually]
-  Org --> Repo[Search/select Source repository]
-  Manual --> Repo
-  Repo --> GitWorkspace{Workspace auto-assigned?}
-  GitWorkspace -->|No| GitFolder[Enter or autofill Repository folder]
-  GitWorkspace -->|Yes| ManagedGit[No folder field; server manages workspace]
-
-  BlankFolder --> Blueprint{Blueprint optional}
-  ManagedBlank --> Blueprint
-  GitFolder --> Blueprint
-  ManagedGit --> Blueprint
-
-  Blueprint -->|No blueprint| Create[Create]
-  Blueprint -->|Predefined| BlueprintId[Apply blueprint_id]
-  Blueprint -->|Generated/custom| Inline[Apply inline blueprint]
-  BlueprintId --> Create
-  Inline --> Create
-  Create --> Project[Project + repository workspace]
-  Project --> Board[Project board]
-```
+<!-- Rendered from ../diagrams/src/experience-projects-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Create blank project
 
