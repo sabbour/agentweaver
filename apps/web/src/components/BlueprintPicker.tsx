@@ -29,14 +29,8 @@ import {
 import { useEffect, useState } from 'react';
 import type { Blueprint, SuggestBlueprintResponse } from '../api/types';
 import type { ReactElement } from 'react';
-export type BlueprintSelection =
-  | { kind: 'none' }
-  | { kind: 'predefined'; blueprint: Blueprint }
-  | { kind: 'generated'; blueprint: Blueprint; generatedWorkflowYaml?: string | null };
-
-export const NO_BLUEPRINT: BlueprintSelection = { kind: 'none' };
-
-export type BlueprintPanelTab = 'suggested' | 'templates' | 'generate';
+import { useBlueprintGeneration } from './BlueprintPicker.helpers';
+import type { BlueprintPanelTab, BlueprintSelection } from './BlueprintPicker.helpers';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
@@ -195,7 +189,7 @@ function RotatingStatus() {
   return <Text size={200} className={styles.workingStatus} aria-live="polite">{GENERATION_STEPS[index]}</Text>;
 }
 
-export function useBlueprintCatalog(active: boolean) {
+function useBlueprintCatalog(active: boolean) {
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -220,32 +214,6 @@ export function useBlueprintCatalog(active: boolean) {
   }, [active]);
 
   return { blueprints, loading, error };
-}
-
-export function useBlueprintGeneration(onChange: (selection: BlueprintSelection) => void, targetRepository?: string | null) {
-  const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [generated, setGenerated] = useState<{ blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null>(null);
-
-  const generate = async (description: string) => {
-    if (!description.trim()) return;
-    setGenerating(true);
-    setError(null);
-    try {
-      const res = targetRepository
-        ? await apiClient.generateBlueprint(description.trim(), targetRepository)
-        : await apiClient.generateBlueprint(description.trim());
-      const next = { blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml };
-      setGenerated(next);
-      onChange({ kind: 'generated', blueprint: next.blueprint, generatedWorkflowYaml: next.generatedWorkflowYaml });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  return { generated, generating, error, generate, setGenerated };
 }
 
 export function BlueprintRosterChips({ roster, limit }: { roster: string[]; limit?: number }) {
@@ -722,16 +690,3 @@ export function BlueprintPicker({ active, value, onChange, targetRepository }: {
   );
 }
 
-export function applyBlueprintToRequest<T extends {
-  blueprint_id?: string;
-  blueprint?: Blueprint;
-  generated_workflow_yaml?: string | null;
-}>(req: T, selection: BlueprintSelection): T {
-  if (selection.kind === 'predefined') {
-    req.blueprint_id = selection.blueprint.id;
-  } else if (selection.kind === 'generated') {
-    req.blueprint = selection.blueprint;
-    req.generated_workflow_yaml = selection.generatedWorkflowYaml ?? null;
-  }
-  return req;
-}

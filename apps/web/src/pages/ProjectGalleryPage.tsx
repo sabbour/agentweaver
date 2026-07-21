@@ -33,7 +33,8 @@ import {
   DismissCircleRegular,
   SparkleRegular,
 } from '@fluentui/react-icons';
-import { applyBlueprintToRequest, BlueprintPanel, NO_BLUEPRINT, useBlueprintGeneration } from '../components/BlueprintPicker';
+import { BlueprintPanel } from '../components/BlueprintPicker';
+import { applyBlueprintToRequest, NO_BLUEPRINT, useBlueprintGeneration } from '../components/BlueprintPicker.helpers';
 import { GitHubIcon } from '../components/GitHubIcon';
 import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
@@ -42,7 +43,7 @@ import { useProjectList } from '../hooks/useProjectList';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { CreateProjectRequest, GitHubAccount, GitHubRepo, PagedResult, Project } from '../api/types';
-import type { BlueprintSelection } from '../components/BlueprintPicker';
+import type { BlueprintSelection } from '../components/BlueprintPicker.helpers';
 import type { ReactElement, ReactNode } from 'react';
 /** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
 function toGitHubUrl(val: string): string {

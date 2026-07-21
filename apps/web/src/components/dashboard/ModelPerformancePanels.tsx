@@ -15,7 +15,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { ChevronDownRegular, ChevronUpRegular } from '@fluentui/react-icons';
-import { costChipLabel } from '../CostChip';
+import { costChipLabel } from '../costChipFormat';
 import { Body, EmptyState, TitleText } from '../ui';
 import type {
   AiCreditUsagePointDto,
