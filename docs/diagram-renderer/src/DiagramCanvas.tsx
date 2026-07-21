@@ -3,15 +3,13 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Background,
   MarkerType,
-  Position,
   ReactFlow,
-  getSmoothStepPath,
   type Edge,
   type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CardNode, GroupNode, CARD_WIDTH } from './nodes';
-import { LabeledSmoothStepEdge, type LabeledEdgeData } from './edges';
+import { RoutedEdge, type Point, type RoutedEdgeData } from './edges';
 import { neutral, radius } from './theme';
 import type { GraphSpec } from './types';
 
@@ -23,7 +21,7 @@ const GROUP_PAD_BOTTOM = 20;
 const CANVAS_MARGIN = 60;
 
 const nodeTypes = { card: CardNode, group: GroupNode };
-const edgeTypes = { labeledSmoothStep: LabeledSmoothStepEdge };
+const edgeTypes = { routed: RoutedEdge };
 
 interface Box { x: number; y: number; width: number; height: number }
 
@@ -130,8 +128,8 @@ function resolveLabelCollisions(items: LabelBox[], obstacles: Box[]): void {
  * dagre avoids that class of bug structurally instead of by more padding.
  */
 function layout(spec: GraphSpec): { nodes: Node[]; edges: Edge[]; canvasWidth: number; canvasHeight: number } {
-  const g = new dagre.graphlib.Graph({ compound: true });
-  g.setGraph({ rankdir: spec.direction ?? 'TB', nodesep: 60, ranksep: 110, marginx: 20, marginy: 20 });
+  const g = new dagre.graphlib.Graph({ compound: true, multigraph: true });
+  g.setGraph({ rankdir: spec.direction ?? 'TB', nodesep: 80, edgesep: 30, ranksep: 120, marginx: 20, marginy: 20 });
   g.setDefaultEdgeLabel(() => ({}));
 
   const groups = spec.groups ?? [];
@@ -145,9 +143,21 @@ function layout(spec: GraphSpec): { nodes: Node[]; edges: Edge[]; canvasWidth: n
     g.setNode(n.id, { width: CARD_WIDTH, height });
     if (n.group) g.setParent(n.id, n.group);
   }
-  for (const e of spec.edges) {
-    g.setEdge(e.from, e.to);
-  }
+  // Give every edge a stable name (index) so parallel edges between the same
+  // pair of nodes are kept distinct, and hand dagre each label's estimated
+  // footprint so it *reserves* space for the label in the layout (positioning
+  // it along the routed poly-line via edge.x/edge.y) instead of letting every
+  // label default to the shared path midpoint.
+  spec.edges.forEach((e, i) => {
+    const edgeLabel: Record<string, unknown> = {};
+    if (e.label) {
+      const { width, height } = estimateLabelSize(e.label);
+      edgeLabel.width = width;
+      edgeLabel.height = height;
+      edgeLabel.labelpos = 'c';
+    }
+    g.setEdge(e.from, e.to, edgeLabel, `e${i}`);
+  });
   dagre.layout(g);
 
   const leafBoxes = new Map<string, Box>();
@@ -206,33 +216,29 @@ function layout(spec: GraphSpec): { nodes: Node[]; edges: Edge[]; canvasWidth: n
     });
   }
 
-  // Compute each edge's label position with the *exact* same function
-  // LabeledSmoothStepEdge uses at render time (getSmoothStepPath is a pure
-  // geometry function -- no React context needed), using the same handle
-  // positions our cards expose (source: bottom-center, target: top-center;
-  // see the <Handle> placement in nodes.tsx). Using the real function here
-  // instead of a hand-rolled straight-line approximation means the
-  // collision-avoidance below reasons about exactly where the label will
-  // actually land, including the orthogonal jogs smoothstep adds for edges
-  // whose source/target aren't vertically aligned -- an earlier straight-line
-  // estimate could diverge enough from the true bent path that an offset
-  // computed to avoid one collision would clear the label into an
-  // unrelated card lying along the jogged route.
+  // Pull dagre's routed poly-line and reserved label anchor for every edge.
+  // dagre routes each edge through per-rank waypoints chosen to avoid the node
+  // cards, and -- because labelled edges were given a width/height above --
+  // reserves a non-overlapping slot for each label along that route (edge.x/
+  // edge.y). Seeding the collision pass from those reserved anchors (rather
+  // than a shared path midpoint) means labels start already separated; the
+  // pass then only has to break any residual overlap and keep labels off the
+  // opaque card backgrounds.
+  const routedPoints: Point[][] = [];
+  const labelAnchors: (Point | undefined)[] = [];
   const labelBoxes: LabelBox[] = [];
   spec.edges.forEach((e, i) => {
-    if (!e.label) return;
-    const sBox = leafBoxes.get(e.from)!;
-    const tBox = leafBoxes.get(e.to)!;
-    const [, labelX, labelY] = getSmoothStepPath({
-      sourceX: sBox.x + sBox.width / 2,
-      sourceY: sBox.y + sBox.height,
-      sourcePosition: Position.Bottom,
-      targetX: tBox.x + tBox.width / 2,
-      targetY: tBox.y,
-      targetPosition: Position.Top,
-    });
-    const { width, height } = estimateLabelSize(e.label);
-    labelBoxes.push({ index: i, cx: labelX, cy: labelY, width, height, dx: 0, dy: 0 });
+    const ge = g.edge(e.from, e.to, `e${i}`) as { points?: Point[]; x?: number; y?: number } | undefined;
+    const pts: Point[] = (ge?.points ?? []).map((p) => ({ x: p.x, y: p.y }));
+    routedPoints.push(pts);
+    if (e.label && ge && typeof ge.x === 'number' && typeof ge.y === 'number') {
+      const anchor = { x: ge.x, y: ge.y };
+      labelAnchors.push(anchor);
+      const { width, height } = estimateLabelSize(e.label);
+      labelBoxes.push({ index: i, cx: anchor.x, cy: anchor.y, width, height, dx: 0, dy: 0 });
+    } else {
+      labelAnchors.push(undefined);
+    }
   });
   // Cards obscure a label with a solid background (unlike the translucent
   // group containers, which labels are expected to sit on top of), so only
@@ -242,32 +248,43 @@ function layout(spec: GraphSpec): { nodes: Node[]; edges: Edge[]; canvasWidth: n
     labelBoxes.map((l) => [l.index, { dx: l.dx, dy: l.dy }]),
   );
 
-  const edges: Edge[] = spec.edges.map((e, i) => ({
-    id: `e${i}-${e.from}-${e.to}`,
-    source: e.from,
-    target: e.to,
-    label: e.label,
-    type: 'labeledSmoothStep',
-    data: { labelOffset: labelOffsetByIndex.get(i) ?? { dx: 0, dy: 0 } } satisfies LabeledEdgeData,
-    style: {
-      stroke: neutral.foreground4,
-      strokeWidth: 1.5,
-      strokeDasharray: e.dashed ? '5 4' : undefined,
-    },
-    markerEnd: e.undirected ? undefined : { type: MarkerType.ArrowClosed, color: neutral.foreground4, width: 16, height: 16 },
-  }));
-
   const allBoxes = [...leafBoxes.values(), ...groupBoxes.values()];
   const bbox = unionBox(allBoxes);
   const canvasWidth = bbox.width + CANVAS_MARGIN * 2;
   const canvasHeight = bbox.height + CANVAS_MARGIN * 2;
 
   // Shift everything so the union bbox starts at (CANVAS_MARGIN, CANVAS_MARGIN).
+  // Edge poly-lines and label anchors come out of dagre in the same
+  // pre-shift coordinate space as the nodes, so they get the same translation.
   const dx = CANVAS_MARGIN - bbox.x;
   const dy = CANVAS_MARGIN - bbox.y;
   for (const n of nodes) {
     n.position = { x: n.position.x + dx, y: n.position.y + dy };
   }
+
+  const edges: Edge[] = spec.edges.map((e, i) => {
+    const shiftedPoints = routedPoints[i].map((p) => ({ x: p.x + dx, y: p.y + dy }));
+    const anchor = labelAnchors[i];
+    const labelPos = anchor ? { x: anchor.x + dx, y: anchor.y + dy } : undefined;
+    return {
+      id: `e${i}-${e.from}-${e.to}`,
+      source: e.from,
+      target: e.to,
+      label: e.label,
+      type: 'routed',
+      data: {
+        points: shiftedPoints,
+        labelPos,
+        labelOffset: labelOffsetByIndex.get(i) ?? { dx: 0, dy: 0 },
+      } satisfies RoutedEdgeData,
+      style: {
+        stroke: neutral.foreground4,
+        strokeWidth: 1.5,
+        strokeDasharray: e.dashed ? '5 4' : undefined,
+      },
+      markerEnd: e.undirected ? undefined : { type: MarkerType.ArrowClosed, color: neutral.foreground4, width: 16, height: 16 },
+    };
+  });
 
   return { nodes, edges, canvasWidth, canvasHeight };
 }
