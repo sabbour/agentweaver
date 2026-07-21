@@ -48,6 +48,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       node-toolchain: ${{ steps.filter.outputs.node-toolchain }}
       docs: ${{ steps.filter.outputs.docs }}
+      diagrams: ${{ steps.filter.outputs.diagrams }}
     steps:
       - uses: actions/checkout@v4
       # dorny/paths-filter classifies the PR/push diff into named groups below.
@@ -76,6 +77,12 @@ jobs:
               - '.github/workflows/**'
             docs:
               - 'docs/**'
+              - '.github/workflows/**'
+            diagrams:
+              - 'docs/diagrams/**'
+              - 'README.md'
+              - 'docs/guide/architecture-aks.md'
+              - 'scripts/docs/**'
               - '.github/workflows/**'
 
   dotnet-tests:
@@ -196,6 +203,8 @@ jobs:
 
   diagrams-in-sync:
     name: Architecture diagrams are in sync
+    needs: changes
+    if: needs.changes.outputs.diagrams == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
