@@ -1,5 +1,5 @@
 ---
-name: "agentweaver-squad-conventions"
+name: "squad-conventions"
 description: "Core conventions and patterns used in the Squad codebase"
 domain: "project-conventions"
 confidence: "high"

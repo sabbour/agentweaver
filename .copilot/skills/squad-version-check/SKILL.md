@@ -1,5 +1,5 @@
 ---
-name: agentweaver-squad-version-check
+name: squad-version-check
 description: Squad CLI internals for version stamping and upgrade mechanics.
 ---
 

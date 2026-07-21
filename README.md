@@ -394,10 +394,6 @@ project-specific operating practices:
 - **agentweaver-reviewer-protocol** — Reviewer rejection workflow and strict lockout semantics.
 - **agentweaver-secret-handling** — Never read `.env` files or write secrets to committed `.squad/` files.
 - **agentweaver-session-recovery** — Find and resume interrupted Copilot CLI sessions using `session_store` queries.
-- **agentweaver-squad-commands** — Categorized catalog of common Squad operations presented as an interactive menu.
-- **agentweaver-squad-conventions** — Core conventions and patterns used in the Squad codebase.
-- **agentweaver-squad-fleet** — Launch Squad agents in parallel across GitHub issues using isolated worktrees and branches.
-- **agentweaver-squad-version-check** — Squad CLI internals for version stamping and upgrade mechanics.
 - **agentweaver-test-discipline** — Update tests when changing APIs — no exceptions.
 
 GitHub Copilot CLI discovers its official skill paths in
