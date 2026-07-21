@@ -1,0 +1,112 @@
+# NetworkPolicy for Agentweaver sandbox pods (label: app: agentweaver-agent-host).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-deny-ingress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-agent-host
+  policyTypes:
+    - Ingress
+---
+# Allow the Istio ingress data-plane (preview gateway) to reach the sandbox browser preview port range.
+#
+# Ports 3000-9000 are the allowed sandbox dev-server preview ports. This range MUST mirror
+# Sandbox:Preview:AllowedPortMin/Max (the preview endpoint rejects out-of-range target_port,
+# so we never provision a preview the NetworkPolicy would black-hole). target_port is
+# user-supplied (default 3000) — coordinate with Morpheus (backend) before changing the range.
+#
+# The approuting-istio add-on creates the preview gateway's data-plane pods in the SAME namespace
+# as this policy (agentweaver) — CONFIRMED on the live cluster (agentweaver-aks-2). They are
+# labelled gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway.
+#
+# A NetworkPolicy `from` peer with only a podSelector (and NO namespaceSelector) matches pods
+# carrying that label in the SAME namespace as the policy (agentweaver) — exactly where the
+# preview-gateway pods run. The gateway-name label scopes ingress to ONLY the preview gateway's
+# pods, which is tight and correct. (An earlier revision required namespaceSelector
+# aks-istio-ingress; that was wrong for this add-on topology and would have black-holed all
+# preview traffic, since the gateway pods are not in aks-istio-ingress.)
+#
+# Egress is NOT touched — all egress rules remain in sandbox-egress-allowlist below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-allow-preview-ingress
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-agent-host
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Same-namespace (agentweaver) podSelector only — admits only the preview gateway
+        # data-plane pods. No namespaceSelector: the gateway pods live in this namespace.
+        - podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway
+      ports:
+        # Range mirrors Sandbox:Preview:AllowedPortMin/Max (gateway-sourced ingress only).
+        - protocol: TCP
+          port: 3000
+          endPort: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-egress-allowlist
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-agent-host
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution (kube-dns). Selector-based; explicit ClusterIP added for kata-VM
+    # robustness (kata pods enforce egress at the virtual NIC, identity selectors still
+    # resolve but the explicit /32 guarantees DNS is never black-holed by the operator
+    # policy, which excludes 10.0.0.0/8 and would otherwise block kube-dns at 10.0.0.10).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - ipBlock:
+            cidr: 10.0.0.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Unrestricted outbound egress (all destinations, all ports) except IMDS/cloud metadata.
+    #
+    # Research/coding agents running in the sandbox need arbitrary outbound network access
+    # (package registries, APIs, git over various ports, RFC1918/VNet resources, etc.), so this
+    # is intentionally an allow-all-destinations rule rather than a domain/IP allowlist.
+    #
+    # Why not Cilium toFQDNs: these pods run as kata VMs (Pod Sandboxing). Cilium intercepts
+    # DNS for FQDN policy on the HOST kernel via eBPF; the kata guest kernel's DNS queries
+    # never traverse those host hooks, so the FQDN->IP map never builds and listed hostnames
+    # are still blocked. Only IP-based rules are enforced for kata pods (at the virtual NIC).
+    #
+    # The only remaining block is 169.254.0.0/16 (link-local) to prevent access to the
+    # cloud-metadata/IMDS endpoint (169.254.169.254) and theft of the node's managed-identity
+    # token via SSRF. kube-dns remains explicitly allowed by the DNS rule above.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16

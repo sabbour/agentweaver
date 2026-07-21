@@ -46,7 +46,7 @@ spec:
         # If Tank's Postgres migration set is not yet generated, this init container will fail;
         # the pod will restart until the migration set is merged and the image is rebuilt.
         - name: migrate-memory-db
-          image: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}
+          image: agentweaverregistry.azurecr.io/agentweaver-api:latest
           imagePullPolicy: Always
           command:
             - /app/efbundle
@@ -75,9 +75,15 @@ spec:
                   key: connectionstring
             # OAuthConfigGuard fires in Production during efbundle host build.
             - name: Auth__OAuth__Issuer
-              value: https://${HOST}
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_ISSUER
             - name: Auth__OAuth__Audience
-              value: https://${HOST}/mcp
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_AUDIENCE
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -89,7 +95,7 @@ spec:
                 - ALL
       containers:
         - name: worker
-          image: ${ACR_LOGIN_SERVER}/agentweaver-api:${IMAGE_TAG}
+          image: agentweaverregistry.azurecr.io/agentweaver-api:latest
           imagePullPolicy: Always
           command:
             - /bin/sh
@@ -157,14 +163,26 @@ spec:
             - name: Auth__GitHub__AllowedOrg
               value: microsoft
             - name: Auth__GitHub__CallbackUrl
-              value: https://${HOST}/auth/github/callback
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: GITHUB_CALLBACK_URL
             - name: Auth__GitHub__FrontendUrl
-              value: https://${HOST}/
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: GITHUB_FRONTEND_URL
             # OAuth AS metadata — worker may need to validate inbound tokens.
             - name: Auth__OAuth__Issuer
-              value: https://${HOST}
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_ISSUER
             - name: Auth__OAuth__Audience
-              value: https://${HOST}/mcp
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_AUDIENCE
             # Postgres (worker always uses Postgres — it is the run-state owner).
             # Flip Database__Provider to "sqlite" ONLY as an emergency rollback; doing so
             # will break run leasing since the lease schema is Postgres-specific.
@@ -192,7 +210,10 @@ spec:
                   key: appinsights-connection-string
                   optional: true
             - name: APPLICATIONINSIGHTS_WORKSPACE_ID
-              value: "${APPINSIGHTS_WORKSPACE_ID}"
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: APPINSIGHTS_WORKSPACE_ID
             - name: TMPDIR
               value: /tmp
             # A2A mTLS client cert (spec-018 H1) — the worker connects to each sandbox agent pod

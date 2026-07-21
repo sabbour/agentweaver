@@ -1,12 +1,25 @@
 // deploy-apply.test.mjs -- Orchestration/ordering tests for steps/30-deploy.mjs's
-// run(), using fully injected fakes (no real kubectl/az/filesystem side effects).
-// Verifies: full apply ordering, the SandboxTemplate CRD conditional, the two
-// gateway Programmed waits, and that a Worker rollout timeout is logged as a
-// non-fatal WARNING (matching 30-deploy.sh's `... || echo WARNING`).
+// run(), using injected fakes for kubectl side effects (apply/wait/rollout),
+// but a REAL `kubectl kustomize` build against the real k8s/base + k8s/overlays
+// production overlay on disk (kubectl has built-in Kustomize support -- no
+// separate `kustomize` binary is required, matching this repo's decision not
+// to add one as a new prerequisite). This gives us confidence the actual
+// manifest content 30-deploy.mjs applies is real, kustomize-built YAML (not a
+// hand-rolled fake), while still keeping the test hermetic for anything that
+// would otherwise touch a real cluster.
+//
+// Verifies: full apply ordering (including the new synthetic
+// _agentweaver-runtime-config.yaml ConfigMap), the SandboxTemplate CRD
+// conditional, the two gateway Programmed waits, that a Worker rollout
+// timeout is logged as a non-fatal WARNING (matching 30-deploy.sh's
+// `... || echo WARNING`), and that the manifests actually applied carry
+// real kustomize-resolved dynamic values (image tag, HOST, workload
+// identity IDs) rather than the committed overlay's placeholders.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import realFs from "node:fs";
 import {
   run,
   DEFAULT_REPO_ROOT,
@@ -17,6 +30,7 @@ import {
   DEPLOYMENT_MANIFESTS,
   WORKER_MANIFESTS,
 } from "../steps/30-deploy.mjs";
+import * as execDefault from "../lib/exec.mjs";
 
 const CFG = {
   RESOURCE_GROUP: "agentweaver-rg",
@@ -39,38 +53,45 @@ const CFG = {
 function makeFakes({ hasSandboxCrd = true, workerRolloutFails = false, ddcExists = true } = {}) {
   const calls = [];
   const writtenFiles = new Map();
+
+  // Real fs underneath -- writeOverlay() must actually write the scratch
+  // overlay to disk so the real `kubectl kustomize` child process (see
+  // execCapture below) can read it back. We wrap (not fake) writeFileSync so
+  // assertions can inspect exactly what content was applied, in addition to
+  // the real write still happening (run()'s own finally block removes the
+  // whole .rendered scratch dir afterwards).
   const fsImpl = {
-    mkdirSync: () => {},
-    rmSync: () => {},
-    writeFileSync: (p, content) => writtenFiles.set(path.basename(p), content),
-    readdirSync: (dir) => {
-      // Delegate to real fs for reading the actual k8s dir listing/content --
-      // only writes are faked, so renderManifests() still renders the real templates.
-      return realFs.readdirSync(dir);
+    ...realFs,
+    writeFileSync: (p, content, ...rest) => {
+      writtenFiles.set(path.basename(p), content);
+      return realFs.writeFileSync(p, content, ...rest);
     },
-    readFileSync: (p, enc) => realFs.readFileSync(p, enc),
   };
 
   const execRun = async (cmd, args) => {
     calls.push({ type: "run", cmd, args });
     if (cmd === "kubectl" && args[0] === "rollout" && args[2] === "deployment/agentweaver-worker" && workerRolloutFails) {
-      const err = new Error("rollout timed out");
-      throw err;
+      throw new Error("rollout timed out");
     }
     return { code: 0 };
   };
 
   const execCapture = async (cmd, args) => {
     calls.push({ type: "capture", cmd, args });
+    if (cmd === "kubectl" && args[0] === "kustomize") {
+      // The one real, unfaked shell-out: builds the actual overlay written
+      // to disk by writeOverlay(), matching what `run()` will apply.
+      return execDefault.capture(cmd, args);
+    }
     if (cmd === "kubectl" && args[0] === "config") return { stdout: "aks-context", stderr: "", code: 0 };
     if (cmd === "az" && args[0] === "monitor" && args[1] === "app-insights") {
       return { stdout: "", stderr: "", code: 0 }; // insights already provisioned
     }
-    if (cmd === "kubectl" && args[0] === "get" && args[1] === "defaultdomaincertificate") {
-      return ddcExists ? { stdout: "", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 1 };
-    }
     if (cmd === "kubectl" && args.includes("jsonpath={.status.domain}")) {
       return { stdout: "*.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io", stderr: "", code: 0 };
+    }
+    if (cmd === "kubectl" && args[0] === "get" && args[1] === "defaultdomaincertificate") {
+      return ddcExists ? { stdout: "", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 1 };
     }
     if (cmd === "kubectl" && args[0] === "api-resources") {
       return { stdout: hasSandboxCrd ? "sandboxtemplates  extensions.agents.x-k8s.io  true  SandboxTemplate" : "", stderr: "", code: 0 };
@@ -95,12 +116,8 @@ function makeFakes({ hasSandboxCrd = true, workerRolloutFails = false, ddcExists
     getLogAnalyticsWorkspaceCustomerId: async () => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   };
 
-  return { calls, execRun, execCapture, log, az, fsImpl };
+  return { calls, writtenFiles, execRun, execCapture, log, az, fsImpl };
 }
-
-// Real fs, aliased so the fake fsImpl above can still read the actual k8s
-// templates (only writes are faked -- we don't want tests touching disk).
-import realFs from "node:fs";
 
 function appliedFilenames(calls) {
   return calls
@@ -108,7 +125,7 @@ function appliedFilenames(calls) {
     .map((c) => path.basename(c.args[2]));
 }
 
-test("run(): applies manifests in the exact order groups from 30-deploy.sh (CRD present)", async () => {
+test("run(): applies manifests in the exact order groups (CRD present)", async () => {
   const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes({ hasSandboxCrd: true });
   await run(CFG, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT });
 
@@ -120,7 +137,7 @@ test("run(): applies manifests in the exact order groups from 30-deploy.sh (CRD 
     "secret-provider-class.yaml",
     ...IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(3),
     ...NETWORK_POLICY_MANIFESTS,
-    ...SERVICES_GATEWAY_ROUTE_MANIFESTS,
+    ...SERVICES_GATEWAY_ROUTE_MANIFESTS.map((f) => f.replace(/^_/, "")),
     ...SANDBOX_MANIFESTS,
     ...DEPLOYMENT_MANIFESTS,
     ...WORKER_MANIFESTS,
@@ -183,4 +200,23 @@ test("run(): throws when IDENTITY_CLIENT_ID/KEYVAULT_NAME/TENANT_ID are missing 
     () => run(badCfg, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT }),
     /IDENTITY_CLIENT_ID[\s\S]*KEYVAULT_NAME[\s\S]*TENANT_ID/,
   );
+});
+
+test("run(): applied manifests carry real kustomize-resolved values, not the committed overlay's placeholders", async () => {
+  const { writtenFiles, execRun, execCapture, log, az, fsImpl } = makeFakes();
+  await run(CFG, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT });
+
+  const apiDeployment = writtenFiles.get("api-deployment.yaml");
+  assert.ok(apiDeployment, "expected api-deployment.yaml to have been written before apply");
+  assert.match(apiDeployment, /image: agentweaverregistry\.azurecr\.io\/agentweaver-api:v0\.9\.71/);
+  assert.doesNotMatch(apiDeployment, /:latest/);
+
+  const runtimeConfig = writtenFiles.get("agentweaver-runtime-config.yaml");
+  assert.ok(runtimeConfig, "expected the synthetic runtime-config ConfigMap to have been written before apply");
+  assert.match(runtimeConfig, /OAUTH_ISSUER: https:\/\/agentweaver\.6a3de4fe60529400010f3fba\.westus2\.staging\.aksapp\.io/);
+
+  const secretProviderClass = writtenFiles.get("secret-provider-class.yaml");
+  assert.ok(secretProviderClass);
+  assert.match(secretProviderClass, /clientID: 11111111-2222-3333-4444-555555555555/);
+  assert.doesNotMatch(secretProviderClass, /changeme/);
 });

@@ -46,7 +46,7 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 | `scripts/azure` | The Node.js provisioning/deployment/release toolchain (no bash/PowerShell) |
 | `tests/Agentweaver.Tests` | .NET test suite |
 | `tests/e2e` | End-to-end tests |
-| `k8s/` | Kubernetes manifests (AKS deployment) |
+| `k8s/` | Kustomize-based Kubernetes manifests (AKS deployment): `k8s/base/` (generic manifests), `k8s/overlays/production/` (image tags, ConfigMap/replacements patches), `k8s/reference/` (non-deployed examples/one-off jobs) |
 
 ## Making a change
 
@@ -73,7 +73,7 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 5. **Run the relevant test suite(s) locally before you push.** CI re-runs the full suite
    on every pull request and push to `dev` or `main`, but running the affected suite
    locally first keeps the feedback loop short and avoids red PRs.
-6. **Add a changeset for shipped user-facing behavior** before opening the PR: run `npm run changeset`, use `patch` for compatible fixes and `minor` for features or breaking changes while Agentweaver is at `0.x`, and write prose for users rather than restating a commit title. Do not edit `VERSION`, package versions, or `CHANGELOG.md`. Docs/tests/CI-only changes normally need no changeset; use the `changeset:not-required` label only with a `Changeset exemption:` rationale in the PR body. Infrastructure and local deployment commands never consume changesets; `release:publish` consumes only metadata already prepared by `release:prepare`. For the full playbook, see the [changelog skill](.copilot/skills/agentweaver-changelog/SKILL.md).
+6. **Add a changeset for shipped user-facing behavior** before opening the PR: run `npm run changeset`, use `patch` for compatible fixes and `minor` for features or breaking changes while Agentweaver is at `0.x`, and write prose for users rather than restating a commit title. Do not edit `VERSION`, package versions, or `CHANGELOG.md`. Docs/tests/CI-only changes normally need no changeset; use the `changeset:not-required` label only with a `Changeset exemption:` rationale in the PR body. Infrastructure and local deployment commands never consume changesets; `release:publish` consumes only metadata already prepared by `release:prepare`. **The `Changeset advisory` CI job blocks merge** if it detects a release-relevant change with no changeset and no exemption, so this can't be silently skipped. For the full playbook, see the [changelog skill](.copilot/skills/agentweaver-changelog/SKILL.md).
 7. **Verify live for anything with runtime/deploy impact**, not just via unit tests.
 
 ### Writing a changeset
@@ -126,21 +126,28 @@ Pull requests and pushes to `dev` and `main` are verified by the
 [`CI` workflow](.github/workflows/ci.yml). It runs the same commands documented under
 [Testing](#testing) above, split into one job per area so each gets a dedicated runner
 (several .NET and web tests are timing-sensitive and flake under CPU contention if
-crowded onto a single runner):
+crowded onto a single runner). A `changes` job classifies each diff by path first, and
+every suite job below except `Changeset advisory` only runs when its path group
+actually changed (any edit to `.github/workflows/**` always runs everything, so the
+pipeline itself is always fully verified); a job that's skipped this way still counts
+as passing for required-status-checks purposes:
 
-| Job | What it runs | Gating |
-|---|---|---|
-| `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass |
-| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs` | Blocking — must pass |
-| `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass |
-| `Web lint` | `npm --prefix apps/web run lint` | Blocking — must pass |
-| `Docs build` | `npm run docs:build` | Blocking — must pass |
+| Job | What it runs | Gating | Runs when |
+|---|---|---|---|
+| `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
+| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs` | Blocking — must pass | `scripts/azure/**` or `scripts/changesets/**` changed |
+| `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass | `apps/web/**` changed |
+| `Web lint` | `npm --prefix apps/web run lint` | Blocking — must pass | `apps/web/**` changed |
+| `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
+| `Changeset advisory` | `npm run version:check && npm run changeset:check` | Blocking — must pass | Always, on every PR |
 
-The repository policy requires these five blocking jobs on a branch that is
-up to date with `dev`. The GitHub ruleset described in
-[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) is **active**,
-so admission is mechanical: direct pushes to `dev` are rejected and merges are blocked
-until the branch is current and the required checks are green.
+The repository policy requires these six blocking jobs (path-conditional jobs count
+as passing when skipped) on a branch that is up to date with `dev`. The GitHub
+ruleset described in [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md)
+is **active**, so admission is mechanical: direct pushes to `dev` are rejected and
+merges are blocked until the branch is current and the required checks are green.
+`Changeset advisory` now fails the build (not just a warning) when a release-relevant
+change has no changeset and no `changeset:not-required` exemption.
 
 ## Opening a pull request
 
