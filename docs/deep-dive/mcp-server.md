@@ -282,17 +282,12 @@ Beyond the static tool names and descriptions summarized here, the protocol-leve
 
 The Kubernetes design has one public host and routes selected paths to the MCP service.
 
-```mermaid
-flowchart LR
-    Client[MCP client] --> Gateway[Gateway / HTTPRoute]
-    Gateway -->|Exact /mcp/health| HealthRewrite[Rewrite to /healthz]
-    HealthRewrite --> McpSvc[agentweaver-mcp Service]
-    Gateway -->|Exact /.well-known/oauth-protected-resource| McpSvc
-    Gateway -->|Exact /.well-known/oauth-protected-resource/mcp| McpSvc
-    Gateway -->|PathPrefix /mcp| McpSvc
-    McpSvc --> McpPod[Agentweaver.Mcp pod]
-    McpPod -->|API calls + JWKS fetch| ApiSvc[agentweaver-api Service]
-```
+![6. Kubernetes routing: expose `/mcp`, but do not hide discovery: MCP client, Gateway / HTTPRoute, Rewrite to /healthz, agentweaver-mcp Service, Agentweaver.Mcp pod, agentweaver-api Service](../diagrams/mcp-server-fig1.png)
+
+<!-- Rendered from ../diagrams/src/mcp-server-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 There are three important routing shapes:
 

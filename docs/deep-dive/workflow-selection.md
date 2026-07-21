@@ -86,52 +86,12 @@ Future automation rules are the place for "when event X fires, invoke workflow Y
 
 ## End-to-end flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Start([SelectWorkflowAsync])
-    Default[ResolveDefault — project default = fallback]
-    Available[GetOrLoad.Available — default first, then by id]
-    Kind[ResolveInvocationKindAsync\nBacklogPickup → Heartbeat\nelse Manual]
-    DialogOverride{input.WorkflowOverrideId set?}
-    BacklogPin{BacklogTask.WorkflowOverrideId\nfound via ResolveWorkflowOverrideIdAsync?}
-    AvailableCheck{Exists in available set?}
-    UseOverride[Use override workflow]
-    Candidates[Use available candidates]
-    Count{Available count}
-    FallbackDefault[Return project default]
-    Single[Use the only candidate — no LLM call]
-    ConvOverride{ReviseFeedback matches\n'use workflow-id'?}
-    UseConv[Use requested workflow\nemit coordinator.workflow_selected\nwasAutoSelected=false]
-    LLM[WorkflowSelector.SelectAsync\nCopilotWorkflowSelectionModel]
-    Emit[Emit coordinator.workflow_selected\nreturn choice\nwasAutoSelected=true]
+![End-to-end flow: SelectWorkflowAsync, ResolveDefault — project default = fallback, GetOrLoad.Available — default first, then by id, ResolveInvocationKindAsync, input.WorkflowOverrideId set?, BacklogTask.WorkflowOverrideId, Exists in available set?, Use override workflow, Use available candidates, Available count, Return project default, Use the only candidate — no LLM call, …](../diagrams/workflow-selection-fig1.png)
 
-    Start --> Default --> Available --> Kind --> DialogOverride
-    DialogOverride -- yes --> AvailableCheck
-    DialogOverride -- no --> BacklogPin
-    BacklogPin -- yes --> AvailableCheck
-    BacklogPin -- no --> Candidates
-    AvailableCheck -- yes --> UseOverride
-    AvailableCheck -- no --> Candidates
-    Candidates --> Count
-    Count -- 0 --> FallbackDefault
-    Count -- 1 --> Single
-    Count -- "2+" --> ConvOverride
-    ConvOverride -- yes --> UseConv
-    ConvOverride -- no --> LLM --> Emit
-
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef gate fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-
-    class Start,Default,Available,Kind,Candidates,Count,FallbackDefault,Single svc;
-    class DialogOverride,BacklogPin,AvailableCheck,ConvOverride gate;
-    class UseOverride,UseConv core;
-    class LLM ext;
-    class Emit data;
-```
+<!-- Rendered from ../diagrams/src/workflow-selection-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## The workflow selection event
 

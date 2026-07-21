@@ -1,0 +1,181 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Slug de-collision",
+  "alt": "Slug de-collision: Submit inbox entry, Requested slug exists?, Create pending entry, Same agent?, Existing entry pending?, Update existing entry, Conflict, Build agent segment, Try requested--agent, Candidate exists?, Create new pending entry, Try requested--agent--N",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Submit inbox entry",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "project + requested slug + agent"
+    },
+    {
+      "id": "B",
+      "label": "Requested slug exists?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Create pending entry",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "slug = requested"
+    },
+    {
+      "id": "D",
+      "label": "Same agent?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Existing entry pending?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Update existing entry",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "retry-safe idempotence"
+    },
+    {
+      "id": "G",
+      "label": "Conflict",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "merged/rejected entries stay closed"
+    },
+    {
+      "id": "H",
+      "label": "Build agent segment",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "lowercase kebab-case"
+    },
+    {
+      "id": "I",
+      "label": "Try requested--agent",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "J",
+      "label": "Candidate exists?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "K",
+      "label": "Create new pending entry",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "slug = candidate"
+    },
+    {
+      "id": "L",
+      "label": "Try requested--agent--N",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "until free"
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "label": "no"
+    },
+    {
+      "from": "B",
+      "to": "D",
+      "label": "yes"
+    },
+    {
+      "from": "D",
+      "to": "E",
+      "label": "yes"
+    },
+    {
+      "from": "E",
+      "to": "F",
+      "label": "yes"
+    },
+    {
+      "from": "E",
+      "to": "G",
+      "label": "no"
+    },
+    {
+      "from": "D",
+      "to": "H",
+      "label": "no"
+    },
+    {
+      "from": "H",
+      "to": "I"
+    },
+    {
+      "from": "I",
+      "to": "J"
+    },
+    {
+      "from": "J",
+      "to": "K",
+      "label": "no"
+    },
+    {
+      "from": "J",
+      "to": "L",
+      "label": "yes"
+    },
+    {
+      "from": "L",
+      "to": "K"
+    }
+  ]
+}

@@ -1,0 +1,283 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Architecture at a glance",
+  "alt": "Architecture at a glance: Browser web UI, MCP client, Direct API caller, default-deny + allowlist NetworkPolicies, Istio gateway / HTTPRoute, AuthEndpoints GitHub sign-in, OAuth 2.1 Authorization Server, GitHubTokenAuthMiddleware, GitHubOrgAuthorizationMiddleware, Protected /api routes, Bearer valid? JWT jti / GitHub /user, Org + team membership, …",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "callers",
+      "label": "Callers",
+      "tier": 1
+    },
+    {
+      "id": "edge",
+      "label": "Network edge",
+      "tier": 1
+    },
+    {
+      "id": "api",
+      "label": "Agentweaver API",
+      "tier": 1
+    },
+    {
+      "id": "ext",
+      "label": "External identity",
+      "tier": 1
+    },
+    {
+      "id": "stores",
+      "label": "Credential stores",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Browser",
+      "label": "Browser web UI",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "callers"
+    },
+    {
+      "id": "Mcp",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "callers"
+    },
+    {
+      "id": "ApiCaller",
+      "label": "Direct API caller",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "callers"
+    },
+    {
+      "id": "NetPol",
+      "label": "default-deny + allowlist NetworkPolicies",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "group": "edge"
+    },
+    {
+      "id": "Gateway",
+      "label": "Istio gateway / HTTPRoute",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "edge"
+    },
+    {
+      "id": "SignIn",
+      "label": "AuthEndpoints GitHub sign-in",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "api"
+    },
+    {
+      "id": "OAuthAS",
+      "label": "OAuth 2.1 Authorization Server",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "api"
+    },
+    {
+      "id": "TokenMw",
+      "label": "GitHubTokenAuthMiddleware",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "api"
+    },
+    {
+      "id": "OrgMw",
+      "label": "GitHubOrgAuthorizationMiddleware",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Routes",
+      "label": "Protected /api routes",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "api"
+    },
+    {
+      "id": "GateBearer",
+      "label": "Bearer valid? JWT jti / GitHub /user",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "GateOrg",
+      "label": "Org + team membership",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "GitHub",
+      "label": "GitHub OAuth + /user",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "group": "ext"
+    },
+    {
+      "id": "KeyVault",
+      "label": "Azure Key Vault",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "group": "ext"
+    },
+    {
+      "id": "TokenStore",
+      "label": "GitHub token store",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "stores"
+    },
+    {
+      "id": "OAuthStore",
+      "label": "MCP refresh tokens + jti denylist",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "stores"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Browser",
+      "to": "NetPol"
+    },
+    {
+      "from": "Mcp",
+      "to": "NetPol"
+    },
+    {
+      "from": "ApiCaller",
+      "to": "NetPol"
+    },
+    {
+      "from": "NetPol",
+      "to": "Gateway"
+    },
+    {
+      "from": "Gateway",
+      "to": "TokenMw"
+    },
+    {
+      "from": "Browser",
+      "to": "SignIn",
+      "label": "sign-in",
+      "dashed": true
+    },
+    {
+      "from": "SignIn",
+      "to": "GitHub"
+    },
+    {
+      "from": "SignIn",
+      "to": "TokenStore"
+    },
+    {
+      "from": "Mcp",
+      "to": "OAuthAS",
+      "label": "OAuth 2.1",
+      "dashed": true
+    },
+    {
+      "from": "OAuthAS",
+      "to": "GitHub"
+    },
+    {
+      "from": "OAuthAS",
+      "to": "OAuthStore"
+    },
+    {
+      "from": "TokenMw",
+      "to": "GateBearer"
+    },
+    {
+      "from": "GateBearer",
+      "to": "GitHub",
+      "label": "raw token"
+    },
+    {
+      "from": "GateBearer",
+      "to": "OAuthStore",
+      "label": "JWT"
+    },
+    {
+      "from": "GateBearer",
+      "to": "OrgMw"
+    },
+    {
+      "from": "OrgMw",
+      "to": "GateOrg"
+    },
+    {
+      "from": "GateOrg",
+      "to": "GitHub",
+      "label": "raw token"
+    },
+    {
+      "from": "GateOrg",
+      "to": "Routes",
+      "label": "allow"
+    },
+    {
+      "from": "OAuthAS",
+      "to": "KeyVault"
+    },
+    {
+      "from": "TokenStore",
+      "to": "KeyVault"
+    }
+  ]
+}

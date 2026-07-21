@@ -1,0 +1,227 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Backend selection logic",
+  "alt": "Backend selection logic: Need an ISandboxExecutor, Sandbox:Backend set?, Kubernetes executor, Local factory, KUBERNETES_SERVICE_HOST present?, Kubernetes client initializes?, Use SandboxClaim warm-pool pods, Throw: do not fall back, Windows?, processcontainer mxc, WSL2 bwrap/unshare, direct passthrough warning, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Start",
+      "label": "Need an ISandboxExecutor",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Override",
+      "label": "Sandbox:Backend set?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "K8s",
+      "label": "Kubernetes executor",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Local",
+      "label": "Local factory",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "InCluster",
+      "label": "KUBERNETES_SERVICE_HOST present?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "K8sOK",
+      "label": "Kubernetes client initializes?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "ClaimExec",
+      "label": "Use SandboxClaim warm-pool pods",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "FailClosed",
+      "label": "Throw: do not fall back",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Windows",
+      "label": "Windows?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Mxc",
+      "label": "processcontainer mxc",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Wsl",
+      "label": "WSL2 bwrap/unshare",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Direct",
+      "label": "direct passthrough warning",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Linux",
+      "label": "Linux?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Bwrap",
+      "label": "linux-bwrap",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Lxc",
+      "label": "lxc-exec",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Start",
+      "to": "Override"
+    },
+    {
+      "from": "Override",
+      "to": "K8s",
+      "label": "kubernetes"
+    },
+    {
+      "from": "Override",
+      "to": "Local",
+      "label": "local"
+    },
+    {
+      "from": "Override",
+      "to": "InCluster",
+      "label": "not set"
+    },
+    {
+      "from": "InCluster",
+      "to": "K8s",
+      "label": "yes"
+    },
+    {
+      "from": "InCluster",
+      "to": "Local",
+      "label": "no"
+    },
+    {
+      "from": "K8s",
+      "to": "K8sOK"
+    },
+    {
+      "from": "K8sOK",
+      "to": "ClaimExec",
+      "label": "yes"
+    },
+    {
+      "from": "K8sOK",
+      "to": "FailClosed",
+      "label": "no"
+    },
+    {
+      "from": "Local",
+      "to": "Windows"
+    },
+    {
+      "from": "Windows",
+      "to": "Mxc",
+      "label": "yes"
+    },
+    {
+      "from": "Mxc",
+      "to": "Wsl",
+      "label": "unavailable"
+    },
+    {
+      "from": "Wsl",
+      "to": "Direct",
+      "label": "unavailable"
+    },
+    {
+      "from": "Windows",
+      "to": "Linux",
+      "label": "no"
+    },
+    {
+      "from": "Linux",
+      "to": "Bwrap",
+      "label": "yes"
+    },
+    {
+      "from": "Bwrap",
+      "to": "Lxc",
+      "label": "unavailable"
+    },
+    {
+      "from": "Lxc",
+      "to": "Direct",
+      "label": "unavailable"
+    }
+  ]
+}

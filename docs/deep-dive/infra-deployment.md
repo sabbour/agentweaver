@@ -18,37 +18,12 @@ The deployment scripts default to `agentweaver-rg`, `agentweaver-aks`, `agentwea
 
 At a high level, Agentweaver is a private application stack behind a public Gateway:
 
-```mermaid
-flowchart TD
-  Client["User / MCP client<br/>HTTPS"] --> Gateway["Gateway API listener<br/>TLS termination"]
+![Rebuild mental model: User / MCP client, Gateway API listener, API and OAuth routes, MCP routes, Frontend catch-all route, API Service, MCP Service, Frontend Service, API pod, MCP pod, Frontend pods, RWX workspace PVC, …](../diagrams/infra-deployment-fig1.png)
 
-  Gateway --> ApiRoute["API and OAuth routes"]
-  Gateway --> McpRoute["MCP routes"]
-  Gateway --> FrontendRoute["Frontend catch-all route"]
-
-  ApiRoute --> ApiSvc["API Service"]
-  McpRoute --> McpSvc["MCP Service"]
-  FrontendRoute --> FrontendSvc["Frontend Service"]
-
-  ApiSvc --> ApiPod["API pod<br/>orchestration, auth, persistence"]
-  McpSvc --> McpPod["MCP pod<br/>resource server"]
-  FrontendSvc --> WebPods["Frontend pods<br/>SPA + docs static host"]
-
-  ApiPod --> WorkspacePVC["RWX workspace PVC<br/>worktrees + sandbox workspace"]
-  ApiPod --> Postgres["Azure Database<br/>for PostgreSQL<br/>Flexible Server"]
-  SandboxPool["Warm sandbox pool<br/>generic ×3"] --> WorkspacePVC
-  AgentHostPool["Warm AgentHost pool<br/>replicas:2 · standby"] --> WorkspacePVC
-
-  KeyVault["Azure Key Vault"] --> CSI["Secrets Store CSI"]
-  CSI --> ApiPod
-  CSI --> McpPod
-  KeyVault --> AgentHostPool
-
-  ACR["Azure Container Registry"] --> ApiPod
-  ACR --> McpPod
-  ACR --> WebPods
-  ACR --> SandboxPool
-```
+<!-- Rendered from ../diagrams/src/infra-deployment-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 If rebuilding this from scratch, create the platform first, then identity and secrets, then images, then Kubernetes primitives in dependency order. The application deployments are deliberately last because they depend on identity, persistent volumes, routes, and secrets being ready.
 
@@ -192,17 +167,12 @@ Where this lives: `k8s/base/httproute-api.yaml`, `k8s/base/mcp-httproute.yaml`, 
 
 The secret path is deliberately indirect:
 
-```mermaid
-flowchart LR
-  KV["Azure Key Vault"] --> RBAC["Key Vault Secrets User<br/>managed identity"]
-  SA["Kubernetes ServiceAccount"] --> FED["OIDC federated credential"]
-  FED --> RBAC
-  RBAC --> CSI["Secrets Store CSI driver"]
-  CSI --> Files["Mounted secret files"]
-  CSI --> K8sSecret["Synced Kubernetes Secret"]
-  Files --> Startup["Startup shell exports env vars"]
-  Startup --> Process["API / MCP process"]
-```
+![Secrets and workload identity: Azure Key Vault, Key Vault Secrets User, Kubernetes ServiceAccount, OIDC federated credential, Secrets Store CSI driver, Mounted secret files, Synced Kubernetes Secret, Startup shell exports env vars, API / MCP process](../diagrams/infra-deployment-fig2.png)
+
+<!-- Rendered from ../diagrams/src/infra-deployment-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
@@ -277,18 +247,12 @@ Where this lives: `k8s/base/networkpolicy-default-deny.yaml`, `k8s/base/networkp
 
 The deployment pipeline is easiest to understand as a tag-convergence problem. A release should put every workload on a known image tag, then apply manifests that all refer to that same tag.
 
-```mermaid
-flowchart LR
-  Vars["Resolve release variables<br/>cluster, ACR, namespace, tag"] --> Images["Ensure images exist for tag"]
-  Images --> BuildChanged["Build changed images"]
-  Images --> RetagUnchanged["Retag/import unchanged images"]
-  BuildChanged --> Render["Render manifests with host, ACR, tag, identity"]
-  RetagUnchanged --> Render
-  Render --> Prereqs["Apply prerequisites<br/>identity, secrets, RBAC, PVCs, policies"]
-  Prereqs --> Routing["Apply services, gateway, routes"]
-  Routing --> Workloads["Apply deployments"]
-  Workloads --> Rollout["Wait for rollout and verify"]
-```
+![Build, retag, deploy, rollout logic: Resolve release variables, Ensure images exist for tag, Build changed images, Retag/import unchanged images, Render manifests with host, ACR, tag, identity, Apply prerequisites, Apply services, gateway, routes, Apply deployments, Wait for rollout and verify](../diagrams/infra-deployment-fig3.png)
+
+<!-- Rendered from ../diagrams/src/infra-deployment-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why use a single image tag per release?
 

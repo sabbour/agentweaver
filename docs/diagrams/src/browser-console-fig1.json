@@ -1,0 +1,157 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Flow",
+  "alt": "Flow: Operator, BrowserConsole, POST /api/console/turn, ConsoleTurnService, ConsoleConversationStore, Request kind, CopilotConsoleFacadeAgent, CoordinatorSteeringService, gate_required response, Read-only API tools",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "User",
+      "label": "Operator",
+      "icon": "box",
+      "badge": {
+        "text": "Terminal",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Panel",
+      "label": "BrowserConsole",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Api",
+      "label": "POST /api/console/turn",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Service",
+      "label": "ConsoleTurnService",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "ConsoleConversationStore",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "last 24 messages"
+    },
+    {
+      "id": "Heuristics",
+      "label": "Request kind",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Facade",
+      "label": "CopilotConsoleFacadeAgent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Steering",
+      "label": "CoordinatorSteeringService",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "gate_required response",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Tools",
+      "label": "Read-only API tools",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "User",
+      "to": "Panel"
+    },
+    {
+      "from": "Panel",
+      "to": "Api",
+      "label": "route + text + conversation_id"
+    },
+    {
+      "from": "Api",
+      "to": "Service"
+    },
+    {
+      "from": "Service",
+      "to": "Store"
+    },
+    {
+      "from": "Service",
+      "to": "Heuristics"
+    },
+    {
+      "from": "Heuristics",
+      "to": "Facade",
+      "label": "read-only status"
+    },
+    {
+      "from": "Heuristics",
+      "to": "Steering",
+      "label": "bound run message"
+    },
+    {
+      "from": "Heuristics",
+      "to": "Gate",
+      "label": "start, review, merge, stop"
+    },
+    {
+      "from": "Facade",
+      "to": "Tools"
+    },
+    {
+      "from": "Tools",
+      "to": "Service"
+    },
+    {
+      "from": "Steering",
+      "to": "Service"
+    },
+    {
+      "from": "Gate",
+      "to": "Service"
+    },
+    {
+      "from": "Service",
+      "to": "Panel"
+    }
+  ]
+}

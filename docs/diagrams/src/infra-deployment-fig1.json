@@ -1,0 +1,270 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Rebuild mental model",
+  "alt": "Rebuild mental model: User / MCP client, Gateway API listener, API and OAuth routes, MCP routes, Frontend catch-all route, API Service, MCP Service, Frontend Service, API pod, MCP pod, Frontend pods, RWX workspace PVC, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Client",
+      "label": "User / MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "HTTPS"
+    },
+    {
+      "id": "Gateway",
+      "label": "Gateway API listener",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "TLS termination"
+    },
+    {
+      "id": "ApiRoute",
+      "label": "API and OAuth routes",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "McpRoute",
+      "label": "MCP routes",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "FrontendRoute",
+      "label": "Frontend catch-all route",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ApiSvc",
+      "label": "API Service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "McpSvc",
+      "label": "MCP Service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "FrontendSvc",
+      "label": "Frontend Service",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ApiPod",
+      "label": "API pod",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "subLabel": "orchestration, auth, persistence"
+    },
+    {
+      "id": "McpPod",
+      "label": "MCP pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "resource server"
+    },
+    {
+      "id": "WebPods",
+      "label": "Frontend pods",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      },
+      "subLabel": "SPA + docs static host"
+    },
+    {
+      "id": "WorkspacePVC",
+      "label": "RWX workspace PVC",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "worktrees + sandbox workspace"
+    },
+    {
+      "id": "Postgres",
+      "label": "Azure Database",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "for PostgreSQL",
+      "meta": "Flexible Server"
+    },
+    {
+      "id": "SandboxPool",
+      "label": "Warm sandbox pool",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "generic ×3"
+    },
+    {
+      "id": "AgentHostPool",
+      "label": "Warm AgentHost pool",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "replicas:2 · standby"
+    },
+    {
+      "id": "KeyVault",
+      "label": "Azure Key Vault",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "CSI",
+      "label": "Secrets Store CSI",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ACR",
+      "label": "Azure Container Registry",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Client",
+      "to": "Gateway"
+    },
+    {
+      "from": "Gateway",
+      "to": "ApiRoute"
+    },
+    {
+      "from": "Gateway",
+      "to": "McpRoute"
+    },
+    {
+      "from": "Gateway",
+      "to": "FrontendRoute"
+    },
+    {
+      "from": "ApiRoute",
+      "to": "ApiSvc"
+    },
+    {
+      "from": "McpRoute",
+      "to": "McpSvc"
+    },
+    {
+      "from": "FrontendRoute",
+      "to": "FrontendSvc"
+    },
+    {
+      "from": "ApiSvc",
+      "to": "ApiPod"
+    },
+    {
+      "from": "McpSvc",
+      "to": "McpPod"
+    },
+    {
+      "from": "FrontendSvc",
+      "to": "WebPods"
+    },
+    {
+      "from": "ApiPod",
+      "to": "WorkspacePVC"
+    },
+    {
+      "from": "ApiPod",
+      "to": "Postgres"
+    },
+    {
+      "from": "SandboxPool",
+      "to": "WorkspacePVC"
+    },
+    {
+      "from": "AgentHostPool",
+      "to": "WorkspacePVC"
+    },
+    {
+      "from": "KeyVault",
+      "to": "CSI"
+    },
+    {
+      "from": "CSI",
+      "to": "ApiPod"
+    },
+    {
+      "from": "CSI",
+      "to": "McpPod"
+    },
+    {
+      "from": "KeyVault",
+      "to": "AgentHostPool"
+    },
+    {
+      "from": "ACR",
+      "to": "ApiPod"
+    },
+    {
+      "from": "ACR",
+      "to": "McpPod"
+    },
+    {
+      "from": "ACR",
+      "to": "WebPods"
+    },
+    {
+      "from": "ACR",
+      "to": "SandboxPool"
+    }
+  ]
+}

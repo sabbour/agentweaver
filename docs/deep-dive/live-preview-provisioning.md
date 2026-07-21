@@ -6,26 +6,12 @@ For proxy internals, see [Sandbox browser preview](./sandbox-browser-preview.md)
 
 ## End-to-end flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Gate[Build & Test verdict]
-    Check{Approved or<br/>request changes?}
-    Resolve[PreviewCommandResolver<br/>find run command]
-    Runner[AgentHost /preview-runner<br/>start supervised process]
-    Port[observe app port<br/>logs + /proc tcp/tcp6]
-    Forward[forwarder<br/>0.0.0.0:publicPort]
-    Approval[AgentPreviewGate<br/>existing approval policy]
-    Route[Gateway HTTPRoute<br/>preview_url]
-    Outcome[preview_ready / failed / skipped]
-    Review[Human review<br/>preview ready or unavailable]
+![End-to-end flow: Gate, Test, Approved or, PreviewCommandResolver, AgentHost /preview-runner, observe app port, forwarder, AgentPreviewGate, Gateway HTTPRoute, preview_ready / failed / skipped, Human review](../diagrams/live-preview-provisioning-fig1.png)
 
-    Gate --> Check
-    Check -- declined --> Review
-    Check -- yes --> Resolve --> Runner --> Port --> Forward --> Approval --> Route --> Outcome --> Review
-    Resolve -- infra unavailable --> Outcome
-    Port -- failure --> Outcome
-```
+<!-- Rendered from ../diagrams/src/live-preview-provisioning-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The invocation point is in the coordinator assembly Build & Test gate. `CoordinatorAssemblyService` records preview applicability, runs Build & Test, then calls `PreviewStep.RunAsync` before applying the authored gate decision (`apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:710`, `:753`). `ShouldRunDeterministicPreviewStep` means the step runs for `APPROVED` and `REQUEST_CHANGES` verdicts, and skips only `DECLINED` verdicts or missing service wiring (`CoordinatorAssemblyService.cs:180`).
 

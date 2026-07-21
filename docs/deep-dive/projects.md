@@ -136,23 +136,12 @@ The workspace provider owns the filesystem boundary for project creation and run
 - **Check mount health**: is the provider's root storage healthy enough for this pod/process to serve requests?
 - **Release**: what should happen to provider-owned runtime resources when the project is deleted?
 
-```mermaid
-flowchart TD
-  Request[Create project request] --> Provider{Workspace provider}
+![Workspace provisioning: Create project request, Workspace provider, Use caller-supplied path, Create directory if absent, Check writable, Use project id as storage identity, MountRoot / projectId, Create per-project directory, Write/delete probe, Workspace ready, Initialize or clone Git repository](../diagrams/projects-fig1.png)
 
-  Provider -->|local| LocalPath[Use caller-supplied path]
-  LocalPath --> LocalEnsure[Create directory if absent]
-  LocalEnsure --> LocalProbe[Check writable]
-
-  Provider -->|persistent-volume| ProjectId[Use project id as storage identity]
-  ProjectId --> PvcPath[MountRoot / projectId]
-  PvcPath --> PvcEnsure[Create per-project directory]
-  PvcEnsure --> PvcProbe[Write/delete probe]
-
-  LocalProbe --> WorkspaceReady[Workspace ready]
-  PvcProbe --> WorkspaceReady
-  WorkspaceReady --> Git[Initialize or clone Git repository]
-```
+<!-- Rendered from ../diagrams/src/projects-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Local filesystem provider
 
@@ -200,25 +189,12 @@ The trade-off is storage complexity. Agentweaver must manage base repositories, 
 
 ## Relationship between projects, runs, workspaces, teams, and sandboxes
 
-```mermaid
-flowchart LR
-  Project[Project record] --> Defaults[Provider, model, workflow, review, sandbox defaults]
-  Project --> BaseWorkspace[Base workspace / Git checkout]
-  Project --> Runs[Project-scoped runs]
-  Project --> Orchestrations[Coordinator orchestrations]
+![Relationship between projects, runs, workspaces, teams, and sandboxes: Project record, Provider, model, workflow, review, sandbox defaults, Base workspace / Git checkout, Project-scoped runs, Coordinator orchestrations, .squad agents, charters, decisions, .agentweaver review policies, Per-run Git worktrees, Selected agent/team member, Sandbox execution, Workspace file/ref browser](../diagrams/projects-fig2.png)
 
-  BaseWorkspace --> SquadFiles[.squad agents, charters, decisions]
-  BaseWorkspace --> ReviewPolicies[.agentweaver review policies]
-  BaseWorkspace --> Worktrees[Per-run Git worktrees]
-
-  Runs --> Worktrees
-  Runs --> Agents[Selected agent/team member]
-  Agents --> SquadFiles
-
-  Orchestrations --> BaseWorkspace
-  Worktrees --> Sandbox[Sandbox execution]
-  BaseWorkspace --> WorkspaceBrowser[Workspace file/ref browser]
-```
+<!-- Rendered from ../diagrams/src/projects-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Runs
 

@@ -1,0 +1,206 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose and mental model",
+  "alt": "Purpose and mental model: Intent, Load project casting state, Resolve role roster, Select or validate universe, Allocate names, Compile charters, Store pending proposal, Confirm?, No workspace changes, Merge proposal with existing team, Add built-in agents, Write .squad workspace, …",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Intent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "scenario, blueprint, manual roster, free text, project analysis"
+    },
+    {
+      "id": "B",
+      "label": "Load project casting state",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "policy, registry, history"
+    },
+    {
+      "id": "C",
+      "label": "Resolve role roster",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Select or validate universe",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Allocate names",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Compile charters",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Store pending proposal",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "read-only"
+    },
+    {
+      "id": "H",
+      "label": "Confirm?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "I",
+      "label": "No workspace changes",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "J",
+      "label": "Merge proposal with existing team",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "K",
+      "label": "Add built-in agents",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "L",
+      "label": "Write .squad workspace",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "M",
+      "label": "Append registry/history events",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "N",
+      "label": "Regenerate canonical JSON",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "O",
+      "label": "Seed memory/session",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "F"
+    },
+    {
+      "from": "F",
+      "to": "G"
+    },
+    {
+      "from": "G",
+      "to": "H"
+    },
+    {
+      "from": "H",
+      "to": "I",
+      "label": "reject/expire"
+    },
+    {
+      "from": "H",
+      "to": "J",
+      "label": "new / augment / recast"
+    },
+    {
+      "from": "J",
+      "to": "K"
+    },
+    {
+      "from": "K",
+      "to": "L"
+    },
+    {
+      "from": "L",
+      "to": "M"
+    },
+    {
+      "from": "M",
+      "to": "N"
+    },
+    {
+      "from": "N",
+      "to": "O"
+    }
+  ]
+}

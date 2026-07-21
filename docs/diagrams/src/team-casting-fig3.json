@@ -1,0 +1,241 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Confirmation flow",
+  "alt": "Confirmation flow: Load pending proposal, Resolve intent, Read existing team and registry, Intent, Final members = proposal, Final members = existing + new proposal names, Final members = proposal, Ensure built-ins, Write team.md and routing.md, Write charters and histories, Archive retired charters, Append registry events, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Load pending proposal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Resolve intent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Read existing team and registry",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Intent",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Final members = proposal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Retire old members"
+    },
+    {
+      "id": "F",
+      "label": "Final members = existing + new proposal names",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Retire none"
+    },
+    {
+      "id": "G",
+      "label": "Final members = proposal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Retire missing old members"
+    },
+    {
+      "id": "H",
+      "label": "Ensure built-ins",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "I",
+      "label": "Write team.md and routing.md",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "J",
+      "label": "Write charters and histories",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "K",
+      "label": "Archive retired charters",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "L",
+      "label": "Append registry events",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "M",
+      "label": "Append cast history snapshot",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "N",
+      "label": "Regenerate canonical JSON",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "O",
+      "label": "Write coordinator agent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "P",
+      "label": "Remove proposal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Q",
+      "label": "Seed initial memory/session",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E",
+      "label": "new"
+    },
+    {
+      "from": "D",
+      "to": "F",
+      "label": "augment"
+    },
+    {
+      "from": "D",
+      "to": "G",
+      "label": "recast"
+    },
+    {
+      "from": "E",
+      "to": "H"
+    },
+    {
+      "from": "F",
+      "to": "H"
+    },
+    {
+      "from": "G",
+      "to": "H"
+    },
+    {
+      "from": "H",
+      "to": "I"
+    },
+    {
+      "from": "I",
+      "to": "J"
+    },
+    {
+      "from": "J",
+      "to": "K"
+    },
+    {
+      "from": "K",
+      "to": "L"
+    },
+    {
+      "from": "L",
+      "to": "M"
+    },
+    {
+      "from": "M",
+      "to": "N"
+    },
+    {
+      "from": "N",
+      "to": "O"
+    },
+    {
+      "from": "O",
+      "to": "P"
+    },
+    {
+      "from": "P",
+      "to": "Q"
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Reviewer Rejection and Lockout",
+  "alt": "Reviewer Rejection and Lockout: Original producer, Proposed tree + diff, Human review gate, Reviewer, Pending request consumed, Revision path, Merge path, Declined terminal, Replay / competing decision, 409 conflict / no pending gate",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Producer",
+      "label": "Original producer",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "agent turn"
+    },
+    {
+      "id": "Output",
+      "label": "Proposed tree + diff",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "Human review gate",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Reviewer",
+      "label": "Reviewer",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Consumed",
+      "label": "Pending request consumed",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Revise",
+      "label": "Revision path",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge path",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Decline",
+      "label": "Declined terminal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Replay",
+      "label": "Replay / competing decision",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Conflict",
+      "label": "409 conflict / no pending gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Producer",
+      "to": "Output"
+    },
+    {
+      "from": "Output",
+      "to": "Gate"
+    },
+    {
+      "from": "Gate",
+      "to": "Reviewer"
+    },
+    {
+      "from": "Reviewer",
+      "to": "Consumed",
+      "label": "request changes"
+    },
+    {
+      "from": "Consumed",
+      "to": "Revise"
+    },
+    {
+      "from": "Revise",
+      "to": "Producer"
+    },
+    {
+      "from": "Reviewer",
+      "to": "Consumed",
+      "label": "approve"
+    },
+    {
+      "from": "Consumed",
+      "to": "Merge"
+    },
+    {
+      "from": "Reviewer",
+      "to": "Consumed",
+      "label": "decline"
+    },
+    {
+      "from": "Consumed",
+      "to": "Decline"
+    },
+    {
+      "from": "Replay",
+      "to": "Conflict"
+    },
+    {
+      "from": "Producer",
+      "to": "Gate",
+      "label": "no merge authority",
+      "dashed": true
+    }
+  ]
+}

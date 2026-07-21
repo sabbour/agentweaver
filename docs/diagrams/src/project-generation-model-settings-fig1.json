@@ -1,0 +1,101 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Flow",
+  "alt": "Flow: Project Settings, ProjectRecord, Blueprint generate endpoint, CopilotBlueprintGenerator, IWorkflowGenerator fallback, CoordinatorRunService.ActivateAsync, CopilotCoordinatorSpecDrafter",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Settings",
+      "label": "Project Settings",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Generation models"
+    },
+    {
+      "id": "Project",
+      "label": "ProjectRecord",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "BlueprintEndpoint",
+      "label": "Blueprint generate endpoint",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "BlueprintGen",
+      "label": "CopilotBlueprintGenerator",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "WorkflowGen",
+      "label": "IWorkflowGenerator fallback",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "CoordinatorStart",
+      "label": "CoordinatorRunService.ActivateAsync",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SpecDraft",
+      "label": "CopilotCoordinatorSpecDrafter",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Settings",
+      "to": "Project",
+      "label": "PUT provider-settings"
+    },
+    {
+      "from": "Project",
+      "to": "BlueprintEndpoint"
+    },
+    {
+      "from": "BlueprintEndpoint",
+      "to": "BlueprintGen",
+      "label": "ResolveBlueprintModel"
+    },
+    {
+      "from": "BlueprintEndpoint",
+      "to": "WorkflowGen",
+      "label": "ResolveWorkflowModel"
+    },
+    {
+      "from": "Project",
+      "to": "CoordinatorStart"
+    },
+    {
+      "from": "CoordinatorStart",
+      "to": "SpecDraft"
+    }
+  ]
+}

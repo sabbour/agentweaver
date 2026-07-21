@@ -13,18 +13,12 @@ and materialized `SKILL.md` path are injected into the agent prompt. The full in
 text resources are written into the run worktree under `.agentweaver/skills/` and read only when the
 agent decides the skill is relevant.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    A[Connected repo, Git import, or upload] --> B[Parse SKILL.md]
-    B --> C{Valid?}
-    C -- Yes --> D[Upsert by content hash]
-    C -- No --> E[Reject or mark malformed]
-    D --> F[Project catalog]
-    F --> G[Assign to agents]
-    G --> H[Run prompt metadata]
-    H --> I[Lazy SKILL.md materialization]
-```
+![Project skills: Connected repo, Git import, or upload, Parse SKILL.md, Valid?, Upsert by content hash, Reject or mark malformed, Project catalog, Assign to agents, Run prompt metadata, Lazy SKILL.md materialization](../diagrams/project-skills-fig1.png)
+
+<!-- Rendered from ../diagrams/src/project-skills-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Acquisition
 

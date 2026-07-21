@@ -1,0 +1,244 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Overview",
+  "alt": "Overview: Model, Gov, Exec, Branch, Work, Wxc, Spawn, Pool, Claim, Bound, Kata, Local, …",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "mxc",
+      "label": "MXC executor — processcontainer",
+      "tier": 1
+    },
+    {
+      "id": "k8s",
+      "label": "Kubernetes sandbox-claim",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Model",
+      "label": "Model",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Gov",
+      "label": "Gov",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Exec",
+      "label": "Exec",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Branch",
+      "label": "Branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "group": "mxc"
+    },
+    {
+      "id": "Work",
+      "label": "Work",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Wxc",
+      "label": "Wxc",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "mxc"
+    },
+    {
+      "id": "Spawn",
+      "label": "Spawn",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "mxc"
+    },
+    {
+      "id": "Pool",
+      "label": "Pool",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "k8s"
+    },
+    {
+      "id": "Claim",
+      "label": "Claim",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "k8s"
+    },
+    {
+      "id": "Bound",
+      "label": "Bound",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "k8s"
+    },
+    {
+      "id": "Kata",
+      "label": "Kata",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "k8s"
+    },
+    {
+      "id": "Local",
+      "label": "Local",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Out",
+      "label": "Out",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Redact",
+      "label": "Redact",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Events",
+      "label": "Events",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Model",
+      "to": "Gov"
+    },
+    {
+      "from": "Gov",
+      "to": "Exec"
+    },
+    {
+      "from": "Exec",
+      "to": "Branch"
+    },
+    {
+      "from": "Branch",
+      "to": "Wxc",
+      "label": "processcontainer"
+    },
+    {
+      "from": "Wxc",
+      "to": "Spawn"
+    },
+    {
+      "from": "Branch",
+      "to": "Pool",
+      "label": "kubernetes-sandbox-claim"
+    },
+    {
+      "from": "Pool",
+      "to": "Claim"
+    },
+    {
+      "from": "Claim",
+      "to": "Bound"
+    },
+    {
+      "from": "Bound",
+      "to": "Kata",
+      "label": "pod name"
+    },
+    {
+      "from": "Branch",
+      "to": "Local",
+      "label": "bwrap / wsl / direct"
+    },
+    {
+      "from": "Work",
+      "to": "Spawn"
+    },
+    {
+      "from": "Work",
+      "to": "Kata"
+    },
+    {
+      "from": "Work",
+      "to": "Local"
+    },
+    {
+      "from": "Spawn",
+      "to": "Out"
+    },
+    {
+      "from": "Kata",
+      "to": "Out"
+    },
+    {
+      "from": "Local",
+      "to": "Out"
+    },
+    {
+      "from": "Out",
+      "to": "Redact"
+    },
+    {
+      "from": "Redact",
+      "to": "Events"
+    },
+    {
+      "from": "Events",
+      "to": "Model"
+    }
+  ]
+}

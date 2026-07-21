@@ -29,18 +29,12 @@ Where this lives: `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.Age
 
 Think of every agent action as passing through three concentric boundaries:
 
-```mermaid
-flowchart LR
-    Model[Model proposes tool call] --> Governance[Governance boundary<br/>default deny + known-tool policy]
-    Governance --> Tool[Tool boundary<br/>path validation + structured errors]
-    Tool --> Executor[Execution boundary<br/>local sandbox or Kubernetes pod]
-    Executor --> Workspace[(Workspace root)]
-    Executor --> Network[Network egress policy]
+![The core mental model: Model proposes tool call, Governance boundary, Tool boundary, Execution boundary, Workspace root, Network egress policy, No side effect, No file escape, No host escape](../diagrams/sandbox-fig1.png)
 
-    Governance -. denies .-> Stop1[No side effect]
-    Tool -. rejects .-> Stop2[No file escape]
-    Executor -. isolates .-> Stop3[No host escape]
-```
+<!-- Rendered from ../diagrams/src/sandbox-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Each boundary has a different job:
 
@@ -142,29 +136,12 @@ Every executor returns the same shape: exit code, stdout, stderr, timeout flag, 
 
 Executor selection is environment-aware:
 
-```mermaid
-flowchart TD
-    Start[Need an ISandboxExecutor] --> Override{Sandbox:Backend set?}
-    Override -->|kubernetes| K8s[Kubernetes executor]
-    Override -->|local| Local[Local factory]
-    Override -->|not set| InCluster{KUBERNETES_SERVICE_HOST present?}
-    InCluster -->|yes| K8s
-    InCluster -->|no| Local
+![Backend selection logic: Need an ISandboxExecutor, Sandbox:Backend set?, Kubernetes executor, Local factory, KUBERNETES_SERVICE_HOST present?, Kubernetes client initializes?, Use SandboxClaim warm-pool pods, Throw: do not fall back, Windows?, processcontainer mxc, WSL2 bwrap/unshare, direct passthrough warning, …](../diagrams/sandbox-fig2.png)
 
-    K8s --> K8sOK{Kubernetes client initializes?}
-    K8sOK -->|yes| ClaimExec[Use SandboxClaim warm-pool pods]
-    K8sOK -->|no| FailClosed[Throw: do not fall back]
-
-    Local --> Windows{Windows?}
-    Windows -->|yes| Mxc[processcontainer mxc]
-    Mxc -->|unavailable| Wsl[WSL2 bwrap/unshare]
-    Wsl -->|unavailable| Direct[direct passthrough warning]
-
-    Windows -->|no| Linux{Linux?}
-    Linux -->|yes| Bwrap[linux-bwrap]
-    Bwrap -->|unavailable| Lxc[lxc-exec]
-    Lxc -->|unavailable| Direct
-```
+<!-- Rendered from ../diagrams/src/sandbox-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The key production invariant is **fail closed in cluster**. If the API is running inside Kubernetes and the Kubernetes executor cannot initialize, Agentweaver throws instead of silently using a weaker local executor. A fallback that is acceptable on a developer laptop would be a security downgrade in production.
 

@@ -1,0 +1,165 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "One executor per host, chosen at run start",
+  "alt": "One executor per host, chosen at run start: Run start:, In Kubernetes?, kubernetes-sandbox-claim, Windows?, processcontainer, wsl-bwrap / wsl-unshare, linux-bwrap, lxc-native-linux, direct, sandbox.selected:",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Start",
+      "label": "Run start:",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "SandboxExecutorFactory"
+    },
+    {
+      "id": "InCluster",
+      "label": "In Kubernetes?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "KUBERNETES_SERVICE_HOST"
+    },
+    {
+      "id": "K8s",
+      "label": "kubernetes-sandbox-claim",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "K8s · Kata VM · real isolation"
+    },
+    {
+      "id": "Win",
+      "label": "Windows?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Mxc",
+      "label": "processcontainer",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Mxc · real isolation"
+    },
+    {
+      "id": "Wsl",
+      "label": "wsl-bwrap / wsl-unshare",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "WslMxc · real isolation"
+    },
+    {
+      "id": "Bwrap",
+      "label": "linux-bwrap",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "bubblewrap · real isolation"
+    },
+    {
+      "id": "Lxc",
+      "label": "lxc-native-linux",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "real isolation"
+    },
+    {
+      "id": "Direct",
+      "label": "direct",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "Passthrough · NO isolation"
+    },
+    {
+      "id": "Sel",
+      "label": "sandbox.selected:",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "backend · isRealIsolation · reason"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Start",
+      "to": "InCluster"
+    },
+    {
+      "from": "InCluster",
+      "to": "K8s",
+      "label": "yes"
+    },
+    {
+      "from": "InCluster",
+      "to": "Win",
+      "label": "no"
+    },
+    {
+      "from": "Win",
+      "to": "Mxc",
+      "label": "yes"
+    },
+    {
+      "from": "Mxc",
+      "to": "Wsl",
+      "label": "unavailable"
+    },
+    {
+      "from": "Win",
+      "to": "Bwrap",
+      "label": "no"
+    },
+    {
+      "from": "Bwrap",
+      "to": "Lxc",
+      "label": "unavailable"
+    },
+    {
+      "from": "Wsl",
+      "to": "Direct",
+      "label": "unavailable"
+    },
+    {
+      "from": "Lxc",
+      "to": "Direct",
+      "label": "unavailable"
+    },
+    {
+      "from": "K8s",
+      "to": "Sel",
+      "label": "emits",
+      "dashed": true
+    },
+    {
+      "from": "Direct",
+      "to": "Sel",
+      "label": "emits",
+      "dashed": true
+    }
+  ]
+}

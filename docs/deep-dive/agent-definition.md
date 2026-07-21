@@ -33,21 +33,12 @@ drifting from the actual tool set.
 
 ## End-to-end flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Src["MCP tool source<br/>apps/Agentweaver.Mcp/Tools/*.cs<br/>[McpServerTool] + [Description]"] -->|parseGroups| Gen[gen-docs.mjs]
-    Gen -->|full index| Doc["docs/reference/mcp-tools.md"]
-    Gen -->|Tool map block only| Repo[".github/agents/agentweaver.agent.md"]
-    Gen -->|byte-identical copy| Tmpl["Projects/Templates/agentweaver.agent.md<br/>(EmbeddedResource)"]
-    Tmpl -->|compiled into| Api[Agentweaver.Api assembly]
-    Api -->|TryMaterializeAgentDefinition| Create["ProjectService<br/>CreateBlankAsync / CreateFromGitHubAsync"]
-    Create -->|writes if absent| Proj["{project}/.github/agents/agentweaver.agent.md"]
-    Proj -->|agent picker| Copilot[GitHub Copilot]
-    Repo -.->|--check in CI| CI[docs-drift workflow]
-    Tmpl -.->|--check in CI| CI
-    Doc -.->|--check in CI| CI
-```
+![End-to-end flow: MCP tool source, gen-docs.mjs, docs/reference/mcp-tools.md, .github/agents/agentweaver.agent.md, Projects/Templates/agentweaver.agent.md, Agentweaver.Api assembly, ProjectService, {project}/.github/agents/agentweaver.agent.md, GitHub Copilot, docs-drift workflow](../diagrams/agent-definition-fig1.png)
+
+<!-- Rendered from ../diagrams/src/agent-definition-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 1. **Source.** Each MCP tool is a method annotated with `[McpServerTool(Name = ...)]` and `[Description(...)]`
    in `apps/Agentweaver.Mcp/Tools/*.cs`. One `Tools.cs` file per category (Backlog, Project, Run, …).

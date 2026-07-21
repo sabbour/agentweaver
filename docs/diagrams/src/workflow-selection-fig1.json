@@ -1,0 +1,242 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "End-to-end flow",
+  "alt": "End-to-end flow: SelectWorkflowAsync, ResolveDefault — project default = fallback, GetOrLoad.Available — default first, then by id, ResolveInvocationKindAsync, input.WorkflowOverrideId set?, BacklogTask.WorkflowOverrideId, Exists in available set?, Use override workflow, Use available candidates, Available count, Return project default, Use the only candidate — no LLM call, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Start",
+      "label": "SelectWorkflowAsync",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Default",
+      "label": "ResolveDefault — project default = fallback",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Available",
+      "label": "GetOrLoad.Available — default first, then by id",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Kind",
+      "label": "ResolveInvocationKindAsync",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "BacklogPickup → Heartbeat",
+      "meta": "else Manual"
+    },
+    {
+      "id": "DialogOverride",
+      "label": "input.WorkflowOverrideId set?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "BacklogPin",
+      "label": "BacklogTask.WorkflowOverrideId",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "found via ResolveWorkflowOverrideIdAsync?"
+    },
+    {
+      "id": "AvailableCheck",
+      "label": "Exists in available set?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "UseOverride",
+      "label": "Use override workflow",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Candidates",
+      "label": "Use available candidates",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Count",
+      "label": "Available count",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "FallbackDefault",
+      "label": "Return project default",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Single",
+      "label": "Use the only candidate — no LLM call",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ConvOverride",
+      "label": "ReviseFeedback matches",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "'use workflow-id'?"
+    },
+    {
+      "id": "UseConv",
+      "label": "Use requested workflow",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "emit coordinator.workflow_selected",
+      "meta": "wasAutoSelected=false"
+    },
+    {
+      "id": "LLM",
+      "label": "WorkflowSelector.SelectAsync",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "subLabel": "CopilotWorkflowSelectionModel"
+    },
+    {
+      "id": "Emit",
+      "label": "Emit coordinator.workflow_selected",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "return choice",
+      "meta": "wasAutoSelected=true"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Start",
+      "to": "Default"
+    },
+    {
+      "from": "Default",
+      "to": "Available"
+    },
+    {
+      "from": "Available",
+      "to": "Kind"
+    },
+    {
+      "from": "Kind",
+      "to": "DialogOverride"
+    },
+    {
+      "from": "DialogOverride",
+      "to": "AvailableCheck",
+      "label": "yes"
+    },
+    {
+      "from": "DialogOverride",
+      "to": "BacklogPin",
+      "label": "no"
+    },
+    {
+      "from": "BacklogPin",
+      "to": "AvailableCheck",
+      "label": "yes"
+    },
+    {
+      "from": "BacklogPin",
+      "to": "Candidates",
+      "label": "no"
+    },
+    {
+      "from": "AvailableCheck",
+      "to": "UseOverride",
+      "label": "yes"
+    },
+    {
+      "from": "AvailableCheck",
+      "to": "Candidates",
+      "label": "no"
+    },
+    {
+      "from": "Candidates",
+      "to": "Count"
+    },
+    {
+      "from": "Count",
+      "to": "FallbackDefault",
+      "label": "0"
+    },
+    {
+      "from": "Count",
+      "to": "Single",
+      "label": "1"
+    },
+    {
+      "from": "Count",
+      "to": "ConvOverride",
+      "label": "2+"
+    },
+    {
+      "from": "ConvOverride",
+      "to": "UseConv",
+      "label": "yes"
+    },
+    {
+      "from": "ConvOverride",
+      "to": "LLM",
+      "label": "no"
+    },
+    {
+      "from": "LLM",
+      "to": "Emit"
+    }
+  ]
+}

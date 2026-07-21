@@ -12,34 +12,12 @@ The easiest way to understand the system is to separate three concerns:
 
 This separation is deliberate. Models are useful but non-deterministic, so Agentweaver keeps authority in deterministic services: persistent stores define truth, review gates define who may approve, merge locks define when repository history changes, and sandbox policy defines what tools may touch.
 
-```mermaid
-flowchart LR
-    Human[Human operator / reviewer]
-    MCPClient[MCP client<br/>Copilot CLI / VS Code / assistants]
-    Web[Web UI]
-    API[Agentweaver API<br/>control plane]
-    Runtime[Agent runtime<br/>workflow agents]
-    Sandbox[Sandboxed tools<br/>files + shell]
-    Git[Git repo<br/>worktrees + branches]
-    Events[(Durable events)]
-    Memory[(Decisions + memory)]
-    Providers[Model providers<br/>Copilot / Foundry paths]
+![Purpose and Mental Model: Human operator / reviewer, MCP client, Web UI, Agentweaver API, Agent runtime, Sandboxed tools, Git repo, Durable events, Decisions + memory, Model providers](../diagrams/00-system-overview-fig1.png)
 
-    Human --> Web
-    Human --> MCPClient
-    Web --> API
-    MCPClient --> API
-    API --> Runtime
-    Runtime --> Providers
-    Runtime --> Sandbox
-    Sandbox --> Git
-    API --> Events
-    API --> Memory
-    API --> Git
-    Events --> Web
-    Events --> MCPClient
-    Memory --> Runtime
-```
+<!-- Rendered from ../diagrams/src/00-system-overview-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The platform is not just a chat wrapper around an agent. It is closer to a CI/CD-style orchestrator for agentic changes: every run has identity, state, events, a workspace, a review boundary, and a terminal result.
 
@@ -121,33 +99,12 @@ A rebuild should preserve the boundaries more than the exact classes. The crucia
 
 A single-agent run is the smallest complete unit of Agentweaver work. It starts with a task and ends in one of a few terminal outcomes: merged, declined, failed, content-safety flagged, no changes, or similar terminal states.
 
-```mermaid
-flowchart TD
-    Submit[Submit task + project + branch + options]
-    Validate[Validate request and canonicalize repository]
-    Worktree[Create isolated worktree and run branch]
-    Context[Build prompt context<br/>agent charter + memory + task]
-    Agent[Agent turn uses governed tools]
-    Commit[Commit worktree changes and compute diff]
-    RAI[Responsible AI review]
-    Safety{RAI result}
-    Review[Human review gate]
-    Decision{Reviewer decision}
-    Merge[Merge under repository lock]
-    Scribe[Scribe updates memory/session/export]
-    Done[Terminal run]
-    Revise[Revise in same run]
+![Single-Agent Run Lifecycle: Submit task + project + branch + options, Validate request and canonicalize repository, Create isolated worktree and run branch, Build prompt context, Agent turn uses governed tools, Commit worktree changes and compute diff, Responsible AI review, RAI result, Human review gate, Reviewer decision, Merge under repository lock, Scribe updates memory/session/export, …](../diagrams/00-system-overview-fig2.png)
 
-    Submit --> Validate --> Worktree --> Context --> Agent --> Commit --> RAI --> Safety
-    Safety -- green/yellow --> Review
-    Safety -- revise --> Revise --> Agent
-    Safety -- red --> Done
-    Safety -- no changes --> Scribe --> Done
-    Review --> Decision
-    Decision -- approve --> Merge --> Scribe --> Done
-    Decision -- request changes --> Revise
-    Decision -- decline --> Done
-```
+<!-- Rendered from ../diagrams/src/00-system-overview-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### What each stage is for
 
@@ -178,34 +135,12 @@ A coordinator run exists for work that is too broad for one linear agent pass. I
 
 The key idea is to move from a vague goal to a confirmed contract before agents start editing. The coordinator first drafts an **OutcomeSpec**: desired outcome, scope, assumptions, and clarifying questions. A human can revise or confirm that spec. Only after confirmation does the system decompose work into a **WorkPlan**: subtasks, dependencies, assigned agents, isolation hints, and assembly strategy.
 
-```mermaid
-flowchart TD
-    Goal[Human goal or ready backlog item]
-    Draft[Draft OutcomeSpec]
-    Confirm{Human confirms?}
-    ReviseSpec[Revise spec]
-    Plan[Create WorkPlan DAG]
-    Frontier[Find ready dependency frontier]
-    Children[Dispatch child runs in parallel]
-    Observe[Observe child terminal states]
-    Ready{All usable outputs ready?}
-    Assemble[Build integration branch]
-    CollectiveRAI[Review aggregate diff]
-    CollectiveReview[One human review]
-    Merge[One collective merge]
-    CollectiveScribe[One collective Scribe pass]
-    Done[Coordinator terminal]
-    Rework[Reset affected subtasks]
+![Coordinator Run Lifecycle: Human goal or ready backlog item, Draft OutcomeSpec, Human confirms?, Revise spec, Create WorkPlan DAG, Find ready dependency frontier, Dispatch child runs in parallel, Observe child terminal states, All usable outputs ready?, Build integration branch, Review aggregate diff, One human review, …](../diagrams/00-system-overview-fig3.png)
 
-    Goal --> Draft --> Confirm
-    Confirm -- no --> ReviseSpec --> Draft
-    Confirm -- yes --> Plan --> Frontier --> Children --> Observe --> Ready
-    Ready -- no / failed frontier --> Rework --> Frontier
-    Ready -- yes --> Assemble --> CollectiveRAI --> CollectiveReview
-    CollectiveReview -- approve --> Merge --> CollectiveScribe --> Done
-    CollectiveReview -- request changes --> Rework
-    CollectiveReview -- decline --> Done
-```
+<!-- Rendered from ../diagrams/src/00-system-overview-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why coordinator children do not each merge
 
@@ -239,20 +174,12 @@ Agentweaver represents work as workflows rather than hard-coded endpoint scripts
 
 The default full workflow is intentionally conservative:
 
-```mermaid
-flowchart LR
-    Agent[Agent] --> RAI[RAI]
-    RAI -- needs revision --> Agent
-    RAI -- safety failed --> Blocked[Terminal: safety blocked]
-    RAI -- no changes --> Scribe[Scribe]
-    RAI -- reviewable --> Review[Human review]
-    Review -- request changes --> Agent
-    Review -- declined --> Declined[Terminal: declined]
-    Review -- approved --> Merge[Merge]
-    Merge -- conflict / blocked --> Review
-    Merge -- merged --> Scribe
-    Scribe --> Done[Terminal: done]
-```
+![Workflow Model: Agent, RAI, Terminal: safety blocked, Scribe, Human review, Terminal: declined, Merge, Terminal: done](../diagrams/00-system-overview-fig4.png)
+
+<!-- Rendered from ../diagrams/src/00-system-overview-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The workflow abstraction matters because it gives project authors and future features a vocabulary for changing process without rewriting orchestration primitives. However, Agentweaver does not blindly execute arbitrary graph nodes. Runtime binding classifies nodes by supported type and gate semantics, then maps them to known executors. Unsupported nodes fail closed. That preserves extensibility without allowing a malformed workflow to bypass review, RAI, or merge policy.
 
@@ -282,23 +209,12 @@ The most important invariant is monotonicity: once a durable event or state tran
 
 Agentweaver's memory system is a structured feedback loop:
 
-```mermaid
-flowchart LR
-    Run[Run produces observations]
-    Tools[Agent memory tools]
-    Inbox[Decision inbox<br/>draft proposals]
-    Memory[(Memory DB)]
-    Review[Coordinator / Scribe / human policy]
-    Decisions[Accepted decisions]
-    Export[Project context export]
-    Future[Future run prompt context]
+![Memory and Decision Flywheel: Run produces observations, Agent memory tools, Decision inbox, Memory DB, Coordinator / Scribe / human policy, Accepted decisions, Project context export, Future run prompt context](../diagrams/00-system-overview-fig5.png)
 
-    Run --> Tools
-    Tools --> Inbox
-    Tools --> Memory
-    Inbox --> Review --> Decisions --> Memory
-    Memory --> Export --> Future
-```
+<!-- Rendered from ../diagrams/src/00-system-overview-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This loop separates three categories of knowledge:
 
@@ -316,26 +232,12 @@ Where this lives: `apps/Agentweaver.Api/Memory`, `packages/Agentweaver.Squad/Mem
 
 Agentweaver treats every model tool call as a request, not a right. The governance stack is layered so a single missed check is less likely to become a workspace escape.
 
-```mermaid
-flowchart TD
-    Model[Model requests tool call]
-    Tool[Registered Agentweaver tool]
-    Policy[Governance policy<br/>default deny]
-    Backend[Tool-specific backend checks]
-    Path[Path containment<br/>open then verify]
-    Exec[Sandbox executor gate]
-    Workspace[Run worktree]
-    Deny[Denied]
+![Sandbox and Tool Governance: Model requests tool call, Registered Agentweaver tool, Governance policy, Tool-specific backend checks, Path containment, Sandbox executor gate, Run worktree, Denied](../diagrams/00-system-overview-fig6.png)
 
-    Model --> Tool --> Policy
-    Policy -- unknown / disallowed --> Deny
-    Policy -- allowed --> Backend
-    Backend -- invalid args --> Deny
-    Backend -- file tool --> Path
-    Backend -- shell tool --> Exec
-    Path -- safe --> Workspace
-    Exec -- isolated --> Workspace
-```
+<!-- Rendered from ../diagrams/src/00-system-overview-fig6.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Key concepts:
 
@@ -363,36 +265,12 @@ Named agents add another layer above providers. A role such as reviewer, planner
 
 In AKS, Agentweaver separates public services, persistent state, secrets, and sandbox execution.
 
-```mermaid
-flowchart TB
-    Internet[Users and MCP clients] --> Gateway[Gateway API<br/>HTTPS]
+![AKS Runtime Topology: Users and MCP clients, Gateway API, /api /auth OAuth routes, /mcp and MCP metadata, / frontend, API service, MCP service, Frontend service, API pod, MCP pod, Frontend pods, Data PVC, …](../diagrams/00-system-overview-fig7.png)
 
-    Gateway --> ApiRoute["/api /auth OAuth routes"]
-    Gateway --> McpRoute["/mcp and MCP metadata"]
-    Gateway --> FrontRoute["/ frontend"]
-
-    ApiRoute --> ApiSvc[API service]
-    McpRoute --> McpSvc[MCP service]
-    FrontRoute --> FrontSvc[Frontend service]
-
-    ApiSvc --> ApiPod[API pod<br/>single writer]
-    McpSvc --> McpPod[MCP pod]
-    FrontSvc --> FrontPods[Frontend pods]
-
-    ApiPod --> DataPVC[(Data PVC<br/>run + memory stores)]
-    ApiPod --> WorkspacePVC[(Workspace PVC<br/>repos + worktrees)]
-    ApiPod --> Secrets[Key Vault via CSI]
-    McpPod --> McpSecrets[Key Vault via CSI]
-
-    ApiPod --> Claim[Per-run SandboxClaim]
-    Claim --> WarmPool[Warm sandbox pool]
-    WarmPool --> SandboxPod[Kata VM sandbox pod]
-    SandboxPod --> WorkspacePVC
-
-    ApiPod --> External[GitHub / Copilot / Foundry / OAuth]
-    ApiPod --> Telemetry[OTLP collector]
-    McpPod --> ApiSvc
-```
+<!-- Rendered from ../diagrams/src/00-system-overview-fig7.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why the topology looks this way
 

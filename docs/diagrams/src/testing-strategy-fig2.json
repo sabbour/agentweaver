@@ -1,0 +1,145 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Fakes, fixtures, and real dependencies",
+  "alt": "Fakes, fixtures, and real dependencies: Test case, Real API host, Real stores, Real workflow services, Real temp git repos, Real validators and policy code, Deterministic agent fake, In-memory GitHub token store, Fake HTTP handler, No-op project initializer",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Test",
+      "label": "Test case",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Host",
+      "label": "Real API host",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Stores",
+      "label": "Real stores",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "SQLite / EF"
+    },
+    {
+      "id": "Workflows",
+      "label": "Real workflow services",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Git",
+      "label": "Real temp git repos",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Sandbox",
+      "label": "Real validators and policy code",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "AgentFake",
+      "label": "Deterministic agent fake",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "TokenStore",
+      "label": "In-memory GitHub token store",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "HttpFake",
+      "label": "Fake HTTP handler",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "GitInit",
+      "label": "No-op project initializer",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Test",
+      "to": "Host"
+    },
+    {
+      "from": "Host",
+      "to": "Stores"
+    },
+    {
+      "from": "Host",
+      "to": "Workflows"
+    },
+    {
+      "from": "Host",
+      "to": "Git"
+    },
+    {
+      "from": "Host",
+      "to": "Sandbox"
+    },
+    {
+      "from": "Host",
+      "to": "AgentFake",
+      "label": "external seam",
+      "dashed": true
+    },
+    {
+      "from": "Host",
+      "to": "TokenStore",
+      "label": "external seam",
+      "dashed": true
+    },
+    {
+      "from": "Host",
+      "to": "HttpFake",
+      "label": "external seam",
+      "dashed": true
+    },
+    {
+      "from": "Host",
+      "to": "GitInit",
+      "label": "external seam",
+      "dashed": true
+    }
+  ]
+}

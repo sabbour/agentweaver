@@ -1,0 +1,114 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Invocation Context",
+  "alt": "Invocation Context: Available valid workflows, Invocation kind, Available candidates, Valid override?, Use override, Any candidates?, Select among candidates, Fallback / fail-safe resolution",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Available",
+      "label": "Available valid workflows",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Kind",
+      "label": "Invocation kind",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Candidates",
+      "label": "Available candidates",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Override",
+      "label": "Valid override?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "UseOverride",
+      "label": "Use override",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "None",
+      "label": "Any candidates?",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Select",
+      "label": "Select among candidates",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Fallback",
+      "label": "Fallback / fail-safe resolution",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Available",
+      "to": "Candidates"
+    },
+    {
+      "from": "Kind",
+      "to": "Candidates"
+    },
+    {
+      "from": "Candidates",
+      "to": "Override"
+    },
+    {
+      "from": "Override",
+      "to": "UseOverride",
+      "label": "yes"
+    },
+    {
+      "from": "Override",
+      "to": "None",
+      "label": "no"
+    },
+    {
+      "from": "None",
+      "to": "Select",
+      "label": "yes"
+    },
+    {
+      "from": "None",
+      "to": "Fallback",
+      "label": "no"
+    }
+  ]
+}

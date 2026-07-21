@@ -1,0 +1,194 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose and mental model",
+  "alt": "Purpose and mental model: Run worker, Coordinator, PostRunScribeService, MCP tools and API endpoints, DecisionInbox pending, Review and merge, Decisions ledger active, AgentMemory core, learning, pattern, update, SessionContext, MemoryContextCompiler, Squad and Agentweaver context files",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "Authors",
+      "label": "Agents and Scribe",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Run",
+      "label": "Run worker",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "Authors"
+    },
+    {
+      "id": "CoordA",
+      "label": "Coordinator",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "Authors"
+    },
+    {
+      "id": "Scribe",
+      "label": "PostRunScribeService",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "Authors"
+    },
+    {
+      "id": "Api",
+      "label": "MCP tools and API endpoints",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Inbox",
+      "label": "DecisionInbox pending",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "Review and merge",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Decisions",
+      "label": "Decisions ledger active",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Memory",
+      "label": "AgentMemory core, learning, pattern, update",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Session",
+      "label": "SessionContext",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Compiler",
+      "label": "MemoryContextCompiler",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Files",
+      "label": "Squad and Agentweaver context files",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Run",
+      "to": "Api",
+      "label": "decision_inbox_submit"
+    },
+    {
+      "from": "CoordA",
+      "to": "Api"
+    },
+    {
+      "from": "Api",
+      "to": "Inbox"
+    },
+    {
+      "from": "Api",
+      "to": "Memory",
+      "label": "memory_record"
+    },
+    {
+      "from": "Api",
+      "to": "Session"
+    },
+    {
+      "from": "Inbox",
+      "to": "Gate"
+    },
+    {
+      "from": "Scribe",
+      "to": "Gate",
+      "label": "auto-merge learning, pattern, update"
+    },
+    {
+      "from": "CoordA",
+      "to": "Gate",
+      "label": "promote architectural, scope"
+    },
+    {
+      "from": "Gate",
+      "to": "Decisions",
+      "label": "merge"
+    },
+    {
+      "from": "Gate",
+      "to": "Inbox",
+      "label": "reject"
+    },
+    {
+      "from": "Decisions",
+      "to": "Compiler"
+    },
+    {
+      "from": "Memory",
+      "to": "Compiler"
+    },
+    {
+      "from": "Session",
+      "to": "Compiler"
+    },
+    {
+      "from": "Compiler",
+      "to": "Run",
+      "label": "compiled boundaries and context"
+    },
+    {
+      "from": "Decisions",
+      "to": "Files"
+    },
+    {
+      "from": "Inbox",
+      "to": "Files"
+    },
+    {
+      "from": "Memory",
+      "to": "Files"
+    }
+  ]
+}

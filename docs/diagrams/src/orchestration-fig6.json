@@ -1,0 +1,75 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Event Streaming",
+  "alt": "Event Streaming: Runtime events, Durable event log, Live bounded channel, SSE client, Last-Event-ID",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Runtime",
+      "label": "Runtime events",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Durable",
+      "label": "Durable event log",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Live",
+      "label": "Live bounded channel",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Client",
+      "label": "SSE client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "LastId",
+      "label": "Last-Event-ID",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Runtime",
+      "to": "Durable"
+    },
+    {
+      "from": "Runtime",
+      "to": "Live"
+    },
+    {
+      "from": "LastId",
+      "to": "Durable"
+    },
+    {
+      "from": "Durable",
+      "to": "Client"
+    },
+    {
+      "from": "Live",
+      "to": "Client"
+    }
+  ]
+}

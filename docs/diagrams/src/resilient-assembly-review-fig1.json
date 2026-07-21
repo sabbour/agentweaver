@@ -1,0 +1,234 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "End-to-end resilient assembly flow",
+  "alt": "End-to-end resilient assembly flow: Assembling, Assembly gate, In-place revision, Conscious dispatch_fresh, Lockout handoff, Alternate eligible, Degrade to same-author, Budget OK?, Escalate to, Human reviews, Approve → merge, Decline → terminal, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "AS",
+      "label": "Assembling",
+      "icon": "box",
+      "badge": {
+        "text": "Terminal",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "Assembly gate",
+      "icon": "route",
+      "badge": {
+        "text": "Gateway",
+        "tone": "teal"
+      },
+      "subLabel": "autonomy loop"
+    },
+    {
+      "id": "InPlace",
+      "label": "In-place revision",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "same agent + worktree"
+    },
+    {
+      "id": "FreshDispatch",
+      "label": "Conscious dispatch_fresh",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "accumulated feedback carried"
+    },
+    {
+      "id": "LockoutDispatch",
+      "label": "Lockout handoff",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "DIFFERENT agent",
+      "meta": "prior worktree reused"
+    },
+    {
+      "id": "RejRoute",
+      "label": "Alternate eligible",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "agent in domain?"
+    },
+    {
+      "id": "DegradeDispatch",
+      "label": "Degrade to same-author",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "fresh re-dispatch",
+      "meta": "full context — no lockout mutation"
+    },
+    {
+      "id": "BudgetOK",
+      "label": "Budget OK?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Escalate",
+      "label": "Escalate to",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "human-review gate",
+      "meta": "InReview / stage=review"
+    },
+    {
+      "id": "HumanActs",
+      "label": "Human reviews",
+      "icon": "route",
+      "badge": {
+        "text": "Gateway",
+        "tone": "teal"
+      },
+      "subLabel": "assembled work"
+    },
+    {
+      "id": "Approve",
+      "label": "Approve → merge",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Decline",
+      "label": "Decline → terminal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "assembly_declined"
+    },
+    {
+      "id": "HumanChanges",
+      "label": "Human request-changes",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "Budget ALWAYS reset",
+      "meta": "round-trip ++ = telemetry only"
+    },
+    {
+      "id": "Done",
+      "label": "assembly_complete",
+      "icon": "box",
+      "badge": {
+        "text": "Terminal",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "AS",
+      "to": "Gate"
+    },
+    {
+      "from": "Gate",
+      "to": "InPlace",
+      "label": "advisory/steer non-rejection"
+    },
+    {
+      "from": "Gate",
+      "to": "RejRoute",
+      "label": "REJECTION implicated authors locked out dependents rebuilt, no lockout"
+    },
+    {
+      "from": "Gate",
+      "to": "FreshDispatch",
+      "label": "in-place terminal failure"
+    },
+    {
+      "from": "RejRoute",
+      "to": "LockoutDispatch",
+      "label": "yes rotate to different agent"
+    },
+    {
+      "from": "RejRoute",
+      "to": "DegradeDispatch",
+      "label": "no + context single-eligible degrade"
+    },
+    {
+      "from": "RejRoute",
+      "to": "Escalate",
+      "label": "no + no context lockout_no_context"
+    },
+    {
+      "from": "InPlace",
+      "to": "BudgetOK"
+    },
+    {
+      "from": "FreshDispatch",
+      "to": "BudgetOK"
+    },
+    {
+      "from": "LockoutDispatch",
+      "to": "BudgetOK"
+    },
+    {
+      "from": "DegradeDispatch",
+      "to": "BudgetOK"
+    },
+    {
+      "from": "BudgetOK",
+      "to": "Gate",
+      "label": "yes"
+    },
+    {
+      "from": "BudgetOK",
+      "to": "Escalate",
+      "label": "no"
+    },
+    {
+      "from": "Escalate",
+      "to": "HumanActs"
+    },
+    {
+      "from": "HumanActs",
+      "to": "Approve"
+    },
+    {
+      "from": "Approve",
+      "to": "Done"
+    },
+    {
+      "from": "HumanActs",
+      "to": "Decline"
+    },
+    {
+      "from": "HumanActs",
+      "to": "HumanChanges"
+    },
+    {
+      "from": "HumanChanges",
+      "to": "Gate"
+    }
+  ]
+}

@@ -1,0 +1,241 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The coordinator mental model",
+  "alt": "The coordinator mental model: Goal or Ready backlog task, coordinator-draft, RequestPort: coordinator-confirmation-gate, coordinator-revise, coordinator-finalize, OutcomeSpec, CoordinatorOrchestratorExecutor, WorkPlan + Subtask DAG, CoordinatorDispatchService, Child MAF runs, CoordinatorAssemblyService, AssemblyReviewGate, …",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "P1",
+      "label": "Phase 1 — MAF spec workflow (checkpointed)",
+      "tier": 1
+    },
+    {
+      "id": "P2",
+      "label": "Phase 2 — Service-driven engine (D3: not a MAF graph)",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Goal",
+      "label": "Goal or Ready backlog task",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Draft",
+      "label": "coordinator-draft",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "P1"
+    },
+    {
+      "id": "CGate",
+      "label": "RequestPort: coordinator-confirmation-gate",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "P1"
+    },
+    {
+      "id": "Revise",
+      "label": "coordinator-revise",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "P1"
+    },
+    {
+      "id": "Finalize",
+      "label": "coordinator-finalize",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "P1"
+    },
+    {
+      "id": "Spec",
+      "label": "OutcomeSpec",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Orchestrate",
+      "label": "CoordinatorOrchestratorExecutor",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "P2"
+    },
+    {
+      "id": "Plan",
+      "label": "WorkPlan + Subtask DAG",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "P2"
+    },
+    {
+      "id": "Dispatch",
+      "label": "CoordinatorDispatchService",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "P2"
+    },
+    {
+      "id": "Children",
+      "label": "Child MAF runs",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "P2"
+    },
+    {
+      "id": "Assembly",
+      "label": "CoordinatorAssemblyService",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "CollectiveAssemblyPipeline",
+      "group": "P2"
+    },
+    {
+      "id": "AGate",
+      "label": "AssemblyReviewGate",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "P2"
+    },
+    {
+      "id": "Result",
+      "label": "Assembled result: merge + scribe",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "P2"
+    },
+    {
+      "id": "Stream",
+      "label": "Coordinator stream (SSE)",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Goal",
+      "to": "Draft"
+    },
+    {
+      "from": "Draft",
+      "to": "CGate"
+    },
+    {
+      "from": "CGate",
+      "to": "Revise",
+      "label": "revise"
+    },
+    {
+      "from": "Revise",
+      "to": "Draft"
+    },
+    {
+      "from": "CGate",
+      "to": "Finalize",
+      "label": "confirm"
+    },
+    {
+      "from": "Draft",
+      "to": "Spec",
+      "label": "persists",
+      "dashed": true
+    },
+    {
+      "from": "Finalize",
+      "to": "Orchestrate"
+    },
+    {
+      "from": "Orchestrate",
+      "to": "Plan"
+    },
+    {
+      "from": "Plan",
+      "to": "Dispatch"
+    },
+    {
+      "from": "Dispatch",
+      "to": "Children",
+      "label": "ready frontier"
+    },
+    {
+      "from": "Children",
+      "to": "Dispatch",
+      "label": "assemble_ready"
+    },
+    {
+      "from": "Dispatch",
+      "to": "Assembly",
+      "label": "all terminal"
+    },
+    {
+      "from": "Assembly",
+      "to": "AGate"
+    },
+    {
+      "from": "AGate",
+      "to": "Result",
+      "label": "approve"
+    },
+    {
+      "from": "AGate",
+      "to": "Dispatch",
+      "label": "request changes"
+    },
+    {
+      "from": "Draft",
+      "to": "Stream",
+      "label": "events",
+      "dashed": true
+    },
+    {
+      "from": "Dispatch",
+      "to": "Stream",
+      "label": "events",
+      "dashed": true
+    }
+  ]
+}

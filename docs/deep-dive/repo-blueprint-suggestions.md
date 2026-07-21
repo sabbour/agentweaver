@@ -6,21 +6,12 @@ For the API contract see the [reference](../reference/repo-blueprint-suggestions
 
 ## End-to-end flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    User[User selects or pastes repo] --> UI[Create project from GitHub<br/>Suggested tab]
-    UI -->|POST /api/blueprints/suggest| Endpoint[BlueprintEndpoints]
-    Endpoint --> Service[GitHubRepoBlueprintSuggestionService]
-    Service -->|resolve user scope| Token[GitHub user token]
-    Service --> GitHub[GitHub REST API<br/>metadata + languages + contents]
-    Service --> Signals[Signals<br/>description, topics, languages, root files, issues]
-    Signals --> Mapper[Catalog mapper<br/>PickBlueprint]
-    Mapper --> Catalog[BlueprintService.GetPredefined]
-    Catalog --> Response[SuggestBlueprintResponse]
-    Response --> UI
-    UI -->|fallback true or error| Templates[Switch to Templates tab]
-```
+![End-to-end flow: User selects or pastes repo, Create project from GitHub, BlueprintEndpoints, GitHubRepoBlueprintSuggestionService, GitHub user token, GitHub REST API, Signals, Catalog mapper, BlueprintService.GetPredefined, SuggestBlueprintResponse, Switch to Templates tab](../diagrams/repo-blueprint-suggestions-fig1.png)
+
+<!-- Rendered from ../diagrams/src/repo-blueprint-suggestions-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 1. **The dialog has a repository.** `CreateFromGitHubDialog` keeps the active repository in `d.sourceRepository` and passes it into the shared `BlueprintPanel`, whose tab strip starts the GitHub flow on `suggested` (`apps/web/src/pages/ProjectGalleryPage.tsx:676`, `apps/web/src/components/BlueprintPicker.tsx:371`).
 2. **The client calls the new endpoint.** `SuggestedBlueprintPanel` calls `apiClient.suggestBlueprint(normalizedRepo)` only when the tab is active and the repo string is non-empty (`apps/web/src/components/BlueprintPicker.tsx:301`, `:305`). The client method posts `{ "repository": "owner/repo" }` to `/blueprints/suggest` (`apps/web/src/api/client.ts:186`).

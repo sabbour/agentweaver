@@ -35,18 +35,12 @@ created and driven **inside the Worker process**. The workflow graph ran in-proc
 the sandbox pod was used only to **exec one shell command at a time** through a warm-pool claim.
 The pod was a place to run `run_command`; it was *not* where the agent lived.
 
-```mermaid
-flowchart LR
-    subgraph Worker["Worker pod (shared runner)"]
-        Graph[Workflow graph<br/>in-process runner]
-        Agent[Agent + live Copilot SDK session]
-        Hist[In-memory run-event history]
-        Graph --> Agent
-        Agent --> Hist
-    end
-    Agent -. exec one shell command .-> Pod[(Sandbox pod<br/>run_command only)]
-    Hist --> SSE[SSE to clients]
-```
+![Before pod-per-run: single-Worker-pod execution: Workflow graph, Agent + live Copilot SDK session, In-memory run-event history, Sandbox pod, SSE to clients](../diagrams/sandbox-pod-execution-fig1.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Every box inside the Worker pod multiplies by concurrent and recent runs. That is why it OOMed, and
 why production had to keep subtasks on one shared in-process owner.
@@ -57,23 +51,12 @@ Under pod-per-run, the **leaf agent turn relocates into the pod**. The orchestra
 human-in-the-loop (HITL) gates stay in the worker tier; only the agent *turn* — the part that holds the
 SDK session and runs tools — moves out.
 
-```mermaid
-flowchart LR
-    subgraph Worker["Worker tier (owns the run)"]
-        Loop[Orchestration graph<br/>+ HITL RequestPort]
-        Proxy[Remote agent proxy<br/>AIAgent leaf seam]
-        Loop --> Proxy
-    end
-    subgraph Pod["Sandbox pod (per run, Kata-isolated)"]
-        Host[In-pod AgentHost]
-        SDK[Agent + live Copilot SDK session]
-        Tools[tool / shell / file exec]
-        Host --> SDK --> Tools
-    end
-    Proxy <-->|turn input + Bearer token · streamed updates| Host
-    Worker --> DB[(Brokered checkpoint store)]
-    Pod -. shared workspace PVC .- Worker
-```
+![Now: per-run sandbox pod: Orchestration graph, Remote agent proxy, In-pod AgentHost, Agent + live Copilot SDK session, tool / shell / file exec, Brokered checkpoint store](../diagrams/sandbox-pod-execution-fig2.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The decisive architectural fact: **the coordinator's orchestration loop stays in the API/worker tier.
 Only agent turns are sandboxed.** Remoting happens at the **AIAgent leaf seam** — the workflow graph,
@@ -137,20 +120,12 @@ ladder and stopping at the first backend that is actually available. It emits a 
 event carrying `backend`, `isRealIsolation`, and `reason`, so the chosen backend — and *why* it was
 chosen — is observable for every run.
 
-```mermaid
-flowchart TD
-    Start[Run start:<br/>SandboxExecutorFactory] --> InCluster{In Kubernetes?<br/>KUBERNETES_SERVICE_HOST}
-    InCluster -->|yes| K8s[kubernetes-sandbox-claim<br/>K8s · Kata VM · real isolation]
-    InCluster -->|no| Win{Windows?}
-    Win -->|yes| Mxc[processcontainer<br/>Mxc · real isolation]
-    Mxc -->|unavailable| Wsl[wsl-bwrap / wsl-unshare<br/>WslMxc · real isolation]
-    Win -->|no| Bwrap[linux-bwrap<br/>bubblewrap · real isolation]
-    Bwrap -->|unavailable| Lxc[lxc-native-linux<br/>real isolation]
-    Wsl -->|unavailable| Direct
-    Lxc -->|unavailable| Direct[direct<br/>Passthrough · NO isolation]
-    K8s -. emits .-> Sel[[sandbox.selected:<br/>backend · isRealIsolation · reason]]
-    Direct -. emits .-> Sel
-```
+![One executor per host, chosen at run start: Run start:, In Kubernetes?, kubernetes-sandbox-claim, Windows?, processcontainer, wsl-bwrap / wsl-unshare, linux-bwrap, lxc-native-linux, direct, sandbox.selected:](../diagrams/sandbox-pod-execution-fig3.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The ladder, top to bottom:
 
@@ -325,19 +300,12 @@ happen in a **complete checkout** under `/local-workspace/{run-hash}/{tree-hash}
 disappears when the pod is released. The shared repository receives changes only through the explicit
 write-back path described below.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Shared["Authoritative repository + worktree<br/>/workspace/... on Azure Files"] -->|"source ref + commit + tree"| Prepare["PodLocalWorkspaceManager<br/>git init + shallow fetch + verify"]
-    Prepare --> Scratch["Ephemeral checkout<br/>/local-workspace/{run-hash}/{tree-hash}<br/>disk-backed emptyDir"]
-    Scratch --> Mode{"Workspace mode"}
-    Mode -->|"LocalReadOnly"| Build["Build / test / preview<br/>no publication"]
-    Mode -->|"LocalWritable"| Turn["Implementation turn<br/>edits local files"]
-    Turn --> Scan["Cancellable nested-repo scan<br/>prune generated/cache paths"]
-    Scan --> Flatten["Flatten nested repos<br/>stage content, not gitlinks"]
-    Flatten --> Commit["Platform alternate index<br/>write-tree + commit-tree"]
-    Commit -->|"git push --no-force<br/>origin {commit}:{ref}"| Shared
-```
+![Pod-local execution workspaces: Authoritative repository + worktree, PodLocalWorkspaceManager, Ephemeral checkout, Workspace mode, Build / test / preview, Implementation turn, Cancellable nested-repo scan, Flatten nested repos, Platform alternate index](../diagrams/sandbox-pod-execution-fig4.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ##### Materialize and verify before execution
 
@@ -734,28 +702,12 @@ A claim can stay unbound longer than the coordinator's subtask-stall timeout (`C
 
 The coordinator's child-observation loop exempts a subtask whose most recent event is `sandbox.provisioning_pending`: it resets the stall window and keeps observing instead of firing `agent_stall_timeout`. The guard self-heals and cannot latch — any other real event (the pod binding, agent output, a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. The heartbeat is best-effort: if the run-event stream is unavailable the wait degrades to a plain bind poll and never fails the launch.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Dispatch["CoordinatorDispatchService<br/>dispatch subtask"] --> Submit["KubernetesSandboxExecutor<br/>submit SandboxClaim"]
-    Submit --> Wait{"claim Bound /<br/>pod Ready?"}
-    Wait -- "not yet (pod Pending)" --> HB["emit sandbox.provisioning_pending<br/>heartbeat (~20s)"]
-    HB --> Exempt["coordinator resets stall<br/>timer while pending"]
-    Exempt --> Wait
-    Wait -- "yes → pod bound" --> Run["child run executes"]
+![Provisioning heartbeat and the coordinator stall exemption: CoordinatorDispatchService, KubernetesSandboxExecutor, claim Bound /, emit sandbox.provisioning_pending, coordinator resets stall, child run executes](../diagrams/sandbox-pod-execution-fig5.png)
 
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Dispatch core;
-    class Submit data;
-    class Wait,Exempt svc;
-    class HB evt;
-    class Run runtime;
-```
+<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ::: info Legacy states
 The `SubtaskStatus.PendingCapacity` enum, the `subtask.pending_capacity` event, and the amber **⏳ Waiting for capacity** badge are **retained for back-compat only**. New runs never enter `PendingCapacity`; a pre-upgrade subtask stranded in that status is recovered to `pending` and re-attempted. The terminal `capacity_unavailable` detail code is likewise legacy — Kubernetes now absorbs the wait instead of hard-failing.

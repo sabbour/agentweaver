@@ -1,0 +1,205 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Purpose and Mental Model",
+  "alt": "Purpose and Mental Model: Operator, AuthGate, AppShell: TopBar, LeftNav, ProjectSwitcher, ProjectPage board, Embedded run inspection, CoordinatorRunPage, WorkspacePage, AgentweaverApiClient, useBoard poll, useRunStream, topologyReducer, sessionStorage token, …",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "SPA",
+      "label": "React + Vite SPA",
+      "tier": 1
+    },
+    {
+      "id": "Pages",
+      "label": "Pages",
+      "tier": 2,
+      "parent": "SPA"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "User",
+      "label": "Operator",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "AuthGate",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "SPA"
+    },
+    {
+      "id": "Shell",
+      "label": "AppShell: TopBar, LeftNav, ProjectSwitcher",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "SPA"
+    },
+    {
+      "id": "Board",
+      "label": "ProjectPage board",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "Pages"
+    },
+    {
+      "id": "Inspect",
+      "label": "Embedded run inspection",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "Pages"
+    },
+    {
+      "id": "Coord",
+      "label": "CoordinatorRunPage",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "Pages"
+    },
+    {
+      "id": "Work",
+      "label": "WorkspacePage",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "Pages"
+    },
+    {
+      "id": "Api",
+      "label": "AgentweaverApiClient",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "UseBoard",
+      "label": "useBoard poll",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Stream",
+      "label": "useRunStream",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Reducer",
+      "label": "topologyReducer",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Token",
+      "label": "sessionStorage token",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Backend",
+      "label": "Agentweaver API",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "User",
+      "to": "Gate"
+    },
+    {
+      "from": "Gate",
+      "to": "Shell"
+    },
+    {
+      "from": "Shell",
+      "to": "Board"
+    },
+    {
+      "from": "Gate",
+      "to": "Api"
+    },
+    {
+      "from": "Board",
+      "to": "UseBoard"
+    },
+    {
+      "from": "Work",
+      "to": "Api"
+    },
+    {
+      "from": "Inspect",
+      "to": "Stream"
+    },
+    {
+      "from": "Coord",
+      "to": "Stream"
+    },
+    {
+      "from": "UseBoard",
+      "to": "Api"
+    },
+    {
+      "from": "Api",
+      "to": "Token",
+      "label": "Bearer token"
+    },
+    {
+      "from": "Api",
+      "to": "Backend",
+      "label": "REST snapshots /runs /board"
+    },
+    {
+      "from": "Stream",
+      "to": "Backend",
+      "label": "GET /runs/:id/stream"
+    },
+    {
+      "from": "Stream",
+      "to": "Reducer"
+    },
+    {
+      "from": "Reducer",
+      "to": "Coord"
+    }
+  ]
+}

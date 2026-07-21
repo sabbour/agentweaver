@@ -1,0 +1,181 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "GitHub credentials and API usage",
+  "alt": "GitHub credentials and API usage: User or browser, Sign-in flow, Device code flow, OAuth redirect callback, IGitHubTokenStore, API request, Resolve token scope, IGitHubAccessTokenProvider, GitHub REST API, 401 / sign-in required, /api/github/accounts, /api/github/repos, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "User",
+      "label": "User or browser",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Flow",
+      "label": "Sign-in flow",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Device",
+      "label": "Device code flow",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "OAuth",
+      "label": "OAuth redirect callback",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "TokenStore",
+      "label": "IGitHubTokenStore",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Caller",
+      "label": "API request",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Scope",
+      "label": "Resolve token scope",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Refresh",
+      "label": "IGitHubAccessTokenProvider",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "GitHubApi",
+      "label": "GitHub REST API",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Unauthorized",
+      "label": "401 / sign-in required",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Accounts",
+      "label": "/api/github/accounts",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Repos",
+      "label": "/api/github/repos",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Clone",
+      "label": "Project clone credential",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "User",
+      "to": "Flow"
+    },
+    {
+      "from": "Flow",
+      "to": "Device"
+    },
+    {
+      "from": "Flow",
+      "to": "OAuth"
+    },
+    {
+      "from": "Device",
+      "to": "TokenStore"
+    },
+    {
+      "from": "OAuth",
+      "to": "TokenStore"
+    },
+    {
+      "from": "Caller",
+      "to": "Scope"
+    },
+    {
+      "from": "Scope",
+      "to": "Refresh"
+    },
+    {
+      "from": "TokenStore",
+      "to": "Refresh"
+    },
+    {
+      "from": "Refresh",
+      "to": "GitHubApi",
+      "label": "valid/rotated token"
+    },
+    {
+      "from": "Refresh",
+      "to": "Unauthorized",
+      "label": "null"
+    },
+    {
+      "from": "GitHubApi",
+      "to": "Accounts"
+    },
+    {
+      "from": "GitHubApi",
+      "to": "Repos"
+    },
+    {
+      "from": "GitHubApi",
+      "to": "Clone"
+    }
+  ]
+}

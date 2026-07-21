@@ -1,0 +1,127 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Coordinator integration branches",
+  "alt": "Coordinator integration branches: Originating branch, agentweaver/integration/coordinatorRunId, Child branch A, Child branch B, Child branch C, Aggregate diff + tree hash, Collective RAI, One human review gate, Merge integration branch",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Origin",
+      "label": "Originating branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Integration",
+      "label": "agentweaver/integration/coordinatorRunId",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ChildA",
+      "label": "Child branch A",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "ChildB",
+      "label": "Child branch B",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "ChildC",
+      "label": "Child branch C",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "AggregateDiff",
+      "label": "Aggregate diff + tree hash",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "RAI",
+      "label": "Collective RAI",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "One human review gate",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge integration branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Origin",
+      "to": "Integration"
+    },
+    {
+      "from": "ChildA",
+      "to": "Integration"
+    },
+    {
+      "from": "ChildB",
+      "to": "Integration"
+    },
+    {
+      "from": "ChildC",
+      "to": "Integration"
+    },
+    {
+      "from": "Integration",
+      "to": "AggregateDiff"
+    },
+    {
+      "from": "AggregateDiff",
+      "to": "RAI"
+    },
+    {
+      "from": "RAI",
+      "to": "Review"
+    },
+    {
+      "from": "Review",
+      "to": "Merge"
+    },
+    {
+      "from": "Merge",
+      "to": "Origin"
+    }
+  ]
+}

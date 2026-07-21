@@ -30,24 +30,12 @@ Agentweaver assembles a run's graph from a `WorkflowDefinition` (the declarative
 
 The binder mints a *distinct* executor per logical node, keyed by node id. This is why **chained turns each get their own node**: a workflow with three sequential agent turns produces three separate MAF executors, not one executor invoked three times. Distinct nodes are what make the topology graph legible and what let MAF emit a clean lifecycle event per step. Edges that cross types — `AgentTurnOutput` into a review request, a review decision into a merge input — are expanded into adapter executors so the typed contract is never violated. Binding **fails closed**: a node kind or edge with no executor mapping aborts the build instead of becoming a silent no-op.
 
-```mermaid
-flowchart LR
-    Agent["agent-turn<br/>AgentTurnExecutor (AIAgent leaf)"]
-    Rai["rai gate<br/>RaiTurnExecutor"]
-    RAdapter["review-adapter<br/>(type adapter)"]
-    Gate["review-gate<br/>RequestPort"]
-    MAdapter["merge-adapter<br/>(type adapter)"]
-    Merge["merge<br/>MergeExecutor"]
-    Scribe["scribe<br/>ScribeTurnExecutor"]
-    Done["terminal"]
+![The Workflow graph: typed executors and edges: agent-turn, rai gate, review-adapter, review-gate, merge-adapter, merge, scribe, terminal](../diagrams/agent-framework-fig1.png)
 
-    Agent --> Rai
-    Rai -- "revise" --> Agent
-    Rai -- "review" --> RAdapter --> Gate
-    Gate -- "approved" --> MAdapter --> Merge --> Scribe --> Done
-    Gate -- "request-changes" --> Agent
-    Gate -- "declined" --> Done
-```
+<!-- Rendered from ../diagrams/src/agent-framework-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## The AIAgent abstraction and CopilotAIAgent
 
@@ -147,20 +135,12 @@ After the human confirms the spec, the coordinator **hands off to a service-driv
 
 The reasoning is the core of D3: **MAF checkpoints exist to make in-memory graph state durable across suspension; the dispatch and assembly phases have no in-memory graph state worth checkpointing because their state is already durable in the DB.** A coordinator can dispatch ten children, observe them, and assemble their branches entirely from persisted rows. If the process dies, recovery re-reads those rows and re-arms dispatch — no checkpoint required. Forcing those phases into a MAF graph would add a second source of truth (checkpoint *and* DB rows) that must be kept consistent, for no durability gain. So the boundary is: **MAF where a run suspends on a human and resumes in-memory; service-driven where state is naturally relational and long-lived.**
 
-```mermaid
-flowchart LR
-    subgraph MAF["MAF workflow (checkpointed)"]
-        Draft[draft spec] --> CGate["confirmation gate<br/>RequestPort"]
-        CGate -- "revise" --> Draft
-        CGate -- "confirm" --> HandOff[hand-off]
-    end
-    subgraph Svc["Service-driven (D3 — DB rows, no MAF graph)"]
-        Dispatch[dispatch frontier] --> Children[child runs]
-        Children --> Assembly[collective assembly]
-        Assembly --> Merge[single merge + scribe]
-    end
-    HandOff --> Dispatch
-```
+![Where Agentweaver deliberately does NOT use MAF (decision D3): draft spec, confirmation gate, hand-off, dispatch frontier, child runs, collective assembly, single merge + scribe](../diagrams/agent-framework-fig2.png)
+
+<!-- Rendered from ../diagrams/src/agent-framework-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Each **child run**, however, is itself an ordinary MAF run with its own graph — so MAF still orchestrates every leaf of real work. D3 is only about the *coordinator's* dispatch/assembly tier, not the workers it launches.
 

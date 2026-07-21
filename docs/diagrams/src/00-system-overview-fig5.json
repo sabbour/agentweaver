@@ -1,0 +1,115 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Memory and Decision Flywheel",
+  "alt": "Memory and Decision Flywheel: Run produces observations, Agent memory tools, Decision inbox, Memory DB, Coordinator / Scribe / human policy, Accepted decisions, Project context export, Future run prompt context",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Run",
+      "label": "Run produces observations",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Tools",
+      "label": "Agent memory tools",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Inbox",
+      "label": "Decision inbox",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "draft proposals"
+    },
+    {
+      "id": "Memory",
+      "label": "Memory DB",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "Coordinator / Scribe / human policy",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Decisions",
+      "label": "Accepted decisions",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Export",
+      "label": "Project context export",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Future",
+      "label": "Future run prompt context",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Run",
+      "to": "Tools"
+    },
+    {
+      "from": "Tools",
+      "to": "Inbox"
+    },
+    {
+      "from": "Tools",
+      "to": "Memory"
+    },
+    {
+      "from": "Inbox",
+      "to": "Review"
+    },
+    {
+      "from": "Review",
+      "to": "Decisions"
+    },
+    {
+      "from": "Decisions",
+      "to": "Memory"
+    },
+    {
+      "from": "Memory",
+      "to": "Export"
+    },
+    {
+      "from": "Export",
+      "to": "Future"
+    }
+  ]
+}

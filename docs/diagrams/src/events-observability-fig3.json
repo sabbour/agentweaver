@@ -1,0 +1,230 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Metrics and Dashboard Stack",
+  "alt": "Metrics and Dashboard Stack: runs table, MetricsService, backlog_tasks table, projects store, HeartbeatStatusStore, /api/projects/{id}/dashboard, /api/overview, SQLite, disk, workflow registry, review policy registry, gh auth, workspace, DiagnosticsService, /api/diagnostics, /api/projects/{id}/diagnostics, /api/diagnostics/heartbeat, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Runs",
+      "label": "runs table",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Metrics",
+      "label": "MetricsService",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Backlog",
+      "label": "backlog_tasks table",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Projects",
+      "label": "projects store",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Heartbeat",
+      "label": "HeartbeatStatusStore",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Dashboard",
+      "label": "/api/projects/{id}/dashboard",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Overview",
+      "label": "/api/overview",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "DiagnosticsInputs",
+      "label": "SQLite, disk, workflow registry, review policy registry, gh auth, workspace",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Diagnostics",
+      "label": "DiagnosticsService",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SystemDiag",
+      "label": "/api/diagnostics",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "ProjectDiag",
+      "label": "/api/projects/{id}/diagnostics",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "HeartbeatDiag",
+      "label": "/api/diagnostics/heartbeat",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Web",
+      "label": "Web UI",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "MCP parity surface",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ApiPod",
+      "label": "API pod logs/runtime telemetry",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "OTLP",
+      "label": "OTLP collector",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Runs",
+      "to": "Metrics"
+    },
+    {
+      "from": "Backlog",
+      "to": "Metrics"
+    },
+    {
+      "from": "Projects",
+      "to": "Metrics"
+    },
+    {
+      "from": "Heartbeat",
+      "to": "Metrics"
+    },
+    {
+      "from": "Metrics",
+      "to": "Dashboard"
+    },
+    {
+      "from": "Metrics",
+      "to": "Overview"
+    },
+    {
+      "from": "DiagnosticsInputs",
+      "to": "Diagnostics"
+    },
+    {
+      "from": "Heartbeat",
+      "to": "Diagnostics"
+    },
+    {
+      "from": "Diagnostics",
+      "to": "SystemDiag"
+    },
+    {
+      "from": "Diagnostics",
+      "to": "ProjectDiag"
+    },
+    {
+      "from": "Diagnostics",
+      "to": "HeartbeatDiag"
+    },
+    {
+      "from": "Dashboard",
+      "to": "Web"
+    },
+    {
+      "from": "Overview",
+      "to": "Web"
+    },
+    {
+      "from": "SystemDiag",
+      "to": "Web"
+    },
+    {
+      "from": "HeartbeatDiag",
+      "to": "Web"
+    },
+    {
+      "from": "ProjectDiag",
+      "to": "Web"
+    },
+    {
+      "from": "SystemDiag",
+      "to": "MCP"
+    },
+    {
+      "from": "HeartbeatDiag",
+      "to": "MCP"
+    },
+    {
+      "from": "ApiPod",
+      "to": "OTLP"
+    }
+  ]
+}

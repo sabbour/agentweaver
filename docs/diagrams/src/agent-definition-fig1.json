@@ -1,0 +1,162 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "End-to-end flow",
+  "alt": "End-to-end flow: MCP tool source, gen-docs.mjs, docs/reference/mcp-tools.md, .github/agents/agentweaver.agent.md, Projects/Templates/agentweaver.agent.md, Agentweaver.Api assembly, ProjectService, {project}/.github/agents/agentweaver.agent.md, GitHub Copilot, docs-drift workflow",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Src",
+      "label": "MCP tool source",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "apps/Agentweaver.Mcp/Tools/*.cs",
+      "meta": "[McpServerTool] + [Description]"
+    },
+    {
+      "id": "Gen",
+      "label": "gen-docs.mjs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Doc",
+      "label": "docs/reference/mcp-tools.md",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Repo",
+      "label": ".github/agents/agentweaver.agent.md",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Tmpl",
+      "label": "Projects/Templates/agentweaver.agent.md",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "(EmbeddedResource)"
+    },
+    {
+      "id": "Api",
+      "label": "Agentweaver.Api assembly",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Create",
+      "label": "ProjectService",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "CreateBlankAsync / CreateFromGitHubAsync"
+    },
+    {
+      "id": "Proj",
+      "label": "{project}/.github/agents/agentweaver.agent.md",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Copilot",
+      "label": "GitHub Copilot",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "CI",
+      "label": "docs-drift workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Src",
+      "to": "Gen",
+      "label": "parseGroups"
+    },
+    {
+      "from": "Gen",
+      "to": "Doc",
+      "label": "full index"
+    },
+    {
+      "from": "Gen",
+      "to": "Repo",
+      "label": "Tool map block only"
+    },
+    {
+      "from": "Gen",
+      "to": "Tmpl",
+      "label": "byte-identical copy"
+    },
+    {
+      "from": "Tmpl",
+      "to": "Api",
+      "label": "compiled into"
+    },
+    {
+      "from": "Api",
+      "to": "Create",
+      "label": "TryMaterializeAgentDefinition"
+    },
+    {
+      "from": "Create",
+      "to": "Proj",
+      "label": "writes if absent"
+    },
+    {
+      "from": "Proj",
+      "to": "Copilot",
+      "label": "agent picker"
+    },
+    {
+      "from": "Repo",
+      "to": "CI",
+      "label": "--check in CI",
+      "dashed": true
+    },
+    {
+      "from": "Tmpl",
+      "to": "CI",
+      "label": "--check in CI",
+      "dashed": true
+    },
+    {
+      "from": "Doc",
+      "to": "CI",
+      "label": "--check in CI",
+      "dashed": true
+    }
+  ]
+}

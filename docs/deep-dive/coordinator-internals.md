@@ -25,60 +25,12 @@ A coordinator run has two personalities:
 
 That split is the key to rebuilding the subsystem. The model helps create structured intent and plan data. Durable services then advance that data through deterministic state machines.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    Goal(["Goal or Ready backlog task"])
+![The coordinator mental model: Goal or Ready backlog task, coordinator-draft, RequestPort: coordinator-confirmation-gate, coordinator-revise, coordinator-finalize, OutcomeSpec, CoordinatorOrchestratorExecutor, WorkPlan + Subtask DAG, CoordinatorDispatchService, Child MAF runs, CoordinatorAssemblyService, AssemblyReviewGate, …](../diagrams/coordinator-internals-fig1.png)
 
-    subgraph P1["Phase 1 — MAF spec workflow (checkpointed)"]
-        Draft(["coordinator-draft"])
-        CGate{{"RequestPort: coordinator-confirmation-gate"}}
-        Revise(["coordinator-revise"])
-        Finalize(["coordinator-finalize"])
-    end
-
-    Spec[("OutcomeSpec")]
-
-    subgraph P2["Phase 2 — Service-driven engine (D3: not a MAF graph)"]
-        Orchestrate(["CoordinatorOrchestratorExecutor"])
-        Plan[("WorkPlan + Subtask DAG")]
-        Dispatch(["CoordinatorDispatchService"])
-        Children(["Child MAF runs"])
-        Assembly(["CoordinatorAssemblyService<br/>CollectiveAssemblyPipeline"])
-        AGate{{"AssemblyReviewGate"}}
-        Result(["Assembled result: merge + scribe"])
-    end
-
-    Stream(["Coordinator stream (SSE)"])
-
-    Goal --> Draft --> CGate
-    CGate -- revise --> Revise --> Draft
-    CGate -- confirm --> Finalize
-    Draft -. persists .-> Spec
-    Finalize --> Orchestrate --> Plan --> Dispatch
-    Dispatch -- ready frontier --> Children
-    Children -- assemble_ready --> Dispatch
-    Dispatch -- all terminal --> Assembly --> AGate
-    AGate -- approve --> Result
-    AGate -- request changes --> Dispatch
-    Draft -. events .-> Stream
-    Dispatch -. events .-> Stream
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Goal client;
-    class Draft,Revise,Finalize,CGate,Children runtime;
-    class Spec,Plan data;
-    class Orchestrate,Assembly,AGate,Result svc;
-    class Dispatch core;
-    class Stream evt;
-```
+<!-- Rendered from ../diagrams/src/coordinator-internals-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The durable artifacts are:
 
@@ -170,33 +122,12 @@ This contract is stored before the work is decomposed. From that point forward, 
 
 The first coordinator phase is a Microsoft Agents Framework workflow:
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Draft[coordinator-draft]
-    Gate[await-confirmation RequestPort]
-    Auto[autopilot auto-confirm<br/>ScheduleUnattendedConfirm]
-    Finalize[finalize spec]
-    Revise[revise input]
-    Orchestrate[orchestrate confirmed spec]
+![How drafting works: coordinator-draft, await-confirmation RequestPort, autopilot auto-confirm, finalize spec, revise input, orchestrate confirmed spec](../diagrams/coordinator-internals-fig2.png)
 
-    Draft --> Gate
-    Auto -. auto-confirm defineOutcome .-> Gate
-    Gate -- revise --> Revise --> Draft
-    Gate -- confirm / decline --> Finalize --> Orchestrate
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Draft,Gate,Finalize,Revise runtime;
-    class Auto evt;
-    class Orchestrate svc;
-```
+<!-- Rendered from ../diagrams/src/coordinator-internals-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The drafting executor compiles team memory and active decisions, resolves the Coordinator charter, and runs a real Copilot coordinator turn. The prompt asks for one JSON object with `desired_outcome`, `scope`, `assumptions`, and `clarifying_questions`.
 
@@ -314,40 +245,12 @@ The persisted WorkPlan starts as `planned`, with subtasks in `pending` and depen
 
 Dispatch repeatedly computes the ready frontier:
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Load[(Load WorkPlan)]
-    Status[Read subtask statuses]
-    Ready{Pending and all dependencies satisfied?}
-    Conflict{Conflicts with in-flight work?}
-    Launch[Launch child run]
-    Observe[Observe child stream]
-    Terminal{Child terminal?}
-    Update[Update subtask status]
-    More{More ready or in-flight?}
-    Assembly[Awaiting assembly]
+![Ready frontier: Load WorkPlan, Read subtask statuses, Pending and all dependencies satisfied?, Conflicts with in-flight work?, Launch child run, Observe child stream, Child terminal?, Update subtask status, More ready or in-flight?, Awaiting assembly](../diagrams/coordinator-internals-fig3.png)
 
-    Load --> Status --> Ready
-    Ready -- no --> More
-    Ready -- yes --> Conflict
-    Conflict -- yes, defer --> More
-    Conflict -- no --> Launch --> Observe --> Terminal --> Update --> More
-    More -- yes --> Status
-    More -- no --> Assembly
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Load data;
-    class Status,Ready,Conflict,Observe,Terminal,Update,More,Assembly svc;
-    class Launch runtime;
-```
+<!-- Rendered from ../diagrams/src/coordinator-internals-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Only `assemble_ready` and `completed` satisfy dependencies. A failed or RAI-flagged dependency fails its still-pending dependents with recovery guidance, because serial dependents cannot safely proceed from a bad prerequisite.
 
@@ -565,57 +468,12 @@ The frontend renders a pod chip on a node only when `executionPodName` is non-nu
 
 When all subtasks settle, dispatch moves the WorkPlan to `awaiting_assembly` and hands off to the assembly service. Assembly is service-driven rather than a MAF workflow because it starts from already-produced git state, has a coordinator-owned review gate, and routes review changes back to re-dispatch rather than back to one model turn.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Claim{CAS awaiting_assembly<br/>to assembling}
-    Eligible{All subtasks eligible?}
-    Order[Topological branch order]
-    Integration[Build integration branch]
-    GateOrder[Resolve authored gates
-by happy-path traversal]
-    Rai[Collective RAI over aggregate diff]
-    RaiFlag{RAI flagged?}
-    Rubberduck[Optional Rubberduck critique]
-    BuildTest[Build & Test
-detached worktree]
-    Preview[Preview outcome
-ready / failed / skipped]
-    Review[Collective human review]
-    Decision{Decision}
-    Merge[Merge integration branch]
-    Scribe[Collective scribe]
-    Complete[Complete parent run]
-    RequestChanges[Infer affected subtasks<br/>reset to pending]
-    AlreadyClaimed[Already claimed<br/>skip]
-    Blocked[Blocked / needs resolution / failed]
+![Collective assembly: CAS awaiting_assembly, All subtasks eligible?, Topological branch order, Build integration branch, GateOrder, by, Collective RAI over aggregate diff, RAI flagged?, Optional Rubberduck critique, BuildTest, Test, detached, …](../diagrams/coordinator-internals-fig4.png)
 
-    Claim -- lost --> AlreadyClaimed
-    Claim -- won --> Eligible
-    Eligible -- no --> Blocked
-    Eligible -- yes --> Order --> Integration
-    Integration -- auto-resolve / ok --> GateOrder --> Rai --> RaiFlag
-    RaiFlag -- yes --> Blocked
-    RaiFlag -- no --> Rubberduck --> BuildTest --> Preview --> Review --> Decision
-    Decision -- approve --> Merge
-    Decision -- request changes --> RequestChanges
-    Decision -- decline --> Blocked
-    Merge -- conflict or failure --> Blocked
-    Merge -- merged --> Scribe --> Complete
-    RequestChanges --> Dispatching[Back to dispatch]
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Claim,Eligible,Order,GateOrder,RaiFlag,Review,Decision,Complete,RequestChanges,AlreadyClaimed,Blocked svc;
-    class Integration,Rai,Rubberduck,BuildTest,Merge,Scribe runtime;
-    class Dispatching core;
-```
+<!-- Rendered from ../diagrams/src/coordinator-internals-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Exactly-once claim
 

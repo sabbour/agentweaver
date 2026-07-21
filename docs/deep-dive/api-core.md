@@ -21,18 +21,12 @@ Domain internals are covered by the focused deep dives for [Auth & security](./a
 
 Agentweaver uses a **minimal API + endpoint modules + stores/services** architecture. The host is a thin, explicit composition root; endpoint modules are thin adapters; services and stores contain the actual behavior.
 
-```mermaid
-flowchart LR
-    Client[Web UI / MCP / CLI] --> Http[ASP.NET Core HTTP host]
-    Http --> Middleware[Cross-cutting middleware]
-    Middleware --> Endpoint[Minimal API endpoint module]
-    Endpoint --> Service[Application/domain service]
-    Service --> Store[Store or provider]
-    Store --> Durable[(SQLite / workspace files / GitHub / Kubernetes)]
+![The Host in One Picture: Web UI / MCP / CLI, ASP.NET Core HTTP host, Cross-cutting middleware, Minimal API endpoint module, Application/domain service, Store or provider, SQLite / workspace files / GitHub / Kubernetes](../diagrams/api-core-fig1.png)
 
-    Endpoint -.maps DTOs.-> Contract[Stable wire contracts]
-    Service -.emits.-> Events[Run events / diagnostics / metrics]
-```
+<!-- Rendered from ../diagrams/src/api-core-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The important separation is:
 
@@ -65,21 +59,12 @@ The API cannot safely accept traffic until three things are true:
 
 Startup therefore behaves like a readiness gate, not just a web-server launch.
 
-```mermaid
-flowchart TD
-    A[Create ASP.NET builder] --> B[Load config, logging, environment]
-    B --> C[Fail fast on unsafe production auth/OAuth settings]
-    C --> D[Register JSON, CORS, rate limiting]
-    D --> E[Register stores, services, providers, hosted workers]
-    E --> F[Build WebApplication]
-    F --> G[Ensure operational SQLite schema]
-    G --> H[Migrate EF memory database]
-    H --> I[Recover interrupted workflows and coordinator state]
-    I --> J[Warn or fail health for workspace mount problems]
-    J --> K[Install middleware]
-    K --> L[Map endpoint modules]
-    L --> M[Run Kestrel]
-```
+![Problem solved: Create ASP.NET builder, Load config, logging, environment, Fail fast on unsafe production auth/OAuth settings, Register JSON, CORS, rate limiting, Register stores, services, providers, hosted workers, Build WebApplication, Ensure operational SQLite schema, Migrate EF memory database, Recover interrupted workflows and coordinator state, Warn or fail health for workspace mount problems, Install middleware, Map endpoint modules, …](../diagrams/api-core-fig2.png)
+
+<!-- Rendered from ../diagrams/src/api-core-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why this order
 
@@ -107,29 +92,12 @@ Where this lives: `apps/Agentweaver.Api/Program.cs`; `apps/Agentweaver.Api/Infra
 
 The host coordinates long-lived state: run streams, locks, registries, background services, SQLite stores, workspace providers, GitHub clients, sandbox routing, and EF contexts. Dependency injection makes those dependencies explicit and gives each category the right lifetime.
 
-```mermaid
-flowchart TB
-    Root[DI container]
+![Problem solved: DI container, Process-wide singletons, SQLite stores, Workflow/review/runtime registries, Run stream stores and event streams, Merge/worktree coordination locks, Workspace and sandbox providers, Diagnostics and metrics services, Scoped services, EF MemoryDbContext, Memory context and post-run scribe work, Hosted background workers, …](../diagrams/api-core-fig3.png)
 
-    Root --> Singletons[Process-wide singletons]
-    Singletons --> Stores[SQLite stores]
-    Singletons --> Registries[Workflow/review/runtime registries]
-    Singletons --> Streams[Run stream stores and event streams]
-    Singletons --> Locks[Merge/worktree coordination locks]
-    Singletons --> Providers[Workspace and sandbox providers]
-    Singletons --> Metrics[Diagnostics and metrics services]
-
-    Root --> Scoped[Scoped services]
-    Scoped --> DbContext[EF MemoryDbContext]
-    Scoped --> Compilers[Memory context and post-run scribe work]
-
-    Root --> Hosted[Hosted background workers]
-    Hosted --> Heartbeat[Coordinator heartbeat]
-    Hosted --> GC[Checkpoint garbage collection]
-
-    Root --> HttpClients[Named/typed HTTP clients]
-    HttpClients --> GitHub[GitHub auth/API calls]
-```
+<!-- Rendered from ../diagrams/src/api-core-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Lifetime logic
 
@@ -154,21 +122,12 @@ Where this lives: `apps/Agentweaver.Api/Program.cs`.
 
 Every endpoint should not have to reimplement exception handling, CORS, rate limiting, bearer-token validation, and organization authorization. Middleware centralizes those concerns and gives requests a predictable path to the handler.
 
-```mermaid
-flowchart TD
-    A[Incoming request] --> B[Exception handler]
-    B --> C[CORS]
-    C --> D[Rate limiter middleware]
-    D --> E{Token auth gate}
-    E -->|public/non-API or explicit auth exception| F{Org authorization gate}
-    E -->|valid /api bearer token| F
-    E -->|missing or invalid bearer| R401[401 Unauthorized]
-    F -->|exempt prefix| H[Endpoint handler]
-    F -->|authorized caller in allowed org/team| H
-    F -->|caller missing| R401
-    F -->|caller denied| R403[403 Forbidden]
-    H --> O[Response]
-```
+![Problem solved: Incoming request, Exception handler, CORS, Rate limiter middleware, Token auth gate, Org authorization gate, 401 Unauthorized, Endpoint handler, 403 Forbidden, Response](../diagrams/api-core-fig4.png)
+
+<!-- Rendered from ../diagrams/src/api-core-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Token gate
 
@@ -264,15 +223,12 @@ Agent runs are long-lived and interactive. The UI needs low-latency updates whil
 
 Agentweaver uses a two-layer event model:
 
-```mermaid
-flowchart LR
-    Producer[Run/orchestrator code emits event] --> Persist[Write event to SQLite first]
-    Persist --> Channel[Publish to bounded in-process channel]
-    Channel --> Live[SSE live subscribers]
-    Persist --> Replay[Replay after reconnect or restart]
-    Replay --> SSE[SSE response]
-    Live --> SSE
-```
+![Problem solved: Run/orchestrator code emits event, Write event to SQLite first, Publish to bounded in-process channel, SSE live subscribers, Replay after reconnect or restart, SSE response](../diagrams/api-core-fig5.png)
+
+<!-- Rendered from ../diagrams/src/api-core-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Control flow
 
@@ -370,18 +326,12 @@ Operators need to know whether the host is healthy and what work is happening wi
 
 Diagnostics are live checks assembled server-side:
 
-```mermaid
-flowchart TD
-    D[Diagnostics request] --> S[Diagnostics service]
-    S --> DB[SQLite reachability]
-    S --> Disk[Data directory write probe]
-    S --> Workflow[Built-in workflow availability]
-    S --> Policy[Built-in review policy availability]
-    S --> Heartbeat[Coordinator heartbeat status]
-    S --> Projects[Project store read]
-    S --> GitHub[GitHub CLI/auth surface]
-    S --> Result[Diagnostic DTO with pass/fail/details/duration]
-```
+![Diagnostics model: Diagnostics request, Diagnostics service, SQLite reachability, Data directory write probe, Built-in workflow availability, Built-in review policy availability, Coordinator heartbeat status, Project store read, GitHub CLI/auth surface, Diagnostic DTO with pass/fail/details/duration](../diagrams/api-core-fig6.png)
+
+<!-- Rendered from ../diagrams/src/api-core-fig6.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 There are three levels:
 

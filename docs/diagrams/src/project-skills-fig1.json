@@ -1,0 +1,125 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Project skills",
+  "alt": "Project skills: Connected repo, Git import, or upload, Parse SKILL.md, Valid?, Upsert by content hash, Reject or mark malformed, Project catalog, Assign to agents, Run prompt metadata, Lazy SKILL.md materialization",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Connected repo, Git import, or upload",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Parse SKILL.md",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Valid?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Upsert by content hash",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Reject or mark malformed",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Project catalog",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Assign to agents",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Run prompt metadata",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "I",
+      "label": "Lazy SKILL.md materialization",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "label": "Yes"
+    },
+    {
+      "from": "C",
+      "to": "E",
+      "label": "No"
+    },
+    {
+      "from": "D",
+      "to": "F"
+    },
+    {
+      "from": "F",
+      "to": "G"
+    },
+    {
+      "from": "G",
+      "to": "H"
+    },
+    {
+      "from": "H",
+      "to": "I"
+    }
+  ]
+}

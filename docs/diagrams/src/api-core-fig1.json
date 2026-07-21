@@ -1,0 +1,97 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The Host in One Picture",
+  "alt": "The Host in One Picture: Web UI / MCP / CLI, ASP.NET Core HTTP host, Cross-cutting middleware, Minimal API endpoint module, Application/domain service, Store or provider, SQLite / workspace files / GitHub / Kubernetes",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Client",
+      "label": "Web UI / MCP / CLI",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Http",
+      "label": "ASP.NET Core HTTP host",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Middleware",
+      "label": "Cross-cutting middleware",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Endpoint",
+      "label": "Minimal API endpoint module",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Service",
+      "label": "Application/domain service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Store or provider",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Durable",
+      "label": "SQLite / workspace files / GitHub / Kubernetes",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Client",
+      "to": "Http"
+    },
+    {
+      "from": "Http",
+      "to": "Middleware"
+    },
+    {
+      "from": "Middleware",
+      "to": "Endpoint"
+    },
+    {
+      "from": "Endpoint",
+      "to": "Service"
+    },
+    {
+      "from": "Service",
+      "to": "Store"
+    },
+    {
+      "from": "Store",
+      "to": "Durable"
+    }
+  ]
+}

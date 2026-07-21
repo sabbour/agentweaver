@@ -1,0 +1,123 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Where Agentweaver deliberately does NOT use MAF (decision D3)",
+  "alt": "Where Agentweaver deliberately does NOT use MAF (decision D3): draft spec, confirmation gate, hand-off, dispatch frontier, child runs, collective assembly, single merge + scribe",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "MAF",
+      "label": "MAF workflow (checkpointed)",
+      "tier": 1
+    },
+    {
+      "id": "Svc",
+      "label": "Service-driven (D3 — DB rows, no MAF graph)",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Draft",
+      "label": "draft spec",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "MAF"
+    },
+    {
+      "id": "CGate",
+      "label": "confirmation gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "RequestPort",
+      "group": "MAF"
+    },
+    {
+      "id": "HandOff",
+      "label": "hand-off",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "MAF"
+    },
+    {
+      "id": "Dispatch",
+      "label": "dispatch frontier",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "Svc"
+    },
+    {
+      "id": "Children",
+      "label": "child runs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "Svc"
+    },
+    {
+      "id": "Assembly",
+      "label": "collective assembly",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "Svc"
+    },
+    {
+      "id": "Merge",
+      "label": "single merge + scribe",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "group": "Svc"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Draft",
+      "to": "CGate"
+    },
+    {
+      "from": "CGate",
+      "to": "Draft",
+      "label": "revise"
+    },
+    {
+      "from": "CGate",
+      "to": "HandOff",
+      "label": "confirm"
+    },
+    {
+      "from": "Dispatch",
+      "to": "Children"
+    },
+    {
+      "from": "Children",
+      "to": "Assembly"
+    },
+    {
+      "from": "Assembly",
+      "to": "Merge"
+    },
+    {
+      "from": "HandOff",
+      "to": "Dispatch"
+    }
+  ]
+}
