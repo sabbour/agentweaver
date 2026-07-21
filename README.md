@@ -373,64 +373,17 @@ project's maintained harness workflows:
 
 ### Block diagram
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    Client(["🌐 Client"])
-    GitHubExt(["GitHub"])
+![AKS block diagram: Client and GitHub reach the AKS Cluster's core services (Frontend, API, Worker, MCP), which use the Kata VM Pool AgentHost warm pool, shared storage (Workspace PVC, CSI SecretProvider), PostgreSQL, Key Vault, and ACR](docs/diagrams/aks-block-diagram.png)
 
-    subgraph aks["AKS Cluster"]
-        subgraph core["Core services"]
-            fe["Frontend ×2"]
-            api["API ×2"]
-            worker["Worker ×1+HPA"]
-            mcp["MCP ×1"]
-        end
-        subgraph kata["Kata VM Pool"]
-            ah["AgentHost<br/>Warm Pool ×2"]
-        end
-        subgraph storage["Shared storage"]
-            pvc[("Workspace PVC")]
-            csi["CSI SecretProvider"]
-        end
-    end
-
-    pg[("PostgreSQL")]
-    kv["Key Vault"]
-    acr["ACR"]
-
-    Client --> fe & api & mcp
-    api & worker --> ah
-    api & worker & ah --- pvc
-    csi -.-> kv
-    api --> pg
-    worker --> pg
-    api --> kv
-    ah --> kv
-    api --> GitHubExt
-    ah --> GitHubExt
-    acr -.->|image pull| fe
-    acr -.->|image pull| api
-    acr -.->|image pull| worker
-    acr -.->|image pull| mcp
-    acr -.->|image pull| ah
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424
-    classDef workerStyle fill:#D9EFD9,stroke:#107C10,stroke-width:2px,color:#242424
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424
-
-    class Client client
-    class fe,mcp svc
-    class api core
-    class worker workerStyle
-    class ah runtime
-    class pvc,csi data
-    class pg,kv,acr,GitHubExt ext
-```
+<!--
+  Pre-rendered as a static PNG from docs/diagrams/src/aks-block-diagram.json
+  by docs/diagram-renderer (a Fluent-styled React Flow app) + Playwright, so
+  it matches the same card/icon/badge look used live in the product UI
+  instead of generic Mermaid/mermaid-cli output. To edit the diagram: change
+  the graph-spec JSON, then run `npm run docs:render-diagrams` and commit the
+  regenerated PNG + .hash.txt. CI fails if the spec's content hash drifts from
+  the committed .hash.txt (see scripts/docs/capture-diagrams.mjs).
+-->
 
 > Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/guide/architecture-aks.md)
 

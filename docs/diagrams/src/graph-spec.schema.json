@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentweaver architecture diagram graph-spec",
+  "description": "Content source-of-truth for the Fluent-styled React Flow architecture diagrams rendered by docs/diagram-renderer and captured by scripts/docs/capture-diagrams.mjs. Edit this file, then run `npm run docs:render-diagrams` and commit the regenerated PNG + .hash.txt.",
+  "type": "object",
+  "required": ["title", "alt", "nodes", "edges"],
+  "properties": {
+    "title": { "type": "string" },
+    "alt": { "type": "string", "description": "Markdown image alt text used in README.md / architecture-aks.md" },
+    "direction": { "type": "string", "enum": ["TB", "LR"], "default": "TB" },
+    "groups": {
+      "type": "array",
+      "description": "Visual clusters (rendered as tinted rounded containers behind their member nodes), mirroring mermaid subgraphs. Tier controls nesting fill (1 = outermost).",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "tier"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "tier": { "type": "integer", "minimum": 1 },
+          "parent": { "type": "string", "description": "id of an enclosing group, for nested clusters" }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "icon", "badge"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "subLabel": { "type": "string" },
+          "meta": { "type": "string", "description": "Optional monospace third line (ports/protocol/mode)" },
+          "icon": { "type": "string", "enum": ["globe", "branch", "route", "window", "server", "bot", "database", "key", "box"] },
+          "badge": {
+            "type": "object",
+            "required": ["text", "tone"],
+            "properties": {
+              "text": { "type": "string" },
+              "tone": { "type": "string", "enum": ["lavender", "teal", "green", "marigold", "neutral"] }
+            }
+          },
+          "group": { "type": "string", "description": "id of the group this node belongs to, if any" }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "label": { "type": "string" },
+          "dashed": { "type": "boolean", "default": false },
+          "undirected": { "type": "boolean", "default": false, "description": "Render without an arrowhead (association, e.g. shared volume mount)" }
+        }
+      }
+    }
+  }
+}

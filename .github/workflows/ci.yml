@@ -48,6 +48,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       node-toolchain: ${{ steps.filter.outputs.node-toolchain }}
       docs: ${{ steps.filter.outputs.docs }}
+      diagrams: ${{ steps.filter.outputs.diagrams }}
     steps:
       - uses: actions/checkout@v4
       # dorny/paths-filter classifies the PR/push diff into named groups below.
@@ -76,6 +77,13 @@ jobs:
               - '.github/workflows/**'
             docs:
               - 'docs/**'
+              - '.github/workflows/**'
+            diagrams:
+              - 'docs/diagrams/**'
+              - 'docs/diagram-renderer/**'
+              - 'README.md'
+              - 'docs/guide/architecture-aks.md'
+              - 'scripts/docs/**'
               - '.github/workflows/**'
 
   dotnet-tests:
@@ -193,6 +201,39 @@ jobs:
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
         run: npm run docs:build
+
+  diagrams-in-sync:
+    name: Architecture diagrams are in sync
+    needs: changes
+    if: needs.changes.outputs.diagrams == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      # README.md's "Block diagram" and architecture-aks.md's "Component
+      # diagram"s are pre-rendered as static PNGs from Fluent-styled React
+      # Flow graph-specs (docs/diagrams/src/*.json) via docs/diagram-renderer
+      # + Playwright, so they match the same card/icon/badge look used live
+      # in the product UI instead of generic Mermaid/mermaid-cli output. This
+      # check only compares each spec's content hash against the committed
+      # <name>.hash.txt sidecar -- it deliberately does NOT re-render and
+      # diff pixels/SVG geometry, since that approach (used by an earlier
+      # mermaid-cli version of this pipeline) broke across OSes: rendering
+      # geometry depends on the host's installed font metrics, which differ
+      # between Windows and Linux even for byte-identical input. A hash
+      # check only fails when the spec's actual content (nodes/edges/labels)
+      # changed since the PNG was last built, and needs no browser here.
+      - name: Check rendered diagrams match source
+        run: npm run docs:check-diagrams
 
   changeset-advisory:
     name: Changeset advisory
