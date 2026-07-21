@@ -3,12 +3,15 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Background,
   MarkerType,
+  Position,
   ReactFlow,
+  getSmoothStepPath,
   type Edge,
   type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CardNode, GroupNode, CARD_WIDTH } from './nodes';
+import { LabeledSmoothStepEdge, type LabeledEdgeData } from './edges';
 import { neutral, radius } from './theme';
 import type { GraphSpec } from './types';
 
@@ -20,6 +23,7 @@ const GROUP_PAD_BOTTOM = 20;
 const CANVAS_MARGIN = 60;
 
 const nodeTypes = { card: CardNode, group: GroupNode };
+const edgeTypes = { labeledSmoothStep: LabeledSmoothStepEdge };
 
 interface Box { x: number; y: number; width: number; height: number }
 
@@ -29,6 +33,88 @@ function unionBox(boxes: Box[]): Box {
   const x2 = Math.max(...boxes.map((b) => b.x + b.width));
   const y2 = Math.max(...boxes.map((b) => b.y + b.height));
   return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+}
+
+interface LabelBox {
+  index: number;
+  /** Approximate un-offset label center, in the same coordinate space as node positions. */
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+  /** Resolved offset applied on top of (cx, cy) -- and, at render time, on top of
+   * whatever labelX/labelY the actual smoothstep path produces. */
+  dx: number;
+  dy: number;
+}
+
+/** Rough label footprint for an 11px/600-weight sans-serif string with the
+ * edge label's own padding, used only to decide how far apart two labels
+ * need to be pushed -- doesn't need to be pixel-exact. */
+function estimateLabelSize(text: string): { width: number; height: number } {
+  const CHAR_WIDTH = 6.4;
+  const PADDING_X = 12;
+  return { width: Math.max(28, text.length * CHAR_WIDTH + PADDING_X), height: 20 };
+}
+
+/**
+ * Pushes apart any edge labels whose estimated bounding boxes overlap each
+ * other, and additionally pushes any label off of a fixed obstacle (a node
+ * card or group container) it starts overlapping -- otherwise a label
+ * shoved sideways to dodge a sibling label can end up sliding underneath a
+ * card, where the card's opaque background clips half its text.
+ */
+function resolveLabelCollisions(items: LabelBox[], obstacles: Box[]): void {
+  const GAP = 4;
+  const MAX_ITERATIONS = 80;
+  for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
+    let moved = false;
+    for (let i = 0; i < items.length; i += 1) {
+      for (let j = i + 1; j < items.length; j += 1) {
+        const a = items[i];
+        const b = items[j];
+        const ax = a.cx + a.dx;
+        const ay = a.cy + a.dy;
+        const bx = b.cx + b.dx;
+        const by = b.cy + b.dy;
+        const overlapX = (a.width + b.width) / 2 + GAP - Math.abs(ax - bx);
+        const overlapY = (a.height + b.height) / 2 + GAP - Math.abs(ay - by);
+        if (overlapX > 0 && overlapY > 0) {
+          moved = true;
+          if (overlapX < overlapY) {
+            const push = overlapX / 2 + 0.5;
+            if (ax <= bx) { a.dx -= push; b.dx += push; } else { a.dx += push; b.dx -= push; }
+          } else {
+            const push = overlapY / 2 + 0.5;
+            if (ay <= by) { a.dy -= push; b.dy += push; } else { a.dy += push; b.dy -= push; }
+          }
+        }
+      }
+    }
+    for (const a of items) {
+      const ax = a.cx + a.dx;
+      const ay = a.cy + a.dy;
+      for (const obstacle of obstacles) {
+        const ocx = obstacle.x + obstacle.width / 2;
+        const ocy = obstacle.y + obstacle.height / 2;
+        const overlapX = (a.width + obstacle.width) / 2 + GAP - Math.abs(ax - ocx);
+        const overlapY = (a.height + obstacle.height) / 2 + GAP - Math.abs(ay - ocy);
+        if (overlapX > 0 && overlapY > 0) {
+          moved = true;
+          // Obstacles are fixed -- move the label entirely. Prefer a
+          // vertical nudge over a horizontal one: this is a TB dagre layout,
+          // so there's always generous clearance above/below a card (the
+          // ranksep gap between rows), but the horizontal gap between two
+          // same-row sibling cards (nodesep) can be *narrower* than a label,
+          // in which case picking "whichever overlap is smaller" ping-pongs
+          // the label back and forth between two neighboring cards forever
+          // without ever fully clearing either one.
+          a.dy += ay <= ocy ? -overlapY - 0.5 : overlapY + 0.5;
+        }
+      }
+    }
+    if (!moved) break;
+  }
 }
 
 /**
@@ -120,21 +206,54 @@ function layout(spec: GraphSpec): { nodes: Node[]; edges: Edge[]; canvasWidth: n
     });
   }
 
+  // Compute each edge's label position with the *exact* same function
+  // LabeledSmoothStepEdge uses at render time (getSmoothStepPath is a pure
+  // geometry function -- no React context needed), using the same handle
+  // positions our cards expose (source: bottom-center, target: top-center;
+  // see the <Handle> placement in nodes.tsx). Using the real function here
+  // instead of a hand-rolled straight-line approximation means the
+  // collision-avoidance below reasons about exactly where the label will
+  // actually land, including the orthogonal jogs smoothstep adds for edges
+  // whose source/target aren't vertically aligned -- an earlier straight-line
+  // estimate could diverge enough from the true bent path that an offset
+  // computed to avoid one collision would clear the label into an
+  // unrelated card lying along the jogged route.
+  const labelBoxes: LabelBox[] = [];
+  spec.edges.forEach((e, i) => {
+    if (!e.label) return;
+    const sBox = leafBoxes.get(e.from)!;
+    const tBox = leafBoxes.get(e.to)!;
+    const [, labelX, labelY] = getSmoothStepPath({
+      sourceX: sBox.x + sBox.width / 2,
+      sourceY: sBox.y + sBox.height,
+      sourcePosition: Position.Bottom,
+      targetX: tBox.x + tBox.width / 2,
+      targetY: tBox.y,
+      targetPosition: Position.Top,
+    });
+    const { width, height } = estimateLabelSize(e.label);
+    labelBoxes.push({ index: i, cx: labelX, cy: labelY, width, height, dx: 0, dy: 0 });
+  });
+  // Cards obscure a label with a solid background (unlike the translucent
+  // group containers, which labels are expected to sit on top of), so only
+  // node cards are treated as fixed obstacles here -- group boxes are not.
+  resolveLabelCollisions(labelBoxes, [...leafBoxes.values()]);
+  const labelOffsetByIndex = new Map<number, { dx: number; dy: number }>(
+    labelBoxes.map((l) => [l.index, { dx: l.dx, dy: l.dy }]),
+  );
+
   const edges: Edge[] = spec.edges.map((e, i) => ({
     id: `e${i}-${e.from}-${e.to}`,
     source: e.from,
     target: e.to,
     label: e.label,
-    type: 'smoothstep',
+    type: 'labeledSmoothStep',
+    data: { labelOffset: labelOffsetByIndex.get(i) ?? { dx: 0, dy: 0 } } satisfies LabeledEdgeData,
     style: {
       stroke: neutral.foreground4,
       strokeWidth: 1.5,
       strokeDasharray: e.dashed ? '5 4' : undefined,
     },
-    labelStyle: { fill: neutral.foreground3, fontSize: 11, fontWeight: 600 },
-    labelBgStyle: { fill: neutral.background1, fillOpacity: 0.9 },
-    labelBgPadding: [4, 2],
-    labelBgBorderRadius: 4,
     markerEnd: e.undirected ? undefined : { type: MarkerType.ArrowClosed, color: neutral.foreground4, width: 16, height: 16 },
   }));
 
@@ -183,6 +302,7 @@ export function DiagramCanvas({ spec, onReady }: DiagramCanvasProps) {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         fitView
         fitViewOptions={{ padding: 0.04 }}
         nodesDraggable={false}
