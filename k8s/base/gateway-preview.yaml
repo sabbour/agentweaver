@@ -24,7 +24,8 @@
 #   Istio selects the most-specific match (exact > wildcard) so the main host routes
 #   correctly. Smoke-test on first deploy to confirm add-on version handles this cleanly.
 #
-# The deploy script (30-deploy.sh) uses envsubst to render this manifest before applying.
+# The deploy script (steps/30-deploy.mjs) injects PREVIEW_HOSTNAME via the production
+# overlay's Kustomize `replacements` before `kubectl apply -k`.
 # allowedRoutes: Same — per-preview HTTPRoutes must be in namespace agentweaver.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -39,14 +40,15 @@ spec:
     - name: https
       port: 443
       protocol: HTTPS
-      hostname: "${PREVIEW_HOSTNAME}"
+      hostname: "*.example.com"
       tls:
         mode: Terminate
         certificateRefs:
-          # Managed cert Secret. Currently always agentweaver-tls (*.zone wildcard);
-          # set by 30-deploy.sh. Quoted to allow future nested wildcard substitution.
+          # Managed cert Secret. AKS App Routing's DefaultDomainCertificate always
+          # issues into agentweaver-tls (see comment above) so this is a static
+          # literal, not a per-deploy dynamic value.
           - kind: Secret
-            name: ${PREVIEW_TLS_SECRET}
+            name: agentweaver-tls
       allowedRoutes:
         namespaces:
           from: Same

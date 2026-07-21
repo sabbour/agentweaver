@@ -87,8 +87,8 @@ Compensating controls:
 | Standby/configure lifecycle | `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` |
 | KV user-token provider/store/scope | `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs` |
 | Executor configure call | `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs` |
-| Warm pool | `k8s/sandbox-warmpool-agenthost.yaml` |
-| AgentHost template | `k8s/sandbox-template-agenthost.yaml` |
+| Warm pool | `k8s/base/sandbox-warmpool-agenthost.yaml` |
+| AgentHost template | `k8s/base/sandbox-template-agenthost.yaml` |
 
 ## Related reading
 

@@ -339,7 +339,8 @@ From the repository root, run these with `npm run <script>` (or `pnpm run <scrip
 | `release:publish` | Create an annotated tag and GitHub Release from a prepared exact-main checkout; no deploy. |
 | `azure:release` | Publish and deploy a prepared release by composing the two commands above. |
 | `azure:verify` | Post-deploy health verification checks. |
-| `azure:dev` | Start the local API + Web UI dev environment. |
+| `dev` / `start` | Start the full local API + Web UI dev environment (WSL2 + bubblewrap sandbox on Windows). No Azure calls despite the neighboring `azure:*` scripts above—browser does not auto-open. |
+| `azure:dev` | Same as `dev`, but opens the browser automatically once ready. Despite the `azure:` prefix, this makes no Azure calls—it is a local-only command. |
 | `dev:web` | Build the web frontend, then start Vite. |
 | `dev:api` | Build the API in Release mode, then run it without rebuilding. |
 

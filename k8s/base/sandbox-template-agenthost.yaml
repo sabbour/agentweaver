@@ -26,10 +26,10 @@
 # The same NetworkPolicy that restricts ingress to worker+api is what guards the
 # unauthenticated /configure endpoint.
 #
-# Apply (envsubst):
-#   ACR_LOGIN_SERVER=agentweaverregistry.azurecr.io AGENTHOST_IMAGE_TAG=be1e28fa \
-#     AGENTHOST_KEYVAULT_URI=https://agentweaver-kv.vault.azure.net/ \
-#     envsubst < k8s/sandbox-template-agenthost.yaml | kubectl apply -f -
+# Apply (Kustomize):
+#   kubectl apply -k k8s/overlays/production
+#   (image tag + AGENTHOST_KEYVAULT_URI are injected by the overlay's `images:`
+#   transformer and generated agentweaver-runtime-config ConfigMap, respectively.)
 ---
 apiVersion: extensions.agents.x-k8s.io/v1alpha1
 kind: SandboxTemplate
@@ -91,7 +91,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agentweaver-agent-host
-          image: ${ACR_LOGIN_SERVER}/agentweaver-agent-host:${AGENTHOST_IMAGE_TAG}
+          image: agentweaverregistry.azurecr.io/agentweaver-agent-host:latest
           imagePullPolicy: IfNotPresent
           securityContext:
             runAsNonRoot: true
@@ -122,7 +122,8 @@ spec:
             # Option C (warm pool, workload identity): the pod fetches the run owner's GitHub token
             # from Key Vault at /configure-time via DefaultAzureCredential (Managed Identity) — NO CSI
             # volume mount. The KV URI is also injected at claim time; the per-user secret NAME arrives
-            # in the /configure POST. ${AGENTHOST_KEYVAULT_URI} is substituted at apply time.
+            # in the /configure POST. AgentHost__KeyVaultUri is injected by the production
+            # overlay's configMapGenerator (agentweaver-runtime-config) at deploy time.
             # Static workspace paths — always /workspace for this deployment.
             # These live here (not in the SandboxClaim) so warm pool adoption is not bypassed.
             - name: AgentHost__WorkingDirectory
@@ -133,8 +134,19 @@ spec:
             # layer, which cannot mount its private /proc under this hardened security context.
             - name: AgentHost__SandboxMode
               value: "kata"
+            # In-cluster AgentweaverMCP /mcp URL, required unconditionally at pod startup
+            # (Program.cs throws InvalidOperationException from DI if empty) -- the operator
+            # assistant purpose (#346/#347) is wired eagerly, not lazily per-run, so every
+            # AgentHost pod (including warm-pool pods never adopted for that purpose) needs
+            # this set. A constant cluster-internal Service DNS name/port, so it is safe to
+            # hardcode here rather than route through the runtime-config ConfigMap.
+            - name: AgentHost__McpEndpoint
+              value: "http://agentweaver-mcp:8080/mcp"
             - name: AgentHost__KeyVaultUri
-              value: "${AGENTHOST_KEYVAULT_URI}"
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: AGENTHOST_KEYVAULT_URI
             - name: APPLICATIONINSIGHTS_CONNECTION_STRING
               valueFrom:
                 secretKeyRef:

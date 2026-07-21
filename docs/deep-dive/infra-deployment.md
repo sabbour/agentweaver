@@ -97,7 +97,7 @@ The sandbox controller adds higher-level objects such as sandbox templates and w
 
 The trade-off is platform maturity and availability: the deploy script only applies sandbox resources when the CRDs are installed. A rebuild can run the core web/API/MCP stack without the sandbox CRDs, but agent execution that depends on Kubernetes sandboxes will not behave the same.
 
-Where this lives: `scripts/azure/steps/10-create-cluster.mjs`, `scripts/azure/steps/15-setup-identity.mjs`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`.
+Where this lives: `scripts/azure/steps/10-create-cluster.mjs`, `scripts/azure/steps/15-setup-identity.mjs`, `k8s/base/gateway.yaml`, `k8s/base/secret-provider-class.yaml`, `k8s/base/sandbox-template-agenthost.yaml`, `k8s/base/sandbox-warmpool-agenthost.yaml`.
 
 ## Workloads and their responsibilities
 
@@ -130,7 +130,7 @@ Sandbox pods are not normal always-on services. The live pod-per-run path claims
 
 The API has narrow RBAC for creating and interacting with these sandbox resources. That is intentional: the API needs to create sandbox claims/pods and exec into them, but it should not be a broad cluster administrator.
 
-Where this lives: `k8s/api-deployment.yaml`, `k8s/frontend-deployment.yaml`, `k8s/mcp-deployment.yaml`, `k8s/rbac-api.yaml`, `apps/web/Dockerfile`, `apps/Agentweaver.Web/Program.cs`.
+Where this lives: `k8s/base/api-deployment.yaml`, `k8s/base/frontend-deployment.yaml`, `k8s/base/mcp-deployment.yaml`, `k8s/base/rbac-api.yaml`, `apps/web/Dockerfile`, `apps/Agentweaver.Web/Program.cs`.
 
 ## Request routing logic
 
@@ -186,7 +186,7 @@ The MCP server is the OAuth resource server. It validates tokens but does not mi
 
 The frontend owns everything else. It serves static assets, the React SPA fallback, and the generated docs under `/docs`. Unknown non-doc application paths return the SPA shell so client-side routing can handle them. Unknown docs paths return 404 rather than the SPA shell, which keeps broken documentation links visible.
 
-Where this lives: `k8s/httproute-api.yaml`, `k8s/mcp-httproute.yaml`, `k8s/httproute-frontend.yaml`, `k8s/frontend-service.yaml`, `apps/Agentweaver.Web/Program.cs`.
+Where this lives: `k8s/base/httproute-api.yaml`, `k8s/base/mcp-httproute.yaml`, `k8s/base/httproute-frontend.yaml`, `k8s/base/frontend-service.yaml`, `apps/Agentweaver.Web/Program.cs`.
 
 ## Secrets and workload identity
 
@@ -214,7 +214,7 @@ Rotation constraint: the CSI driver can refresh mounted API files on a polling i
 
 OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `npm run azure:provision-infra` before the first `npm run azure:deploy-from-local`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
-Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `scripts/azure/steps/16-provision-oauth-signing-key.mjs`, `k8s/serviceaccount-api.yaml`, `k8s/serviceaccount-agenthost.yaml`, `k8s/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
+Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `scripts/azure/steps/16-provision-oauth-signing-key.mjs`, `k8s/base/serviceaccount-api.yaml`, `k8s/base/serviceaccount-agenthost.yaml`, `k8s/base/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
 
 ## Storage and persistence
 
@@ -236,7 +236,7 @@ StorageClass constraint: mount options are immutable. Do not patch a cluster-man
 
 All production data lives in **Azure Database for PostgreSQL Flexible Server**, which provides automated daily backups and point-in-time restore (PITR). Configure retention and geo-redundancy via the Azure portal or `az postgres flexible-server` CLI. No CronJob is needed.
 
-Where this lives: `k8s/pvc-workspace.yaml`, `k8s/storageclass-workspace.yaml`, `apps/Agentweaver.Api/Program.cs`.
+Where this lives: `k8s/base/pvc-workspace.yaml`, `k8s/base/storageclass-workspace.yaml`, `apps/Agentweaver.Api/Program.cs`.
 
 ## Network policy model
 
@@ -271,7 +271,7 @@ Sandbox pods are even narrower. They get DNS, a limited GitHub IP allowance, and
 - Broad “allow HTTPS anywhere” rules are easier but weaken the sandbox boundary. If you add one for debugging, remove it rather than letting it become permanent.
 - Gateway pods are created by the app-routing implementation, so label/namespace assumptions must match the actual Gateway implementation.
 
-Where this lives: `k8s/networkpolicy-default-deny.yaml`, `k8s/networkpolicy-mcp.yaml`, `k8s/networkpolicy-sandbox.yaml`, `k8s/cilium-network-policy-sandbox.yaml`, `k8s/serviceentry-telemetry.yaml`.
+Where this lives: `k8s/base/networkpolicy-default-deny.yaml`, `k8s/base/networkpolicy-mcp.yaml`, `k8s/base/networkpolicy-sandbox.yaml`, `k8s/base/cilium-network-policy-sandbox.yaml`, `k8s/base/serviceentry-telemetry.yaml`.
 
 ## Build, retag, deploy, rollout logic
 

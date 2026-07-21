@@ -27,6 +27,7 @@ Create an **active branch ruleset** targeting only `dev`:
     - `Web tests`
     - `Docs build`
     - `Web lint`
+    - `Changeset advisory`
 
 ## Repository merge settings
 
@@ -42,4 +43,7 @@ Under **Settings → General → Pull Requests**:
 
 **Active** as of 2026-07-21, ruleset `dev-integration-ruleset` (id `19284785`), applied via
 an audited `gh api` call at Ahmed's explicit direction. Repository merge settings
-(squash-only, auto-delete head branches) were applied at the same time.
+(squash-only, auto-delete head branches) were applied at the same time. `Changeset
+advisory` was added to the required checks the same day, once the underlying
+`scripts/changesets/check.mjs` check was changed from an advisory-only warning to a
+real failure for missing changesets.

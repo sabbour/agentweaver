@@ -23,7 +23,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: frontend
-          image: ${ACR_LOGIN_SERVER}/agentweaver-frontend:${IMAGE_TAG}
+          image: agentweaverregistry.azurecr.io/agentweaver-frontend:latest
           imagePullPolicy: Always
           ports:
             - name: http

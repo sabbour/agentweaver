@@ -7,8 +7,8 @@ This reference covers the AKS setup used by the deployment scripts. The live in-
 | Component | Source | Purpose |
 |---|---|---|
 | `agent-sandbox` controller | `scripts/azure/steps/10-create-cluster.mjs` | Installs CRDs in API group `extensions.agents.x-k8s.io`. |
-| `SandboxTemplate/agentweaver-agent-host` | `k8s/sandbox-template-agenthost.yaml` | Defines the Kata-isolated AgentHost pod: image, service account, workspace PVC, config, A2A port `8088`. |
-| `SandboxWarmPool/agentweaver-agent-host` | `k8s/sandbox-warmpool-agenthost.yaml` | Keeps AgentHost pods pre-warmed for fast run startup. |
+| `SandboxTemplate/agentweaver-agent-host` | `k8s/base/sandbox-template-agenthost.yaml` | Defines the Kata-isolated AgentHost pod: image, service account, workspace PVC, config, A2A port `8088`. |
+| `SandboxWarmPool/agentweaver-agent-host` | `k8s/base/sandbox-warmpool-agenthost.yaml` | Keeps AgentHost pods pre-warmed for fast run startup. |
 | `SandboxClaim` | created per run by the API/worker | Binds one warm AgentHost pod for a run, then releases it on completion/suspend. |
 
 ## Install order

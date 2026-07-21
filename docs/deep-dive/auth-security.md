@@ -317,7 +317,7 @@ Where this lives:
 - `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs`
 - `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs`
 - `apps/Agentweaver.Api/appsettings.json`
-- `k8s/api-deployment.yaml`
+- `k8s/base/api-deployment.yaml`
 
 ## Resource ownership authorization
 
@@ -678,9 +678,9 @@ Where this lives:
 - `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs`
 - `apps/Agentweaver.AgentHost/AgentHostStartupService.cs`
 - `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs`
-- `k8s/serviceaccount-agenthost.yaml`
-- `k8s/sandbox-warmpool-agenthost.yaml`
-- `k8s/sandbox-template-agenthost.yaml`
+- `k8s/base/serviceaccount-agenthost.yaml`
+- `k8s/base/sandbox-warmpool-agenthost.yaml`
+- `k8s/base/sandbox-template-agenthost.yaml`
 
 ## Rebuild checklist
 
