@@ -23,11 +23,33 @@ same `@xyflow/react` + `dagre` stack the product uses for its live workflow/
 topology graphs), with a custom node card component
 (`docs/diagram-renderer/src/nodes.tsx`) that mirrors
 `CoordinatorTopologyGraph.tsx`'s card layout: a rounded card, an icon + title +
-subtitle column, and a pill-shaped category badge — using the app's actual
+subtitle column, and a pill-shaped category badge -- using the app's actual
 resolved Fluent color palette (`docs/diagram-renderer/src/theme.ts`), not
 Mermaid's flat classDef fills. The rendered result is captured as a static PNG
 via Playwright, so it embeds in GitHub/VitePress exactly as rendered, with no
 dependency on any viewer's own diagram renderer.
+
+## Edge routing (no overlapping / card-piercing lines)
+
+Edges are **not** drawn as naive handle-to-handle paths. Doing that (an earlier
+version used `getSmoothStepPath` from each card's bottom handle to the next
+card's top handle) ignores where the intervening nodes actually are, so a line
+spanning several ranks slices straight through any card in between and several
+near-parallel edges collapse onto one another -- illegible, and nothing like a
+professional draw.io/Fluent architecture diagram.
+
+Instead, each edge is drawn along the **poly-line dagre itself routes** for it
+(`docs/diagram-renderer/src/edges.tsx`'s `RoutedEdge` renders `dagre`'s
+computed `edge.points`, rounded at the corners so it still reads like a
+smoothstep curve). dagre performs real layered edge routing -- inserting
+per-rank waypoints chosen to thread each line through the gaps between ranked
+nodes -- so edges follow those gaps instead of cutting across cards. Labelled
+edges additionally hand dagre their estimated footprint (`width`/`height`) so
+it *reserves* a non-overlapping slot for each label along the route; a light
+collision-avoidance pass in `DiagramCanvas.tsx` then breaks any residual label
+overlap and keeps labels off the opaque card backgrounds. This is a generic
+pipeline fix -- every current and future graph-spec gets overlap-free routing
+with no per-diagram tuning.
 
 ## How it works
 
