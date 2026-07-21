@@ -1,0 +1,197 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The experience in one picture",
+  "alt": "The experience in one picture: Project, Agents page, Cast a team, Catalog scenarios and roles, Proposal, Review names, roles, charters, warnings, Team roster, Agent work sessions, Agent memory, Decision inbox, Decision ledger, Rejected inbox entry, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Project",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Agents page",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "team_get"
+    },
+    {
+      "id": "C",
+      "label": "Cast a team",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Catalog scenarios and roles",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "catalog_list_scenarios / catalog_list_roles"
+    },
+    {
+      "id": "E",
+      "label": "Proposal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "team_cast"
+    },
+    {
+      "id": "F",
+      "label": "Review names, roles, charters, warnings",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Team roster",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "one universe, persistent names"
+    },
+    {
+      "id": "H",
+      "label": "Agent work sessions",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "session_start / session_update"
+    },
+    {
+      "id": "I",
+      "label": "Agent memory",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "memory_record / memory_search"
+    },
+    {
+      "id": "J",
+      "label": "Decision inbox",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "decision_inbox_submit / squad_decide"
+    },
+    {
+      "id": "K",
+      "label": "Decision ledger",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "decision_list / decision_update"
+    },
+    {
+      "id": "L",
+      "label": "Rejected inbox entry",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "audit kept"
+    },
+    {
+      "id": "M",
+      "label": "Exported context",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "memory_export"
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "label": "No team or recast needed"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "F"
+    },
+    {
+      "from": "F",
+      "to": "G",
+      "label": "Confirm"
+    },
+    {
+      "from": "G",
+      "to": "H"
+    },
+    {
+      "from": "H",
+      "to": "I"
+    },
+    {
+      "from": "H",
+      "to": "J"
+    },
+    {
+      "from": "J",
+      "to": "K",
+      "label": "Merge"
+    },
+    {
+      "from": "J",
+      "to": "L",
+      "label": "Reject"
+    },
+    {
+      "from": "K",
+      "to": "M"
+    },
+    {
+      "from": "I",
+      "to": "M"
+    },
+    {
+      "from": "M",
+      "to": "H"
+    }
+  ]
+}

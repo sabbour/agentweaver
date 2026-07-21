@@ -75,8 +75,12 @@ pipeline with `scripts/docs/migrate-mermaid.mjs`, which:
 
 * extracts each Mermaid block, and for **flowchart/graph** blocks converts it
   to a graph-spec JSON (`scripts/docs/mermaid-to-graphspec.mjs`) written to
-  `docs/diagrams/src/<doc>-figN.json`, then replaces the fence in the `.md`
-  with the standard image embed + provenance comment;
+  `docs/diagrams/src/<dir>-<doc>-figN.json` (directory-scoped so same-named
+  docs in different folders — e.g. `deep-dive/agent-communication.md` and
+  `experience/agent-communication.md` — don't collide on a shared basename;
+  the first migrated batch, `docs/deep-dive`, kept bare `<doc>-figN` names),
+  then replaces the fence in the `.md` with the standard image embed +
+  provenance comment;
 * lifts semantics the Mermaid source already carries — `class <id> <cat>`
   assignments (client/svc/core/data/ext/runtime/evt), node shapes (`[( )]`
   cylinder, `{ }` decision, `([ ])` terminal, …) and nested `subgraph`

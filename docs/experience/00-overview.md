@@ -14,17 +14,12 @@ Agentweaver exposes one product through two front doors:
 
 They are two front-ends over the same backend and data model. Projects, runs, coordinator orchestration, team rosters, memory, workflows, backlog items, sandbox policy, diagnostics, and workspace files are authoritative on the backend. The web UI renders those facts as pages, cards, graphs, timelines, and forms. The MCP server exposes the same facts and mutations as tools. Most actions a person performs in the web UI have a corresponding MCP tool an assistant can call.
 
-```mermaid
-flowchart LR
-    Human[Human user] --> Web[Agentweaver web UI]
-    Assistant[MCP client<br/>Claude / Copilot / agent host] --> MCP[Agentweaver MCP server]
+![The two surfaces: Human user, Agentweaver web UI, MCP client, Agentweaver MCP server, Agentweaver backend API, Projects, runs, teams,](../diagrams/experience-00-overview-fig1.png)
 
-    Web -->|REST commands and snapshots| API[Agentweaver backend API]
-    Web <-->|SSE run streams| API
-    MCP -->|tool calls forwarded as API requests| API
-
-    API --> Data[(Projects, runs, teams,<br/>memory, workflows, backlog,<br/>workspace, diagnostics)]
-```
+<!-- Rendered from ../diagrams/src/experience-00-overview-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The web UI and MCP server differ in interaction style, not in product intent:
 
@@ -143,21 +138,12 @@ Standalone workflow/execution run pages are no longer part of the web UI. Run de
 
 Most human work starts with a project and ends with review:
 
-```mermaid
-flowchart TD
-    Projects[Projects gallery] --> Project[Project Dashboard]
-    Project --> Board[Board]
-    Board --> Start{Start work}
-    Start -->|multi-agent goal| Coord[Coordinator run]
-    Coord --> Spec[Confirm or revise outcome spec]
-    Spec --> Plan[Watch work plan and child runs]
-    Plan --> Assembly[Review assembly state]
-    Coord --> Watch[Embedded timeline, graph, files, approvals]
-    Watch --> Review{Review needed?}
-    Review -->|approve| Merge[Merge / complete]
-    Review -->|reject or request changes| Revise[Revise, retry, steer, or decline]
-    Merge --> Memory[Capture decisions and memory]
-```
+![Common web journey: project → board → orchestration → review: Projects gallery, Project Dashboard, Board, Start work, Coordinator run, Confirm or revise outcome spec, Watch work plan and child runs, Review assembly state, Embedded timeline, graph, files, approvals, Review needed?, Merge / complete, Revise, retry, steer, or decline, …](../diagrams/experience-00-overview-fig2.png)
+
+<!-- Rendered from ../diagrams/src/experience-00-overview-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A typical path looks like this:
 

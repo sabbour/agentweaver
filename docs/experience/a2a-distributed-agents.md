@@ -18,16 +18,12 @@ A run that executes its agent turns inside pods produces the **same timeline, in
 
 There is no "distributed mode" toggle in the UI, no different progress bar, no transport indicator. A user cannot tell from the experience whether a turn ran in the worker process or in a pod across the cluster. **That is the design goal, not a happy accident.**
 
-```mermaid
-flowchart LR
-    User[User / operator] --> UI[Web UI run timeline]
-    UI --> SSE[Same SSE event stream]
-    SSE --> Same{Same events,\nsame order,\nsame gates?}
-    Same -->|in-api mode| InProc[Turn ran in worker]
-    Same -->|pod-per-run mode| Pod[Turn ran in a pod]
-    InProc -.identical experience.-> UI
-    Pod -.identical experience.-> UI
-```
+![1. The headline: runs behave identically to in-process: User / operator, Web UI run timeline, Same SSE event stream, Same events,, Turn ran in worker, Turn ran in a pod](../diagrams/experience-a2a-distributed-agents-fig1.png)
+
+<!-- Rendered from ../diagrams/src/experience-a2a-distributed-agents-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## 2. Why the transport is invisible
 
@@ -67,18 +63,12 @@ A few mental models keep distributed execution easy to reason about.
 
 **More pods to watch, same run model.** The new operational surface is sandbox pods alongside worker pods. Their warm-pool sizing, isolation, and credential model are covered in [sandbox pods reference](../reference/sandbox-pods.md). The run timeline, review gates, and event stream you already know are unchanged.
 
-```mermaid
-flowchart TD
-    Turn[Agent turn starts] --> Pod[Claim warm AgentHost pod]
-    Pod --> Configure[POST /configure<br/>RunId/UserId/token/KV secret]
-    Configure --> Run[Stream turn over A2A<br/>Bearer {per-run token}]
-    Run -->|completes| Commit[Turn output committed]
-    Run -->|suspend on review gate| Release[Checkpoint + release pod]
-    Release -->|human resumes| Rehydrate[Re-launch per-run pod, rehydrate]
-    Rehydrate --> Run
-    Run -->|mid-turn drop| Redrive[Re-drive from last checkpoint]
-    Redrive --> Pod
-```
+![4. How to reason about it as an operator: Agent turn starts, Claim warm AgentHost pod, POST /configure, Stream turn over A2A, Turn output committed, Checkpoint + release pod, Re-launch per-run pod, rehydrate, Re-drive from last checkpoint](../diagrams/experience-a2a-distributed-agents-fig2.png)
+
+<!-- Rendered from ../diagrams/src/experience-a2a-distributed-agents-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## 5. Where you see it: Web UI, MCP, and diagnostics
 

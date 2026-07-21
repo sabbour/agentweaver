@@ -1,0 +1,94 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The mental model",
+  "alt": "The mental model: Developer, Web pods (many), Worker pods (many), Managed Postgres, Per-run sandbox pods",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "WhatYouRun",
+      "label": "What you operate",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Dev",
+      "label": "Developer",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Web",
+      "label": "Web pods (many)",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      },
+      "subLabel": "API + live event relay",
+      "group": "WhatYouRun"
+    },
+    {
+      "id": "Worker",
+      "label": "Worker pods (many)",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "own runs via lease",
+      "group": "WhatYouRun"
+    },
+    {
+      "id": "DB",
+      "label": "Managed Postgres",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "HA, managed backups",
+      "group": "WhatYouRun"
+    },
+    {
+      "id": "Pods",
+      "label": "Per-run sandbox pods",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "WhatYouRun"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Dev",
+      "to": "Web",
+      "label": "submit run / watch stream"
+    },
+    {
+      "from": "Web",
+      "to": "DB"
+    },
+    {
+      "from": "Worker",
+      "to": "DB"
+    },
+    {
+      "from": "Worker",
+      "to": "Pods",
+      "label": "dispatch",
+      "dashed": true
+    },
+    {
+      "from": "DB",
+      "to": "Web",
+      "label": "events",
+      "dashed": true
+    }
+  ]
+}

@@ -18,35 +18,12 @@ Agentweaver operations is a control room, not a general admin console. A user us
 
 The backend remains the source of truth. The web UI renders snapshots, badges, cards, and empty states. MCP tools return the same operational facts as structured results an assistant can summarize or act on.
 
-```mermaid
-flowchart TD
-    Human[Human operator] --> Web[Web UI]
-    Assistant[MCP client] --> MCP[MCP tools]
+![Mental model: Human operator, Web UI, MCP client, MCP tools, Settings, Diagnostics, Heartbeat, Flow, Project Settings, diagnostics_get, heartbeat_status, sandbox_policy_get, …](../diagrams/experience-operations-fig1.png)
 
-    Web --> Settings[Settings]
-    Web --> Diagnostics[Diagnostics]
-    Web --> Heartbeat[Heartbeat]
-    Web --> Flow[Flow]
-    Web --> ProjectSettings[Project Settings<br/>Sandbox policy]
-
-    MCP --> DG[`diagnostics_get`]
-    MCP --> HS[`heartbeat_status`]
-    MCP --> SPG[`sandbox_policy_get`]
-    MCP --> SPS[`sandbox_policy_set`]
-
-    Settings --> Policy[(Repository sandbox policy)]
-    ProjectSettings --> Policy
-    SPG --> Policy
-    SPS --> Policy
-
-    Diagnostics --> Health[(API, storage, projects,<br/>runs, heartbeat, checkpoint GC)]
-    DG --> Health
-    Heartbeat --> Tick[(Tick state and automation history)]
-    HS --> Tick
-    Tick --> Ready[Ready backlog pickup]
-    Ready --> Runs[Active coordinator runs]
-    Runs --> Flow
-```
+<!-- Rendered from ../diagrams/src/experience-operations-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The important operating rule is: Agentweaver shows real state. Diagnostics can warn or fail. Heartbeat can be `running`, `waiting_first_tick`, or `disabled`. Flow can be empty. Sandbox policy can prevent shell execution even when the project itself is available.
 

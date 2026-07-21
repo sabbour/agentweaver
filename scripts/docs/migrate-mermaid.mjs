@@ -41,7 +41,14 @@ async function collectFiles() {
 }
 
 function slugBase(file) {
-  return path.basename(file, '.md');
+  // Namespace specs by the doc's parent directory so same-named docs in
+  // different folders (e.g. deep-dive/agent-communication.md and
+  // experience/agent-communication.md) don't collide on a shared basename.
+  // NOTE: the first migrated batch (docs/deep-dive) shipped with bare
+  // `<doc>-figN` names in PR #389; every later batch is directory-scoped.
+  const dir = path.basename(path.dirname(file));
+  const doc = path.basename(file, '.md');
+  return dir === 'deep-dive' ? doc : `${dir}-${doc}`;
 }
 
 function embedBlock(name, alt) {

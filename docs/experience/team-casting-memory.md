@@ -13,23 +13,12 @@ The experience has two loops that reinforce each other:
 1. **Casting loop**: the user chooses a scenario, roles, goal, or project analysis path; Agentweaver proposes named agents with charters; the user confirms; the roster becomes the team.
 2. **Memory loop**: agents and coordinators record learnings and proposals; the decision inbox holds candidates; accepted entries become team decisions; exports mirror the state to `.squad/` and `.agentweaver/context/` files.
 
-```mermaid
-flowchart TD
-    A[Project] --> B[Agents page\nteam_get]
-    B -->|No team or recast needed| C[Cast a team]
-    C --> D[Catalog scenarios and roles\ncatalog_list_scenarios / catalog_list_roles]
-    D --> E[Proposal\nteam_cast]
-    E --> F[Review names, roles, charters, warnings]
-    F -->|Confirm| G[Team roster\none universe, persistent names]
-    G --> H[Agent work sessions\nsession_start / session_update]
-    H --> I[Agent memory\nmemory_record / memory_search]
-    H --> J[Decision inbox\ndecision_inbox_submit / squad_decide]
-    J -->|Merge| K[Decision ledger\ndecision_list / decision_update]
-    J -->|Reject| L[Rejected inbox entry\naudit kept]
-    K --> M[Exported context\nmemory_export]
-    I --> M
-    M --> H
-```
+![The experience in one picture: Project, Agents page, Cast a team, Catalog scenarios and roles, Proposal, Review names, roles, charters, warnings, Team roster, Agent work sessions, Agent memory, Decision inbox, Decision ledger, Rejected inbox entry, …](../diagrams/experience-team-casting-memory-fig1.png)
+
+<!-- Rendered from ../diagrams/src/experience-team-casting-memory-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The user-facing promise is simple: cast a team once, refer to agents by stable names, and let the team carry forward accepted decisions and useful memory instead of restarting from blank context every run.
 

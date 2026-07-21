@@ -4,27 +4,12 @@ Coordinator orchestration is the Agentweaver experience for turning one plain-la
 
 Related experience docs: [Runs & board](./runs-board-watch.md), [MCP client](./mcp-client.md), [Projects](./projects.md), and [Review, workspace & merge](./review-workspace-merge.md). Related grounding references: [Coordinator reference](../reference/coordinator.md), [Coordinator internals](../deep-dive/coordinator-internals.md), [Orchestration engine](../deep-dive/orchestration.md), and [Team casting](../deep-dive/team-casting.md).
 
-```mermaid
-flowchart TD
-    Goal[Plain-language goal]
-    Start[Start coordinator orchestration\nUI Start task or coordinator_start]
-    Draft[Draft OutcomeSpec]
-    Gate{Confirm gate\nrun suspended}
-    Revise[Request revision\ncoordinator_outcome_spec_revise]
-    Confirm[Confirm OutcomeSpec\ncoordinator_outcome_spec_confirm]
-    Plan[Create work plan\nsubtasks + agents + models + dependencies]
-    Dispatch[Dispatch ready children]
-    Watch[Watch topology\ncoordinator.topology + subtask.*]
-    Steer[Steer or recover\ncoordinator_steer]
-    Assemble[Collective assembly\nRAI + review + merge + scribe]
-    Done[Done]
+![Coordinator orchestration experience: Plain-language goal, Start coordinator orchestration, Draft OutcomeSpec, Confirm gate, Request revision, Confirm OutcomeSpec, Create work plan, Dispatch ready children, Watch topology, Steer or recover, Collective assembly, Done](../diagrams/experience-coordinator-orchestration-fig1.png)
 
-    Goal --> Start --> Draft --> Gate
-    Gate -- revise --> Revise --> Draft
-    Gate -- confirm --> Confirm --> Plan --> Dispatch --> Watch
-    Watch --> Steer --> Watch
-    Watch --> Assemble --> Done
-```
+<!-- Rendered from ../diagrams/src/experience-coordinator-orchestration-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ![Orchestrations page listing active and recent coordinator runs](/screenshots/orchestrations-list.png)
 

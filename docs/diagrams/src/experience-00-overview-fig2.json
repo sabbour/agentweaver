@@ -1,0 +1,178 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Common web journey: project → board → orchestration → review",
+  "alt": "Common web journey: project → board → orchestration → review: Projects gallery, Project Dashboard, Board, Start work, Coordinator run, Confirm or revise outcome spec, Watch work plan and child runs, Review assembly state, Embedded timeline, graph, files, approvals, Review needed?, Merge / complete, Revise, retry, steer, or decline, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Projects",
+      "label": "Projects gallery",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Project",
+      "label": "Project Dashboard",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Board",
+      "label": "Board",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Start",
+      "label": "Start work",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Coord",
+      "label": "Coordinator run",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Spec",
+      "label": "Confirm or revise outcome spec",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Plan",
+      "label": "Watch work plan and child runs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Assembly",
+      "label": "Review assembly state",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Watch",
+      "label": "Embedded timeline, graph, files, approvals",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "Review needed?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge / complete",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Revise",
+      "label": "Revise, retry, steer, or decline",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Memory",
+      "label": "Capture decisions and memory",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Projects",
+      "to": "Project"
+    },
+    {
+      "from": "Project",
+      "to": "Board"
+    },
+    {
+      "from": "Board",
+      "to": "Start"
+    },
+    {
+      "from": "Start",
+      "to": "Coord",
+      "label": "multi-agent goal"
+    },
+    {
+      "from": "Coord",
+      "to": "Spec"
+    },
+    {
+      "from": "Spec",
+      "to": "Plan"
+    },
+    {
+      "from": "Plan",
+      "to": "Assembly"
+    },
+    {
+      "from": "Coord",
+      "to": "Watch"
+    },
+    {
+      "from": "Watch",
+      "to": "Review"
+    },
+    {
+      "from": "Review",
+      "to": "Merge",
+      "label": "approve"
+    },
+    {
+      "from": "Review",
+      "to": "Revise",
+      "label": "reject or request changes"
+    },
+    {
+      "from": "Merge",
+      "to": "Memory"
+    }
+  ]
+}
