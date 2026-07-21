@@ -65,7 +65,7 @@ jobs:
           echo "$changed"
 
           # Drift-prone source paths whose changes usually require doc updates.
-          code_re='^(apps/Agentweaver\.Api/Endpoints/|apps/Agentweaver\.Api/Workflows/|apps/Agentweaver\.Api/Blueprints/|apps/Agentweaver\.Mcp/Tools/|packages/Agentweaver\.Squad/Catalog/Resources/blueprints/)'
+          code_re='^(apps/Agentweaver\.Api/Endpoints/|apps/Agentweaver\.Api/Workflows/|apps/Agentweaver\.Api/Blueprints/|apps/Agentweaver\.Mcp/Tools/|packages/Agentweaver\.Squad/Catalog/Resources/(blueprints|workflows)/)'
 
           code_changed="$(echo "$changed" | grep -E "$code_re" || true)"
           docs_changed="$(echo "$changed" | grep -E '^docs/' | grep -v '^docs/node_modules/' || true)"
