@@ -320,7 +320,7 @@ required on any platform. The root `package.json` exposes these scripts:
 
 | Script | What it does |
 |---|---|
-| `npm start` / `npm run dev` | Local dev orchestration (API + web), browser auto-open disabled. Alias for `azure:dev -- --no-browser`. |
+| `npm start` / `npm run dev` | Local dev orchestration (API + web), browser auto-open disabled. Alias for `dev:open -- --no-browser`. |
 | `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
 | `npm run azure:provision-infra` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:deploy-from-local` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
@@ -329,7 +329,7 @@ required on any platform. The root `package.json` exposes these scripts:
 | `npm run azure:deploy-from-release -- vX.Y.Z` | Deploys an existing published release from an exact checkout of its tag commit. |
 | `npm run azure:release` | Composes `release:publish` and `azure:deploy-from-release` for the first shipment. |
 | `npm run azure:verify` | Post-deploy health verification against the live cluster (pods, gateway, HTTP probes) — read-only, safe to run anytime. |
-| `npm run azure:dev` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). |
+| `npm run dev:open` | Same as `npm run dev`, but opens your browser by default (omit `--no-browser`). No Azure calls. |
 | `npm run dev:web` | Builds and starts only the web UI (Vite dev server) against an API you're already running separately. |
 | `npm run dev:api` | Builds and runs only the .NET API. |
 | `npm run docs:dev` / `docs:build` / `docs:preview` | This documentation site (VitePress). |
@@ -340,7 +340,7 @@ Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full
 - **`azure:deploy-from-local`**: `--allow-dirty` to bypass the clean-working-tree check (personal/throwaway testing only).
 - **`azure:deploy-from-commit`**: one required SHA or ref; no dirty-tree option because only committed source is eligible.
 - **`azure:deploy-from-release`**: positional existing `vX.Y.Z` tag; the checkout must be clean and at that tag commit.
-- **`azure:dev` / `dev` / `setup`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step), `--setup` (local-only setup, no servers started — this is what `npm run setup` runs).
+- **`dev:open` / `dev` / `setup`**: `--no-browser` (skip opening a browser tab), `--skip-build` (skip the web build step), `--setup` (local-only setup, no servers started — this is what `npm run setup` runs).
 - **`release:publish` / `azure:release`**: `--dry-run`; `azure:release -- --resume vX.Y.Z` resumes a partially completed first shipment.
 
 ## 1. Configure local authentication and model access
