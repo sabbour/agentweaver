@@ -1,10 +1,10 @@
 ---
 name: "agentweaver-changelog"
-description: "Agentweaver Changesets lifecycle for contributor release intent, prepared changelogs, and GitHub Release notes"
+description: "Agentweaver Changesets lifecycle for contributor release intent, prepared changelogs, publication, and release notes"
 domain: "release-management, documentation"
 confidence: "high"
 source: "RELEASING.md and scripts/changesets/*.mjs"
-triggers: ["generate the changelog", "changelog for this release", "how do I add a changeset", "what changed in this release", "write release notes"]
+triggers: ["generate the changelog", "changelog for this release", "how do I add a changeset", "what changed in this release", "write release notes", "publish a release"]
 ---
 
 ## Purpose
@@ -16,7 +16,7 @@ package. `VERSION` is the product-version source of truth; `package.json.version
 `package-lock.json.packages[""].version` must mirror it. `@changesets/cli` is pinned to
 the stable `^2.31.0` line, not the `next` prerelease tag.
 
-## Fragment lifecycle
+## Changeset lifecycle
 
 1. **Add intent:** for a user-facing PR, run `npm run changeset`, select
    `agentweaver`, choose the appropriate bump, and write user-facing prose. At `0.x`,
@@ -29,11 +29,14 @@ the stable `^2.31.0` line, not the `next` prerelease tag.
    Changesets update package/lockfile versions and the matching `CHANGELOG.md` section,
    writes `VERSION`, and validates all version mirrors and the generated section.
 4. **Promote:** promote the prepared release branch to `main` through a green PR.
-5. **Publish:** from a clean checkout at the exact resulting `main` SHA, run
-   `npm run azure:release`. It validates the prepared metadata, creates the tag and
-   GitHub Release from the exact matching changelog section, then builds, deploys, and
-   verifies. It does not calculate or commit a version.
-6. **Forward-port:** before deleting the release branch, create a short-lived branch
+5. **Publish:** from a clean checkout at the exact promoted `main` SHA, run
+   `npm run release:publish`. It validates the prepared metadata and creates the
+   annotated tag plus the GitHub Release from the exact matching changelog section. It
+   does not calculate or commit a version, and it does not deploy anything.
+6. **Deploy:** deploy that published version with
+   `npm run azure:deploy-from-release -- vX.Y.Z`. For the normal first shipment,
+   `npm run azure:release` composes steps 5 and 6 in one command.
+7. **Forward-port:** before deleting the release branch, create a short-lived branch
    from current `dev` and run `npm run release:sync-dev -- <prepare-sha>`. Open and
    merge its PR to return the prepared metadata and consumed fragments to `dev`.
 
@@ -47,6 +50,14 @@ generated.
 Never hand-edit `CHANGELOG.md`, and never regenerate it after tagging.
 `release:prepare` is the only command that writes it. Do not run an old changelog
 generator: none should exist in this repository.
+
+## Deploy commands use SHA identity, not release identity
+
+`release:publish` creates repository release identity (tag + GitHub Release) but
+performs no Azure operations. `azure:deploy-from-release` consumes an existing
+published `vX.Y.Z`. `azure:deploy-from-local`, `azure:deploy-from-commit`, and
+`azure:provision-infra` use SHA identity instead and never consume changesets or
+create a release — they are for dev/test deploys, not official releases.
 
 ## Recovery and guardrails
 

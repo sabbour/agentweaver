@@ -18,7 +18,7 @@ to make a change and get it merged. It has two parts:
 
 See [Prerequisites in the getting started guide](https://sabbour.me/agentweaver/guide/getting-started#prerequisites)
 for the tools you'll need (git, Node.js 22+, .NET 10 SDK, and Azure CLI if you're touching
-the deploy/upgrade scripts) and per-platform install instructions (winget/brew/apt-get).
+the provisioning/deployment scripts) and per-platform install instructions (winget/brew/apt-get).
 
 ## Getting set up
 
@@ -43,7 +43,7 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 | `apps/web` | The React/Vite frontend |
 | `docs/` | VitePress documentation site (published at sabbour.me/agentweaver) |
 | `packages/` | Shared .NET libraries (agent runtime, squad model, etc.) |
-| `scripts/azure` | The Node.js build/deploy/upgrade/release toolchain (no bash/PowerShell) |
+| `scripts/azure` | The Node.js provisioning/deployment/release toolchain (no bash/PowerShell) |
 | `tests/Agentweaver.Tests` | .NET test suite |
 | `tests/e2e` | End-to-end tests |
 | `k8s/` | Kubernetes manifests (AKS deployment) |
@@ -73,7 +73,7 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 5. **Run the relevant test suite(s) locally before you push.** CI re-runs the full suite
    on every pull request and push to `dev` or `main`, but running the affected suite
    locally first keeps the feedback loop short and avoids red PRs.
-6. **Add a changeset for shipped user-facing behavior** before opening the PR: run `npm run changeset`, use `patch` for compatible fixes and `minor` for features or breaking changes while Agentweaver is at `0.x`, and write prose for users rather than restating a commit title. Do not edit `VERSION`, package versions, or `CHANGELOG.md`. Docs/tests/CI-only changes normally need no changeset; use the `changeset:not-required` label only with a `Changeset exemption:` rationale in the PR body. `azure:deploy` and `azure:upgrade` never consume changesets. For the full playbook, see the [changelog skill](.copilot/skills/agentweaver-changelog/SKILL.md).
+6. **Add a changeset for shipped user-facing behavior** before opening the PR: run `npm run changeset`, use `patch` for compatible fixes and `minor` for features or breaking changes while Agentweaver is at `0.x`, and write prose for users rather than restating a commit title. Do not edit `VERSION`, package versions, or `CHANGELOG.md`. Docs/tests/CI-only changes normally need no changeset; use the `changeset:not-required` label only with a `Changeset exemption:` rationale in the PR body. Infrastructure and local deployment commands never consume changesets; `release:publish` consumes only metadata already prepared by `release:prepare`. For the full playbook, see the [changelog skill](.copilot/skills/agentweaver-changelog/SKILL.md).
 7. **Verify live for anything with runtime/deploy impact**, not just via unit tests.
 
 ### Writing a changeset
@@ -124,7 +124,7 @@ Run only the suite(s) relevant to what you changed:
 # dev machines to avoid the Copilot SDK trying to download a CLI binary)
 dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 
-# Node.js build/deploy/upgrade/release toolchain
+# Node.js provisioning/deployment/release toolchain
 node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 
 # Web frontend (Vitest)

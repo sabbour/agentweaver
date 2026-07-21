@@ -98,8 +98,7 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
         var entry = streamStore.Get(runId);
         entry.Should().NotBeNull();
-        var planEvents = entry!.GetSnapshotSince(0).Events
-            .Where(e => e.Type == EventTypes.CoordinatorWorkPlan).ToList();
+        var planEvents = await PollForWorkPlanEventsAsync(entry!);
         planEvents.Should().HaveCount(1, "exactly one plan-time snapshot event is emitted");
     }
 
@@ -241,5 +240,23 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         }
 
         return null;
+    }
+
+    private static async Task<List<RunEvent>> PollForWorkPlanEventsAsync(
+        RunStreamEntry entry,
+        int timeoutSeconds = 20)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            var events = entry.GetSnapshotSince(0).Events
+                .Where(e => e.Type == EventTypes.CoordinatorWorkPlan).ToList();
+            if (events.Count > 0)
+                return events;
+
+            await Task.Delay(50);
+        }
+
+        return [];
     }
 }

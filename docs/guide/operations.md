@@ -9,16 +9,31 @@ and individual-step instructions.
 
 ## Release Process
 
-Agentweaver uses Changesets with the protected
-`dev → release/vX.Y.Z → main` flow. Contributors add a changeset, maintainers preview
-the calculated version, and `release:prepare` writes version metadata and the durable
-changelog section on the release branch. After the prepared branch is promoted to `main`,
-`azure:release` tags, creates a GitHub Release from that exact changelog section, builds,
-deploys, and verifies.
+Agentweaver uses Changesets and the protected
+`dev → release/vX.Y.Z → main` flow. `release:prepare` generates the version
+mirrors and changelog on the release branch.
 
-Follow [RELEASING.md](../../RELEASING.md) for the canonical release procedure and the
-[Agentweaver changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md) for
-the full fragment lifecycle, recovery commands, and changelog/release-notes rules.
+From the exact promoted `main` SHA, publication and deployment are independent:
+
+```bash
+npm run release:publish
+npm run azure:deploy-from-release -- vX.Y.Z
+```
+
+`release:publish` creates the annotated tag and GitHub Release only.
+`azure:deploy-from-release` requires that existing published tag, builds or
+retags its images, deploys them, and verifies the live environment.
+
+For the normal first shipment to the default environment:
+
+```bash
+npm run azure:release
+```
+
+This composes publication and deployment. It never calculates or commits a
+version. See [RELEASING.md](../../RELEASING.md) for preparation and recovery, and
+the [Agentweaver changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md)
+for the full fragment lifecycle, recovery commands, and changelog/release-notes rules.
 
 ### Image tags
 
@@ -67,13 +82,11 @@ Each image is built with the following OCI labels:
 
 ## Rolling back a release
 
-To roll back to a previous version, redeploy with the old tag using
-`azure:deploy`'s `--image-tag` flag (the deploy pipeline is idempotent, so
-re-running it against an existing environment just redeploys/verifies rather
-than re-provisioning from scratch):
+To roll back to a previous published version, check out its exact tag commit and
+deploy that release:
 
 ```bash
-npm run azure:deploy -- --image-tag v0.6.0
+npm run azure:deploy-from-release -- v0.6.0
 ```
 
 All previous semver tags remain in ACR and are not deleted by the release process.
@@ -81,11 +94,17 @@ All previous semver tags remain in ACR and are not deleted by the release proces
 ## Manual image builds (development)
 
 To build and push images without cutting a release (e.g. for a staging
-environment), use `azure:upgrade`, which builds using the current git SHA as
+environment), use `azure:deploy-from-local`, which builds using the current git SHA as
 the tag and then redeploys:
 
 ```bash
-npm run azure:upgrade
+npm run azure:deploy-from-local
+```
+
+To deploy another committed ref without switching the current checkout:
+
+```bash
+npm run azure:deploy-from-commit -- <sha-or-ref>
 ```
 
 ## Observability notes
@@ -100,8 +119,11 @@ npm run azure:upgrade
 | Command | Purpose |
 |---|---|
 | `npm run azure:release` | Full semver release (see above) |
-| `npm run azure:deploy` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
-| `npm run azure:upgrade` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
+| `npm run release:publish` | Create the annotated tag and GitHub Release without deploying |
+| `npm run azure:deploy-from-release -- vX.Y.Z` | Deploy an existing published release |
+| `npm run azure:provision-infra` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
+| `npm run azure:deploy-from-local` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
+| `npm run azure:deploy-from-commit -- <sha-or-ref>` | Deploy an arbitrary exact commit through a temporary detached worktree |
 | `npm run azure:verify` | Verify the current deployment |
 
 Use `pnpm run` in place of `npm run` if pnpm is your selected package runner.
@@ -114,7 +136,7 @@ Agentweaver ships with end-to-end telemetry using **Azure Monitor OpenTelemetry 
 
 ### Provisioning monitoring resources
 
-Monitoring is provisioned as part of `npm run azure:deploy`. To rerun only
+Monitoring is provisioned as part of `npm run azure:provision-infra`. To rerun only
 that step, see the runbook's [individual-step section](./deployment-aks.md#running-an-individual-step)
 (`scripts/azure/steps/15-provision-monitoring.mjs`).
 

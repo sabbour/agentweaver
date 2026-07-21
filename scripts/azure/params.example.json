@@ -1,7 +1,7 @@
-// scripts/azure/params.example.json -- Example params file for `azure:deploy`.
+// scripts/azure/params.example.json -- Example params file for `azure:provision-infra`.
 //
 // Usage:
-//   node scripts/azure/cli.mjs deploy --params-file scripts/azure/params.my-env.json
+//   node scripts/azure/cli.mjs provision-infra --params-file scripts/azure/params.my-env.json
 //
 // Precedence: CLI flags > environment variables > this params file >
 // detected defaults (scripts/azure/variables.mjs's DEFAULTS) > interactive
