@@ -10,7 +10,7 @@ name: CI
 #   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 #   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 #   - npm --prefix apps/web run test
-#   - npm --prefix apps/web run lint   (advisory -- see the web-lint job)
+#   - npm --prefix apps/web run lint
 #   - npm run docs:build
 
 on:
@@ -94,13 +94,6 @@ jobs:
   web-lint:
     name: Web lint
     runs-on: ubuntu-latest
-    # Advisory, not blocking: a lint failure marks THIS job red so the finding
-    # stays visible on the PR, but job-level continue-on-error keeps the overall
-    # run from failing (so lint does not block merge). The eslint-plugin-react-
-    # hooks v7 upgrade added strict React-Compiler-style rules that surface a
-    # pre-existing backlog in apps/web; flip continue-on-error to false to make
-    # lint a hard gate once that backlog is cleared.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
