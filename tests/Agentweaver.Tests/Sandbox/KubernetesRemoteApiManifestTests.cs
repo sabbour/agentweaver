@@ -79,7 +79,7 @@ public sealed class KubernetesRemoteApiManifestTests
                 $@"(?m)^\s+name: {Regex.Escape(name)}\s*$"));
 
     private static string ReadManifest(string fileName) =>
-        File.ReadAllText(Path.Combine(RepositoryRoot(), "k8s", fileName));
+        File.ReadAllText(Path.Combine(RepositoryRoot(), "k8s", "base", fileName));
 
     private static string RepositoryRoot()
     {
