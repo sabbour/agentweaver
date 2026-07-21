@@ -362,6 +362,39 @@ From the repository root, run these with `npm run <script>` (or `pnpm run <scrip
 
 > **Never use `:latest`.** The default image tag is the short git SHA (`git rev-parse --short HEAD`). Always pin to a specific SHA for reproducible deployments — image tags are immutable per build.
 
+## Skills
+
+Project skills in [`.copilot/skills/`](.copilot/skills/) capture Agentweaver's
+project-specific operating practices:
+
+- **agentweaver-agent-collaboration** — Standard collaboration patterns for all squad agents — worktree awareness, decisions, cross-agent communication.
+- **agentweaver-azure-fluent-system-sync** — Refresh the Azure Fluent System library from Azure UI Kit / Fluent 2 via Figma MCP and validate checked-in React, CSS, docs, and showcase artifacts.
+- **agentweaver-docs-feature** — Full authoring playbook for documenting new or existing features across all documentation facets.
+- **agentweaver-docs-sync** — Keep Agentweaver docs in sync with code changes, including source grounding, regeneration, and builds.
+- **agentweaver-error-recovery** — Standard recovery patterns for all squad agents when something fails.
+- **agentweaver-git-workflow** — Agentweaver Git workflow for protected dev integration, worktrees, and PRs.
+- **agentweaver-github-issue** — File a well-structured GitHub issue and dispatch the right Squad member for triage, RCA, or specification work.
+- **agentweaver-issue-status** — Print a live pipeline status board for GitHub issues, deployments, and documentation disposition.
+- **agentweaver-playwright-cli** — Automate browser interactions, test web pages, and work with Playwright tests.
+- **agentweaver-reviewer-protocol** — Reviewer rejection workflow and strict lockout semantics.
+- **agentweaver-secret-handling** — Never read `.env` files or write secrets to committed `.squad/` files.
+- **agentweaver-session-recovery** — Find and resume interrupted Copilot CLI sessions using `session_store` queries.
+- **agentweaver-squad-commands** — Categorized catalog of common Squad operations presented as an interactive menu.
+- **agentweaver-squad-conventions** — Core conventions and patterns used in the Squad codebase.
+- **agentweaver-squad-fleet** — Launch Squad agents in parallel across GitHub issues using isolated worktrees and branches.
+- **agentweaver-squad-version-check** — Squad CLI internals for version stamping and upgrade mechanics.
+- **agentweaver-test-discipline** — Update tests when changing APIs — no exceptions.
+
+GitHub Copilot CLI discovers its official skill paths in
+[`.github/skills/`](.github/skills/); these thin entry points expose the
+project's maintained harness workflows:
+
+- **agentweaver-api-harness** — Run Agentweaver's REST API harness for backend validation, repro reruns, or plain-English scenario exploration.
+- **agentweaver-harness** — Run Agentweaver's complete cross-surface persona harness for validation, regression, or exploratory passes.
+- **agentweaver-harness-scenarios** — List built-in harness scenarios and persona catalogs, or generate reviewed surface adapters.
+- **agentweaver-mcp-harness** — Run Agentweaver's MCP protocol harness for tool-surface validation, repro reruns, or scenario exploration.
+- **agentweaver-ui-harness** — Run Agentweaver's deployed-UI harness for browser evidence, repros, or scenario exploration.
+
 ## AKS architecture
 
 ### Block diagram
