@@ -134,6 +134,29 @@ jobs:
       - name: Build docs site
         run: npm run docs:build
 
+  diagrams-in-sync:
+    name: Architecture diagrams are in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      # README.md's "Block diagram" and architecture-aks.md's "Component
+      # diagram" are pre-rendered from docs/diagrams/*.mmd to static SVG
+      # (GitHub's live Mermaid renderer clips long subgraph/node labels on
+      # those diagrams). Re-render from source and fail if the committed
+      # SVGs have drifted, so a .mmd edit can't ship without its SVG.
+      - name: Check rendered diagrams match source
+        run: npm run docs:check-diagrams
+
   changeset-advisory:
     name: Changeset advisory
     if: github.event_name == 'pull_request' && (github.base_ref == 'dev' || startsWith(github.base_ref, 'release/v'))

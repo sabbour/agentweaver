@@ -17,6 +17,8 @@
     "docs:dev": "npm --prefix docs run dev",
     "docs:build": "npm --prefix docs run build",
     "docs:preview": "npm --prefix docs run preview",
+    "docs:render-diagrams": "node scripts/docs/render-diagrams.mjs",
+    "docs:check-diagrams": "node scripts/docs/render-diagrams.mjs --check",
     "changeset": "changeset add",
     "changeset:status": "changeset status --verbose",
     "changeset:check": "node scripts/changesets/check.mjs",
@@ -28,6 +30,7 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
+    "@mermaid-js/mermaid-cli": "^11.16.0",
     "@types/node": "^26.1.1"
   },
   "version": "0.9.70"
