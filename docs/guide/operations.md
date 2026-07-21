@@ -31,7 +31,9 @@ npm run azure:release
 ```
 
 This composes publication and deployment. It never calculates or commits a
-version. See [RELEASING.md](../../RELEASING.md) for preparation and recovery.
+version. See [RELEASING.md](../../RELEASING.md) for preparation and recovery, and
+the [Agentweaver changelog skill](../../.copilot/skills/agentweaver-changelog/SKILL.md)
+for the full fragment lifecycle, recovery commands, and changelog/release-notes rules.
 
 ### Image tags
 
