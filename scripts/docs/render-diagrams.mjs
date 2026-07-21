@@ -110,16 +110,30 @@ async function main() {
   }
 }
 
-// mmdc's rounded-rect path curves have tiny run-to-run floating point jitter
-// (headless Chromium text-metrics variance), so a byte-for-byte SVG diff is
-// not reliable. Compare a content fingerprint instead: every rendered label
-// (node/edge/cluster text) in document order, plus the overall viewBox. This
-// still catches real drift (label text changes, nodes added/removed, layout
-// size changes) without false positives from sub-pixel curve noise.
+// mmdc's rendering geometry (node/cluster bounding boxes, the overall SVG
+// viewBox) depends on the host's font metrics, which differ across
+// operating systems and font stacks -- confirmed empirically: the exact same
+// .mmd rendered on Windows (Segoe UI) vs. Linux (DejaVu/Liberation
+// fallback, since "Segoe UI" isn't installed) produces different viewBox
+// dimensions (e.g. "0 0 1132.16 744.78" vs "0 0 1152.64 745.96") even
+// though every rendered label's text is byte-identical. A committed SVG
+// rendered on one OS will therefore always look like "drift" to a
+// freshly-rendered comparison done on a different OS -- this bit both the
+// GitHub-web-vs-VitePress live-Mermaid clipping bug this whole pre-render
+// approach was built to avoid, and (ironically) an early version of this
+// very drift check, which was authored/verified on Windows and then failed
+// on CI's Linux runners for exactly this reason.
+//
+// The fingerprint therefore intentionally excludes all rendering-derived
+// geometry (viewBox, path coordinates, node positions) and compares only
+// the semantic content that mermaid's layout pass produces deterministically
+// regardless of font metrics: every rendered label (node/edge/cluster text)
+// in document order. This still catches real drift (label text changes,
+// nodes/edges added or removed, wording changes) while being robust to
+// which OS/font-stack rendered the currently-committed SVG.
 function fingerprintSvg(svg) {
   const labels = [...svg.matchAll(/<p>(.*?)<\/p>/g)].map((m) => m[1]);
-  const viewBox = svg.match(/viewBox="([^"]*)"/)?.[1] ?? '';
-  return `${labels.join('|')}::${viewBox}`;
+  return labels.join('|');
 }
 
 main().catch((err) => {
