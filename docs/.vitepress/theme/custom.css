@@ -690,6 +690,143 @@ html.dark .mermaid .sequenceNumber {
   object-position: top;
 }
 
+.aw-mcp-showcase {
+  width: min(100%, calc(var(--aw-max) + 48px));
+  margin: 0 auto;
+  padding: clamp(84px, 10vw, 144px) 24px;
+}
+
+.aw-mcp-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 44px;
+}
+
+.aw-mcp-panel {
+  overflow: hidden;
+  border: 1px solid var(--aw-line);
+  border-radius: 16px;
+  background: var(--aw-ink);
+  box-shadow: 0 20px 60px rgba(39, 35, 32, 0.08);
+}
+
+.aw-mcp-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(250, 246, 242, 0.12);
+}
+
+.aw-mcp-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.aw-mcp-dot-red {
+  background: #ff6159;
+}
+
+.aw-mcp-dot-yellow {
+  background: #ffbd2e;
+}
+
+.aw-mcp-dot-green {
+  background: #28c941;
+}
+
+.aw-mcp-panel-title {
+  margin-left: 6px;
+  color: rgba(250, 246, 242, 0.72);
+  font-size: 0.82rem;
+  font-weight: 620;
+}
+
+.aw-mcp-panel-body {
+  margin: 0 !important;
+  padding: 18px 20px;
+  overflow-x: auto;
+  color: rgba(250, 246, 242, 0.86);
+  font-size: 0.82rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.aw-mcp-prompt {
+  color: #7dd3fc;
+  font-weight: 700;
+}
+
+.aw-mcp-call {
+  display: block;
+  color: #ffbd2e;
+}
+
+.aw-mcp-ret {
+  display: block;
+  color: rgba(250, 246, 242, 0.55);
+}
+
+.aw-mcp-out {
+  display: block;
+  color: #a6e3a1;
+}
+
+.aw-mcp-chat-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  min-height: 168px;
+}
+
+.aw-mcp-chat-msg {
+  padding: 12px 14px;
+  border-radius: 10px;
+  color: rgba(250, 246, 242, 0.9);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+
+.aw-mcp-chat-user {
+  justify-self: end;
+  max-width: 80%;
+  background: rgba(250, 246, 242, 0.12);
+}
+
+.aw-mcp-chat-assistant {
+  max-width: 92%;
+  background: rgba(250, 246, 242, 0.06);
+}
+
+.aw-mcp-chat-label {
+  display: block;
+  margin-bottom: 4px;
+  color: rgba(250, 246, 242, 0.5);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.aw-mcp-panel-caption {
+  margin: 0 !important;
+  padding: 14px 20px 18px;
+  color: rgba(250, 246, 242, 0.55);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.aw-mcp-panel-caption code {
+  color: rgba(250, 246, 242, 0.85);
+}
+
+.aw-mcp-panel-caption a {
+  color: rgba(250, 246, 242, 0.85);
+  text-decoration: underline;
+}
+
 .aw-evidence {
   width: min(100%, calc(var(--aw-max) + 80px));
 }
@@ -818,6 +955,10 @@ html.dark .mermaid .sequenceNumber {
   .aw-team-copy {
     max-width: 720px;
     padding-bottom: 0;
+  }
+
+  .aw-mcp-panels {
+    grid-template-columns: 1fr;
   }
 
   .aw-observability-copy {
