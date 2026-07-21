@@ -49,3 +49,31 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+# Allow AgentHost pods to reach the MCP server directly on 8080 for the operator assistant
+# (#346/#347 narrow AgentHost cutover). AgentHost:McpEndpoint (sandbox-template-agenthost.yaml)
+# points at http://agentweaver-mcp:8080/mcp, required unconditionally at pod startup; without
+# this ingress rule the MCP pod drops the AgentHost pod's east-west connection at the network
+# layer (agenthost-egress-allowlist explicitly excludes RFC1918 destinations, so an ingress-side
+# allow here is required in addition to the egress side).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agenthost-to-mcp
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: agent-host
+      ports:
+        - protocol: TCP
+          port: 8080

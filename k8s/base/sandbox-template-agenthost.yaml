@@ -134,6 +134,14 @@ spec:
             # layer, which cannot mount its private /proc under this hardened security context.
             - name: AgentHost__SandboxMode
               value: "kata"
+            # In-cluster AgentweaverMCP /mcp URL, required unconditionally at pod startup
+            # (Program.cs throws InvalidOperationException from DI if empty) -- the operator
+            # assistant purpose (#346/#347) is wired eagerly, not lazily per-run, so every
+            # AgentHost pod (including warm-pool pods never adopted for that purpose) needs
+            # this set. A constant cluster-internal Service DNS name/port, so it is safe to
+            # hardcode here rather than route through the runtime-config ConfigMap.
+            - name: AgentHost__McpEndpoint
+              value: "http://agentweaver-mcp:8080/mcp"
             - name: AgentHost__KeyVaultUri
               valueFrom:
                 configMapKeyRef:
