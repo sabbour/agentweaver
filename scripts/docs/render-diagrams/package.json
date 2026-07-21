@@ -2,7 +2,7 @@
   "name": "agentweaver-diagram-renderer",
   "private": true,
   "version": "0.1.0",
-  "description": "Standalone React Flow + dagre harness that lays out the AKS architecture diagrams (docs/diagrams/src/*.json) and renders each to a static SVG, driven headlessly by Playwright. See scripts/docs/render-diagrams.mjs.",
+  "description": "Generic React Flow + dagre harness that lays out any diagram spec under docs/diagrams/specs/*.json and renders it to a static SVG, driven headlessly by Playwright. See scripts/docs/render-diagrams.mjs and docs/diagrams/README.md.",
   "type": "module",
   "scripts": {
     "dev": "vite",

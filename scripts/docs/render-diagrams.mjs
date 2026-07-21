@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// Renders (or checks) the AKS architecture diagrams under docs/diagrams/.
+// Renders (or checks) every diagram spec under docs/diagrams/specs/.
 //
-// Source of truth: docs/diagrams/src/*.json (plain node+edge definitions, no
-// hand-placed coordinates). `npm run docs:render-diagrams` shells out to
-// scripts/docs/render-diagrams/ (a standalone React Flow + dagre + Playwright
-// app — see that folder's render.mjs) to lay out and render each diagram to
-// docs/diagrams/<name>.svg, then records a SHA-256 hash of the source file in
-// docs/diagrams/manifest.json.
+// Source of truth: docs/diagrams/specs/*.json (plain node+edge+group graph
+// definitions, no hand-placed coordinates). Diagrams are entirely data-driven:
+// adding a new one is "add a spec file", no code changes anywhere in this
+// pipeline. `npm run docs:render-diagrams` discovers every spec file, shells
+// out to scripts/docs/render-diagrams/ (a standalone, generic React Flow +
+// dagre + Playwright renderer — see that folder's render.mjs/src/) to lay out
+// and render each diagram to docs/diagrams/<name>.svg, then records a SHA-256
+// hash of each source file in docs/diagrams/manifest.json.
 //
 // `npm run docs:check-diagrams` (what CI runs) does NOT re-render or compare
 // any rendered geometry — that was the previous (Mermaid CLI) drift-check's
@@ -16,7 +18,7 @@
 // "hash(current source file) == hash recorded in manifest.json", which is
 // 100% deterministic, needs no browser, and has zero dependencies of its own.
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,13 +27,22 @@ import { spawnSync } from 'node:child_process';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const diagramsDir = path.join(repoRoot, 'docs', 'diagrams');
-const srcDir = path.join(diagramsDir, 'src');
+const specsDir = path.join(diagramsDir, 'specs');
 const manifestPath = path.join(diagramsDir, 'manifest.json');
 const rendererDir = path.join(__dirname, 'render-diagrams');
 
-const DIAGRAMS = ['aks-block-diagram', 'aks-component-simplified', 'aks-component-detailed'];
-
 const checkMode = process.argv.includes('--check');
+
+/** Every diagram spec under docs/diagrams/specs/*.json -- adding a new diagram is just
+ *  "add a spec file, rerun this script", no code changes required anywhere. */
+async function listDiagramNames() {
+  if (!existsSync(specsDir)) return [];
+  const entries = await readdir(specsDir, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name.replace(/\.json$/, ''))
+    .sort();
+}
 
 function hashFile(contents) {
   // Normalize CRLF -> LF before hashing. Git's autocrlf normalization means a
@@ -50,14 +61,15 @@ async function loadManifest() {
 
 async function runCheck() {
   const manifest = await loadManifest();
+  const diagrams = await listDiagramNames();
   let ok = true;
-  for (const name of DIAGRAMS) {
-    const srcPath = path.join(srcDir, `${name}.json`);
+  for (const name of diagrams) {
+    const srcPath = path.join(specsDir, `${name}.json`);
     const svgPath = path.join(diagramsDir, `${name}.svg`);
     const entry = manifest[name];
 
     if (!existsSync(srcPath)) {
-      console.error(`Diagram source missing: docs/diagrams/src/${name}.json`);
+      console.error(`Diagram spec missing: docs/diagrams/specs/${name}.json`);
       ok = false;
       continue;
     }
@@ -82,11 +94,19 @@ async function runCheck() {
     }
   }
 
+  // Also catch stale manifest entries / stale SVGs left behind by a removed or renamed spec.
+  for (const name of Object.keys(manifest)) {
+    if (!diagrams.includes(name)) {
+      console.error(`Stale manifest entry for "${name}" has no matching docs/diagrams/specs/${name}.json. Remove it (and the orphaned SVG, if any) or re-run "npm run docs:render-diagrams".`);
+      ok = false;
+    }
+  }
+
   if (!ok) {
     process.exitCode = 1;
     return;
   }
-  console.log(`All ${DIAGRAMS.length} architecture diagrams are in sync with their source definitions.`);
+  console.log(`All ${diagrams.length} architecture diagrams are in sync with their source definitions.`);
 }
 
 async function runRender() {
@@ -104,9 +124,10 @@ async function runRender() {
     process.exit(render.status ?? 1);
   }
 
-  const manifest = await loadManifest();
-  for (const name of DIAGRAMS) {
-    const srcPath = path.join(srcDir, `${name}.json`);
+  const diagrams = await listDiagramNames();
+  const manifest = {};
+  for (const name of diagrams) {
+    const srcPath = path.join(specsDir, `${name}.json`);
     manifest[name] = { sourceHash: hashFile(await readFile(srcPath)), generatedAt: new Date().toISOString() };
   }
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');

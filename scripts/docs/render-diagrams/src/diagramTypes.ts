@@ -1,5 +1,6 @@
 /**
- * Diagram source schema (docs/diagrams/src/*.json).
+ * Diagram source schema (docs/diagrams/specs/*.json). See docs/diagrams/README.md
+ * for how to add a new diagram.
  *
  * Deliberately plain data — no hand-placed coordinates. `dagre` computes every
  * node/group position at render time (see layout.ts), exactly like the

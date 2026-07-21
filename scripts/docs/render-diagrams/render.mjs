@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Renders every diagram under docs/diagrams/src/*.json to a static SVG under
+// Renders every diagram spec under docs/diagrams/specs/*.json to a static SVG under
 // docs/diagrams/. Invoked via `npm run render` from this package (so it can
 // resolve its own local vite/@playwright/test install) — the top-level
 // `npm run docs:render-diagrams` (scripts/docs/render-diagrams.mjs) shells
@@ -16,7 +16,7 @@
 // image pipeline does not reliably render foreignObject-based SVGs, and a
 // plain-SVG artifact is the same robust format Mermaid itself produces (just
 // laid out correctly, this time).
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
@@ -24,10 +24,18 @@ import { chromium } from '@playwright/test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const diagramsDir = path.resolve(__dirname, '..', '..', '..', 'docs', 'diagrams');
-const srcDir = path.join(diagramsDir, 'src');
+const specsDir = path.join(diagramsDir, 'specs');
 const publicDir = path.join(__dirname, 'public');
 
-const DIAGRAMS = ['aks-block-diagram', 'aks-component-simplified', 'aks-component-detailed'];
+/** Every diagram spec under docs/diagrams/specs/*.json is rendered automatically -- adding
+ *  a new diagram is just "add a spec file, rerun this script", no code changes here. */
+async function listDiagramNames() {
+  const entries = await readdir(specsDir, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name.replace(/\.json$/, ''))
+    .sort();
+}
 
 async function waitForServerReady(port, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
@@ -44,7 +52,7 @@ async function waitForServerReady(port, timeoutMs = 10000) {
 }
 
 async function renderOne(name, page, port) {
-  const srcPath = path.join(srcDir, `${name}.json`);
+  const srcPath = path.join(specsDir, `${name}.json`);
   const source = await readFile(srcPath, 'utf8');
   // Served as a static file (rather than a huge base64 query string) so we
   // never risk hitting a URL-length limit on the larger detailed diagram.
@@ -79,7 +87,8 @@ async function main() {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 1200 } });
-    for (const name of DIAGRAMS) {
+    const diagrams = await listDiagramNames();
+    for (const name of diagrams) {
       await renderOne(name, page, port);
     }
   } finally {

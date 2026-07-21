@@ -10,7 +10,7 @@ diagrams (e.g. "AKS Cluster" -> "AKS Cluste", "PostgreSQL" -> "PostgreSQ"),
 and switching from `block-beta` to `flowchart TB` syntax did not fix it.
 
 Diagram sources are now plain node/edge/group JSON definitions under
-`docs/diagrams/src/*.json`, auto-laid-out with `dagre` (no hand-placed
+`docs/diagrams/specs/*.json`, auto-laid-out with `dagre` (no hand-placed
 coordinates) and rendered through a small standalone `@xyflow/react` +
 Playwright harness (`scripts/docs/render-diagrams/`) that mounts a real
 React Flow graph, lets dagre position it, and exports a clean, self-contained
@@ -29,5 +29,5 @@ the drift-check (`npm run docs:check-diagrams`) is now a pure, dependency-free
 SHA-256 hash comparison of each source JSON against `docs/diagrams/manifest.json`
 -- it never re-renders or compares geometry, so it can't be OS-sensitive by
 construction. Regenerate diagrams with `npm run docs:render-diagrams` after
-editing a `docs/diagrams/src/*.json` source; CI fails if the committed SVG's
+editing a `docs/diagrams/specs/*.json` source; CI fails if the committed SVG's
 source hash drifts from the manifest.

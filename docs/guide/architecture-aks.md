@@ -15,7 +15,7 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 ![AKS component diagram (simplified overview): Client through the Gateway to Frontend, API, MCP; API and Worker to the AgentHost warm pool; shared Workspace PVC and CSI SecretProviderClass; PostgreSQL, Key Vault, ACR, and GitHub](../diagrams/aks-component-simplified.svg)
 
 <!--
-  Pre-rendered from ../diagrams/src/aks-component-simplified.json (React Flow +
+  Pre-rendered from ../diagrams/specs/aks-component-simplified.json (React Flow +
   dagre layout) -- GitHub's live Mermaid renderer clipped long subgraph/node
   labels on this diagram. To edit: change the JSON source, run
   `npm run docs:render-diagrams`, and commit the regenerated SVG. CI fails if
@@ -27,7 +27,7 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 ![AKS component diagram (detailed): full request/data flow between the Browser/AI client, AKS Gateway, Frontend, API, Worker, MCP, the Kata VM AgentHost warm pool, Workspace PVC, CSI SecretProviderClass, Azure Key Vault, Azure PostgreSQL, Azure Container Registry, and GitHub](../diagrams/aks-component-detailed.svg)
 
 <!--
-  Pre-rendered from ../diagrams/src/aks-component-detailed.json -- same
+  Pre-rendered from ../diagrams/specs/aks-component-detailed.json -- same
   clipping issue as above, at even greater severity given this diagram's
   size. To edit: change the JSON source, run `npm run docs:render-diagrams`,
   and commit the regenerated SVG. CI fails if the SVG's source hash drifts

@@ -1,14 +1,14 @@
 {
   "aks-block-diagram": {
     "sourceHash": "84edd3dc6f917258eaa614ca62abc298b27a4f776423ca6508c7d1140a2656ba",
-    "generatedAt": "2026-07-21T11:09:52.818Z"
-  },
-  "aks-component-simplified": {
-    "sourceHash": "74f321cdce0e6a34e1c7888c127385d111dd156e9183af6d8900ded64526d49d",
-    "generatedAt": "2026-07-21T11:09:52.820Z"
+    "generatedAt": "2026-07-21T11:26:28.572Z"
   },
   "aks-component-detailed": {
     "sourceHash": "b39de8a614e1f479f7063a6e2495e0c27cde2f547b1fe83867a64fb6ea0258a7",
-    "generatedAt": "2026-07-21T11:09:52.822Z"
+    "generatedAt": "2026-07-21T11:26:28.573Z"
+  },
+  "aks-component-simplified": {
+    "sourceHash": "74f321cdce0e6a34e1c7888c127385d111dd156e9183af6d8900ded64526d49d",
+    "generatedAt": "2026-07-21T11:26:28.574Z"
   }
 }
