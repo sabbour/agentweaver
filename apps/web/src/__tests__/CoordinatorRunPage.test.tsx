@@ -218,7 +218,14 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(dialog.textContent).toContain('Are you sure you want to stop this run?');
     expect(apiClient.steerCoordinator).not.toHaveBeenCalled();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop run' }));
+    // The dialog surface is briefly aria-hidden while Fluent UI's tabster
+    // focus trap finishes wiring up the modal (especially under the CPU
+    // contention of a full-suite run), so poll for the button to become
+    // accessible instead of querying it synchronously. A longer timeout
+    // (matching the convention elsewhere in this file) gives the trap time
+    // to settle even under heavy parallel-worker load.
+    const stopConfirmButton = await within(dialog).findByRole('button', { name: 'Stop run' }, { timeout: 4000 });
+    fireEvent.click(stopConfirmButton);
     await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith('coord-run-1', { kind: 'stop' }));
   });
 
@@ -231,7 +238,10 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('Are you sure you want to stop this run?');
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    // See note above: wait for the modal's focus trap to settle before
+    // querying its contents by role.
+    const cancelButton = await within(dialog).findByRole('button', { name: 'Cancel' }, { timeout: 4000 });
+    fireEvent.click(cancelButton);
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(apiClient.steerCoordinator).not.toHaveBeenCalled();
