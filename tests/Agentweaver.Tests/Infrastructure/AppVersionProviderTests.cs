@@ -96,6 +96,30 @@ public sealed class AppVersionProviderTests : IDisposable
     }
 
     [Fact]
+    public void WhenGitShaIsFullLength_TruncatesToSevenCharShortSha()
+    {
+        Environment.SetEnvironmentVariable("IMAGE_TAG", "a1c11f1234567890abcdef1234567890abcdef12");
+        Environment.SetEnvironmentVariable("GIT_SHA", "a1c11f1234567890abcdef1234567890abcdef12");
+
+        var provider = new AppVersionProvider(new FakeWebHostEnvironment(_dir));
+
+        provider.IsRelease.Should().BeFalse();
+        provider.GitSha.Should().Be("a1c11f1");
+        provider.GitSha.Should().HaveLength(7);
+    }
+
+    [Fact]
+    public void WhenGitShaIsAlreadyShort_LeavesItUnchanged()
+    {
+        Environment.SetEnvironmentVariable("IMAGE_TAG", "a1c11f1");
+        Environment.SetEnvironmentVariable("GIT_SHA", "a1c");
+
+        var provider = new AppVersionProvider(new FakeWebHostEnvironment(_dir));
+
+        provider.GitSha.Should().Be("a1c");
+    }
+
+    [Fact]
     public void WhenVersionFileIsMissing_FallsBackToZeroVersion()
     {
         Environment.SetEnvironmentVariable("IMAGE_TAG", null);
