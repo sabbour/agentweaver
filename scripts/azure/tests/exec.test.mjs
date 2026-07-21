@@ -12,7 +12,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { capture, run } from "../lib/exec.mjs";
+import path from "node:path";
+import fs from "node:fs";
+import { capture, run, resolveExecutable } from "../lib/exec.mjs";
 
 const DEFINITELY_MISSING_BINARY = "agentweaver-definitely-not-a-real-binary-xyz";
 
@@ -34,4 +36,19 @@ test("capture: a real, existing binary (node) succeeds and returns stdout", asyn
 
 test("run: rejects with ExecError when the binary does not exist on PATH (no allowFailure option)", async () => {
   await assert.rejects(run(DEFINITELY_MISSING_BINARY, ["--version"]), /Failed to spawn/);
+});
+
+test("resolveExecutable('openssl'): falls back to Git for Windows' bundled usr/bin/openssl.exe when not on PATH directly", {
+  skip: process.platform !== "win32" ? "Windows-only fallback path" : false,
+}, () => {
+  // Git for Windows only puts <root>\cmd (or \bin) on PATH, never \usr\bin,
+  // so `openssl` alone never resolves via the plain PATH scan on a stock
+  // install -- reproduces the real `spawn openssl ENOENT` failure seen when
+  // running provision-infra/deploy-from-local on Windows.
+  const resolved = resolveExecutable("openssl");
+  assert.ok(
+    path.isAbsolute(resolved) && fs.existsSync(resolved),
+    `expected resolveExecutable('openssl') to find a real binary via the Git-bundled fallback, got: ${resolved}`
+  );
+  assert.match(resolved, /usr[\\/]bin[\\/]openssl\.exe$/i);
 });

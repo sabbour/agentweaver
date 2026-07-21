@@ -96,24 +96,7 @@ The active topology is `dev → release/vX.Y.Z → main`:
   release branch or an audited emergency hotfix, which must be forward-ported to `dev`.
   Release tags are cut from the exact resulting `main` promotion SHA.
 
-This topology was deliberately activated on 2026-07-20 for room to grow; it was not the
-result of the prior automatic metrics threshold. The complete operating flow is in
-[RELEASING.md](RELEASING.md).
-
-Two further-growth triggers remain forward-looking and un-fired:
-
-- **Trigger A — Merge Queue:** when the repository is organization-owned and either at
-  least **5 PRs in a rolling 14-day period** rerun blocking CI solely because another PR
-  merged first, or median ready-to-merge time exceeds **one business day for two
-  consecutive weeks** because of update/retest serialization. Add `merge_group` CI and
-  enable Merge Queue for protected integration admission.
-- **Trigger B — protected maintenance branch:** when the project explicitly commits to
-  ship a fix for an older minor after an incompatible newer minor has landed. Create and
-  protect `release/X.Y` from the last supported tag; publish patch tags from it and
-  forward-port applicable fixes to `dev`.
-
-For the retained rationale and original activation plan, see
-[Niobe's branching growth review](.squad/decisions/inbox/niobe-branching-growth-review.md).
+The complete operating flow is in [RELEASING.md](RELEASING.md).
 
 ## Testing
 
@@ -150,27 +133,14 @@ crowded onto a single runner):
 | `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass |
 | `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs` | Blocking — must pass |
 | `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass |
-| `Web lint` | `npm --prefix apps/web run lint` | **Advisory** — visible but non-blocking |
+| `Web lint` | `npm --prefix apps/web run lint` | Blocking — must pass |
 | `Docs build` | `npm run docs:build` | Blocking — must pass |
 
-The `Web lint` job is currently **advisory**: a lint failure marks that one job red so the
-finding stays visible on the PR, but (via job-level `continue-on-error`) it does not fail
-the overall run or block merge. The `eslint-plugin-react-hooks` v7 upgrade introduced
-stricter React-Compiler-style rules that surface a pre-existing backlog of violations in
-`apps/web`; running lint in its own job keeps those findings visible, and the plan is to
-flip it to blocking once the backlog is cleared. Until then, **do not add new lint
-violations** — run `npm --prefix apps/web run lint` locally and keep your own changes clean.
-
-The repository policy requires these four blocking jobs on a branch that is
+The repository policy requires these five blocking jobs on a branch that is
 up to date with `dev`. The GitHub ruleset described in
 [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) is **active**,
 so admission is mechanical: direct pushes to `dev` are rejected and merges are blocked
 until the branch is current and the required checks are green.
-
-GitHub Merge Queue is unavailable while this repository is owned by the
-personal `sabbour` account. Strict up-to-date protection causes more
-update/retest churn when concurrent PRs race, but it is the enforceable
-fallback. Revisit Merge Queue only if the repository moves to an organization.
 
 ## Opening a pull request
 

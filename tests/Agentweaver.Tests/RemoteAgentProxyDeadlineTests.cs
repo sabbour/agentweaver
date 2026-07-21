@@ -22,12 +22,18 @@ public sealed class RemoteAgentProxyDeadlineTests
     [Fact]
     public async Task QuietTurn_LongerThanFormerIdleWindow_ButWithinConfiguredIdle_Completes()
     {
+        // Margins here are intentionally generous (800ms of idle headroom per update)
+        // rather than razor-thin: this suite runs with unbounded xUnit parallelism
+        // across ~2700 tests, and GitHub-hosted runners see real scheduler jitter
+        // (occasionally several hundred ms) under that contention. A tight margin
+        // caused this test to flake in CI (idle timeout firing mid-gap even though
+        // the stream was healthy) — see run 29809482065.
         var formerIdleWindow = TimeSpan.FromMilliseconds(100);
-        var perUpdateGap = TimeSpan.FromMilliseconds(220);
+        var perUpdateGap = TimeSpan.FromMilliseconds(200);
         var options = new RemoteAgentProxyOptions
         {
-            ReadIdleTimeout = TimeSpan.FromMilliseconds(500),
-            TotalTurnTimeout = TimeSpan.FromSeconds(5),
+            ReadIdleTimeout = TimeSpan.FromMilliseconds(1000),
+            TotalTurnTimeout = TimeSpan.FromSeconds(15),
         };
         var collected = new List<int>();
         var stopwatch = Stopwatch.StartNew();
@@ -41,7 +47,7 @@ public sealed class RemoteAgentProxyDeadlineTests
         }
 
         stopwatch.Stop();
-        collected.Should().Equal(1, 2, 3);
+        collected.Should().Equal(1, 2, 3, 4, 5, 6);
         perUpdateGap.Should().BeGreaterThan(formerIdleWindow,
             "each healthy quiet gap exceeds the former worker idle window");
         stopwatch.Elapsed.Should().BeGreaterThan(options.ReadIdleTimeout,
@@ -189,7 +195,7 @@ public sealed class RemoteAgentProxyDeadlineTests
         TimeSpan perUpdateGap,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        foreach (var item in new[] { 1, 2, 3 })
+        foreach (var item in new[] { 1, 2, 3, 4, 5, 6 })
         {
             await Task.Delay(perUpdateGap, ct);
             yield return item;

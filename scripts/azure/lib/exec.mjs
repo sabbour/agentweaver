@@ -95,7 +95,36 @@ export function resolveExecutable(cmd) {
       if (fs.existsSync(full) && fs.statSync(full).isFile()) return full;
     }
   }
+
+  // Git for Windows always bundles a real openssl.exe (used for CA/CSR
+  // signing in gen-a2a-mtls-certs.mjs, which is too complex to reimplement
+  // with node:crypto), but only puts <git-root>\cmd (or \bin) on PATH -- not
+  // \usr\bin, where openssl actually lives. Since git is already a hard
+  // prerequisite for this whole toolchain (this IS a git repo), reuse git's
+  // resolved location to find the bundled openssl rather than requiring
+  // users to hand-edit PATH. Verified layout: git.exe at <root>\cmd\git.exe
+  // or <root>\bin\git.exe or <root>\mingw64\bin\git.exe, openssl.exe at
+  // <root>\usr\bin\openssl.exe in all three cases.
+  if (isWindows && cmd.toLowerCase() === "openssl") {
+    const bundled = findWindowsGitBundledOpenssl(pathDirs);
+    if (bundled) return bundled;
+  }
+
   return cmd;
+}
+
+function findWindowsGitBundledOpenssl(pathDirs) {
+  for (const dir of pathDirs) {
+    const gitExe = path.join(dir, "git.exe");
+    if (!fs.existsSync(gitExe)) continue;
+    // dir is one of <root>\cmd, <root>\bin, or <root>\mingw64\bin.
+    const candidateRoots = [path.dirname(dir), path.dirname(path.dirname(dir))];
+    for (const root of candidateRoots) {
+      const opensslExe = path.join(root, "usr", "bin", "openssl.exe");
+      if (fs.existsSync(opensslExe)) return opensslExe;
+    }
+  }
+  return null;
 }
 
 function needsCmdWrapper(resolvedPath) {
