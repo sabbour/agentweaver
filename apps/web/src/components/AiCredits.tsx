@@ -9,7 +9,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { SparkleRegular } from '@fluentui/react-icons';
-import { costChipLabel, formatAic } from './CostChip';
+import { costChipLabel, formatAic } from './costChipFormat';
 import { formatUsd, hasUsdRate, nanoAiuToCredits } from '../lib/credits';
 
 const useStyles = makeStyles({

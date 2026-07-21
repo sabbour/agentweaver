@@ -1,7 +1,7 @@
 import { makeStyles, mergeClasses, ProgressBar, Text, tokens } from '@fluentui/react-components';
 import { InfoRegular } from '@fluentui/react-icons';
 import { AgentIdentity } from '../AgentIdentity';
-import { costChipLabel } from '../CostChip';
+import { costChipLabel } from '../costChipFormat';
 import { Body, EmptyState, TitleText } from '../ui';
 import type { AgentUsageBreakdownDto, RunAgentTokenBreakdownDto } from '../../api/types';
 

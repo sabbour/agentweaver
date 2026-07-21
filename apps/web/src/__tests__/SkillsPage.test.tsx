@@ -774,17 +774,20 @@ describe('SkillsPage — blueprint defaults', () => {
     renderPage();
     const trigger = await screen.findByRole('button', { name: 'Preview blueprint defaults' });
     await user.click(trigger);
-    await screen.findByRole('dialog');
+    // A longer timeout guards against full-suite parallel-worker CPU
+    // contention delaying Fluent UI's dialog mount/focus-trap wiring (same
+    // rationale as the CoordinatorRunPage dialog tests).
+    await screen.findByRole('dialog', {}, { timeout: 4000 });
 
     await user.keyboard('{Escape}');
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(document.activeElement).toBe(trigger);
       expect((trigger as HTMLButtonElement).disabled).toBe(false);
-    });
+    }, { timeout: 4000 });
 
     await user.click(trigger);
-    await screen.findByRole('dialog');
+    await screen.findByRole('dialog', {}, { timeout: 4000 });
     const backdrop = document.querySelector<HTMLElement>('[class*="fui-DialogSurface__backdrop"]');
     expect(backdrop).toBeTruthy();
     fireEvent.click(backdrop!);
@@ -792,7 +795,7 @@ describe('SkillsPage — blueprint defaults', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(document.activeElement).toBe(trigger);
-    });
+    }, { timeout: 4000 });
   });
 
   it('cancels an in-flight preview when the dialog closes', async () => {
