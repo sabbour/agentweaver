@@ -107,6 +107,70 @@ public sealed class OpenPullRequestWorkflowTests
     }
 
     [Fact]
+    public void Loader_AcceptsOpenPullRequestAfterMerge()
+    {
+        var yaml = """
+        id: open-pr-after-merge
+        name: Open Pull Request After Merge
+        start: implement
+        nodes:
+          - id: implement
+            type: prompt
+            label: Implement
+          - id: review
+            type: check
+            label: Review
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: merge
+            type: merge
+            label: Merge
+          - id: open-pr
+            type: open_pull_request
+            label: Open Pull Request
+          - id: record
+            type: scribe
+            label: Record
+          - id: done
+            type: terminal
+            label: Done
+          - id: declined
+            type: terminal
+            label: Declined
+        edges:
+          - from: implement
+            to: review
+          - from: review
+            to: merge
+            when: approved
+          - from: review
+            to: implement
+            when: request-changes
+          - from: review
+            to: declined
+            when: declined
+          - from: merge
+            to: open-pr
+            when: merged
+          - from: merge
+            to: review
+            when: blocked
+          - from: open-pr
+            to: record
+          - from: record
+            to: done
+        """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "test");
+
+        result.IsValid.Should().BeTrue(result.Error);
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.Definition!).Should().BeEmpty();
+    }
+
+    [Fact]
     public void RenderTemplate_SubstitutesAllPlaceholders()
     {
         var output = new AgentTurnOutput(
@@ -406,6 +470,15 @@ public sealed class OpenPullRequestWorkflowTests
             LastToken = accessToken;
             return Task.FromResult(result);
         }
+
+        public Task<GitHubPullRequestResult?> FindOpenPullRequestAsync(
+            string owner,
+            string repo,
+            string baseBranch,
+            string headBranch,
+            string accessToken,
+            CancellationToken ct = default) =>
+            Task.FromResult<GitHubPullRequestResult?>(null);
     }
 
     private sealed class FixedAccessTokenProvider(string? token) : IGitHubAccessTokenProvider

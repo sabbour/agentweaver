@@ -11,14 +11,15 @@ namespace Agentweaver.Tests.Workflows;
 /// <summary>
 /// Feature 015 US1 — the generalized <see cref="RunWorkflowGraphBinder"/> resolves each node's executor
 /// from its TYPE (not a fixed id vocabulary) and wires edges from <c>(from, to, when)</c> generically,
-/// while producing a byte-for-byte identical graph for the default workflow (the P0 parity guarantee).
+/// while producing a byte-for-byte identical graph for the default workflow's visible stages (the P0
+/// parity guarantee as the pipeline evolves).
 /// </summary>
 public sealed class RunWorkflowGraphBinderTests
 {
     // ── Parity (real path): the default workflow built through the new binder with the REAL executors
-    //    collapses to the same five-stage graph the hand-wired pipeline produced. ────────────────────
+    //    collapses to the same six-stage graph the hand-wired pipeline now produces. ────────────────
     [Fact]
-    public void DefaultWorkflow_RealPath_ProducesCanonicalFiveStageGraph()
+    public void DefaultWorkflow_RealPath_ProducesCanonicalSixStageGraph()
     {
         using var factory = new WorkflowWebApplicationFactory();
         var workflowFactory = factory.Services.GetRequiredService<RunWorkflowFactory>();
@@ -31,7 +32,7 @@ public sealed class RunWorkflowGraphBinderTests
     // ── Parity (unit path): the default WorkflowDefinition wired through the binder onto fake-but-typed
     //    bindings produces the canonical collapsed graph. This pins the raw edge/predicate/output set. ─
     [Fact]
-    public void DefaultDefinition_Binder_ProducesCanonicalFiveStageGraph()
+    public void DefaultDefinition_Binder_ProducesCanonicalSixStageGraph()
     {
         var bindings = FakeBindings.Create();
         var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
@@ -57,7 +58,7 @@ public sealed class RunWorkflowGraphBinderTests
         var descriptor = builder.BuildDescriptor("test-renamed", "full");
 
         // The descriptor nodes are the EXECUTOR logical ids (resolved by type), not the definition ids,
-        // so a renamed definition collapses to the exact same canonical five-stage graph.
+        // so a renamed definition collapses to the exact same canonical six-stage graph.
         AssertCanonicalDefaultGraph(descriptor);
     }
 
@@ -124,7 +125,7 @@ public sealed class RunWorkflowGraphBinderTests
         descriptor.StartNodeId.Should().Be("agent");
 
         descriptor.Nodes.Select(n => n.Id).Should().BeEquivalentTo(
-            new[] { "agent", "rai", "review", "merge", "scribe" });
+            new[] { "agent", "rai", "review", "merge", "push-pr", "scribe" });
 
         var edges = descriptor.Edges.Select(e => (e.From, e.To, e.Loopback)).ToList();
 
@@ -136,7 +137,8 @@ public sealed class RunWorkflowGraphBinderTests
             ("rai",    "review", false),
             ("review", "merge",  false),
             ("review", "agent",  true),   // request-changes loop
-            ("merge",  "scribe", false),  // merged path
+            ("merge",  "push-pr", false), // merged path
+            ("push-pr","scribe", false),  // record published/reused PR outcome
             ("merge",  "review", true),   // blocked re-review loop
         });
     }
@@ -160,6 +162,7 @@ public sealed class RunWorkflowGraphBinderTests
             Node("safety", WorkflowNodeType.Check, gateKind: "rai"),
             Node("approve", WorkflowNodeType.Check, gateKind: "human-review"),
             Node("apply", WorkflowNodeType.Merge),
+            Node("publish", WorkflowNodeType.OpenPullRequest),
             Node("record", WorkflowNodeType.Scribe),
             Node("safety-stop", WorkflowNodeType.Terminal),
             Node("rejected", WorkflowNodeType.Terminal),
@@ -175,8 +178,9 @@ public sealed class RunWorkflowGraphBinderTests
             new WorkflowEdge { From = "approve", To = "apply", When = "approved" },
             new WorkflowEdge { From = "approve", To = "plan", When = "request-changes" },
             new WorkflowEdge { From = "approve", To = "rejected", When = "declined" },
-            new WorkflowEdge { From = "apply", To = "record", When = "merged" },
+            new WorkflowEdge { From = "apply", To = "publish", When = "merged" },
             new WorkflowEdge { From = "apply", To = "approve", When = "blocked" },
+            new WorkflowEdge { From = "publish", To = "record" },
             new WorkflowEdge { From = "record", To = "finished" },
         ],
     };
@@ -197,6 +201,7 @@ internal static class FakeBindings
         var rai = Exec("rai-turn", "rai", "review", "gate", hidden: false);
         var review = Exec("review-gate", "review", "review", "gate", hidden: false);
         var merge = Exec("merge", "merge", "merge", "action", hidden: false);
+        var openPr = Exec("open-pr", "push-pr", "action", "action", hidden: false);
         var scribeMerge = Exec("scribe-turn-merge", "scribe", "scribe", "agent", hidden: false);
         var scribeNoChanges = Exec("scribe-turn-no-changes", "scribe", "scribe", "agent", hidden: false);
         var scribeInputMerge = Exec("scribe-input-merge", "scribe", "scribe", "agent", hidden: false);
@@ -214,6 +219,7 @@ internal static class FakeBindings
         var policyAgentOutputAdapter = Exec("policy-agent-output-adapter", "policy-agent-output-adapter", "plumbing", "action", hidden: true);
         var policyDirectMergeAdapter = Exec("policy-direct-merge-adapter", "policy-direct-merge-adapter", "plumbing", "action", hidden: true);
         var mergeAdapter = Exec("merge-adapter", "merge-adapter", "plumbing", "action", hidden: true);
+        var mergeToOutputAdapter = Exec("merge-to-output-adapter", "merge-to-output-adapter", "plumbing", "action", hidden: true);
         var terminalMerge = Exec("terminal-merge", "terminal-merge", "plumbing", "terminal", hidden: true);
         var blockedAdapter = Exec("blocked-adapter", "blocked-adapter", "plumbing", "action", hidden: true);
         var reviewChangesAdapter = Exec("review-changes-adapter", "review-changes-adapter", "plumbing", "action", hidden: true);
@@ -246,7 +252,7 @@ internal static class FakeBindings
             ReviewChangesAdapter: reviewChangesAdapter,
             TerminalDeclined: terminalDeclined,
             MaxIterations: 3,
-            Wiring: new FakeWiring(agent));
+            Wiring: new FakeWiring(agent, openPr, mergeToOutputAdapter, new ScribeSubPath(scribeInputMerge, scribeMerge, scribeOutputMerge)));
     }
 
     private static ExecutorBinding Exec(string id, string logicalId, string role, string nodeType, bool hidden) =>
@@ -261,11 +267,15 @@ internal static class FakeBindings
 /// (logical id "agent") for ANY node id — preserving the id-independent collapse to the canonical graph.
 /// The generic catalog adapters are exercised by the factory-level binding test, not here, so they throw.
 /// </summary>
-internal sealed class FakeWiring(ExecutorBinding agent) : IRunWorkflowWiringSupport
+internal sealed class FakeWiring(
+    ExecutorBinding agent,
+    ExecutorBinding openPr,
+    ExecutorBinding mergeToOutputAdapter,
+    ScribeSubPath openPrScribePath) : IRunWorkflowWiringSupport
 {
     public ExecutorBinding ResolveAgentNode(WorkflowNode node) => agent;
     public ExecutorBinding ResolvePeerReviewNode(WorkflowNode node) => throw new NotSupportedException();
-    public ExecutorBinding ResolveOpenPullRequestNode(WorkflowNode node) => throw new NotSupportedException();
+    public ExecutorBinding ResolveOpenPullRequestNode(WorkflowNode node) => openPr;
     public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding ReviewToAgentForwardAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding ReviewToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
@@ -276,9 +286,9 @@ internal sealed class FakeWiring(ExecutorBinding agent) : IRunWorkflowWiringSupp
     public ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding ReviewToTerminalAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
     public ScribeSubPath AgentScribePath(WorkflowEdge edge) => throw new NotSupportedException();
-    public ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge) => throw new NotSupportedException();
+    public ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge) => openPrScribePath;
     public ScribeSubPath ReviewScribePath(WorkflowEdge edge) => throw new NotSupportedException();
 }
