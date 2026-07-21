@@ -12,6 +12,17 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Explicit namespace transformer (also set in k8s/base/kustomization.yaml).
+# Required here too: the namespace transformer only applies to resources
+# *produced by this kustomization*. Resources pulled in via `resources: -
+# ../../base` already carry base's transformer, so this is a no-op for them,
+# but generators declared directly in *this* overlay (configMapGenerator
+# below) have no namespace of their own otherwise and default to whatever
+# namespace `kubectl apply` falls back to (typically "default"), which
+# breaks every configMapKeyRef in k8s/base/*.yaml that expects this
+# ConfigMap to live in the agentweaver namespace.
+namespace: agentweaver
+
 resources:
   - ../../base
 

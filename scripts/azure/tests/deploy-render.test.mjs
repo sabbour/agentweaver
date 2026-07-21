@@ -135,6 +135,25 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
       assert.match(manifest, new RegExp(`name: ${name}\\b`), `${filename} should contain ${kind}/${name}`);
     }
   }
+
+  // Regression: the overlay's configMapGenerator-produced ConfigMap (and any
+  // other namespace-scoped resource) must carry `namespace: agentweaver`.
+  // This was previously missing because the overlay's own kustomization.yaml
+  // had no top-level `namespace:` transformer -- base's transformer only
+  // applies to resources pulled in via `resources: - ../../base`, not to
+  // generators declared directly in the overlay. Left unset, kubectl apply
+  // falls back to whatever namespace the current context defaults to
+  // (typically "default"), silently breaking every configMapKeyRef that
+  // expects this ConfigMap to live in the agentweaver namespace.
+  const CLUSTER_SCOPED_KINDS = new Set(["Namespace", "StorageClass"]);
+  for (const doc of docs) {
+    if (CLUSTER_SCOPED_KINDS.has(doc.kind) || !doc.kind) continue;
+    assert.match(
+      doc.text,
+      /^\s*namespace: agentweaver\s*$/m,
+      `${doc.kind}/${doc.name} must be namespaced to 'agentweaver'`,
+    );
+  }
 });
 
 test("manifestForFilename() throws a clear error for an unknown filename (fail-fast, no silent partial applies)", () => {
