@@ -159,7 +159,9 @@ describe('NotificationBell + NotificationsProvider', () => {
 
   it('keeps a dismissed notification hidden after a subsequent poll', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([makeNotification()]));
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([makeNotification()]))
+      .mockResolvedValueOnce(respond([]));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
     renderBell(1000);
