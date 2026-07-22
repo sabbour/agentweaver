@@ -1,12 +1,13 @@
 import { Badge, Button, FluentProvider, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { SparkleRegular } from '@fluentui/react-icons';
-import { ReactFlow, type Node } from '@xyflow/react';
+import { ReactFlow, type Edge, type Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { createRoot } from 'react-dom/client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { agentweaverLightTheme } from '../theme';
 import {
   forwardEdge,
+  loopbackEdge,
   iconForRole,
   roleDescForRole,
   workflowEdgeTypes,
@@ -20,64 +21,117 @@ import {
   type NodeSizeHint,
 } from '../utils/dagLayout';
 
+type WorkflowNodeType = 'prompt' | 'peer_review' | 'check' | 'build_test' | 'merge' | 'open_pull_request' | 'scribe' | 'terminal';
+
 type WorkflowStep = {
   id: string;
+  type: WorkflowNodeType;
   label: string;
   role: string;
-  nodeType: 'subtask' | 'gate' | 'action';
+  kind: 'live' | 'gate' | 'terminal' | 'action' | 'agent';
+  agent?: string;
+  prompt?: string;
+  gateKind?: string;
+  branches?: string[];
   modelId?: string;
+};
+
+type WorkflowEdge = {
+  from: string;
+  to: string;
+  when?: string;
 };
 
 type WorkflowPreset = {
   id: string;
   name: string;
   description: string;
-  schedule?: string;
+  version: string;
+  start: string;
   steps: WorkflowStep[];
+  edges: WorkflowEdge[];
 };
 
-const PRESETS: WorkflowPreset[] = [
+// eslint-disable-next-line react-refresh/only-export-components
+export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   {
     id: 'pm-delivery',
     name: 'Product Management',
     description: 'Turn a product request into a reviewed, shippable plan.',
-    schedule: '0 9 * * 1-5',
+    version: '1.0',
+    start: 'triage',
     steps: [
-      { id: 'triage', label: 'Triage request', role: 'agent', nodeType: 'subtask', modelId: 'claude-sonnet-5' },
-      { id: 'draft-spec', label: 'Draft spec', role: 'agent', nodeType: 'subtask', modelId: 'claude-opus-4.8' },
-      { id: 'break-tasks', label: 'Break into tasks', role: 'agent', nodeType: 'subtask', modelId: 'claude-sonnet-5' },
-      { id: 'build-test', label: 'Build & Test', role: 'build_test', nodeType: 'gate' },
-      { id: 'rai', label: 'RAI check', role: 'rai', nodeType: 'gate' },
-      { id: 'review', label: 'Human review', role: 'review', nodeType: 'gate' },
-      { id: 'ship', label: 'Merge & ship', role: 'merge', nodeType: 'action' },
+      { id: 'triage', type: 'prompt', label: 'Triage request', role: 'agent', kind: 'live', agent: 'product-manager', prompt: 'Clarify the request, user value, and delivery constraints.' },
+      { id: 'draft-spec', type: 'prompt', label: 'Draft spec', role: 'agent', kind: 'live', agent: 'product-manager', prompt: 'Write an actionable product specification with acceptance criteria.' },
+      { id: 'break-tasks', type: 'prompt', label: 'Break into tasks', role: 'agent', kind: 'live', agent: 'product-manager', prompt: 'Break the approved specification into independent delivery tasks.' },
+      { id: 'review-gate', type: 'check', label: 'Plan review', role: 'review', kind: 'gate', gateKind: 'human-review', branches: ['approved', 'request-changes', 'declined'] },
+      { id: 'terminal-declined', type: 'terminal', label: 'Declined', role: 'plumbing', kind: 'terminal' },
+      { id: 'done', type: 'terminal', label: 'Done', role: 'plumbing', kind: 'terminal' },
+    ],
+    edges: [
+      { from: 'triage', to: 'draft-spec' },
+      { from: 'draft-spec', to: 'break-tasks' },
+      { from: 'break-tasks', to: 'review-gate' },
+      { from: 'review-gate', to: 'done', when: 'approved' },
+      { from: 'review-gate', to: 'draft-spec', when: 'request-changes' },
+      { from: 'review-gate', to: 'terminal-declined', when: 'declined' },
     ],
   },
   {
     id: 'content-author',
     name: 'Content Author',
     description: 'Research, write, review, and publish a finished story.',
+    version: '1.0',
+    start: 'research',
     steps: [
-      { id: 'research', label: 'Research brief', role: 'agent', nodeType: 'subtask', modelId: 'claude-sonnet-5' },
-      { id: 'draft', label: 'Draft article', role: 'agent', nodeType: 'subtask', modelId: 'claude-opus-4.8' },
-      { id: 'edit', label: 'Edit for voice', role: 'agent', nodeType: 'subtask', modelId: 'claude-sonnet-5' },
-      { id: 'rai', label: 'RAI check', role: 'rai', nodeType: 'gate' },
-      { id: 'review', label: 'Editorial review', role: 'review', nodeType: 'gate' },
-      { id: 'publish', label: 'Publish', role: 'merge', nodeType: 'action' },
+      { id: 'research', type: 'prompt', label: 'Research brief', role: 'agent', kind: 'live', agent: 'content-author', prompt: 'Research the topic and prepare a factual brief.' },
+      { id: 'draft', type: 'prompt', label: 'Draft article', role: 'agent', kind: 'live', agent: 'content-author', prompt: 'Write the article from the approved research brief.' },
+      { id: 'editorial-review', type: 'peer_review', label: 'Editorial review', role: 'review', kind: 'live', agent: 'editor', prompt: 'Review the draft for accuracy, voice, and publication readiness.' },
+      { id: 'rai-check', type: 'check', label: 'RAI check', role: 'review', kind: 'gate', gateKind: 'rai', branches: ['revise', 'safety-failed', 'review'] },
+      { id: 'publish', type: 'open_pull_request', label: 'Publish', role: 'action', kind: 'live' },
+      { id: 'scribe', type: 'scribe', label: 'Record publication', role: 'scribe', kind: 'agent' },
+      { id: 'terminal-declined', type: 'terminal', label: 'Declined', role: 'plumbing', kind: 'terminal' },
+      { id: 'terminal-safety-failed', type: 'terminal', label: 'Safety Failed', role: 'plumbing', kind: 'terminal' },
+      { id: 'done', type: 'terminal', label: 'Done', role: 'plumbing', kind: 'terminal' },
+    ],
+    edges: [
+      { from: 'research', to: 'draft' },
+      { from: 'draft', to: 'editorial-review' },
+      { from: 'editorial-review', to: 'rai-check', when: 'approved' },
+      { from: 'editorial-review', to: 'draft', when: 'request-changes' },
+      { from: 'editorial-review', to: 'terminal-declined', when: 'declined' },
+      { from: 'rai-check', to: 'draft', when: 'revise' },
+      { from: 'rai-check', to: 'terminal-safety-failed', when: 'safety-failed' },
+      { from: 'rai-check', to: 'publish', when: 'review' },
+      { from: 'publish', to: 'scribe' },
+      { from: 'scribe', to: 'done' },
     ],
   },
   {
     id: 'bug-triage',
     name: 'Bug Triage',
     description: 'Route a customer report through reproduction, repair, and release.',
-    schedule: '0 */4 * * *',
+    version: '1.0',
+    start: 'triage',
     steps: [
-      { id: 'triage', label: 'Triage request', role: 'agent', nodeType: 'subtask', modelId: 'claude-sonnet-5' },
-      { id: 'reproduce', label: 'Reproduce issue', role: 'agent', nodeType: 'subtask', modelId: 'claude-sonnet-5' },
-      { id: 'fix', label: 'Implement fix', role: 'agent', nodeType: 'subtask', modelId: 'claude-opus-4.8' },
-      { id: 'build-test', label: 'Build & Test', role: 'build_test', nodeType: 'gate' },
-      { id: 'rai', label: 'RAI check', role: 'rai', nodeType: 'gate' },
-      { id: 'review', label: 'Human review', role: 'review', nodeType: 'gate' },
-      { id: 'merge', label: 'Merge', role: 'merge', nodeType: 'action' },
+      { id: 'triage', type: 'prompt', label: 'Triage request', role: 'agent', kind: 'live', agent: 'bug-triager', prompt: 'Reproduce the issue and identify its root cause.' },
+      { id: 'fix', type: 'prompt', label: 'Implement fix', role: 'agent', kind: 'live', agent: 'software-engineer', prompt: 'Implement the smallest safe fix with regression coverage.' },
+      { id: 'verify', type: 'peer_review', label: 'Verify fix', role: 'review', kind: 'live', agent: 'qa-engineer', prompt: 'Verify the fix resolves the defect without regressions.' },
+      { id: 'rai-check', type: 'check', label: 'RAI check', role: 'review', kind: 'gate', gateKind: 'rai', branches: ['revise', 'safety-failed', 'review'] },
+      { id: 'build-test', type: 'build_test', label: 'Build & Test', role: 'build_test', kind: 'live', agent: 'qa-engineer' },
+      { id: 'terminal-safety-failed', type: 'terminal', label: 'Safety Failed', role: 'plumbing', kind: 'terminal' },
+      { id: 'done', type: 'terminal', label: 'Done', role: 'plumbing', kind: 'terminal' },
+    ],
+    edges: [
+      { from: 'triage', to: 'fix' },
+      { from: 'fix', to: 'verify' },
+      { from: 'verify', to: 'rai-check', when: 'approved' },
+      { from: 'verify', to: 'fix', when: 'request-changes' },
+      { from: 'rai-check', to: 'fix', when: 'revise' },
+      { from: 'rai-check', to: 'terminal-safety-failed', when: 'safety-failed' },
+      { from: 'rai-check', to: 'build-test', when: 'review' },
+      { from: 'build-test', to: 'done', when: 'approved' },
+      { from: 'build-test', to: 'fix', when: 'request-changes' },
     ],
   },
 ];
@@ -90,9 +144,10 @@ const GENERATION_PROMPTS = [
 
 const COORDINATOR_STEP: WorkflowStep = {
   id: 'coordinator',
+  type: 'scribe',
   label: 'Coordinator dispatch',
   role: 'coordinator',
-  nodeType: 'action',
+  kind: 'agent',
   modelId: 'claude-sonnet-5',
 };
 
@@ -197,38 +252,66 @@ const useStyles = makeStyles({
   graph: { width: '100%', height: '100%', '& .react-flow__pane': { cursor: 'default' } },
 });
 
-function gateKind(role: string): string | undefined {
-  return {
-    build_test: 'build-test',
-    rai: 'rai',
-    review: 'human-review',
-  }[role];
+function graphNodeType(step: WorkflowStep): 'subtask' | 'gate' | 'action' | 'terminal' {
+  if (step.type === 'check' || step.type === 'build_test') return 'gate';
+  if (step.type === 'terminal') return 'terminal';
+  if (step.type === 'merge' || step.type === 'open_pull_request' || step.type === 'scribe') return 'action';
+  return 'subtask';
 }
 
-function yamlLines(preset: WorkflowPreset, generatedPrompt: string | null): { text: string; generated?: boolean }[] {
+// eslint-disable-next-line react-refresh/only-export-components
+export function yamlLines(preset: WorkflowPreset, generatedPrompt: string | null): { text: string; generated?: boolean }[] {
   return [
     { text: `id: ${preset.id}` },
     { text: `name: ${preset.name}` },
-    ...(preset.schedule ? [{ text: `schedule: "${preset.schedule}"` }] : []),
+    { text: `description: ${preset.description}` },
+    { text: `version: "${preset.version}"` },
+    { text: `start: ${preset.start}` },
     ...(generatedPrompt ? [{ text: `# Generated for: ${generatedPrompt}`, generated: true }] : []),
     { text: 'nodes:' },
     ...preset.steps.flatMap((step) => [
       { text: `  - id: ${step.id}` },
+      { text: `    type: ${step.type}` },
       { text: `    label: ${step.label}` },
       { text: `    role: ${step.role}` },
-      ...(gateKind(step.role) ? [{ text: `    gate_kind: ${gateKind(step.role)}` }] : []),
+      { text: `    kind: ${step.kind}` },
+      ...(step.gateKind ? [{ text: `    gate_kind: ${step.gateKind}` }] : []),
+      ...(step.branches ? [{ text: '    branches:' }, ...step.branches.map((branch) => ({ text: `      - ${branch}` }))] : []),
+      ...(step.agent ? [{ text: `    agent: ${step.agent}` }] : []),
+      ...(step.prompt ? [{ text: `    prompt: ${step.prompt}` }] : []),
     ]),
+    { text: 'edges:' },
+    ...preset.edges.flatMap((edge) => [
+      { text: `  - from: ${edge.from}` },
+      { text: `    to: ${edge.to}` },
+      ...(edge.when ? [{ text: `    when: ${edge.when}` }] : []),
+    ]),
+  ];
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function workflowGraphEdges(preset: WorkflowPreset): Edge[] {
+  const order = new Map([COORDINATOR_STEP, ...preset.steps].map((step, index) => [step.id, index]));
+  return [
+    forwardEdge(`edge-${COORDINATOR_STEP.id}-${preset.start}`, COORDINATOR_STEP.id, preset.start),
+    ...preset.edges.map((edge) => {
+      const id = `edge-${edge.from}-${edge.to}-${edge.when ?? 'next'}`;
+      const isLoopback = (order.get(edge.to) ?? 0) <= (order.get(edge.from) ?? 0);
+      return isLoopback
+        ? loopbackEdge(id, edge.from, edge.to, edge.when ?? 'return')
+        : { ...forwardEdge(id, edge.from, edge.to), label: edge.when };
+    }),
   ];
 }
 
 export function WorkflowEditorPreview() {
   const styles = useStyles();
-  const [presetId, setPresetId] = useState(PRESETS[0].id);
+  const [presetId, setPresetId] = useState(WORKFLOW_PRESETS[0].id);
   const [generationIndex, setGenerationIndex] = useState(0);
   const [generatedPrompt, setGeneratedPrompt] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const preset = PRESETS.find((candidate) => candidate.id === presetId) ?? PRESETS[0];
+  const preset = WORKFLOW_PRESETS.find((candidate) => candidate.id === presetId) ?? WORKFLOW_PRESETS[0];
 
   useEffect(() => () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -263,13 +346,9 @@ export function WorkflowEditorPreview() {
       data: {},
     }));
     const sizeHints: Record<string, NodeSizeHint> = Object.fromEntries(
-      graphSteps.map((step) => [step.id, workflowNodeSizeHint(step.nodeType)]),
+      graphSteps.map((step) => [step.id, workflowNodeSizeHint(graphNodeType(step))]),
     );
-    const rawEdges = graphSteps.slice(1).map((step, index) => forwardEdge(
-      `edge-${graphSteps[index].id}-${step.id}`,
-      graphSteps[index].id,
-      step.id,
-    ));
+    const rawEdges = workflowGraphEdges(preset);
     const laidOut = layoutDagStaircase(
       rawNodes,
       rawEdges,
@@ -289,13 +368,13 @@ export function WorkflowEditorPreview() {
           def: { key: step.role, label: step.label, roleDescription: roleDescForRole(step.role), Icon: iconForRole(step.role) },
           state: { status: step.id === COORDINATOR_STEP.id ? 'started' : 'completed' },
           modelId: step.modelId,
-          nodeType: step.nodeType,
+          nodeType: graphNodeType(step),
           dir: 'GRID',
         },
       })),
       edges: routeGridEdges(rawEdges, laidOut),
     };
-  }, [graphSteps]);
+  }, [graphSteps, preset]);
 
   return (
     <FluentProvider theme={agentweaverLightTheme}>
@@ -314,7 +393,7 @@ export function WorkflowEditorPreview() {
         </div>
         <div className={styles.presetBar} aria-label="Workflow presets">
           <span className={styles.presetLabel}>Templates</span>
-          {PRESETS.map((candidate) => (
+          {WORKFLOW_PRESETS.map((candidate) => (
             <Button
               key={candidate.id}
               appearance={candidate.id === preset.id && !generatedPrompt ? 'primary' : 'secondary'}
