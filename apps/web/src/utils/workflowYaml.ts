@@ -189,6 +189,28 @@ export function setHeaderField(text: string, field: string, value: string): stri
   });
 }
 
+/** Set or remove a schedule trigger while preserving the rest of the workflow document. */
+export function setScheduleTrigger(
+  text: string,
+  trigger: { interval: 'daily' | 'weekly' | 'monthly'; timeOfDay: string; dayOfWeek?: string; dayOfMonth?: number } | null,
+): string {
+  return withDoc(text, (doc) => {
+    if (!isMap(doc.contents)) return;
+    if (trigger === null) {
+      doc.contents.delete('trigger');
+      return;
+    }
+    const value: Record<string, string | number> = {
+      type: 'schedule',
+      interval: trigger.interval,
+      time_of_day: trigger.timeOfDay,
+    };
+    if (trigger.interval === 'weekly' && trigger.dayOfWeek) value.day_of_week = trigger.dayOfWeek;
+    if (trigger.interval === 'monthly' && trigger.dayOfMonth) value.day_of_month = trigger.dayOfMonth;
+    doc.contents.set('trigger', value);
+  });
+}
+
 /** Set or delete a scalar field on the node identified by id. */
 export function setNodeField(text: string, id: string, field: string, value: string): string {
   return withDoc(text, (doc) => {
