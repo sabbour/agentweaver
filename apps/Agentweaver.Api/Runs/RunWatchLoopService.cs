@@ -746,7 +746,6 @@ public sealed class RunWatchLoopService
             var changed = await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, now, turnFailed.Reason, CancellationToken.None).ConfigureAwait(false);
 
-            EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
             if (!entry.HasEventType(EventTypes.RunFailed))
             {
                 entry.RecordNext(EventTypes.RunFailed, new
@@ -758,6 +757,7 @@ public sealed class RunWatchLoopService
                     retryable = turnFailed.Retryable,
                 });
             }
+            EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
@@ -772,7 +772,6 @@ public sealed class RunWatchLoopService
             var changed = await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, now, childFailed.Reason, CancellationToken.None).ConfigureAwait(false);
 
-            EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
             if (!entry.HasEventType(EventTypes.RunFailed))
             {
                 entry.RecordNext(EventTypes.RunFailed, new
@@ -784,6 +783,7 @@ public sealed class RunWatchLoopService
                     retryable = childFailed.Retryable,
                 });
             }
+            EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
