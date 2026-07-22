@@ -13,19 +13,20 @@ VERIFIED — needs follow-up run**.
 
 ## Recording order and verification status
 
-Record the beats in order, top to bottom: **1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4,
-2.5, 2.6, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7**.
+Record the beats in order, top to bottom: **1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 2.5,
+2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7**.
 
 | Beats | Status | Recording use |
 | --- | --- | --- |
 | 1.1, 2.1, 2.2 | Verified | Record with the stated live selectors. |
-| 1.2, 1.3, 2.4, 2.5, 2.6 | Nav-only / partial | Record only the verified surface; respect each cut condition and the "verify in mapping pass" notes. |
-| 2.3, 3.1–3.7 | Unverified | Do not include in a finished cut until a follow-up run supplies the missing artifact. |
+| 1.2, 1.3, 2.4, 2.6, 2.7, 2.8 | Nav-only / partial | Record only the verified surface; respect each cut condition and the "verify in mapping pass" notes. |
+| 2.3, 2.5, 3.1–3.7 | Unverified | Do not include in a finished cut until a follow-up run supplies the missing artifact. |
 
 New UI surfaces added in this pass — the **Generate a Blueprint** option, the **Import
-Skill** dialog, and the **Clarify** refinement input — have no confirmed selectors yet.
-Each is annotated **verify in mapping pass**: Trinity maps the real refs live before
-recording, and the placeholder locators here must not be recorded as-is.
+Skill** dialog, the **Clarify** refinement input, the Backlog-to-Ready **board drag** and
+task card, and the **Open preview** control — have no confirmed selectors yet. Each is
+annotated **verify in mapping pass**: Trinity maps the real refs live before recording, and
+the placeholder locators here must not be recorded as-is.
 
 ### Wait handling for every take
 
@@ -154,19 +155,19 @@ a real result are captured.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Frame the product" --description="Pick the product workflow and describe one small feature to build." --duration=18000
+playwright-cli video-chapter "Frame the product" --description="Pick the product workflow and ask the team to deliver a landing page." --duration=18000
 playwright-cli click "getByTestId('start-task-topbar-action')"
 playwright-cli select "getByLabel('Workflow', { exact: true })" "pm-discovery"
 playwright-cli click "getByRole('textbox', { name: 'Goal' })"
-playwright-cli type "Build the first tiny slice of Standup Scribe: a single-page web app where someone pastes a raw meeting transcript and gets back a clean list of action items, each with an owner and a due date when one is mentioned. The landing screen has a short welcome banner explaining the tool and one primary 'Paste transcript' button. Keep scope to this one MVP slice — paste text, extract action items, render the list. Define the problem, the target user, and the success criteria."
+playwright-cli type "Design and build the landing page for Standup Scribe, a tool that turns a pasted meeting transcript into a clean list of action items. The page has a welcome banner across the top that explains what the tool does, and directly below it one primary 'Paste transcript' call-to-action button that starts the flow. Keep scope to this one landing page: the welcome banner, the primary button, and a short supporting line. Define the problem, the target user, and the success criteria."
 playwright-cli hover "getByRole('button', { name: 'Define Outcome', exact: true })"
 playwright-cli click "getByRole('button', { name: 'Define Outcome', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “You start the product workflow and describe one small feature: paste a
-meeting transcript, get back the action items. It’s one MVP slice with clear success
-criteria.”
+Narration: “You start the product workflow and ask the team to design and build a landing
+page: a welcome banner up top and one primary ‘Paste transcript’ button below it. That’s
+the page you’ll preview and ship.”
 
 Pacing: type the goal naturally; pause before Define Outcome. Select the product
 discovery workflow with the verified `pm-discovery` value before entering the goal.
@@ -243,14 +244,82 @@ the live execution artifacts (the files and outputs the nodes produce) were not 
 Get the real artifact selectors before recording the “watch the work land” portion, and do
 not stage an empty run view as if work were flowing.
 
+Transition to Beat 2.4: once the tasks exist, move to the board to see them and queue
+one up.
+
 ---
 
-## Beat 2.4 — Approve the merge
+## Beat 2.4 — Review the board
 
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Approve the merge" --description="Wait for the approval notification, review the result, and approve the merge." --duration=14000
+playwright-cli video-chapter "Review the board" --description="See the broken-down tasks, then move the landing-page task from Backlog to Ready and watch it get picked up." --duration=16000
+playwright-cli click "getByRole('link', { name: 'Board', exact: true })"
+playwright-cli hover "getByRole('region', { name: 'Backlog column' })"
+playwright-cli hover "getByRole('region', { name: 'Ready column' })"
+playwright-cli snapshot
+# Human move: drag the landing-page card from Backlog to Ready — verb, card, and drop target unverified, verify in mapping pass.
+# playwright-cli drag "TODO(mapping): landing-page card in Backlog" "TODO(mapping): Ready column drop target"
+playwright-cli snapshot
+```
+
+Narration: “Independent task promotion split the plan into separate tasks, and here they
+are on the board. You drag the landing-page task from Backlog to Ready, and the
+coordinator picks it up.”
+
+Pacing: hold on Backlog so the split tasks are readable. You can only drag between Backlog
+and Ready; after the move, wait for the heartbeat to pull the card into Active. Pre-warm a
+Ready task or speed-ramp the pickup; never record idle polling.
+
+**Verify in mapping pass:** the landing-page card selector and the Backlog-to-Ready drag
+targets are not mapped, and the heartbeat pickup into Active was not captured. Trinity maps
+the card and the drop target; pre-warm a run so the pickup is visible.
+
+---
+
+## Beat 2.5 — Ship it
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Ship it" --description="Approve gates as they appear, wait for the preview environment in Build and Test, and open the live landing page." --duration=18000
+# Approve each gate as it appears (tool, permission, and preview-approval cards):
+playwright-cli click "getByTestId('notification-bell')"
+playwright-cli snapshot
+playwright-cli click "getByTestId('notification-bell')"
+# Preview environment: after Build & Test, an "Open preview" control exposes the Gateway preview URL — selector unverified, verify in mapping pass.
+playwright-cli click "TODO(mapping): 'Open preview' control on the Build & Test row"
+playwright-cli snapshot
+```
+
+Narration: “As the work runs, you approve each gate that comes up. After Build and Test,
+a preview environment starts up, and you open it to see the landing page running live.”
+
+Pacing: there may be more than one approval gate; approve each as it appears. Wait for the
+preview to reach “Open preview” before you launch it, using a pre-warmed run or a
+speed-ramp.
+
+Human-review automation: the preview step runs after Build & Test. Its states are **Open
+preview** (a reachable Gateway URL), **Preview pending approval** (approve the tool-approval
+card), and **Preview unavailable** (non-blocking). The preview URL appears on the Build &
+Test row and in the human-review artifacts panel.
+
+**Verify in mapping pass:** the **Open preview** control and the preview URL are not mapped.
+The preview can self-skip when there is no reachable Gateway preview, so pre-warm a run that
+produced a live preview, and let Trinity map the control before recording.
+
+**NOT YET VERIFIED — needs follow-up run:** no live preview environment or rendered landing
+page was captured on staging.
+
+---
+
+## Beat 2.6 — Approve the merge
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Approve the merge" --description="Open the final approval notification, approve the merge, and watch the run finish." --duration=14000
 playwright-cli click "getByTestId('notification-bell')"
 playwright-cli snapshot
 playwright-cli click "getByTestId('notification-bell')"
@@ -261,8 +330,8 @@ playwright-cli click "getByRole('button', { name: 'Approve & merge', exact: true
 playwright-cli snapshot
 ```
 
-Narration: “When the work’s ready, a notification asks you to approve. You review the
-result and approve the merge.”
+Narration: “When the work’s ready, a notification asks you to approve the merge. You
+review the final result, approve, and the run finishes.”
 
 Pacing: wait for the approval notification to arrive, then open it. Use the pause on
 Approve & merge so the automated click still reads as an intentional human decision.
@@ -277,7 +346,7 @@ Pre-warm a run that has reached the gate before recording this beat.
 
 ---
 
-## Beat 2.5 — Check health
+## Beat 2.7 — Check health
 
 **video-chapter**
 
@@ -301,7 +370,7 @@ and Agents tabs.
 
 ---
 
-## Beat 2.6 — Review team memory
+## Beat 2.8 — Review team memory
 
 **video-chapter**
 
