@@ -19,10 +19,10 @@ import {
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
-  DAG_NODE_SEP,
-  layoutDag,
+  layoutDagStaircase,
   NODE_TYPE_W,
   NODE_W,
+  routeGridEdges,
   roundedOrthogonalPath,
   workflowNodeSizeHint,
 } from '../utils/dagLayout';
@@ -1321,6 +1321,52 @@ const useInlinePanelStyles = makeStyles({
 const FIT_VIEW_OPTS = { padding: 0.2, maxZoom: 1.1 };
 
 /**
+ * Builds the read-only workflow-definition graph with the same staircase and
+ * grid-edge-routing pipeline used by the coordinator topology.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- pure graph transform is unit-tested independently.
+export function buildWorkflowDefinitionGraph(graph: WorkflowGraphDto): { rfNodes: Node[]; rfEdges: Edge[] } {
+  const allEdges = graph.edges.map((edge) =>
+    edge.loopback
+      ? loopbackEdge(`${edge.from}->${edge.to}`, edge.from, edge.to, edge.label ?? '')
+      : forwardEdge(`${edge.from}->${edge.to}`, edge.from, edge.to),
+  );
+  const forwardEdges = allEdges.filter((edge) => edge.type !== 'loopback');
+  const hints: Record<string, { width: number; height: number }> = {};
+  const raw: Node[] = graph.nodes.map((node) => {
+    const nodeType = node.node_type;
+    hints[node.id] = workflowNodeSizeHint(nodeType);
+    return {
+      id: node.id,
+      type: 'workflow',
+      position: { x: 0, y: 0 },
+      data: {
+        def: {
+          key:             node.role,
+          label:           node.label,
+          roleDescription: roleDescForRole(node.role),
+          Icon:            iconForRole(node.role),
+        },
+        state:     { status: 'pending' },
+        nodeType,
+        isPlanned: true,
+        // Grid routing chooses among all four sides, so expose the matching
+        // source and target handles used by CoordinatorRunPage.
+        dir: 'GRID',
+      } as WorkflowNodeData,
+    };
+  });
+  const rfNodes = layoutDagStaircase(
+    raw,
+    forwardEdges,
+    { rankdir: 'LR', rankSep: 40, nodeSep: 20, targetAspect: 1.35, minStepRanks: 3 },
+    hints,
+  );
+
+  return { rfNodes, rfEdges: routeGridEdges(allEdges, rfNodes) };
+}
+
+/**
  * Fetches the static graph descriptor for a workflow definition and renders a
  * read-only ReactFlow graph. Intended for inline expansion in WorkflowsPage.
  */
@@ -1360,41 +1406,10 @@ export function WorkflowDefinitionInlinePanel({
     return () => { cancelled = true; };
   }, [projectId, workflowId]);
 
-  const rfEdges = useMemo<Edge[]>(() => {
-    if (!graph) return [];
-    return graph.edges.map((e) =>
-      e.loopback
-        ? loopbackEdge(`${e.from}->${e.to}`, e.from, e.to, e.label ?? '')
-        : forwardEdge(`${e.from}->${e.to}`, e.from, e.to),
-    );
-  }, [graph]);
-
-  const rfNodes = useMemo<Node[]>(() => {
-    if (!graph) return [];
-    const forwardOnly = rfEdges.filter((e) => e.type !== 'loopback');
-    const hints: Record<string, { width: number; height: number }> = {};
-    const raw: Node[] = graph.nodes.map((n) => {
-      const nt = n.node_type;
-      hints[n.id] = workflowNodeSizeHint(nt);
-      return {
-        id: n.id,
-        type: 'workflow',
-        position: { x: 0, y: 0 },
-        data: {
-          def: {
-            key:             n.role,
-            label:           n.label,
-            roleDescription: roleDescForRole(n.role),
-            Icon:            iconForRole(n.role),
-          },
-          state:     { status: 'pending' },
-          nodeType:  nt,
-          isPlanned: true,
-        } as WorkflowNodeData,
-      };
-    });
-    return layoutDag(raw, forwardOnly, { rankdir: 'LR', rankSep: 60, nodeSep: DAG_NODE_SEP }, hints);
-  }, [graph, rfEdges]);
+  const { rfNodes, rfEdges } = useMemo(
+    () => graph ? buildWorkflowDefinitionGraph(graph) : { rfNodes: [], rfEdges: [] },
+    [graph],
+  );
 
   if (loading) {
     return (

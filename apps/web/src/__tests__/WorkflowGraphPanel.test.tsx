@@ -1,5 +1,10 @@
 import { AzureFluentProvider } from '../copilot-fluent-system';
-import { ActiveEdgeContext, ExecutionModalContext, workflowNodeTypes } from '../components/WorkflowGraphPanel';
+import {
+  ActiveEdgeContext,
+  buildWorkflowDefinitionGraph,
+  ExecutionModalContext,
+  workflowNodeTypes,
+} from '../components/WorkflowGraphPanel';
 import { buildSteppedConnectorRoute } from '../utils/dagLayout';
 import { BotRegular, CheckmarkCircleRegular, MergeRegular, ShieldRegular } from '../copilot-fluent-system';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
@@ -7,6 +12,7 @@ import { ReactFlow } from '@xyflow/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowNodeData } from '../components/WorkflowGraphPanel';
+import type { WorkflowGraphDto } from '../api/types';
 import type { Node } from '@xyflow/react';
 /**
  * Direct unit tests for WorkflowNode — verifies that node_type drives
@@ -278,6 +284,49 @@ describe('WorkflowNode — message field display', () => {
 });
 
 describe('WorkflowGraphPanel — topology connector routing', () => {
+  it('routes a diamond workflow through GRID handles without dangling edge endpoints', () => {
+    const graph: WorkflowGraphDto = {
+      graph_id: 'content-authoring',
+      variant: 'default',
+      start_node_id: 'author',
+      nodes: [
+        { id: 'author', label: 'Author', role: 'agent', kind: 'planned', node_type: 'agent' },
+        { id: 'rai', label: 'RAI Check', role: 'rai', kind: 'planned', node_type: 'gate' },
+        { id: 'safety-failed', label: 'Safety Failed', role: 'agent', kind: 'planned', node_type: 'action' },
+        { id: 'review', label: 'Human Review', role: 'review', kind: 'planned', node_type: 'gate' },
+        { id: 'declined', label: 'Declined', role: 'agent', kind: 'planned', node_type: 'terminal' },
+        { id: 'publish', label: 'Publish', role: 'merge', kind: 'planned', node_type: 'action' },
+        { id: 'done', label: 'Done', role: 'scribe', kind: 'planned', node_type: 'terminal' },
+      ],
+      edges: [
+        { from: 'author', to: 'rai', cardinality: 'direct', loopback: false },
+        { from: 'rai', to: 'safety-failed', cardinality: 'direct', loopback: false },
+        { from: 'rai', to: 'review', cardinality: 'direct', loopback: false },
+        { from: 'safety-failed', to: 'publish', cardinality: 'direct', loopback: false },
+        { from: 'review', to: 'declined', cardinality: 'direct', loopback: false },
+        { from: 'review', to: 'publish', cardinality: 'direct', loopback: false },
+        { from: 'publish', to: 'done', cardinality: 'direct', loopback: false },
+      ],
+    };
+
+    const { rfNodes, rfEdges } = buildWorkflowDefinitionGraph(graph);
+    const nodeIds = new Set(rfNodes.map((node) => node.id));
+
+    expect(rfEdges).toHaveLength(graph.edges.length);
+    for (const node of rfNodes) {
+      expect(node.data.dir).toBe('GRID');
+      expect(Number.isFinite(node.position.x)).toBe(true);
+      expect(Number.isFinite(node.position.y)).toBe(true);
+    }
+    for (const edge of rfEdges) {
+      expect(nodeIds.has(edge.source)).toBe(true);
+      expect(nodeIds.has(edge.target)).toBe(true);
+      expect(edge.sourceHandle).toMatch(/^source-(left|right|top|bottom)$/);
+      expect(edge.targetHandle).toMatch(/^target-(left|right|top|bottom)$/);
+      expect(edge.data).toMatchObject({ flowDirection: expect.any(String) });
+    }
+  });
+
   it('uses one orthogonal stepped path instead of cubic squiggles and junction dots', () => {
     const route = buildSteppedConnectorRoute({
       sourceX: 120,
