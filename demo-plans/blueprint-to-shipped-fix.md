@@ -67,7 +67,7 @@ playwright-cli type "blueprint-demo"
 playwright-cli snapshot
 ```
 
-Narration: “Here’s an empty GitHub repo. I paste the URL and give the project a
+Narration: “Here’s an empty GitHub repo. You paste the URL and give the project a
 name.”
 
 Pacing: leave action callouts on while typing; pause briefly on the repository URL.
@@ -90,9 +90,9 @@ playwright-cli click "getByRole('button', { name: 'Create' })"
 playwright-cli snapshot
 ```
 
-Narration: “A blueprint is a reusable team — the roles, the skills they carry, and the
-workflows they run. I can generate a custom one for my goal, or start from a preset; I’ll
-cast Product & Software Delivery.”
+Narration: “A blueprint is a reusable team: the roles, the skills they carry, and the
+workflows they run. You can generate a custom one for your goal or start from a preset.
+Here, you’ll cast Product & Software Delivery.”
 
 Pacing: hover the Generate option long enough to read it, then linger on the Product &
 Software Delivery card before Create.
@@ -125,9 +125,9 @@ playwright-cli click "getByRole('tab', { name: 'Assignments', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “Each agent has a name, a role, and a set of skills. On the Skills page I can
-import shared skills straight from a GitHub repo and assign each one to the agents that
-need it.”
+Narration: “Every agent has a name, a role, and a set of skills. On the Skills page you
+can import shared skills straight from a GitHub repo and assign each one to the agents
+that need it.”
 
 Pacing: hold on the agents list, then on the Skills catalog, then on the Assignments grid
 so the per-agent checkboxes are legible.
@@ -164,8 +164,9 @@ playwright-cli click "getByRole('button', { name: 'Define Outcome', exact: true 
 playwright-cli snapshot
 ```
 
-Narration: “I start the product workflow and describe one small feature: paste a meeting
-transcript, get back the action items. One MVP slice, with clear success criteria.”
+Narration: “You start the product workflow and describe one small feature: paste a
+meeting transcript, get back the action items. It’s one MVP slice with clear success
+criteria.”
 
 Pacing: type the goal naturally; pause before Define Outcome. Select the product
 discovery workflow with the verified `pm-discovery` value before entering the goal.
@@ -196,8 +197,8 @@ playwright-cli click "getByRole('button', { name: 'Confirm plan', exact: true })
 playwright-cli snapshot
 ```
 
-Narration: “I read the OutcomeSpec first, then use Clarify to tighten the scope. I let the
-independent pieces become their own tasks, and confirm.”
+Narration: “You read the OutcomeSpec first, then use Clarify to tighten the scope. You
+let the independent pieces become their own tasks, then confirm.”
 
 Pacing: show the Clarify exchange, then pause before Confirm plan so the human decision is
 legible.
@@ -229,8 +230,8 @@ playwright-cli click "getByRole('button', { name: 'Close panel' })"
 playwright-cli snapshot
 ```
 
-Narration: “The coordinator turns the plan into a graph of tasks. I click through a few
-nodes to see what each agent is doing, close it, and watch the work land.”
+Narration: “The coordinator turns the plan into a graph of tasks. You click through a few
+nodes to see what each agent’s doing, close it, and watch the work land.”
 
 Pacing: let each selected-node label settle. The verified graph focused Coordinator and
 Work plan at 130%; Zoom in on Research reached 156%. After closing the graph, hold on the
@@ -260,7 +261,7 @@ playwright-cli click "getByRole('button', { name: 'Approve & merge', exact: true
 playwright-cli snapshot
 ```
 
-Narration: “When the work is ready, a notification asks for my approval. I review the
+Narration: “When the work’s ready, a notification asks you to approve. You review the
 result and approve the merge.”
 
 Pacing: wait for the approval notification to arrive, then open it. Use the pause on
@@ -281,7 +282,7 @@ Pre-warm a run that has reached the gate before recording this beat.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Check project health" --description="Look at throughput, quality, cost, and traces per agent." --duration=14000
+playwright-cli video-chapter "Check project health" --description="See throughput, quality, cost, and traces for each agent." --duration=14000
 playwright-cli click "getByRole('link', { name: 'Dashboard', exact: true })"
 playwright-cli hover "getByRole('heading', { name: 'Operational signals' })"
 playwright-cli hover "getByRole('table', { name: 'Agent leaderboard' })"
@@ -292,7 +293,7 @@ playwright-cli snapshot
 ```
 
 Narration: “The Dashboard shows throughput and quality. Observability shows model use,
-cost, latency, and traces down to each agent.”
+cost, latency, and traces for each agent.”
 
 Pacing: do not hard-code changing counts. The live controls verified here are Dashboard
 Refresh and Time range, Observability time range and Refresh, and Overview, Traces,
@@ -311,8 +312,8 @@ playwright-cli click "getByRole('tab', { name: 'Decisions', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “Now the decisions the run made are saved. The next piece of work starts with
-that context instead of a blank page.”
+Narration: “The decisions the run made are saved now, so your next piece of work starts
+with that context instead of a blank page.”
 
 Reason for placement: this pays off the team we met in Beat 1.3, after a workflow has had a
 chance to write a decision, instead of showing an empty memory page early.
@@ -324,8 +325,8 @@ cut this beat until a real decision is visible.
 
 # Act 3 — Triage the seeded bug
 
-With the feature shipped and the decisions saved, I turn to a bug that was already filed
-against this repo.
+With the feature shipped and the decisions saved, you turn to a bug that was already
+filed against this repo.
 
 ## Beat 3.1 — Pivot to the seeded bug
 
@@ -336,8 +337,8 @@ playwright-cli video-chapter "Pivot to the seeded bug" --description="Start the 
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-**DRAFT VO — only record once verified:** “Same project, a filed bug: on a narrow tablet
-the welcome banner overlaps the primary button, so people can’t start.”
+**DRAFT VO — only record once verified:** “Same project, a filed bug: on a narrow tablet,
+the welcome banner overlaps the primary button, so people can’t get started.”
 
 **NOT YET VERIFIED — needs follow-up run:** no Agentweaver issue-list or linked-issue
 surface was validated. Keep the GitHub issue as pre-recording setup.
@@ -358,7 +359,7 @@ playwright-cli click "getByRole('button', { name: 'Send', exact: true })"
 ```
 
 Narration: “The assistant reads the issue, proposes the smallest safe fix and a test plan,
-and starts a Bug Fix workflow. Anything that changes state still waits for my approval.”
+and starts a Bug Fix workflow. Anything that changes state still waits for your approval.”
 
 Pacing: pause after typing, then allow the first streamed reply to appear.
 
@@ -413,8 +414,8 @@ playwright-cli video-chapter "Preview the repaired behavior" --description="Show
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “We preview the fix the same way we previewed the feature — the banner and the
-button no longer collide on a narrow tablet.”
+Narration: “You preview the fix the same way you previewed the feature. Now the banner and
+the button don’t collide on a narrow tablet.”
 
 **NOT YET VERIFIED — needs follow-up run:** no bug-preview surface was reached.
 
