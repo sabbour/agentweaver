@@ -40,7 +40,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
         [Description("Local working directory path")] string working_directory,
-        [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint,
+        [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint = null,
         [Description("Project origin: 'blank' (default) or 'github'")] string? origin = null,
         [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id = null,
         [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml = null,
