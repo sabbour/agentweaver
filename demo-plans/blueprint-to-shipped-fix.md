@@ -9,6 +9,7 @@
 
 1. **PASS — pick repo and create project.** From the authenticated `Projects` page, use `getByRole('button', { name: 'Create from GitHub' })`, `getByRole('textbox', { name: 'Or paste any repository' })`, `getByRole('button', { name: 'Go →' })`, `getByRole('textbox', { name: 'Project name' })`, and `getByRole('button', { name: 'Create' })`. This created **blueprint-demo** at `https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610`.
 2. **BLOCKED — the planned cast-confirmation gate is absent.** `getByRole('button', { name: 'Templates' })` exposes `getByRole('radio', { name: 'Product & Software Delivery' })`; its live preview contains Lead PM, Customer Researcher, Product Marketing Manager, and engineering roles. Selecting it and creating the project immediately cast 12 project agents (plus system agents); no human confirmation dialog/button appeared. The resulting team is verifiable through the `Agents` project-nav link and includes the required roles, but the recording cannot show the described approval gate.
+2a. **PARTIAL — cast, skills, and memory surfaces are verified.** The `Agents` page exposes `getByRole('list', { name: 'Project agents' })` and role-bearing cards such as `getByRole('button', { name: 'Active Ripley Lead PM' })`; the live cast has 12 project agents and 4 system agents. `getByRole('link', { name: 'Skills', exact: true })` exposes the Catalog and Assignments tabs and active built-in skills assigned to cast members. `getByRole('link', { name: 'Memories', exact: true })` exposes Decisions, Agent memory, and Session history, but this project currently has no recorded decisions or memories; do not present the empty state as captured learning.
 3. **PASS — PM workflow completed and its graph is verified.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e), which completed after 16m22s. `getByTestId('open-topology-minimap')` opens the **Topology** dialog with graph controls (`getByRole('button', { name: 'Fit to view' })`, `getByRole('button', { name: 'Tidy' })`) and the graph region. Live nodes use role selectors: `getByRole('button', { name: 'Coordinator: In Progress' })`, `getByRole('button', { name: 'Work plan: Complete' })`, and `getByRole('button', { name: /Research the problem space/ })`. Each updates the dialog’s `Selected:` focus; selecting Coordinator focused/zoomed the graph to 130%, selecting Research then using `getByRole('button', { name: 'Zoom in' })` reached 156%, and selecting Work plan refocused the graph at 130%. The initial `Coordinator: Pending`/`0.0000 AIC` snapshot was the normal early startup state, not a credit failure.
 4. **PARTIAL — customer research is a generated PM-workflow subtask.** The graph exposes `getByRole('treeitem', { name: /Research the problem space and target user/ })`; the task reached **Ready for assembly**. Its output has not yet been surfaced as a standalone results panel, so no output selector is claimed.
 5. **PASS — notifications affordance verified.** `getByTestId('notification-bell')` opens the **Notifications** panel (`getByRole('button', { name: 'Notifications' })`). This run displayed the empty-state text “Nothing needs your attention right now” and the `getByRole('switch', { name: 'Sound on' })` control.
@@ -18,6 +19,7 @@
 9. **BLOCKED — depends on completed implementation and a reachable human-review/preview state.**
 9a. **PARTIAL — post-merge workspace is verified; a live PR diff is not yet available.** `getByRole('link', { name: 'Workspace' })` opens the read-only Workspace, which exposes `getByRole('combobox', { name: 'Branch or worktree' })` and a visible branch/file tree. The current project is on `master (base)`. This dry run has not produced a merged PR or integration changes, so no **Files changed** tab/selector was fabricated; capture that selector from the generated PR only after Beat 9 genuinely completes.
 9b. **PASS — project Dashboard and Observability views are available.** `getByRole('link', { name: 'Dashboard', exact: true })` opens Dashboard with throughput, live pressure, run totals, task totals, quality evidence, model performance, and an Agent leaderboard. `getByRole('link', { name: 'Observability', exact: true })` opens telemetry with verified `Overview`, `Traces`, and `Agents` tabs, time-range and refresh controls, model-call count, AIC usage, model mix, and latency-percentile tables.
+10a. **PARTIAL — the browser assistant console and triage prompt are verified, but no bug run was started.** `getByRole('button', { name: 'New session', exact: true })` opens `/assistant` for the project. The console has `getByRole('textbox', { name: 'Message the assistant...' })` and `getByRole('button', { name: 'Send', exact: true })`; after entering the seeded-issue prompt, Send became available. Sending creates an operator run and any state-changing step asks for approval. This PM-focused dry run did not send the message or create a bug workflow; record its run, output, approval, and resulting bug task in a fresh, issue-seeded follow-up run.
 
 ### Recording-plan corrections required
 
@@ -123,6 +125,35 @@ Narration: “Next, we select the Product & Software Delivery template: it inclu
 Recording notes:
 
 - Staging does not expose a separate human cast-confirmation gate; do not narrate or record one.
+
+---
+
+## Beat 2a — Inspect the cast, reusable skills, and team memory
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Inspect the team behind the blueprint" --description="Show the cast, its reusable skills, and the team memory that accumulates decisions." --duration=14000
+playwright-cli click "getByRole('link', { name: 'Agents', exact: true })"
+playwright-cli snapshot
+playwright-cli hover "getByRole('list', { name: 'Project agents' })"
+playwright-cli hover "getByRole('button', { name: 'Active Ripley Lead PM' })"
+playwright-cli hover "getByRole('button', { name: 'Active Dallas Customer Researcher' })"
+playwright-cli click "getByRole('link', { name: 'Skills', exact: true })"
+playwright-cli snapshot
+playwright-cli click "getByRole('tab', { name: 'Assignments', exact: true })"
+playwright-cli snapshot
+playwright-cli click "getByRole('link', { name: 'Memories', exact: true })"
+playwright-cli snapshot
+```
+
+Narration: “The template is a real operating team, not a generic prompt. We can inspect the cast, the reusable skills assigned to them, and the shared memory where the team’s decisions and learnings accumulate.”
+
+Recording notes:
+
+- This scene follows Beat 2 because it makes the cast concrete before its first workflow produces work.
+- The live cast contains 12 project agents and four system agents. The Skills page has verified Catalog and Assignments tabs with built-in skills assigned to the cast.
+- **Current dry-run gap:** Team memory exposes Decisions, Agent memory, and Session history, but contains no decisions or memories. Use an entry created by a real subsequent workflow; otherwise show the empty state honestly or omit the memory portion.
 
 ---
 
@@ -499,6 +530,31 @@ Narration: “The repo already contains a seeded bug issue. From the issue itsel
 Recording notes:
 
 - If issue creation is outside Agentweaver in GitHub proper, treat that as pre-seeded setup and only show the linked issue inside Agentweaver.
+
+---
+
+## Beat 10a — Ask the assistant to triage the seeded bug
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Launch assisted bug triage" --description="Use the browser assistant to inspect the seeded issue and initiate a governed Bug Fix workflow." --duration=16000
+playwright-cli click "getByRole('button', { name: 'New session', exact: true })"
+playwright-cli snapshot
+playwright-cli click "getByRole('textbox', { name: 'Message the assistant...' })"
+# [PAUSE 600ms]
+playwright-cli type "Triage https://github.com/sabbour/agentweaver-demo-dryrun/issues/1. Investigate the narrow-tablet welcome-banner overlap, propose a minimal fix and test plan, then use the Bug Fix workflow."
+playwright-cli snapshot
+playwright-cli click "getByRole('button', { name: 'Send', exact: true })"
+playwright-cli snapshot
+```
+
+Narration: “For the repair loop, we use the operator assistant. It can inspect the seeded issue, propose the smallest safe fix and test plan, and begin the Bug Fix workflow — while any change to project state still asks for approval.”
+
+Recording notes:
+
+- The assistant page describes the first message as creating an operator run; capture its streamed response, any approval request, and the resulting bug task before proceeding to Beat 11.
+- **PARTIAL in this dry run:** the console, text box, and enabled Send action were verified, but no prompt was sent and no bug run was created. Run this beat in a fresh follow-up orchestration seeded against issue #1; then resolve the later bug-triage placeholders from that live output.
 
 ---
 
