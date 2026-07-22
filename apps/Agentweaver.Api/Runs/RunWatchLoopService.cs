@@ -537,12 +537,12 @@ public sealed class RunWatchLoopService
     /// <summary>
     /// Logical nodes whose <c>workflow.step</c> lifecycle is owned by a dedicated, richer emitter, so
     /// the generic MAF-event translator must NOT also emit for them (double-emit / status clobber):
-    /// agent, rai, merge, scribe self-emit from their executors (including revise/skipped/failed
-    /// nuances MAF lifecycle cannot express); review is driven by the HITL RequestInfoEvent + the
-    /// terminal handlers below.
+    /// agent, rai, merge, push-pr, and scribe self-emit from their executors (including
+    /// revise/skipped/failed nuances MAF lifecycle cannot express); review is driven by the HITL
+    /// RequestInfoEvent + the terminal handlers below.
     /// </summary>
     private static readonly HashSet<string> DedicatedStepNodes =
-        new(StringComparer.Ordinal) { "agent", "rai", "merge", "scribe", "review", "policy-rai", "policy-rubberduck", "policy-human-review" };
+        new(StringComparer.Ordinal) { "agent", "rai", "merge", "push-pr", "scribe", "review", "policy-rai", "policy-rubberduck", "policy-human-review" };
 
     private void EmitExecutorStep(string runId, RunStreamEntry entry, string executorId, string status)
     {

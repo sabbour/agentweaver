@@ -230,6 +230,7 @@ builder.Services.AddHttpClient("github-authz")
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
+builder.Services.AddSingleton<Agentweaver.Domain.IGitHubRepositoryClient, Agentweaver.Api.Github.GitHubRepositoryClient>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,

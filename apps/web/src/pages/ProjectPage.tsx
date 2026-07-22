@@ -11,11 +11,13 @@ import {
   DialogSurface,
   DialogTitle,
   DialogTrigger,
+  Link as FluentLink,
   MessageBar,
   MessageBarBody,
   Spinner,
   Text,
 } from '@fluentui/react-components';
+import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import { KanbanBoard } from '../components/board/KanbanBoard';
 import { PageHeader } from '../components/PageHeader';
 import { StartOrchestrationDialog } from '../components/StartOrchestrationDialog';
@@ -393,6 +395,7 @@ export function ProjectPage() {
   const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [connectRepoOpen, setConnectRepoOpen] = useState(false);
 
   const handleRunDeleted = (workflowRunId: string) => {
     setRuns((prev) => prev.filter((r) => r.workflow_run_id !== workflowRunId));
@@ -475,6 +478,27 @@ export function ProjectPage() {
             This project is unavailable. The agent worktree may have moved or become inaccessible.
           </MessageBarBody>
         </MessageBar>
+      )}
+
+      {project && project.origin === 'blank' && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            This project has no connected GitHub repository, so runs can't publish pull requests.{' '}
+            <FluentLink onClick={() => setConnectRepoOpen(true)}>Connect or create one</FluentLink>.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {project && (
+        <ConnectGitHubRepositoryDialog
+          projectId={projectId}
+          projectName={project.name}
+          open={connectRepoOpen}
+          onOpenChange={setConnectRepoOpen}
+          onConnected={(sourceRepository) => {
+            setProject((prev) => prev ? { ...prev, origin: 'github', source_repository: sourceRepository } : prev);
+          }}
+        />
       )}
 
       {project && (

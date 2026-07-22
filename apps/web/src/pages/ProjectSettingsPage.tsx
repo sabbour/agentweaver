@@ -1,5 +1,6 @@
 ﻿import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
   Badge,
   Button,
@@ -14,7 +15,7 @@ import {
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { Delete24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
+import { Branch24Regular, Delete24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { Project, SandboxPolicy, UpdateProjectProviderSettingsRequest } from '../api/types';
@@ -32,7 +33,7 @@ import {
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
-type SectionId = 'general' | 'sandbox' | 'danger';
+type SectionId = 'general' | 'repository' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
@@ -64,6 +65,12 @@ const SECTIONS: SectionDef[] = [
     icon: <Settings24Regular />,
   },
   {
+    id: 'repository',
+    label: 'Repository',
+    description: 'Connect or create the GitHub repository for this project.',
+    icon: <Branch24Regular />,
+  },
+  {
     id: 'sandbox',
     label: 'Sandbox policy',
     description: 'Control how agent commands execute and what they may reach.',
@@ -79,7 +86,7 @@ const SECTIONS: SectionDef[] = [
 ];
 
 function isSectionId(value: string | null): value is SectionId {
-  return value === 'general' || value === 'sandbox' || value === 'danger';
+  return value === 'general' || value === 'repository' || value === 'sandbox' || value === 'danger';
 }
 
 const useStyles = makeStyles({
@@ -227,6 +234,8 @@ export function ProjectSettingsPage() {
     next.set('section', id);
     setSearchParams(next, { replace: true });
   };
+
+  const [connectRepoOpen, setConnectRepoOpen] = useState(false);
 
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
@@ -429,7 +438,8 @@ export function ProjectSettingsPage() {
 
   if (!projectId) return null;
 
-  const activeDef = SECTIONS.find((s) => s.id === activeSection) ?? SECTIONS[0];
+  const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
+  const activeDef = visibleSections.find((s) => s.id === activeSection) ?? visibleSections[0];
 
   return (
     <PageContainer>
@@ -458,7 +468,7 @@ export function ProjectSettingsPage() {
       {project && (
         <div className={styles.layout}>
           <nav className={styles.rail} aria-label="Settings sections">
-            {SECTIONS.map((section) => (
+            {visibleSections.map((section) => (
               <button
                 key={section.id}
                 className={mergeClasses(
@@ -615,6 +625,34 @@ export function ProjectSettingsPage() {
                     <MessageBar intent="success"><MessageBarBody>Generation model settings saved.</MessageBarBody></MessageBar>
                   )}
                 </div>
+              </div>
+            )}
+
+            {activeSection === 'repository' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>Connect a GitHub repository</TitleText>
+                  <Body as="p" tone="muted">
+                    This project was started without a connected GitHub repository, so runs can't
+                    open pull requests. Create a new repository (or connect one you own) to enable
+                    publishing.
+                  </Body>
+                  <div className={styles.formActions}>
+                    <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>
+                      Connect or create repository
+                    </Button>
+                  </div>
+                </div>
+                <ConnectGitHubRepositoryDialog
+                  projectId={projectId}
+                  projectName={project.name}
+                  open={connectRepoOpen}
+                  onOpenChange={setConnectRepoOpen}
+                  onConnected={(sourceRepository) => {
+                    setProject((prev) => prev ? { ...prev, origin: 'github', source_repository: sourceRepository } : prev);
+                    selectSection('general');
+                  }}
+                />
               </div>
             )}
 
