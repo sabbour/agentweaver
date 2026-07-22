@@ -318,11 +318,31 @@ public sealed class PostgresSkillDefaultsTests(PostgresFixture pg)
                 await before.GetService<IMigrator>()
                     .MigrateAsync("20260716213000_AddProjectTeamRevision");
             }
-
             var project = NewProject(ProjectId.New());
             var projectStore = new EfProjectStore(factory);
             var skillStore = new EfSkillStore(factory);
-            await projectStore.InsertAsync(project);
+            // This fixture deliberately targets the historical schema before the current webhook
+            // migration, so insert the project through SQL rather than using today's EF model.
+            await using (var connection = new NpgsqlConnection(connectionBuilder.ConnectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO projects (
+                        project_id, name, origin_kind, working_directory, default_branch, owner,
+                        default_provider, state, created_at, updated_at, team_revision)
+                    VALUES (@projectId, @name, 'blank', @workingDirectory, 'main', @owner,
+                        'github-copilot', 'active', @createdAt, @updatedAt, 0);
+                    """;
+                command.Parameters.AddWithValue("projectId", project.Id.ToString());
+                command.Parameters.AddWithValue("name", project.Name);
+                command.Parameters.AddWithValue("workingDirectory", project.WorkingDirectory);
+                command.Parameters.AddWithValue("owner", project.Owner);
+                command.Parameters.AddWithValue("createdAt", project.CreatedAt);
+                command.Parameters.AddWithValue("updatedAt", project.UpdatedAt);
+                await command.ExecuteNonQueryAsync();
+            }
             var validSkill = NewBuiltIn(project.Id, "valid-upgrade-skill");
             // This intentionally targets the schema before the marketplace-provenance migration.
             // Insert the valid fixture through SQL so the current EF model does not require the
