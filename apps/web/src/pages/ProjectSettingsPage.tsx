@@ -1,5 +1,5 @@
 ﻿import { apiClient } from '../api/apiClient';
-import { API_URL } from '../config';
+import { resolvePublicApiOrigin } from '../config';
 import { ApiError } from '../api/client';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
@@ -449,7 +449,7 @@ export function ProjectSettingsPage() {
     }
   };
 
-  const webhookUrl = `${API_URL.replace(/\/$/, '')}/api/projects/${encodeURIComponent(projectId ?? '')}/webhooks/github`;
+  const webhookUrl = `${resolvePublicApiOrigin()}/api/projects/${encodeURIComponent(projectId ?? '')}/webhooks/github`;
 
   const copyWebhookValue = async (value: string, kind: 'url' | 'secret') => {
     try {

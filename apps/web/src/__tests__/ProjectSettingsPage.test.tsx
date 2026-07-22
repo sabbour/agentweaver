@@ -1,5 +1,5 @@
 import { apiClient } from '../api/apiClient';
-import { API_URL } from '../config';
+import { API_URL, resolvePublicApiOrigin } from '../config';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectSettingsPage } from '../pages/ProjectSettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -120,8 +120,12 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
 
     expect(screen.getByDisplayValue(
-      `${API_URL.replace(/\/$/, '')}/api/projects/proj-1/webhooks/github`,
+      `${resolvePublicApiOrigin(API_URL)}/api/projects/proj-1/webhooks/github`,
     )).toBeDefined();
+  });
+
+  it('uses the browser origin for public URLs when API_URL is the same-origin sentinel', () => {
+    expect(resolvePublicApiOrigin('')).toBe(window.location.origin);
   });
 
   it('renders generation model overrides with blank fields inheriting gpt-5.4', async () => {
