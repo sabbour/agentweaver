@@ -92,8 +92,8 @@ playwright-cli snapshot
 ```
 
 Narration: “A blueprint is a reusable team: the roles, the skills they carry, and the
-workflows they run. You can generate a custom one for your goal or start from a preset.
-Here, you’ll cast Product & Software Delivery.”
+workflows they run. Generate a custom one for your goal, or start from a preset. Here,
+you’ll cast Product & Software Delivery.”
 
 Pacing: hover the Generate option long enough to read it, then linger on the Product &
 Software Delivery card before Create.
@@ -112,7 +112,7 @@ before recording; do not record the placeholder locator.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Inspect the team" --description="Show the agents, the skills page, importing shared skills, and per-agent assignments." --duration=16000
+playwright-cli video-chapter "Inspect the team" --description="Show the agents, then import shared skills and assign them to each agent." --duration=16000
 playwright-cli click "getByRole('link', { name: 'Agents', exact: true })"
 playwright-cli hover "getByRole('list', { name: 'Project agents' })"
 playwright-cli hover "getByRole('button', { name: 'Active Ripley Lead PM' })"
@@ -126,9 +126,9 @@ playwright-cli click "getByRole('tab', { name: 'Assignments', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “Every agent has a name, a role, and a set of skills. On the Skills page you
-can import shared skills straight from a GitHub repo and assign each one to the agents
-that need it.”
+Narration: “Every agent has a name, a role, and a set of skills. On the Skills page,
+import shared skills straight from a GitHub repo and assign each one to the agents that
+need it.”
 
 Pacing: hold on the agents list, then on the Skills catalog, then on the Assignments grid
 so the per-agent checkboxes are legible.
@@ -218,7 +218,7 @@ recording; do not record the placeholder locators.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Watch the work plan run" --description="Open the topology graph, step through the new nodes, then watch execution and the artifacts it produces." --duration=16000
+playwright-cli video-chapter "Watch the work plan run" --description="Open the topology graph, step through the nodes, then watch the run produce artifacts." --duration=16000
 playwright-cli click "getByTestId('open-topology-minimap')"
 playwright-cli click "getByRole('button', { name: /Coordinator/ })"
 playwright-cli snapshot
@@ -254,7 +254,7 @@ one up.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Review the board" --description="See the broken-down tasks, then move the landing-page task from Backlog to Ready and watch it get picked up." --duration=16000
+playwright-cli video-chapter "Review the board" --description="See the promoted tasks, move the landing-page task from Backlog to Ready, and watch it get picked up." --duration=16000
 playwright-cli click "getByRole('link', { name: 'Board', exact: true })"
 playwright-cli hover "getByRole('region', { name: 'Backlog column' })"
 playwright-cli hover "getByRole('region', { name: 'Ready column' })"
@@ -264,9 +264,8 @@ playwright-cli snapshot
 playwright-cli snapshot
 ```
 
-Narration: “Independent task promotion split the plan into separate tasks, and here they
-are on the board. You drag the landing-page task from Backlog to Ready, and the
-coordinator picks it up.”
+Narration: “Independent task promotion split the plan into separate tasks. You drag the
+landing-page task from Backlog to Ready, and the coordinator picks it up.”
 
 Pacing: hold on Backlog so the split tasks are readable. You can only drag between Backlog
 and Ready; after the move, wait for the heartbeat to pull the card into Active. Pre-warm a
@@ -419,7 +418,7 @@ surface was validated. Keep the GitHub issue as pre-recording setup.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Ask the assistant to triage" --description="Have the assistant read the issue and kick off a Bug Fix workflow." --duration=14000
+playwright-cli video-chapter "Ask the assistant to triage" --description="Have the assistant read the issue and start a Bug Fix workflow." --duration=14000
 playwright-cli click "getByRole('button', { name: 'New session', exact: true })"
 playwright-cli click "getByRole('textbox', { name: 'Message the assistant...' })"
 playwright-cli type "Triage https://github.com/sabbour/agentweaver-demo-dryrun/issues/1. Investigate the narrow-tablet welcome-banner overlap, propose a minimal fix and test plan, then use the Bug Fix workflow."
@@ -495,7 +494,7 @@ the button don’t collide on a narrow tablet.”
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Approve the bug fix" --description="A person makes the final merge decision." --duration=10000
+playwright-cli video-chapter "Approve the bug fix" --description="Make the final merge decision." --duration=10000
 # Only when a live review gate is present:
 playwright-cli hover "getByRole('button', { name: 'Approve & merge', exact: true })"
 # [PAUSE 700ms]
