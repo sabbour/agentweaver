@@ -803,9 +803,6 @@ export interface AgentSessionPanelProps {
     totalNanoAiu?: number | null;
     detail?: ReactNode;
   };
-  /** True once the run has decomposed into a work plan / dispatched subtasks (or is terminal), so the
-   *  inline Outcome-plan view hides the pre-dispatch "Break into tasks" authoring action. */
-  outcomePlanDispatched?: boolean;
 }
 
 interface ConversationRow {
@@ -1837,7 +1834,9 @@ export function AgentSessionPanel({
   selectedNodeId,
   onSelectNode,
   coordinatorRunId,
-  projectId,
+  // Retained for prop-contract compatibility with existing callers/tests; no longer read internally.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  projectId: _projectId,
   onCoordinatorFollowUp,
   coordinatorActive = false,
   automation,
@@ -1847,7 +1846,6 @@ export function AgentSessionPanel({
   artifactAdapter,
   runChips,
   credits,
-  outcomePlanDispatched = false,
   workPlanTopologyThumbnail,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
@@ -2421,14 +2419,12 @@ export function AgentSessionPanel({
                 {selectedItem.nodeId === 'outcome-plan' ? (
                   <OutcomePlanPanel
                     runId={coordinatorRunId}
-                    projectId={projectId}
                     events={events}
                     streamStatus="streaming"
                     runStatus={runDetail?.status ?? undefined}
                     onReconnect={onCoordinatorFollowUp}
                     onClarifyPlan={focusOutcomePlanClarification}
                     clarificationSent={selectedItem.status === 'revising'}
-                    dispatched={outcomePlanDispatched}
                   />
                 ) : (
                   <>

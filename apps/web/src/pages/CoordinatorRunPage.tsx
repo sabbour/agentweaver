@@ -4435,7 +4435,6 @@ export function CoordinatorRunPage() {
                   onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
-                  outcomePlanDispatched={hasSubtaskNodes || viewState.terminal}
                   workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}
                   credits={{
                     totalNanoAiu: tokenBreakdown?.totalNanoAiu ?? null,
@@ -4476,14 +4475,12 @@ export function CoordinatorRunPage() {
         >
           <OutcomePlanPanel
             runId={runId}
-            projectId={projectId ?? undefined}
             events={events}
             streamStatus={streamStatus}
             runStatus={runLevelStatus}
             onCollapse={() => setPlanPanelOpen(false)}
             onReconnect={reconnectStream}
             onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
-            dispatched={hasSubtaskNodes || viewState.terminal}
           />
         </SlidePanel>
       )}
