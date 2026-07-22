@@ -27,6 +27,7 @@ import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { SessionsPage } from './pages/SessionsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { SignInPage } from './pages/SignInPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { TeamPage } from './pages/TeamPage';
@@ -56,6 +57,7 @@ function Shell() {
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/projects" element={<ProjectGalleryPage />} />
         <Route path="/sessions" element={<SessionsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         {/* Legacy operator-dock bookmark (#346) — the dock is retired; route old links
             straight through the assistant page. */}
         <Route path="/console" element={<Navigate to="/assistant" replace />} />

@@ -6,6 +6,79 @@ title: MCP CLI operator guide
 
 Use this guide when driving Agentweaver from Copilot CLI, Claude Desktop, or another MCP client.
 
+## Connecting a client
+
+The hosted MCP endpoint is `https://<your-agentweaver-host>/mcp`. In the web app,
+open **Account settings → MCP clients** to copy the URL and a client-specific configuration.
+
+The MCP server accepts the same bearer-token model as Agentweaver's web/API session.
+Agentweaver intentionally does not render the browser session token in the UI. Use an
+existing GitHub bearer token instead—for example, obtain the token used by GitHub CLI
+with `gh auth token`—or let a client that supports MCP OAuth complete its interactive
+sign-in flow. Set it in your client environment as `AGENTWEAVER_TOKEN`; do not commit it
+to a configuration file.
+
+### Claude Desktop
+
+Add this to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "agentweaver": {
+      "url": "https://<your-agentweaver-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AGENTWEAVER_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### VS Code
+
+Add this to your `mcp.json`:
+
+```json
+{
+  "servers": {
+    "agentweaver": {
+      "type": "http",
+      "url": "https://<your-agentweaver-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:agentweaver-token}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "agentweaver-token",
+      "type": "promptString",
+      "description": "Your existing Agentweaver/GitHub bearer token",
+      "password": true
+    }
+  ]
+}
+```
+
+### GitHub Copilot CLI
+
+Add this to `.copilot/mcp-config.json` (or `~/.copilot/mcp-config.json`):
+
+```json
+{
+  "mcpServers": {
+    "agentweaver": {
+      "type": "http",
+      "url": "https://<your-agentweaver-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AGENTWEAVER_TOKEN}"
+      }
+    }
+  }
+}
+```
+
 ## Auth-first
 
 Before repo-backed or run-backed work, verify auth:
