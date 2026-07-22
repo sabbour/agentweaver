@@ -1511,9 +1511,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         return await CoordinatorAssemblyGateResolver
-            .ResolveAsync(db, _projectStore, _workflowRegistry, workPlanId, ct)
+            .ResolveAsync(scope.ServiceProvider, workPlanId, ct)
             .ConfigureAwait(false);
     }
 

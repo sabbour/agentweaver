@@ -184,50 +184,71 @@ public sealed class AssemblyGateCanonicalStageTests
         CoordinatorAssemblyGateResolver.ProducesCode(Array.Empty<string?>()).Should().BeTrue();
     }
 
-    [Theory]
-    [InlineData("Update the README", "Write a new README section documenting coordinator workflows.", """["README.md"]""")]
-    [InlineData("Update documentation", "Document how coordinator workflows are selected.", "[]")]
-    public void ProducesCode_SingleExecutionDocumentationSubtask_IsFalse(
-        string title,
-        string scope,
-        string declaredOutputPathsJson)
+    [Fact]
+    public async Task ProducesCode_AllPlanningSubtasks_SkipsClassifier()
     {
-        var subtask = new CoordinatorAssemblyGateResolver.SubtaskGateMetadata(
-            title,
-            scope,
-            "execution",
-            declaredOutputPathsJson);
-        var producesCode = CoordinatorAssemblyGateResolver.ProducesCode([subtask]);
-        var gates = CoordinatorAssemblyService.ResolveAssemblyGates(
-            BuildSoftwareWorkflow(),
-            producesCode);
+        var classifier = new StubCodeClassifier(_ => true);
+        var subtasks = new[]
+        {
+            Subtask("Research the problem", "planning"),
+            Subtask("Draft the design", "planning"),
+        };
+
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            subtasks, classifier, ClassificationContext(), CancellationToken.None);
 
         producesCode.Should().BeFalse();
-        gates.Select(g => g.GateKind).Should().NotContain("build-test");
+        classifier.CallCount.Should().Be(0);
     }
 
     [Fact]
-    public void ProducesCode_SingleExecutionCodeSubtask_IsTrue()
+    public async Task ProducesCode_ExecutionDocumentationSubtask_UsesClassifierAndIsFalse()
     {
-        var subtask = new CoordinatorAssemblyGateResolver.SubtaskGateMetadata(
-            "Implement the API",
-            "Add the coordinator endpoint and its tests.",
+        var classifier = new StubCodeClassifier(_ => false);
+        var subtask = Subtask(
+            "Improve the operator guide",
             "execution",
-            """["apps/Agentweaver.Api/Endpoints/RunEndpoints.cs"]""");
+            """["guides/operator-guide.custom"]""");
 
-        CoordinatorAssemblyGateResolver.ProducesCode([subtask]).Should().BeTrue();
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            [subtask], classifier, ClassificationContext(), CancellationToken.None);
+
+        producesCode.Should().BeFalse();
+        classifier.LastContext.Should().NotBeNull();
+        classifier.LastContext!.DeclaredOutputPaths.Should().Equal("guides/operator-guide.custom");
     }
 
     [Fact]
-    public void ProducesCode_ExecutionTaskWithMarkdownNamedImplementationOutput_IsTrue()
+    public async Task ProducesCode_ExecutionCodeSubtask_UsesClassifierAndIsTrue()
     {
-        var subtask = new CoordinatorAssemblyGateResolver.SubtaskGateMetadata(
-            "Update the PRD parser",
-            "Update parser.md as part of the parser implementation.",
-            "execution",
-            """["parser.md"]""");
+        var classifier = new StubCodeClassifier(_ => true);
+        var subtask = Subtask("Implement the API", "execution");
 
-        CoordinatorAssemblyGateResolver.ProducesCode([subtask]).Should().BeTrue();
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            [subtask], classifier, ClassificationContext(), CancellationToken.None);
+
+        producesCode.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProducesCode_ClassifierFailureOrTimeout_DefaultsToTrue(bool timeout)
+    {
+        var classifier = new StubCodeClassifier(_ =>
+        {
+            if (timeout)
+                throw new OperationCanceledException("model timeout");
+            throw new InvalidOperationException("model failure");
+        });
+
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            [Subtask("Ambiguous delivery", "execution")],
+            classifier,
+            ClassificationContext(),
+            CancellationToken.None);
+
+        producesCode.Should().BeTrue();
     }
 
     private static WorkflowDefinition BuildSoftwareWorkflow() => new()
@@ -279,5 +300,31 @@ public sealed class AssemblyGateCanonicalStageTests
         }
 
         throw new InvalidOperationException($"Catalog workflow '{workflowId}' was not found.");
+    }
+
+    private static CoordinatorAssemblyGateResolver.SubtaskGateMetadata Subtask(
+        string title,
+        string phase,
+        string declaredOutputPathsJson = "[]") =>
+        new(title, "Test scope", phase, declaredOutputPathsJson);
+
+    private static AssemblyGateCodeClassificationContext ClassificationContext() =>
+        new("run-423", "project-423", "sabbour", "", "", []);
+
+    private sealed class StubCodeClassifier(
+        Func<AssemblyGateCodeClassificationContext, bool?> classify)
+        : IAssemblyGateCodeClassifier
+    {
+        public int CallCount { get; private set; }
+        public AssemblyGateCodeClassificationContext? LastContext { get; private set; }
+
+        public Task<bool?> ClassifyAsync(
+            AssemblyGateCodeClassificationContext context,
+            CancellationToken ct)
+        {
+            CallCount++;
+            LastContext = context;
+            return Task.FromResult(classify(context));
+        }
     }
 }
