@@ -113,8 +113,8 @@ npm run azure:provision-infra</code></pre>
       <template #fallback>
         <figure class="aw-proof-frame aw-workflow-editor-fallback">
           <img
-            :src="withBase('/screenshots/workflow-definition-graph.png')"
-            alt="An Agentweaver workflow definition beside its rendered graph"
+            :src="withBase('/screenshots/workflow-run-graph.png')"
+            alt="An Agentweaver workflow graph showing connected stages"
             loading="lazy"
           />
           <figcaption><span>Turn on JavaScript to edit the example workflow.</span></figcaption>
