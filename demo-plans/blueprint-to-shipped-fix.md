@@ -9,7 +9,7 @@
 
 1. **PASS — pick repo and create project.** From the authenticated `Projects` page, use `getByRole('button', { name: 'Create from GitHub' })`, `getByRole('textbox', { name: 'Or paste any repository' })`, `getByRole('button', { name: 'Go →' })`, `getByRole('textbox', { name: 'Project name' })`, and `getByRole('button', { name: 'Create' })`. This created **blueprint-demo** at `https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610`.
 2. **BLOCKED — the planned cast-confirmation gate is absent.** `getByRole('button', { name: 'Templates' })` exposes `getByRole('radio', { name: 'Product & Software Delivery' })`; its live preview contains Lead PM, Customer Researcher, Product Marketing Manager, and engineering roles. Selecting it and creating the project immediately cast 12 project agents (plus system agents); no human confirmation dialog/button appeared. The resulting team is verifiable through the `Agents` project-nav link and includes the required roles, but the recording cannot show the described approval gate.
-3. **PARTIAL — PM workflow is executing and its graph is verified.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e). `getByTestId('open-topology-minimap')` opens the **Topology** dialog with graph controls (`getByRole('button', { name: 'Fit to view' })`, `getByRole('button', { name: 'Tidy' })`) and the graph region. At 6m50s the graph showed Work plan, Review Gate, and Merge completed; research and PM synthesis ready for assembly; Coordinator and Scribe running. At 8m37s, it remained in Scribing with 7 tasks, 0 pending, 0 waiting and 26.38 AIC consumed. The initial `Coordinator: Pending`/`0.0000 AIC` snapshot was the normal early startup state, not a credit failure.
+3. **PARTIAL — PM workflow is executing and its graph is verified.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e). `getByTestId('open-topology-minimap')` opens the **Topology** dialog with graph controls (`getByRole('button', { name: 'Fit to view' })`, `getByRole('button', { name: 'Tidy' })`) and the graph region. Live nodes use role selectors: `getByRole('button', { name: 'Coordinator: In Progress' })`, `getByRole('button', { name: 'Work plan: Complete' })`, and `getByRole('button', { name: /Research the problem space/ })`. Each updates the dialog’s `Selected:` focus; selecting Coordinator focused/zoomed the graph to 130%, selecting Research then using `getByRole('button', { name: 'Zoom in' })` reached 156%, and selecting Work plan refocused the graph at 130%. At 6m50s the graph showed Work plan, Review Gate, and Merge completed; research and PM synthesis ready for assembly; Coordinator and Scribe running. At 8m37s, it remained in Scribing with 7 tasks, 0 pending, 0 waiting and 26.38 AIC consumed. The initial `Coordinator: Pending`/`0.0000 AIC` snapshot was the normal early startup state, not a credit failure.
 4. **PARTIAL — customer research is a generated PM-workflow subtask.** The graph exposes `getByRole('treeitem', { name: /Research the problem space and target user/ })`; the task reached **Ready for assembly**. Its output has not yet been surfaced as a standalone results panel, so no output selector is claimed.
 5. **PASS — notifications affordance verified.** `getByTestId('notification-bell')` opens the **Notifications** panel (`getByRole('button', { name: 'Notifications' })`). This run displayed the empty-state text “Nothing needs your attention right now” and the `getByRole('switch', { name: 'Sound on' })` control.
 5. **BLOCKED — depends on the unavailable research output.**
@@ -176,6 +176,34 @@ Narration: “While the PM work continues in the background, the notification fe
 Recording notes:
 
 - The verified empty state is “Nothing needs your attention right now”; use a real notification only if one arrives during the recorded run.
+
+---
+
+## Beat 3b — Focus the live topology graph
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Follow work through the topology graph" --description="Select coordinator, task, and agent nodes; then zoom into the active research path." --duration=12000
+playwright-cli click "getByTestId('open-topology-minimap')"
+playwright-cli snapshot
+playwright-cli click "getByRole('button', { name: 'Coordinator: In Progress' })"
+playwright-cli snapshot
+playwright-cli click "getByRole('button', { name: 'Work plan: Complete' })"
+playwright-cli snapshot
+playwright-cli click "getByRole('button', { name: /Research the problem space/ })"
+playwright-cli click "getByRole('button', { name: 'Zoom in' })"
+playwright-cli snapshot
+playwright-cli click "getByRole('button', { name: 'Fit to view' })"
+playwright-cli click "getByRole('button', { name: 'Close panel' })"
+```
+
+Narration: “The topology is more than a status list. Selecting a coordinator, completed plan, or research agent focuses the run evidence for that node, and we can zoom into the active work before returning to the complete workflow.”
+
+Recording notes:
+
+- Verified live focus labels are `Selected: Coordinator`, `Selected: Work plan`, and `Selected: Research the problem space and target user for the new feature`.
+- The dialog begins around 103%; the verified Coordinator focus reached 130%, and the explicit Zoom in control reached 156% after selecting the research node.
 
 ---
 
