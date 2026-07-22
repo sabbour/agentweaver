@@ -113,11 +113,18 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   }, []);
 
   const markAllSeen = useCallback(() => setUnreadCount(0), []);
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications((current) => {
+      const next = current.filter((notification) => notification.id !== id);
+      setUnreadCount((count) => Math.min(count, next.length));
+      return next;
+    });
+  }, []);
   const refresh = useCallback(() => { void poll(); }, [poll]);
 
   return (
     <NotificationsContext.Provider
-      value={{ notifications, unreadCount, loading, muted, toggleMuted, markAllSeen, refresh }}
+      value={{ notifications, unreadCount, loading, muted, toggleMuted, markAllSeen, dismissNotification, refresh }}
     >
       <Toaster toasterId={toasterId} position="top-end" />
       {children}

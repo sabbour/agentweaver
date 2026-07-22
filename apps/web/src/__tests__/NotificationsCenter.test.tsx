@@ -137,6 +137,22 @@ describe('NotificationBell + NotificationsProvider', () => {
     await waitFor(() => expect(screen.queryByText(makeNotification().title)).toBeNull());
   });
 
+  it('dismisses one notification without navigating from its row', async () => {
+    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([makeNotification()]));
+    const user = userEvent.setup();
+
+    renderBell();
+
+    await waitFor(() => expect(screen.getByTestId('notification-bell-badge').textContent).toContain('1'));
+    await user.click(screen.getByTestId('notification-bell'));
+    await user.click(await screen.findByRole('button', {
+      name: `Dismiss notification: ${makeNotification().title}`,
+    }));
+
+    expect(screen.queryByText(makeNotification().title)).toBeNull();
+    expect(await screen.findByText('Nothing needs your attention right now.')).toBeTruthy();
+  });
+
   it('mute toggle persists to localStorage', async () => {
     vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([]));
     const user = userEvent.setup();
@@ -215,4 +231,3 @@ describe('NotificationBell + NotificationsProvider', () => {
     });
   });
 });
-
