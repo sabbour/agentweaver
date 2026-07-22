@@ -27,6 +27,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
     public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
+    public DbSet<DismissedNotification> DismissedNotifications => Set<DismissedNotification>();
 
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
     public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
@@ -123,6 +124,14 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
+        model.Entity<DismissedNotification>(e =>
+        {
+            e.ToTable("dismissed_notifications");
+            e.HasKey(d => new { d.User, d.NotificationId });
+            e.Property(d => d.User).HasColumnName("user");
+            e.Property(d => d.NotificationId).HasColumnName("notification_id");
+            e.Property(d => d.DismissedAt).HasColumnName("dismissed_at");
+        });
 
         model.Entity<PendingRequestRecord>().HasIndex(p => p.RunId).IsUnique();
         model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);
