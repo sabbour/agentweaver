@@ -119,6 +119,7 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
       setUnreadCount((count) => Math.min(count, next.length));
       return next;
     });
+    void apiClient.dismissNotification(id);
   }, []);
   const refresh = useCallback(() => { void poll(); }, [poll]);
 

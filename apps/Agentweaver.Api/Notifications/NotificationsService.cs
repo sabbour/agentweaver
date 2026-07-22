@@ -1,4 +1,5 @@
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
@@ -30,15 +31,18 @@ public sealed class NotificationsService
     private readonly IRunStore _runStore;
     private readonly IProjectStore _projectStore;
     private readonly PendingToolApprovalRunsQuery _pendingApprovalQuery;
+    private readonly MemoryDbContext _db;
 
     public NotificationsService(
         IRunStore runStore,
         IProjectStore projectStore,
-        PendingToolApprovalRunsQuery pendingApprovalQuery)
+        PendingToolApprovalRunsQuery pendingApprovalQuery,
+        MemoryDbContext db)
     {
         _runStore = runStore;
         _projectStore = projectStore;
         _pendingApprovalQuery = pendingApprovalQuery;
+        _db = db;
     }
 
     public async Task<NotificationsResponseDto> GetPendingAsync(CallerContext caller, CancellationToken ct = default)
@@ -76,11 +80,31 @@ public sealed class NotificationsService
             .OrderByDescending(notification => notification.CreatedUtc)
             .ToList();
 
+        var dismissedIds = await _db.DismissedNotifications
+            .Where(dismissal => dismissal.User == caller.User)
+            .Select(dismissal => dismissal.NotificationId)
+            .ToHashSetAsync(ct)
+            .ConfigureAwait(false);
+
         return new NotificationsResponseDto
         {
             GeneratedUtc = DateTimeOffset.UtcNow,
-            Notifications = notifications,
+            Notifications = notifications.Where(notification => !dismissedIds.Contains(notification.Id)).ToList(),
         };
+    }
+
+    public async Task DismissAsync(CallerContext caller, string notificationId, CancellationToken ct = default)
+    {
+        if (await _db.DismissedNotifications.FindAsync([caller.User, notificationId], ct).ConfigureAwait(false) is not null)
+            return;
+
+        _db.DismissedNotifications.Add(new DismissedNotification
+        {
+            User = caller.User,
+            NotificationId = notificationId,
+            DismissedAt = DateTimeOffset.UtcNow,
+        });
+        await _db.SaveChangesAsync(ct).ConfigureAwait(false);
     }
 
     private static NotificationDto ToHumanReviewNotification(
@@ -107,6 +131,13 @@ public sealed class NotificationsService
             CreatedUtc = run.EndedAt ?? run.StartedAt,
             CtaPath = $"/projects/{projectId}/orchestrations/{deepLinkRunId}",
         };
+    }
+
+    public sealed class DismissedNotification
+    {
+        public required string User { get; init; }
+        public required string NotificationId { get; init; }
+        public DateTimeOffset DismissedAt { get; init; }
     }
 
     private static NotificationDto ToToolApprovalNotification(
@@ -143,4 +174,3 @@ public sealed class NotificationsService
         return value.Length <= max ? value : value[..max].TrimEnd() + "\u2026";
     }
 }
-

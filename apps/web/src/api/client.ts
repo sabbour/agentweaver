@@ -1166,6 +1166,10 @@ export class AgentweaverApiClient {
     return this.request<import('./types').NotificationsResponseDto>('GET', '/notifications', undefined, signal);
   }
 
+  dismissNotification(notificationId: string): Promise<void> {
+    return this.request<void>('POST', `/notifications/${encodeURIComponent(notificationId)}/dismiss`);
+  }
+
   // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).
   getWorkspaceFiles(projectId: string): Promise<WorkspaceFileNode[]> {
     return this.request<WorkspaceFileNode[]>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/files`);

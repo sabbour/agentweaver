@@ -21,5 +21,16 @@ public static class NotificationsEndpoints
             var result = await notifications.GetPendingAsync(caller, ct).ConfigureAwait(false);
             return Results.Ok(result);
         });
+
+        app.MapPost("/api/notifications/{notificationId}/dismiss", async (
+            string notificationId,
+            HttpContext httpContext,
+            NotificationsService notifications,
+            CancellationToken ct) =>
+        {
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            await notifications.DismissAsync(caller, notificationId, ct).ConfigureAwait(false);
+            return Results.NoContent();
+        });
     }
 }
