@@ -193,13 +193,14 @@ public static class WorkflowDefinitionEndpoints
             return Results.Ok(WorkflowDtoMapper.ToGraph(result.Definition));
         });
 
-        // GET /api/projects/{projectId}/workflows/{workflowId}/yaml — raw YAML content on disk (US7).
-        // Returns 404 for built-in workflows (no on-disk file) and for unknown workflow ids.
+        // GET /api/projects/{projectId}/workflows/{workflowId}/yaml — raw YAML content (US7).
+        // Built-ins are serialized from their immutable definition so callers can duplicate a template.
         app.MapGet("/api/projects/{projectId}/workflows/{workflowId}/yaml", async (
             HttpContext httpContext,
             string projectId,
             string workflowId,
             IProjectStore projectStore,
+            WorkflowRegistry registry,
             CancellationToken ct) =>
         {
             var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
@@ -210,9 +211,53 @@ public static class WorkflowDefinitionEndpoints
 
             var dir = Path.Combine(project!.WorkingDirectory, ".agentweaver", "workflows");
             var yaml = await TryReadWorkflowYamlAsync(dir, workflowId, ct);
-            if (yaml is null) return Results.NotFound();
+            if (yaml is null)
+            {
+                var builtIn = registry.Get(project, workflowId);
+                if (builtIn?.Definition is null || !builtIn.IsBuiltIn) return Results.NotFound();
+                yaml = WorkflowDefinitionYamlSerializer.Serialize(builtIn.Definition);
+            }
 
             return Results.Ok(new WorkflowYamlResponse { Yaml = yaml });
+        });
+
+        // POST /api/projects/{projectId}/workflows/{workflowId}/run — create a Ready, workflow-bound
+        // backlog task. The coordinator claims it through the ordinary pickup path, just like a
+        // schedule-triggered run, keeping the run visible and capacity-controlled.
+        app.MapPost("/api/projects/{projectId}/workflows/{workflowId}/run", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            IProjectStore projectStore,
+            IBacklogTaskStore backlogStore,
+            WorkflowRegistry registry,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+
+            var definition = registry.Get(project!, workflowId)?.Definition;
+            if (definition is null) return Results.NotFound();
+
+            var bindErrors = RunWorkflowGraphBinder.GetBindabilityErrors(definition);
+            if (bindErrors.Count > 0)
+                return Results.BadRequest(new { error = "workflow_not_bindable", validation_errors = bindErrors });
+
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
+                backlogStore,
+                project!,
+                definition,
+                title: $"Manual run: {definition.Name}",
+                description: $"Manually triggered from the workflow library for '{definition.Id}'.",
+                capturedBy: caller.User,
+                idempotencyKey: $"workflow-manual-trigger:{definition.Id}:{Guid.NewGuid():N}",
+                now: DateTimeOffset.UtcNow,
+                ct: ct);
+
+            return Results.Created(
+                $"/api/projects/{projectId}/backlog/tasks/{task.Id}",
+                new { task_id = task.Id.ToString() });
         });
 
         // PUT /api/projects/{projectId}/workflows/{workflowId} — parse, binder dry-run, save (US7).
