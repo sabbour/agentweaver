@@ -145,7 +145,8 @@ public sealed class GitHubTokenAuthMiddleware
             || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
             // GitHub webhook receiver (issue #53 follow-up): GitHub's delivery carries no Agentweaver
             // bearer token. Its own HMAC-SHA256 signature check (GitHubWebhookEndpoints) is the auth.
-            || context.Request.Path.StartsWithSegments("/api/webhooks/github", StringComparison.OrdinalIgnoreCase))
+            || (context.Request.Path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
+                && context.Request.Path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true))
         {
             await _next(context).ConfigureAwait(false);
             return;

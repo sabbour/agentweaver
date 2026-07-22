@@ -195,6 +195,10 @@ export interface Project {
   allowed_workflow_ids?: string[] | null;
 }
 
+export interface WebhookSecretRotationResponse {
+  secret: string;
+}
+
 export interface Blueprint {
   id: string;
   name: string;

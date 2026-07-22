@@ -73,6 +73,8 @@ public sealed class DataMigratorTests : IDisposable
         workflowRuns.Should().BeGreaterThanOrEqualTo(1, "all seeded workflow_runs must be migrated");
         backlogTasks.Should().BeGreaterThanOrEqualTo(2, "all seeded backlog_tasks must be migrated");
         seededProject.TeamRevision.Should().Be(7, "team mutation concurrency state must survive provider migration");
+        seededProject.WebhookSecret.Should().Be("github-webhook:seed",
+            "the per-project webhook secret-store reference must survive provider migration");
         packageVersions.Should().ContainSingle();
         packageVersions.Single().CanonicalVersionKey.Should().Be(
             BlueprintPackageLibraryLimits.CanonicalVersionKey(packageVersions.Single().CanonicalVersion));
@@ -207,8 +209,8 @@ public sealed class DataMigratorTests : IDisposable
 
         using var data = conn.CreateCommand();
         data.CommandText = $"""
-            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at, team_revision)
-                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}',7);
+            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at, team_revision, webhook_secret)
+                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}',7,'github-webhook:seed');
             INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at)
                 VALUES ('{pid2}','Project B','blank','/b','main','bob','github_copilot','active','{now}','{now}');
 

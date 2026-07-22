@@ -25,11 +25,14 @@ function resolveApiUrl(): string {
 }
 
 export const API_URL = resolveApiUrl();
-// MCP is hosted by the same public gateway as the API. When API_URL is the
-// deployed same-origin sentinel (""), use the browser origin so users can copy
-// a complete URL into an external MCP client.
-export const MCP_URL = `${(API_URL || (typeof window !== 'undefined' ? window.location.origin : ''))
-  .replace(/\/$/, '')}/mcp`;
+
+// External integrations need an absolute URL. When API_URL is the deployed same-origin sentinel
+// (""), use the browser origin rather than producing a relative path.
+export function resolvePublicApiOrigin(apiUrl = API_URL): string {
+  return (apiUrl || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+}
+
+export const MCP_URL = `${resolvePublicApiOrigin()}/mcp`;
 export const GITHUB_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/github/authorize`;
 
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';
