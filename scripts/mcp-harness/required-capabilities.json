@@ -8,6 +8,8 @@
     { "capability": "cleanup-run", "tools": ["run_archive"], "in": { "requires": { "run_id": "string" } } },
     { "capability": "auth-status", "tools": ["github_status"] },
     { "capability": "auth-signin", "tools": ["github_signin"] },
+    { "capability": "list-projects", "tools": ["project_list"] },
+    { "capability": "create-project", "tools": ["project_create"], "in": { "requires": { "name": "string", "working_directory": "string" } } },
     { "capability": "diagnostics", "tools": ["diagnostics_get"] },
     { "capability": "one-call-run", "tools": ["run_task"], "optional": true, "out": { "requires": { "run_id": "string", "status": "string", "artifacts": "array" } }, "note": "#130 — optional until shipped" },
     { "capability": "confirm-outcome-spec", "tools": ["coordinator_outcome_spec_confirm"], "in": { "requires": { "run_id": "string" } }, "note": "#345 — advances a coordinator run past the awaiting_confirmation gate" }

@@ -19,6 +19,7 @@
     "docs:preview": "npm --prefix docs run preview",
     "docs:render-diagrams": "node scripts/docs/render-diagrams.mjs",
     "docs:check-diagrams": "node scripts/docs/render-diagrams.mjs --check",
+    "test:mcp-smoke": "npm --prefix scripts/mcp-harness run smoke --",
     "changeset": "changeset add",
     "changeset:status": "changeset status --verbose",
     "changeset:check": "node scripts/changesets/check.mjs",
