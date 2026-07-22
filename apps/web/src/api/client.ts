@@ -1103,6 +1103,14 @@ export class AgentweaverApiClient {
     );
   }
 
+  runWorkflowNow(projectId: string, workflowId: string): Promise<{ task_id: string }> {
+    return this.request<{ task_id: string }>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/run`,
+      {},
+    );
+  }
+
   // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
   // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
   // pass was needed. Throws ApiError 400 when generation fails after the correction pass.

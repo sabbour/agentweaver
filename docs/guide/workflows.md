@@ -66,13 +66,19 @@ If you edit a workflow YAML file on disk or add a new one, click **Sync** on the
 
 ### YAML editor
 
-Click **New workflow** and choose **YAML editor**. A YAML template opens in the editor. Workflows are described as a sequence of steps, each bound to a role (which agent executes it) and a set of inputs and outputs.
+Click **New workflow** to open the visual editor with a YAML-backed template. Use **Edit** on an existing project workflow when you prefer to edit its YAML directly.
 
 ### Visual editor
 
-Choose **Visual editor** to build a workflow as a node graph. Drag roles onto the canvas, connect them, and configure each step visually. The editor generates the YAML for you.
+Use **Edit visually** to build a workflow as a node graph. Drag roles onto the canvas, connect them, and configure each step visually. The editor generates the YAML for you.
 
-For existing project workflows, use **Edit** to open the YAML editor or **Edit visually** to open the graph editor. Built-in workflows are read-only; fork or create a project workflow when you need to customize the pipeline.
+For existing project workflows, use **Edit** to open the YAML editor or **Edit visually** to open the graph editor. Built-in workflows are read-only; use **Duplicate to project** to create an editable copy and open it in the visual editor.
+
+## Running and scheduling workflows
+
+Each workflow row shows whether it is **Manual only** or has a schedule, including its UTC cadence. Use **Run now** to queue a Ready task bound to that workflow; it is picked up and shown on the board through the same normal coordinator path as other work.
+
+For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily, weekly, or monthly at a UTC time. Removing the schedule returns the workflow to manual-only operation.
 
 ### Generate from description
 
