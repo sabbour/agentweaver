@@ -11,7 +11,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Alert24Regular } from '@fluentui/react-icons';
+import { Alert24Regular, DismissRegular } from '@fluentui/react-icons';
 import { useNotifications } from '../../notifications/notificationsContext';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -50,12 +50,19 @@ const useStyles = makeStyles({
     overflowY: 'auto',
   },
   item: {
+    position: 'relative',
     display: 'flex',
     flexDirection: 'column',
     gap: '2px',
     padding: tokens.spacingVerticalXS,
+    paddingRight: '36px',
     borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer',
+  },
+  dismiss: {
+    position: 'absolute',
+    top: tokens.spacingVerticalXXS,
+    right: tokens.spacingHorizontalXXS,
   },
   empty: {
     padding: tokens.spacingVerticalM,
@@ -67,7 +74,7 @@ const useStyles = makeStyles({
 export function NotificationBell() {
   const styles = useStyles();
   const navigate = useNavigate();
-  const { notifications, unreadCount, muted, toggleMuted, markAllSeen } = useNotifications();
+  const { notifications, unreadCount, muted, toggleMuted, markAllSeen, dismissNotification } = useNotifications();
   const [open, setOpen] = useState(false);
 
   const goTo = (path: string) => {
@@ -137,6 +144,18 @@ export function NotificationBell() {
               <NotificationTypeBadge type={notification.type} />
               <Text weight="semibold">{notification.title}</Text>
               <Caption1>{notification.project_name ?? 'Unknown project'}</Caption1>
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<DismissRegular />}
+                aria-label={`Dismiss notification: ${notification.title}`}
+                className={styles.dismiss}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  dismissNotification(notification.id);
+                }}
+                onKeyDown={(event) => event.stopPropagation()}
+              />
             </div>
           ))}
         </div>
