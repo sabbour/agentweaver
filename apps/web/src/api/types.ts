@@ -678,6 +678,7 @@ export interface WorkPlanSubtask {
 export interface CoordinatorWorkPlan {
   workPlanId: string;
   status: string;
+  warnings?: string[];
   subtasks: WorkPlanSubtask[];
 }
 
