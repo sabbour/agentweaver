@@ -9,8 +9,9 @@
 
 1. **PASS — pick repo and create project.** From the authenticated `Projects` page, use `getByRole('button', { name: 'Create from GitHub' })`, `getByRole('textbox', { name: 'Or paste any repository' })`, `getByRole('button', { name: 'Go →' })`, `getByRole('textbox', { name: 'Project name' })`, and `getByRole('button', { name: 'Create' })`. This created **blueprint-demo** at `https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610`.
 2. **BLOCKED — the planned cast-confirmation gate is absent.** `getByRole('button', { name: 'Templates' })` exposes `getByRole('radio', { name: 'Product & Software Delivery' })`; its live preview contains Lead PM, Customer Researcher, Product Marketing Manager, and engineering roles. Selecting it and creating the project immediately cast 12 project agents (plus system agents); no human confirmation dialog/button appeared. The resulting team is verifiable through the `Agents` project-nav link and includes the required roles, but the recording cannot show the described approval gate.
-3. **PARTIAL — PM workflow launch and initial run surface verified.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e). The initial UI snapshot, taken 20 seconds later, showed `Coordinator: Pending` and `0.0000 AIC`; this is consumed credit, **not** remaining credit. Kubernetes logs later confirmed the coordinator AgentHost completed normally and the API persisted work plan 1 with two pending subtasks, then “confirmed; handed off to dispatch + observe” (01:42:57 UTC). The initial apparent pending state was therefore a roughly two-minute coordinator cold-start/planning interval, not a credit failure. No PM output selector was captured before the disposable dry-run was stopped.
-4. **BLOCKED — no research output was captured before the disposable PM run was stopped.**
+3. **PARTIAL — PM workflow is executing and its graph is verified.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e). `getByTestId('open-topology-minimap')` opens the **Topology** dialog with graph controls (`getByRole('button', { name: 'Fit to view' })`, `getByRole('button', { name: 'Tidy' })`) and the graph region. At 6m50s the graph showed Work plan, Review Gate, and Merge completed; research and PM synthesis ready for assembly; Coordinator and Scribe running. At 8m37s, it remained in Scribing with 7 tasks, 0 pending, 0 waiting and 26.38 AIC consumed. The initial `Coordinator: Pending`/`0.0000 AIC` snapshot was the normal early startup state, not a credit failure.
+4. **PARTIAL — customer research is a generated PM-workflow subtask.** The graph exposes `getByRole('treeitem', { name: /Research the problem space and target user/ })`; the task reached **Ready for assembly**. Its output has not yet been surfaced as a standalone results panel, so no output selector is claimed.
+5. **PASS — notifications affordance verified.** `getByTestId('notification-bell')` opens the **Notifications** panel (`getByRole('button', { name: 'Notifications' })`). This run displayed the empty-state text “Nothing needs your attention right now” and the `getByRole('switch', { name: 'Sound on' })` control.
 5. **BLOCKED — depends on the unavailable research output.**
 6. **BLOCKED — depends on the unavailable positioning output.**
 7. **BLOCKED — the planned ranked backlog cannot be produced while the orchestration is pending.** The observed run surface does expose `getByRole('button', { name: 'Break into tasks' })`, but invoking it would not satisfy the planned output without a completed PM run.
@@ -22,7 +23,8 @@
 - Replace the landing-page/create-project placeholders with the Beat 1 locators above.
 - Use the **Product & Software Delivery** template; it is the verified template containing PM, research, marketing, and engineering roles.
 - Remove or rewrite the Beat 2 human cast-confirmation scene: staging casts the selected template during project creation without that gate.
-- Allow the PM orchestration to finish before rerunning Beats 4-9; do not claim output, backlog, preview, approval, merge, PR, or selector validation beyond the observed surfaces above.
+- Keep one authenticated browser session open for the full recording dry run; save storage state only as a backup checkpoint, not as continuity between beats.
+- Allow the PM orchestration to finish before rerunning the later backlog, implementation, preview, and merge beats; do not claim output, backlog, preview, approval, merge, PR, or selector validation beyond the observed surfaces above.
 
 ## Status: planning only
 
@@ -100,46 +102,26 @@ Recording notes:
 
 ---
 
-## Beat 2 — Cast the PM + Marketing + Research + Engineering Blueprint team
+## Beat 2 — Select the PM + Marketing + Research + Engineering Blueprint team
 
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Cast a cross-functional Blueprint team" --description="Choose the Blueprint-based team setup and show the cast before confirming." --duration=18000
+playwright-cli video-chapter "Select a cross-functional Blueprint team" --description="Choose the Product & Software Delivery template and show the resulting cast." --duration=18000
 playwright-cli snapshot
-playwright-cli hover <REF_BLUEPRINTS_TAB_OR_CARD [VERIFY SELECTOR]>
-playwright-cli click <REF_BLUEPRINTS_TAB_OR_CARD [VERIFY SELECTOR]>
+playwright-cli click "getByRole('button', { name: 'Templates' })"
 playwright-cli snapshot
-playwright-cli mousemove <X_BLUEPRINT_CARD [VERIFY SELECTOR]>
-playwright-cli hover <REF_PM_MARKETING_RESEARCH_ENGINEERING_BLUEPRINT [VERIFY SELECTOR]>
-playwright-cli click <REF_PM_MARKETING_RESEARCH_ENGINEERING_BLUEPRINT [VERIFY SELECTOR]>
+playwright-cli click "getByRole('radio', { name: 'Product & Software Delivery' })"
 playwright-cli snapshot
-playwright-cli hover <REF_CAST_TEAM_BUTTON [VERIFY SELECTOR]>
-playwright-cli click <REF_CAST_TEAM_BUTTON [VERIFY SELECTOR]>
+playwright-cli click "getByRole('button', { name: 'Create' })"
 playwright-cli snapshot
-playwright-cli hover <REF_SKILL_CATALOG_PANEL [VERIFY SELECTOR]>
-playwright-cli mousemove <X_SKILL_CATALOG_PANEL [VERIFY SELECTOR]>
-playwright-cli snapshot
-playwright-cli hover <REF_HUMAN_CONFIRM_CAST_BUTTON [VERIFY SELECTOR]>
-# [PAUSE 700ms]
-playwright-cli mousemove <X_HUMAN_CONFIRM_CAST_BUTTON [VERIFY SELECTOR]>
-playwright-cli click <REF_HUMAN_CONFIRM_CAST_BUTTON [VERIFY SELECTOR]>
-playwright-cli video-hide-actions
 ```
 
-Narration: “Next, we instantiate a full Blueprint team: PM, customer research, marketing, and engineering. Here’s the human review gate — for this recording we’re clicking confirm ourselves, but in real use a person approves the cast.”
+Narration: “Next, we select the Product & Software Delivery template: it includes PM, customer research, marketing, and engineering. Creating the project casts this template immediately.”
 
 Recording notes:
 
-- Keep the cursor travel deliberate before the confirm click so the gate reads clearly on camera.
-- Use the brief `video-hide-actions` beat after the click if you want the confirmed state to sit on screen without extra callouts.
-
-Resume after confirmation:
-
-```bash
-playwright-cli video-show-actions --duration=900 --position=top-right
-playwright-cli snapshot
-```
+- Staging does not expose a separate human cast-confirmation gate; do not narrate or record one.
 
 ---
 
@@ -173,6 +155,27 @@ Recording notes:
 
 - Favor `type` instead of `fill` so the prompt appears naturally in the video.
 - If the product framing appears in chat rather than cards, swap the target refs during the dry run.
+
+---
+
+## Beat 3a — Check notifications while work runs
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Check live notifications" --description="Show the notification feed while the PM workflow progresses asynchronously." --duration=8000
+playwright-cli snapshot
+playwright-cli click "getByTestId('notification-bell')"
+playwright-cli snapshot
+playwright-cli hover "getByRole('switch', { name: 'Sound on' })"
+playwright-cli click "getByTestId('notification-bell')"
+```
+
+Narration: “While the PM work continues in the background, the notification feed keeps attention items visible without leaving the run.”
+
+Recording notes:
+
+- The verified empty state is “Nothing needs your attention right now”; use a real notification only if one arrives during the recorded run.
 
 ---
 
