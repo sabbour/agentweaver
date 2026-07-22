@@ -102,10 +102,10 @@ npm run azure:provision-infra</code></pre>
     <div class="aw-section-heading">
       <h2 id="workflow-editor-title">Define your deterministic workflows.</h2>
       <p>
-        Declare the stages your work must follow, and every run follows the same topology.
-        Edit the YAML or shape it in the drag-and-drop graph editor, then add Build &amp; Test,
-        RAI, and Human Review gates where they belong. Schedule a workflow when the same
-        checked path needs to run again.
+        Start from a template or describe the work in plain language, then declare the stages
+        every run must follow. Edit the YAML or shape it in the drag-and-drop graph editor,
+        then add Build &amp; Test, RAI, and Human Review gates where they belong. Schedule a
+        workflow when the same checked path needs to run again.
       </p>
     </div>
     <ClientOnly>
