@@ -37,6 +37,11 @@ npm run dev</code></pre>
           <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
 npm run azure:provision-infra</code></pre>
+          <p>
+            This provisions the infrastructure <strong>and performs the initial deployment</strong>
+            (build, image push, deploy, and verification). For later deployments to the same
+            environment, run <code>npm run azure:deploy-from-local</code>.
+          </p>
         </div>
       </div>
       <p class="aw-hero-quickstart-note">
