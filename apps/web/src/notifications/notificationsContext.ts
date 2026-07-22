@@ -12,6 +12,8 @@ export interface NotificationsContextValue {
   /** Resets the unread badge to 0. Does not remove items from `notifications` — those only
    *  disappear once the underlying run is actually reviewed/actioned server-side. */
   markAllSeen: () => void;
+  /** Removes a notification from the current notification list. */
+  dismissNotification: (id: string) => void;
   refresh: () => void;
 }
 
