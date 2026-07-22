@@ -243,6 +243,25 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task UpdateOriginAsync(ProjectId id, ProjectOrigin origin, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET origin_kind = $originKind,
+                   source_repository = $sourceRepository,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$originKind", origin.ToApiString());
+        command.Parameters.AddWithValue("$sourceRepository", (object?)origin.SourceRepository ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);

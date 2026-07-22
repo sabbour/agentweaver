@@ -37,4 +37,12 @@ public interface IGitHubPullRequestClient
         bool draft,
         string accessToken,
         CancellationToken ct = default);
+
+    Task<GitHubPullRequestResult?> FindOpenPullRequestAsync(
+        string owner,
+        string repo,
+        string baseBranch,
+        string headBranch,
+        string accessToken,
+        CancellationToken ct = default);
 }

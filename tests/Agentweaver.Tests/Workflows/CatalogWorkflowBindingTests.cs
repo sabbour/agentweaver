@@ -6,7 +6,7 @@ namespace Agentweaver.Tests.Workflows;
 
 /// <summary>
 /// Catalog workflows are coordinator-authored topologies: special review gates are first-class workflow
-/// nodes, while merge and scribe are platform-appended by coordinator assembly.
+/// nodes, while merge, pull-request publication, and scribe are platform-appended by coordinator assembly.
 /// </summary>
 public sealed class CatalogWorkflowBindingTests
 {

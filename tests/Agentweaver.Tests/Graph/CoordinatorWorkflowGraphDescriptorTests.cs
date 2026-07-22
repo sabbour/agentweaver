@@ -45,7 +45,7 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         d.GraphId.Should().NotBeNullOrEmpty();
         d.StartNodeId.Should().Be("agent");
         d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(
-            new[] { "agent", "rai", "review", "merge", "scribe" });
+            new[] { "agent", "rai", "review", "merge", "push-pr", "scribe" });
         // No assemble-ready terminal in the full pipeline.
         d.Nodes.Select(n => n.Id).Should().NotContain("assemble-ready");
         // All nodes are live and self-describing.
@@ -56,10 +56,13 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         d.Nodes.Single(n => n.Id == "rai").NodeType.Should().Be("agent");
         d.Nodes.Single(n => n.Id == "review").NodeType.Should().Be("gate");
         d.Nodes.Single(n => n.Id == "merge").NodeType.Should().Be("action");
+        d.Nodes.Single(n => n.Id == "push-pr").NodeType.Should().Be("action");
         d.Nodes.Single(n => n.Id == "scribe").NodeType.Should().Be("agent");
         // Review gate uses the explicit known-port fallback label.
         d.Nodes.Single(n => n.Id == "review").Label.Should().Be("Human Review");
         d.Nodes.Single(n => n.Id == "review").Role.Should().Be("review");
+        d.Nodes.Single(n => n.Id == "push-pr").Label.Should().Be("Push PR");
+        d.Nodes.Single(n => n.Id == "push-pr").Role.Should().Be("action");
     }
 
     [Fact]
@@ -76,7 +79,8 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
             E("rai", "agent"),     // RAI revise loop
             E("review", "merge"),
             E("review", "agent"),  // review request-changes loop
-            E("merge", "scribe"),
+            E("merge", "push-pr"),
+            E("push-pr", "scribe"),
             E("merge", "review"),  // merge-blocked re-enter review loop
         });
     }
@@ -94,7 +98,8 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         Find(d, "rai", "scribe")!.Loopback.Should().BeFalse();
         Find(d, "rai", "review")!.Loopback.Should().BeFalse();
         Find(d, "review", "merge")!.Loopback.Should().BeFalse();
-        Find(d, "merge", "scribe")!.Loopback.Should().BeFalse();
+        Find(d, "merge", "push-pr")!.Loopback.Should().BeFalse();
+        Find(d, "push-pr", "scribe")!.Loopback.Should().BeFalse();
     }
 
     [Fact]
@@ -105,11 +110,12 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         // RAI forward fans out to review + scribe.
         Find(d, "rai", "review")!.Cardinality.Should().Be("fanout");
         Find(d, "rai", "scribe")!.Cardinality.Should().Be("fanout");
-        // scribe is reached from both rai and merge (forward fan-in).
-        Find(d, "merge", "scribe")!.Cardinality.Should().Be("fanin");
+        // scribe is reached from both rai and push-pr (forward fan-in).
+        Find(d, "push-pr", "scribe")!.Cardinality.Should().Be("fanin");
         // 1:1 forward edges.
         Find(d, "agent", "rai")!.Cardinality.Should().Be("direct");
         Find(d, "review", "merge")!.Cardinality.Should().Be("direct");
+        Find(d, "merge", "push-pr")!.Cardinality.Should().Be("direct");
         // Loopback edges are direct back-edges.
         Find(d, "rai", "agent")!.Cardinality.Should().Be("direct");
     }
@@ -127,7 +133,7 @@ public sealed class CoordinatorWorkflowGraphDescriptorTests : IClassFixture<Coor
         // (child-turn-failed) alongside the assemble-ready success terminal.
         d.Nodes.Select(n => n.Id).Should().BeEquivalentTo(new[] { "agent", "assemble-ready", "child-turn-failed" });
         // The trimmed child pipeline has no per-child RAI / review / merge / scribe.
-        d.Nodes.Select(n => n.Id).Should().NotContain(new[] { "rai", "review", "merge", "scribe" });
+        d.Nodes.Select(n => n.Id).Should().NotContain(new[] { "rai", "review", "merge", "push-pr", "scribe" });
 
         var assemble = d.Nodes.Single(n => n.Id == "assemble-ready");
         assemble.Label.Should().Be("Assemble-ready");

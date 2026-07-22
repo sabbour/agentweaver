@@ -47,6 +47,7 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         new("rai",    "Rai",          "rai",    "live", "agent"),
         new("review", "Human Review", "review", "live", "gate"),
         new("merge",  "Merge",        "merge",  "live", "action"),
+        new("push-pr","Push PR",      "action", "live", "action"),
         new("scribe", "Scribe",       "scribe", "live", "agent"),
     };
 
@@ -58,7 +59,8 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         new("rai",    "agent",  "direct", true),   // RAI revise loop
         new("review", "merge",  "direct", false),
         new("review", "agent",  "direct", true),   // review request-changes loop
-        new("merge",  "scribe", "fanin",  false),
+        new("merge",  "push-pr","direct", false),
+        new("push-pr","scribe", "fanin",  false),
         new("merge",  "review", "direct", true),   // merge-blocked re-enter review loop
     };
 

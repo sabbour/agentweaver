@@ -470,6 +470,25 @@ export interface GitHubAccount {
   type: 'user' | 'org';
 }
 
+/** One candidate owner for creating a new repository for a project (GET
+ * /api/projects/{id}/github/repository-owners). */
+export interface RepositoryOwner {
+  login: string;
+  type: 'user' | 'org';
+}
+
+export interface CreateProjectRepositoryRequest {
+  owner: string;
+  name?: string;
+  private?: boolean;
+}
+
+export interface ConnectedRepository {
+  source_repository: string;
+  html_url: string;
+}
+
+
 // --- Casting / Team types ---
 
 export interface TeamTemplateDto {

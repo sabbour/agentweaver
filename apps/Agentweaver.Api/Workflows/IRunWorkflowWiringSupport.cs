@@ -78,8 +78,9 @@ internal interface IRunWorkflowWiringSupport
     /// the merge stage (publish-style workflows with no human gate before merge).</summary>
     ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge);
 
-    /// <summary><c>MergeOutput → AgentTurnOutput</c>: reconstruct the stored diff after a blocked merge so
-    /// the run can re-enter an AI peer-review gate.</summary>
+    /// <summary><c>MergeOutput → AgentTurnOutput</c>: reconstruct the stored diff after the merge stage so
+    /// downstream nodes that consume <c>AgentTurnOutput</c> (for example AI review retries or PR publication)
+    /// can continue from the produced branch.</summary>
     ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge);
 
     /// <summary><c>MergeOutput → AgentTurnInput</c>: re-enter a producer agent after a blocked merge.</summary>

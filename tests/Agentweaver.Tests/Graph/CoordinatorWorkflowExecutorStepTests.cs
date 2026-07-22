@@ -148,8 +148,8 @@ public sealed class CoordinatorWorkflowExecutorStepTests : IClassFixture<Coordin
     [Fact]
     public void FullExecutorMetaMap_SkipsAllDedicatedNodes()
     {
-        // The full pipeline's only non-hidden nodes are agent/rai/review/merge/scribe — all dedicated
-        // — so the generic translator emits nothing for it (no behavior change to the full pipeline).
+        // The full pipeline's only non-hidden nodes are agent/rai/review/merge/push-pr/scribe — all
+        // dedicated — so the generic translator emits nothing for them (no behavior change to the full pipeline).
         var map = Factory.BuildExecutorMetaForTest(isChild: false);
 
         foreach (var meta in map.Values)
