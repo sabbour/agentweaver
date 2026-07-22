@@ -83,3 +83,9 @@ scripts/azure/params.*.json
 scripts/azure/steps/.rendered/
 scripts/azure/tests/.scratch-*/
 
+
+# Playwright CLI recording + auth artifacts (never commit)
+.playwright-cli/
+*.webm
+staging-auth*.json
+*.storageState.json
