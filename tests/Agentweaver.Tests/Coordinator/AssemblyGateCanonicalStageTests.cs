@@ -184,6 +184,52 @@ public sealed class AssemblyGateCanonicalStageTests
         CoordinatorAssemblyGateResolver.ProducesCode(Array.Empty<string?>()).Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("Update the README", "Write a new README section documenting coordinator workflows.", """["README.md"]""")]
+    [InlineData("Update documentation", "Document how coordinator workflows are selected.", "[]")]
+    public void ProducesCode_SingleExecutionDocumentationSubtask_IsFalse(
+        string title,
+        string scope,
+        string declaredOutputPathsJson)
+    {
+        var subtask = new CoordinatorAssemblyGateResolver.SubtaskGateMetadata(
+            title,
+            scope,
+            "execution",
+            declaredOutputPathsJson);
+        var producesCode = CoordinatorAssemblyGateResolver.ProducesCode([subtask]);
+        var gates = CoordinatorAssemblyService.ResolveAssemblyGates(
+            BuildSoftwareWorkflow(),
+            producesCode);
+
+        producesCode.Should().BeFalse();
+        gates.Select(g => g.GateKind).Should().NotContain("build-test");
+    }
+
+    [Fact]
+    public void ProducesCode_SingleExecutionCodeSubtask_IsTrue()
+    {
+        var subtask = new CoordinatorAssemblyGateResolver.SubtaskGateMetadata(
+            "Implement the API",
+            "Add the coordinator endpoint and its tests.",
+            "execution",
+            """["apps/Agentweaver.Api/Endpoints/RunEndpoints.cs"]""");
+
+        CoordinatorAssemblyGateResolver.ProducesCode([subtask]).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ProducesCode_ExecutionTaskWithMarkdownNamedImplementationOutput_IsTrue()
+    {
+        var subtask = new CoordinatorAssemblyGateResolver.SubtaskGateMetadata(
+            "Update the PRD parser",
+            "Update parser.md as part of the parser implementation.",
+            "execution",
+            """["parser.md"]""");
+
+        CoordinatorAssemblyGateResolver.ProducesCode([subtask]).Should().BeTrue();
+    }
+
     private static WorkflowDefinition BuildSoftwareWorkflow() => new()
     {
         Id = "software-flow",

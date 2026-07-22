@@ -66,14 +66,24 @@ public static class CoordinatorAssemblyGateResolver
         if (workflow is null)
             return CoordinatorGraphDescriptor.DefaultAssemblyGates;
 
-        var phases = await db.Subtasks.AsNoTracking()
+        var persistedSubtasks = await db.Subtasks.AsNoTracking()
             .Where(s => s.WorkPlanId == workPlanId)
-            .Select(s => s.Phase)
+            .Select(s => new { s.Title, s.Scope, s.Phase, s.DeclaredOutputPathsJson })
             .ToListAsync(ct)
             .ConfigureAwait(false);
+        var subtasks = persistedSubtasks
+            .Select(s => new SubtaskGateMetadata(
+                s.Title, s.Scope, s.Phase, s.DeclaredOutputPathsJson))
+            .ToList();
 
-        return CoordinatorAssemblyService.ResolveAssemblyGates(workflow, ProducesCode(phases));
+        return CoordinatorAssemblyService.ResolveAssemblyGates(workflow, ProducesCode(subtasks));
     }
+
+    internal sealed record SubtaskGateMetadata(
+        string Title,
+        string Scope,
+        string? Phase,
+        string? DeclaredOutputPathsJson);
 
     /// <summary>
     /// Whether a work plan may produce buildable/testable code. A plan is treated as non-code-producing
@@ -88,5 +98,78 @@ public static class CoordinatorAssemblyGateResolver
             return true;
 
         return subtaskPhases.Any(p => !string.Equals(p, "planning", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Classifies gate applicability from persisted subtask content as well as phase metadata. Planning
+    /// subtasks are non-code, while an execution subtask is also non-code when its declared outputs are
+    /// exclusively documentation files or its task text explicitly describes documentation-only work.
+    /// Unknown work remains code-producing so the gate is only removed with positive evidence.
+    /// </summary>
+    internal static bool ProducesCode(IReadOnlyCollection<SubtaskGateMetadata> subtasks)
+    {
+        if (subtasks.Count == 0)
+            return true;
+
+        return subtasks.Any(ProducesCode);
+    }
+
+    private static bool ProducesCode(SubtaskGateMetadata subtask)
+    {
+        if (string.Equals(subtask.Phase, "planning", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var outputPaths =
+            CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(subtask.DeclaredOutputPathsJson);
+        if (outputPaths.Count > 0)
+        {
+            if (outputPaths.Any(path => !IsDocumentationPath(path)))
+                return true;
+
+            return !(outputPaths.All(IsClearlyDocumentationPath)
+                || IsExplicitDocumentationTask(subtask.Title, subtask.Scope));
+        }
+
+        return !IsExplicitDocumentationTask(subtask.Title, subtask.Scope);
+    }
+
+    private static bool IsDocumentationPath(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("CHANGELOG", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("CONTRIBUTING", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("LICENSE", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return Path.GetExtension(fileName).ToLowerInvariant() is
+            ".md" or ".markdown" or ".mdx" or ".rst" or ".adoc" or ".txt";
+    }
+
+    private static bool IsClearlyDocumentationPath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        var fileName = Path.GetFileName(normalized);
+        return normalized.StartsWith("docs/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("/docs/", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("CHANGELOG", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("CONTRIBUTING", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("LICENSE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsExplicitDocumentationTask(string title, string scope)
+    {
+        var text = $"{title}\n{scope}".ToLowerInvariant();
+        var hasDocumentationAction = new[]
+        {
+            "write", "update", "add", "edit", "revise", "create", "draft", "document",
+        }.Any(text.Contains);
+        var hasDocumentationSubject = new[]
+        {
+            "documentation", "readme", "docs", "changelog", "release notes", "user guide",
+        }.Any(text.Contains);
+
+        return hasDocumentationAction && hasDocumentationSubject;
     }
 }
