@@ -13,19 +13,21 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal static class AzureMonitorBootstrap
 {
+    internal static IReadOnlyList<string> TraceSources { get; } =
+        ["Agentweaver", "Microsoft.Extensions.AI", "OpenAI", "Azure.AI.OpenAI"];
+
+    internal static IReadOnlyList<string> MetricMeters { get; } =
+        ["Agentweaver", "Microsoft.Extensions.AI", "OpenAI", "Azure.AI.OpenAI"];
+
     internal static void Configure(IServiceCollection services, ILoggingBuilder logging)
     {
         services.AddOpenTelemetry()
             .ConfigureResource(r => r.AddService("agentweaver-agent-host"))
             .WithTracing(t => t
-                .AddSource("Microsoft.Extensions.AI")
-                .AddSource("OpenAI")
-                .AddSource("Azure.AI.OpenAI")
+                .AddSource([.. TraceSources])
                 .AddAzureMonitorTraceExporter())
             .WithMetrics(m => m
-                .AddMeter("Microsoft.Extensions.AI")
-                .AddMeter("OpenAI")
-                .AddMeter("Azure.AI.OpenAI")
+                .AddMeter([.. MetricMeters])
                 .AddAzureMonitorMetricExporter());
         logging.AddOpenTelemetry(o => o.AddAzureMonitorLogExporter());
     }
