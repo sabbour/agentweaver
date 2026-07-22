@@ -23,7 +23,9 @@
 //            required-capabilities.json contract check live (the MCP peer of the API
 //            harness's fixed generated-artifacts-seam check — deterministic, separate
 //            from the dynamic drive), adapt + judge the evidence, and write the normalized
-//            agentweaver.persona-judge-verdict/v1 verdict under verdicts/.
+//            agentweaver.persona-judge-verdict/v1 verdict under verdicts/. With
+//            --dump-evidence and --prompt-out, it instead writes the normalized evidence
+//            and shared Judge prompt for the calling agent session to judge natively.
 //
 // The fast deterministic connectivity/capability tripwire still lives in
 // smoke/mcp-cli-smoke.mjs — use that for a quick capability/connectivity check, and this
@@ -45,7 +47,7 @@ import { loadPersona, listPersonas } from '../persona-briefs/index.mjs';
 import { loadCapabilitiesContract, checkCapabilities } from './lib/capabilities-contract.mjs';
 import { computeMcpP0 } from './lib/mcp-p0.mjs';
 import { adaptMcpEvidence } from '../harness-judge/adapters/mcp.mjs';
-import { judgeEvidence } from '../harness-judge/core.mjs';
+import { buildJudgePrompt, judgeEvidence } from '../harness-judge/core.mjs';
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const CHARTER_PATH = join(HERE, 'agent-driver', 'AGENT.md');
@@ -64,6 +66,8 @@ export function parseArgs(argv) {
     else if (a === '--goal') out.goal = argv[++i];
     else if (a === '--out') out.out = argv[++i];
     else if (a === '--transcript') out.transcript = argv[++i];
+    else if (a === '--dump-evidence') out.dumpEvidence = argv[++i];
+    else if (a === '--prompt-out') out.promptOut = argv[++i];
     else if (a === '--target-revision') out.targetRevision = argv[++i];
     else if (a === '--server-command') out.serverCommand = argv[++i];
     else if (a === '--server-args') out.serverArgs = argv[++i];
@@ -262,12 +266,11 @@ export async function runCapabilityCheck({ client, contractPath = CONTRACT_PATH 
 
 /**
  * Finalize a run from the transcript the dispatched driver wrote: parse it, fold in the
- * capability-contract result and the objective MCP P0 facts, adapt for the shared judge,
- * judge, and write the normalized verdict. Returns { verdict, verdictPath, p0, capability }.
+ * capability-contract result and the objective MCP P0 facts, and adapt for the shared
+ * judge. Returns { normalized, prompt, p0, capability, parseErrors }.
  */
-export async function finalizeVerdict({
+export function prepareJudgeEvidence({
   transcriptText, persona, metadata, capability = { available: false, reason: 'not run' },
-  outPath, judge, timeoutMs, now = new Date(),
 }) {
   const { turns, parseErrors } = parseTranscriptJsonl(transcriptText);
   const p0 = computeMcpP0({ turns });
@@ -289,6 +292,25 @@ export async function finalizeVerdict({
     attachments: parseErrors.length ? [{ kind: 'transcript-parse-errors', evidence: JSON.stringify(parseErrors) }] : [],
     summary: `MCP harness ${metadata.scenarioId}`,
   });
+  return {
+    normalized,
+    prompt: buildJudgePrompt(normalized),
+    p0,
+    capability,
+    parseErrors,
+  };
+}
+
+/**
+ * Finalize a run by judging prepared MCP evidence and writing the normalized verdict.
+ * Returns { verdict, verdictPath, p0, capability }.
+ */
+export async function finalizeVerdict({
+  transcriptText, persona, metadata, capability = { available: false, reason: 'not run' },
+  outPath, judge, timeoutMs, now = new Date(),
+}) {
+  const prepared = prepareJudgeEvidence({ transcriptText, persona, metadata, capability });
+  const { normalized, p0, parseErrors } = prepared;
   const judged = await judgeEvidence(normalized, { judge, timeoutMs });
   const finalOut = outPath ?? join(HERE, 'verdicts', `${metadata.scenarioId}-${stamp(now)}.json`);
   await mkdir(dirname(finalOut), { recursive: true });
@@ -359,6 +381,15 @@ async function main() {
 
   // ---- FINALIZE phase: a transcript already exists, judge it. ----
   if (args.transcript) {
+    const nativeJudgeExport = args.dumpEvidence || args.promptOut;
+    if (nativeJudgeExport && (!args.dumpEvidence || !args.promptOut)) {
+      console.error('error: --dump-evidence and --prompt-out must be used together');
+      return 2;
+    }
+    if (nativeJudgeExport && args.out) {
+      console.error('error: --out cannot be used with --dump-evidence/--prompt-out; run save-verdict.mjs after Judge responds');
+      return 2;
+    }
     let transcriptText;
     try {
       transcriptText = await readFile(args.transcript, 'utf8');
@@ -378,6 +409,26 @@ async function main() {
       } finally {
         await client?.close?.();
       }
+    }
+
+    if (nativeJudgeExport) {
+      const { normalized, prompt, p0 } = prepareJudgeEvidence({
+        transcriptText, persona, metadata, capability,
+      });
+      await mkdir(dirname(args.dumpEvidence), { recursive: true });
+      await mkdir(dirname(args.promptOut), { recursive: true });
+      await writeFile(args.dumpEvidence, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+      await writeFile(args.promptOut, `${prompt}\n`, 'utf8');
+
+      console.log(`Persona     : ${metadata.persona}`);
+      console.log(`Transcript  : ${relativize(resolve(args.transcript))}`);
+      console.log(`Capability  : ${capability.available ? (capability.report.ok ? 'PASS' : 'FAIL') : `not evaluated (${capability.reason})`}`);
+      console.log(`Driver P0   : ${p0.ok ? 'PASS' : 'FAIL'} (pushbacks=${p0.successfulPushbacks}, failedTurns=${p0.failedTurns.join(',') || 'none'})`);
+      console.log(`Evidence written: ${relativize(resolve(args.dumpEvidence))}`);
+      console.log(`Judge prompt written: ${relativize(resolve(args.promptOut))}`);
+      console.log('Next: dispatch the Judge custom agent synchronously via the task tool using the prompt file content.');
+      console.log(`Then save its raw response: node scripts/harness-judge/save-verdict.mjs <raw-judge-response.txt> --evidence ${relativize(resolve(args.dumpEvidence))} --out <verdict.json>`);
+      return 0;
     }
 
     const { verdict, verdictPath, p0 } = await finalizeVerdict({

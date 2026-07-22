@@ -79,7 +79,7 @@ The Harness agent then dispatches a fresh sub-agent under
 `scripts/mcp-harness/agent-driver/AGENT.md` (via the `task` tool) with that prompt.
 The sub-agent drives the server live and appends the JSONL transcript itself.
 
-### 2) finalize — judge the transcript the driver wrote
+### 2) finalize — export MCP-adapted evidence, then judge natively (recommended)
 
 ```powershell
 node scripts/mcp-harness/run-persona.mjs `
@@ -87,7 +87,8 @@ node scripts/mcp-harness/run-persona.mjs `
   --target http://localhost:5000/mcp `
   --token $env:AGENTWEAVER_TOKEN `
   --transcript scripts/mcp-harness/transcripts/priya-live-<timestamp>.jsonl `
-  --out scripts/mcp-harness/verdicts/priya.json
+  --dump-evidence scripts/mcp-harness/verdicts/priya-evidence.json `
+  --prompt-out scripts/mcp-harness/verdicts/priya-judge-prompt.txt
 ```
 
 With `--transcript`, `run-persona.mjs` parses the JSONL the driver wrote, runs the
@@ -96,10 +97,23 @@ peer of the API harness's fixed `generated-artifacts-seam` structural check —
 deterministic, separate from the dynamic drive; pass `--no-capability-check` to
 skip it, or it degrades gracefully if the server is unreachable), computes the
 objective MCP P0 facts, adapts the evidence via `scripts/harness-judge/adapters/mcp.mjs`,
-judges it via `scripts/harness-judge/core.mjs`, and writes the normalized verdict
-under `scripts/mcp-harness/verdicts/` (or `--out`). Read the verdict JSON and
-report its verdict and evidence references; do not treat a zero driver exit as a
-subjective quality pass.
+and writes normalized evidence plus the shared Judge prompt without calling a
+subprocess judge. The Harness/Squad agent must synchronously dispatch the `Judge`
+custom agent using the prompt-file content, save its raw text response, then validate
+and persist it:
+
+```powershell
+node scripts/harness-judge/save-verdict.mjs <raw-judge-response.txt> `
+  --evidence scripts/mcp-harness/verdicts/priya-evidence.json `
+  --out scripts/mcp-harness/verdicts/priya.json
+```
+
+This agent-native path produces real LLM verdicts while keeping the untrusted
+evidence isolated in the tool-less Judge agent. For headless/CI environments with no
+agent session, the legacy `finalize --transcript ... --out ...` path remains available
+and uses `AGENTWEAVER_JUDGE_CMD`; without that configured command it safely produces
+`CANNOT_DETERMINE`. Read the saved verdict JSON and report its verdict and evidence
+references; do not treat a zero driver exit as a subjective quality pass.
 
 `--target` and `--base-url` are aliases; `--scenario` and `--persona` are aliases.
 List the reviewed persona IDs that currently have MCP adapters (no server needed):
