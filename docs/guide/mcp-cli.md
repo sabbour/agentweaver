@@ -54,3 +54,34 @@ Use `coordinator_start` instead of `run_task` when the operator wants manual con
 ## Results retrieval
 
 Always call `run_show_artifacts` before `run_get_file`. The artifact list tells you which file paths are valid inputs for `run_get_file`.
+
+## Testing the MCP path
+
+Run the deterministic CLI-to-MCP smoke test from the repository root:
+
+```powershell
+$env:AGENTWEAVER_BASE_URL = "https://<staging-host>"
+$env:GITHUB_TOKEN = gh auth token
+$env:AGENTWEAVER_SMOKE_PROJECT_ID = "<configured-staging-project-id>" # optional
+npm run test:mcp-smoke
+```
+
+The test discovers the live MCP tools, verifies their capability contract, checks
+GitHub sign-in, creates or reuses a project, submits a minimal run, polls for at
+most five minutes, confirms an outcome gate when needed, requires a successful
+terminal state and at least one artifact, then archives the run. Each failure
+names the workflow step and MCP tool that failed.
+
+For local stdio testing, pass the server command explicitly:
+
+```powershell
+npm run test:mcp-smoke -- --target stdio --server-command dotnet `
+  --server-args '["run","--project","apps/Agentweaver.Mcp","--","--stdio"]' `
+  --project-id <id>
+```
+
+HTTP targets must be localhost or staging unless both `--allow-prod` and
+`--i-understand-prod` are supplied. Prefer a preconfigured smoke project; if no
+project exists, use `AGENTWEAVER_SMOKE_PROJECT_NAME`,
+`AGENTWEAVER_SMOKE_WORKING_DIRECTORY`, and `AGENTWEAVER_SMOKE_BLUEPRINT_ID` to
+control project creation.

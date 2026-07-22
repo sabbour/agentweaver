@@ -37,9 +37,15 @@ There are two entry points:
   OAuth sign-in flow (or `gh auth token` where that identity is what the
   Agentweaver server trusts); stdio transport has no such requirement since it
   never leaves the local subprocess.
-- Required env vars / flags: `AGENTWEAVER_TOKEN` (or `--token`) for authenticated
-  calls, and `--project-id` (project creation is scenario-owned — the smoke
-  script does not create projects for you).
+- Authentication: `AGENTWEAVER_TOKEN`, `GITHUB_TOKEN`, or `--token`. The smoke
+  checks `github_status` and invokes `github_signin` when the server has no
+  existing GitHub session.
+- Project selection: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` takes
+  precedence. Otherwise the smoke reuses `--project-name` /
+  `AGENTWEAVER_SMOKE_PROJECT_NAME`, falls back to the first existing project,
+  or creates a project with `project_create`. Use `--working-directory` and
+  `--blueprint-id` (or their `AGENTWEAVER_SMOKE_*` env equivalents) to
+  configure project creation.
 
 Stdio example:
 
@@ -53,6 +59,10 @@ and `$env:AGENTWEAVER_TOKEN` must be a valid OAuth-derived bearer token):
 ```powershell
 npm run smoke -- --target http://localhost:5000/mcp --token $env:AGENTWEAVER_TOKEN --project-id <id>
 ```
+
+From the repository root, the equivalent command is `npm run test:mcp-smoke -- ...`.
+When `AGENTWEAVER_BASE_URL` is set, the root command automatically targets its
+`/mcp` endpoint.
 
 List reviewed persona adapters without connecting to a server:
 

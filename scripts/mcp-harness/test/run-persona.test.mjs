@@ -185,7 +185,10 @@ test('runCapabilityCheck fails closed without a client and runs the contract wit
       { name: 'run_status', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } }, outputSchema: { type: 'object', required: ['status'], properties: { status: { type: 'string' } } } },
       { name: 'run_show_artifacts', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } }, outputSchema: { type: 'object', required: ['artifacts'], properties: { artifacts: { type: 'array' } } } },
       { name: 'run_archive', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } } },
-      { name: 'github_status' }, { name: 'github_signin' }, { name: 'diagnostics_get' },
+      { name: 'github_status' }, { name: 'github_signin' },
+      { name: 'project_list' },
+      { name: 'project_create', inputSchema: { type: 'object', required: ['name', 'working_directory'], properties: { name: { type: 'string' }, working_directory: { type: 'string' } } } },
+      { name: 'diagnostics_get' },
       { name: 'coordinator_outcome_spec_confirm', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } } },
     ]),
   };
