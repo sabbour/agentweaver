@@ -2,10 +2,27 @@
 #
 # Agent-host pods carry app.kubernetes.io/component: agent-host in addition to
 # app: agentweaver-agent-host. The shared sandbox-egress-allowlist (networkpolicy-sandbox.yaml)
-# is NOT sufficient for the in-cluster MCP dependency under the live kata/ACNS enforcement path:
-# live staging validation showed AgentHost -> agentweaver-mcp:8080 still timed out until an
-# explicit AgentHost -> MCP egress rule existed. Keep that narrow in-cluster allow here, then
-# keep the public-HTTPS allowlist for Copilot/GitHub traffic below.
+# is NOT sufficient for the in-cluster API/MCP dependencies under the live kata/ACNS (Cilium)
+# enforcement path: live staging validation showed AgentHost -> agentweaver-mcp:8080 AND
+# AgentHost -> agentweaver-api:8080 still timed out until an EXPLICIT podSelector egress rule
+# existed for each. This is a Cilium behaviour, not a Kubernetes-semantics quirk: Cilium
+# resolves an in-cluster ClusterIP to the destination pod's *security identity*, and only an
+# identity-based (podSelector) egress rule authorizes it. A CIDR/ipBlock rule — even the
+# 0.0.0.0/0 allow in sandbox-egress-allowlist — matches the "world"/CIDR entity, NOT
+# cluster-managed pod identities, so it never permits east-west traffic to API/MCP. The
+# SandboxTemplate-owned agentweaver-agent-host-network-policy (selector
+# agents.x-k8s.io/sandbox-template-ref-hash=<hash>, applied once a warm pod is claimed)
+# additionally excepts 10.0.0.0/8 from its own 0.0.0.0/0 egress, so the ONLY thing that lets a
+# claimed sandbox pod reach the API/MCP ClusterIPs (both in 10.0.0.0/8) is the identity-based
+# allow below. Keep these narrow in-cluster allows here, then keep the public-HTTPS allowlist
+# for Copilot/GitHub traffic below.
+#
+# Selector note (#424): claimed/active sandbox pods carry BOTH the warm-pool label
+# (app.kubernetes.io/component: agent-host) AND agents.x-k8s.io/sandbox-template-ref-hash=<hash>
+# — the ref-hash label is *added* on claim, the component label persists — so selecting by the
+# component label matches claimed pods too (live-verified: this policy's MCP rule is enforced on
+# both warm and ref-hash-labelled pods). The identity-based allow is additive with, and
+# unaffected by, the operator policy's RFC1918 CIDR exceptions.
 #
 # The Copilot CLI SDK also calls copilot-proxy.githubusercontent.com (138.91.x.x — Azure CDN)
 # for SDK token validation during session.create. Without the public-HTTPS rule below, that call
@@ -40,6 +57,18 @@ spec:
         - podSelector:
             matchLabels:
               app: agentweaver-mcp
+      ports:
+        - protocol: TCP
+          port: 8080
+    # In-cluster API on 8080 (#424). Native agent tools (submit_decision, memory, inbox, …)
+    # call the API over east-west from inside the sandbox pod. Targeted by podSelector (pod
+    # security identity) rather than the API ClusterIP so the rule survives ClusterIP
+    # reassignment and is enforced by Cilium's identity model. The API ingress side is already
+    # opened by allow-agenthost-to-api (networkpolicy-agenthost.yaml).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: agentweaver-api
       ports:
         - protocol: TCP
           port: 8080
