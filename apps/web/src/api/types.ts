@@ -1217,6 +1217,16 @@ export interface WorkflowSummaryDto {
   error: string | null;
   is_built_in: boolean;
   is_default: boolean;
+  trigger?: WorkflowTriggerDto | null;
+}
+
+export interface WorkflowTriggerDto {
+  type: 'schedule' | 'event';
+  interval?: 'daily' | 'weekly' | 'monthly' | null;
+  day_of_week?: string | null;
+  day_of_month?: number | null;
+  time_of_day?: string | null;
+  event_name?: string | null;
 }
 
 // Response body for GET/POST the project's workflows list.

@@ -19,6 +19,9 @@ vi.mock('../api/apiClient', () => ({
     syncWorkflows: vi.fn(),
     setDefaultWorkflow: vi.fn(),
     getProject: vi.fn(),
+    getWorkflowYaml: vi.fn(),
+    saveWorkflowYaml: vi.fn(),
+    runWorkflowNow: vi.fn(),
   },
 }));
 
@@ -152,5 +155,57 @@ describe('WorkflowsPage', () => {
 
     await waitFor(() => expect(apiClient.setDefaultWorkflow).toHaveBeenCalledWith('proj-1', 'nightly'));
     await waitFor(() => expect(screen.getByText(/Default workflow set to Nightly Sweep/)).toBeDefined());
+  });
+
+  it('renders and edits a project workflow schedule trigger', async () => {
+    const scheduled = {
+      ...sampleList.workflows[1],
+      valid: true,
+      error: null,
+      trigger: { type: 'schedule' as const, interval: 'weekly' as const, day_of_week: 'monday', time_of_day: '09:00' },
+    };
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], scheduled] });
+    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue('id: nightly\nname: Nightly Sweep\nstart: done\nnodes: []\nedges: []\n');
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
+
+    renderPage('proj-1');
+
+    expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /edit schedule/i }));
+    expect(await screen.findByText('Schedule workflow')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /save schedule/i }));
+
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalledWith(
+      'proj-1',
+      'nightly',
+      expect.stringContaining('trigger:'),
+    ));
+  });
+
+  it('queues a workflow-bound run from Run now', async () => {
+    const runnable = { ...sampleList.workflows[1], valid: true, error: null };
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], runnable] });
+    vi.mocked(apiClient.runWorkflowNow).mockResolvedValue({ task_id: 'task-1' });
+
+    renderPage('proj-1');
+
+    fireEvent.click((await screen.findAllByRole('button', { name: /run now/i }))[1]);
+    await waitFor(() => expect(apiClient.runWorkflowNow).toHaveBeenCalledWith('proj-1', 'nightly'));
+    expect(await screen.findByText(/Queued a run for "Nightly Sweep"/)).toBeDefined();
+  });
+
+  it('duplicates a built-in workflow into a project workflow and opens the visual editor', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue(sampleList);
+    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue('id: default\nname: Default Workflow\nstart: done\nnodes: []\nedges: []\n');
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Copy of Default Workflow' } as never);
+
+    renderPage('proj-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: /duplicate to project/i }));
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalledWith(
+      'proj-1',
+      'default-copy',
+      expect.stringContaining('id: default-copy'),
+    ));
   });
 });

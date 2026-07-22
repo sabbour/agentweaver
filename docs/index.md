@@ -37,11 +37,6 @@ npm run dev</code></pre>
           <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
 npm run azure:provision-infra</code></pre>
-          <p>
-            This provisions the infrastructure <strong>and performs the initial deployment</strong>
-            (build, image push, deploy, and verification). For later deployments to the same
-            environment, run <code>npm run azure:deploy-from-local</code>.
-          </p>
         </div>
       </div>
       <p class="aw-hero-quickstart-note">
@@ -101,6 +96,31 @@ npm run azure:provision-infra</code></pre>
         <div><strong>Review the result</strong><p>Review the team's work as one assembled result.</p></div>
       </li>
     </ol>
+  </section>
+
+  <section class="aw-workflow-editor" aria-labelledby="workflow-editor-title">
+    <div class="aw-section-heading">
+      <h2 id="workflow-editor-title">Define your deterministic workflows.</h2>
+      <p>
+        Declare the stages your work must follow, and every run follows the same topology.
+        Edit the YAML or shape it in the drag-and-drop graph editor, then add Build &amp; Test,
+        RAI, and Human Review gates where they belong. Schedule a workflow when the same
+        checked path needs to run again.
+      </p>
+    </div>
+    <ClientOnly>
+      <WorkflowEditorProof />
+      <template #fallback>
+        <figure class="aw-proof-frame aw-workflow-editor-fallback">
+          <img
+            :src="withBase('/screenshots/workflow-run-graph.png')"
+            alt="An Agentweaver workflow graph showing connected stages"
+            loading="lazy"
+          />
+          <figcaption><span>Turn on JavaScript to edit the example workflow.</span></figcaption>
+        </figure>
+      </template>
+    </ClientOnly>
   </section>
 
   <section class="aw-team-story" aria-labelledby="team-title">

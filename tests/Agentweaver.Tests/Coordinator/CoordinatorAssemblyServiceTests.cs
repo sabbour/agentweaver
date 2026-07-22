@@ -2631,6 +2631,89 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_MergeFailed_KeepsAgentHostAliveUntilScribeCompletes()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.MergeOverride = CollectiveMergeResult.Failed("merge_error");
+
+        var podAvailable = true;
+        var order = new List<string>();
+        _pipeline.OnScribe = (_, _) =>
+        {
+            order.Add("scribe");
+            if (!podAvailable)
+                throw new HttpRequestException("Connection refused (10.0.0.42:8088)");
+            return Task.CompletedTask;
+        };
+        _pipeline.OnCleanupBuildTestResources = () =>
+        {
+            order.Add("cleanup");
+            podAvailable = false;
+        };
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        order.Should().Equal("scribe", "cleanup");
+        EventTypes_(coordinatorRunId).Should().NotContain("run.scribe_failed");
+        _pipeline.Scribes.Should().Be(1);
+        _pipeline.CleanupBuildTestResourcesCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RunAssembly_ScribeTimeout_ReleasesAgentHostAndDoesNotWedgeCompletion()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.OnScribe = async (_, ct) => await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Coordinator:FinalScribeTimeoutSeconds"] = "0.1",
+            })
+            .Build();
+        var sut = new CoordinatorAssemblyService(
+            _runStore,
+            _streamStore,
+            _assemblyStore,
+            _reviewGate,
+            _pipeline,
+            _scopeFactory,
+            _provider,
+            new TestHostApplicationLifetime(),
+            NullLogger<CoordinatorAssemblyService>.Instance,
+            configuration,
+            steeringWaits: _steeringWaits,
+            previewClassifier: _previewClassifier);
+
+        var run = sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        EventTypes_(coordinatorRunId).Should().Contain("run.scribe_failed");
+        _pipeline.CleanupBuildTestResourcesCalls.Should().Be(1);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.Completed);
+    }
+
+    [Fact]
     public async Task RunAssembly_UnexpectedFault_FailsRunWithReason_AndEmitsAssemblyFailed()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -3550,6 +3633,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public CollectiveGateDecision? BuildTestDecision;
         public CollectiveRaiResult? RaiResult;
         public Action<CollectiveBuildTestRequest>? OnBuildTest;
+        public Action? OnCleanupBuildTestResources;
+        public Func<CollectiveScribeRequest, CancellationToken, Task>? OnScribe;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
         public CollectiveMergeResult? MergeOverride;
@@ -3601,6 +3686,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             CancellationToken ct = default)
         {
             CleanupBuildTestResourcesCalls++;
+            OnCleanupBuildTestResources?.Invoke();
             return Task.CompletedTask;
         }
 
@@ -3629,7 +3715,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)
         {
             Scribes++;
-            return Task.CompletedTask;
+            return OnScribe?.Invoke(request, ct) ?? Task.CompletedTask;
         }
     }
 
