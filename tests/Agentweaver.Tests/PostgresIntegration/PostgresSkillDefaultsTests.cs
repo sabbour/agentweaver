@@ -324,14 +324,22 @@ public sealed class PostgresSkillDefaultsTests(PostgresFixture pg)
             var skillStore = new EfSkillStore(factory);
             await projectStore.InsertAsync(project);
             var validSkill = NewBuiltIn(project.Id, "valid-upgrade-skill");
-            await skillStore.InsertAsync(validSkill);
-            await skillStore.AssignAsync(project.Id, validSkill.Id, "Tank", DateTimeOffset.UtcNow);
+            // This intentionally targets the schema before the marketplace-provenance migration.
+            // Insert the valid fixture through SQL so the current EF model does not require the
+            // pending marketplace_name column before Database.MigrateAsync below applies it.
             await using (var connection = new NpgsqlConnection(connectionBuilder.ConnectionString))
             {
                 await connection.OpenAsync();
                 await using var command = connection.CreateCommand();
                 command.CommandText =
                     """
+                    INSERT INTO skills (
+                        skill_id, project_id, name, description, instructions, provenance,
+                        content_hash, status, created_at, updated_at)
+                    VALUES (@validSkill, @validProject, 'valid-upgrade-skill', 'valid',
+                        'instructions', 'built-in', 'hash', 'active', now(), now());
+                    INSERT INTO skill_assignments (project_id, skill_id, agent_name, created_at)
+                    VALUES (@validProject, @validSkill, 'Tank', now());
                     INSERT INTO skills (
                         skill_id, project_id, name, description, instructions, provenance,
                         content_hash, status, created_at, updated_at)
@@ -343,6 +351,7 @@ public sealed class PostgresSkillDefaultsTests(PostgresFixture pg)
                     INSERT INTO skill_assignments (project_id, skill_id, agent_name, created_at)
                     VALUES (@validProject, @missingSkill, 'Trinity', now());
                     """;
+                command.Parameters.AddWithValue("validSkill", validSkill.Id.ToString());
                 command.Parameters.AddWithValue("orphanSkill", Guid.NewGuid().ToString());
                 command.Parameters.AddWithValue("orphanProject", Guid.NewGuid().ToString());
                 command.Parameters.AddWithValue("validProject", project.Id.ToString());
