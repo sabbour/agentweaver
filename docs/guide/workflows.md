@@ -28,11 +28,18 @@ When you submit a task, an LLM pass automatically selects the best-fit workflow 
 
 When you start an orchestration, Agentweaver reads your task description and runs a matching pass that considers:
 
-1. Keywords and intent in your description
+1. The semantic intent of your description
 2. The project's configured default workflow (if set)
 3. The built-in library's workflow metadata and use-case descriptions
 
-The matched workflow is shown in the run detail. If the auto-match picks the wrong one, you can override it at submission time.
+After the confirmed outcome is decomposed, Agentweaver validates that code-producing work uses a
+workflow with a **Build & Test** stage. If an automatic match such as `pm-discovery` cannot express
+that gate, the coordinator re-selects from compatible workflows. Explicit overrides remain pinned;
+when an override lacks Build & Test for code work, the work plan surfaces a warning instead of
+silently changing the user's choice.
+
+The matched workflow is shown in the run detail. If the auto-match picks the wrong one, you can
+override it at submission time.
 
 ## Workflows in your project
 

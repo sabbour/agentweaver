@@ -64,6 +64,7 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
     public FakeOutcomeSpecReplyClassifier ReplyClassifier { get; } = new();
     public FakeStoryIndependenceClassifier StoryIndependenceClassifier { get; } = new();
     public FakeAssemblyGateCodeClassifier AssemblyGateCodeClassifier { get; } = new();
+    public FakeWorkflowSelectionModel WorkflowSelectionModel { get; } = new();
     public FakePreviewClassifier PreviewClassifier { get; } = new();
 
     private HttpClient CreateClientWithKey(string apiKey)
@@ -138,6 +139,9 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
 
             RemoveService<Agentweaver.Api.Coordinator.IAssemblyGateCodeClassifier>(services);
             services.AddSingleton<Agentweaver.Api.Coordinator.IAssemblyGateCodeClassifier>(AssemblyGateCodeClassifier);
+
+            RemoveService<Agentweaver.Api.Coordinator.IWorkflowSelectionModel>(services);
+            services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelectionModel>(WorkflowSelectionModel);
 
             RemoveService<Agentweaver.Api.Coordinator.IPreviewClassifier>(services);
             services.AddSingleton<Agentweaver.Api.Coordinator.IPreviewClassifier>(PreviewClassifier);

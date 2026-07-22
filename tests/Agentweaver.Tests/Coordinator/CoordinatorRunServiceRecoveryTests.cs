@@ -515,6 +515,7 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             agentFactory,
             new ThrowingSpecDrafter(),
             new ThrowingStoryIndependenceClassifier(),
+            new FakeAssemblyGateCodeClassifier(),
             streamStore,
             _scopeFactory,
             loggerFactory,
