@@ -134,12 +134,6 @@ public sealed class NotificationsService
         };
     }
 
-    public sealed class DismissedNotification
-    {
-        public required string User { get; init; }
-        public required string NotificationId { get; init; }
-        public DateTimeOffset DismissedAt { get; init; }
-    }
 
     private static NotificationDto ToToolApprovalNotification(
         Run run,

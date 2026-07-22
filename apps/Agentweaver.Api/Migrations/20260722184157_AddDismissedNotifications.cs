@@ -5,8 +5,10 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Agentweaver.Api.Migrations
 {
+    /// <inheritdoc />
     public partial class AddDismissedNotifications : Migration
     {
+        /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.CreateTable(
@@ -15,12 +17,19 @@ namespace Agentweaver.Api.Migrations
                 {
                     user = table.Column<string>(type: "TEXT", nullable: false),
                     notification_id = table.Column<string>(type: "TEXT", nullable: false),
-                    dismissed_at = table.Column<DateTimeOffset>(type: "TEXT", nullable: false),
+                    dismissed_at = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
                 },
-                constraints: table => table.PrimaryKey("PK_dismissed_notifications", x => new { x.user, x.notification_id }));
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_dismissed_notifications", x => new { x.user, x.notification_id });
+                });
         }
 
-        protected override void Down(MigrationBuilder migrationBuilder) =>
-            migrationBuilder.DropTable(name: "dismissed_notifications");
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropTable(
+                name: "dismissed_notifications");
+        }
     }
 }

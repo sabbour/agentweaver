@@ -3,7 +3,6 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Diagnostics;
-using Agentweaver.Api.Notifications;
 
 namespace Agentweaver.Api.Memory;
 
