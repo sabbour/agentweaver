@@ -15,6 +15,7 @@ public sealed class SkillRecord
     public string Provenance { get; set; } = "";
     public string? SourceRepository { get; set; }
     public string? SourceLocation { get; set; }
+    public string? MarketplaceName { get; set; }
     public string ContentHash { get; set; } = "";
     public string Status { get; set; } = "active";
     public DateTimeOffset CreatedAt { get; set; }

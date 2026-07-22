@@ -390,6 +390,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(s => s.Provenance).HasColumnName("provenance");
             e.Property(s => s.SourceRepository).HasColumnName("source_repository");
             e.Property(s => s.SourceLocation).HasColumnName("source_location");
+            e.Property(s => s.MarketplaceName).HasColumnName("marketplace_name");
             e.Property(s => s.ContentHash).HasColumnName("content_hash");
             e.Property(s => s.Status).HasColumnName("status").HasDefaultValue("active");
             e.Property(s => s.CreatedAt).HasColumnName("created_at");

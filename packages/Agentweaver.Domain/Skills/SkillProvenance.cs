@@ -20,6 +20,9 @@ public enum SkillProvenance
 
     /// <summary>Discovered/synced from the project's connected repository at a recognized location.</summary>
     ConnectedRepoSync,
+
+    /// <summary>Imported from an administrator-curated skill marketplace.</summary>
+    Marketplace,
 }
 
 public static class SkillProvenanceExtensions
@@ -31,6 +34,7 @@ public static class SkillProvenanceExtensions
         SkillProvenance.FileUpload => "file-upload",
         SkillProvenance.Manual => "manual",
         SkillProvenance.ConnectedRepoSync => "connected-repo-sync",
+        SkillProvenance.Marketplace => "marketplace",
         _ => throw new ArgumentOutOfRangeException(nameof(p)),
     };
 
@@ -41,6 +45,7 @@ public static class SkillProvenanceExtensions
         "file-upload" => SkillProvenance.FileUpload,
         "manual" => SkillProvenance.Manual,
         "connected-repo-sync" => SkillProvenance.ConnectedRepoSync,
+        "marketplace" => SkillProvenance.Marketplace,
         _ => throw new ArgumentException($"Unknown skill provenance: {s}"),
     };
 }

@@ -181,6 +181,29 @@ public sealed class SkillTools(AgentweaverApiClient api)
             ct);
     }
 
+    [McpServerTool(Name = "skill_marketplaces_list"), Description("List enabled administrator-curated skill marketplaces.")]
+    public async Task<string> SkillMarketplacesListAsync(CancellationToken ct = default) =>
+        await ExecuteJsonAsync("skill_marketplaces_list", token => api.GetAsync<object>("api/skill-marketplaces", token), ct);
+
+    [McpServerTool(Name = "skill_marketplace_browse"), Description("Browse or search a curated marketplace without changing the project catalog.")]
+    public async Task<string> SkillMarketplaceBrowseAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Marketplace name as returned by skill_marketplaces_list")] string marketplace,
+        [Description("Optional skill name, description, or metadata search text")] string? query = null,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync("skill_marketplace_browse", token => api.PostAsync<object>(
+            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/browse", new { query }, token), ct);
+
+    [McpServerTool(Name = "skill_marketplace_import"), Description("Import selected candidates from a curated marketplace through the normal repository-import pipeline.")]
+    public async Task<string> SkillMarketplaceImportAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Marketplace name as returned by skill_marketplaces_list")] string marketplace,
+        [Description("Comma-separated locations returned by skill_marketplace_browse")] string locations,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync("skill_marketplace_import", token => api.PostAsync<object>(
+            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/import",
+            new { locations = locations.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) }, token), ct);
+
     [McpServerTool(Name = "skill_defaults_preview"), Description("Preview explicit bundled role-skill defaults for a confirmed project team. Returns a digest required by skill_defaults_apply; makes no changes.")]
     public async Task<string> SkillDefaultsPreviewAsync(
         [Description("Project ID")] string project_id,

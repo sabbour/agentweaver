@@ -1501,7 +1501,7 @@ export interface PortForwardSessionDto {
 }
 
 // ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
-export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync';
+export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync' | 'marketplace';
 export type SkillStatus = 'active' | 'missing' | 'malformed';
 
 export function isSkillProvenance(value: unknown): value is SkillProvenance {
@@ -1509,7 +1509,8 @@ export function isSkillProvenance(value: unknown): value is SkillProvenance {
     || value === 'repo-import'
     || value === 'file-upload'
     || value === 'manual'
-    || value === 'connected-repo-sync';
+    || value === 'connected-repo-sync'
+    || value === 'marketplace';
 }
 
 // GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
@@ -1520,6 +1521,7 @@ export interface SkillDto {
   provenance: SkillProvenance;
   source_repository?: string | null;
   source_location?: string | null;
+  marketplace_name?: string | null;
   status: SkillStatus;
   content_hash: string;
   resource_count: number;
@@ -1543,6 +1545,7 @@ export interface SkillDetailDto {
   provenance: SkillProvenance;
   source_repository?: string | null;
   source_location?: string | null;
+  marketplace_name?: string | null;
   status: SkillStatus;
   content_hash: string;
   created_at: string;
@@ -1562,6 +1565,9 @@ export interface SkillCandidateDto {
 export interface SkillImportPreviewResponse {
   candidates: SkillCandidateDto[];
 }
+
+export interface SkillMarketplaceDto { name: string; repository: string; subpath?: string | null; layout_note?: string | null; }
+export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; }
 
 export interface CreateSkillRequest {
   name: string;

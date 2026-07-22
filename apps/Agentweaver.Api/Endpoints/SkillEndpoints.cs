@@ -191,6 +191,35 @@ public static class SkillEndpoints
         });
 
         // POST /api/projects/{id}/skills/upload — multipart upload of a skill file/folder/archive.
+        app.MapGet("/api/skill-marketplaces", (SkillMarketplaceRegistry marketplaces) =>
+            Results.Ok(marketplaces.ListEnabled().Select(m => new { name = m.Name, repository = m.Repository, subpath = m.Subpath, layout_note = m.LayoutNote })))
+            .WithName("ListSkillMarketplaces").WithTags("Skills");
+
+        app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/browse", async (
+            HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, SkillMarketplaceRegistry marketplaces, SkillCatalogService svc, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
+            var definition = marketplaces.FindEnabled(marketplace);
+            if (definition is null) return Results.NotFound();
+            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var (outcome, error, candidates) = await svc.PreviewRepoCandidatesAsync(projectId, SkillMarketplaceRegistry.ToImportUrl(definition), caller, ct);
+            if (outcome != SkillOutcome.Ok) return outcome == SkillOutcome.NotFound ? Results.NotFound() : Results.UnprocessableEntity(new { error });
+            var query = body?.Query?.Trim();
+            var filtered = string.IsNullOrEmpty(query) ? candidates! : candidates!.Where(c => $"{c.Name} {c.Description} {c.Location} {definition.Name} {definition.Repository}".Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+            return Results.Ok(new { marketplace = definition.Name, candidates = filtered });
+        }).WithName("BrowseSkillMarketplace").WithTags("Skills");
+
+        app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/import", async (
+            HttpContext http, string id, string marketplace, MarketplaceImportRequest body, SkillMarketplaceRegistry marketplaces, SkillCatalogService svc, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
+            var definition = marketplaces.FindEnabled(marketplace);
+            if (definition is null) return Results.NotFound();
+            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var result = await svc.ImportFromRepoAsync(projectId, SkillMarketplaceRegistry.ToImportUrl(definition), body?.Locations, caller, ct, definition.Name);
+            return MapAcquisition(result);
+        }).WithName("ImportSkillMarketplace").WithTags("Skills");
+
         app.MapPost("/api/projects/{id}/skills/upload", async (
             HttpContext http, string id, SkillCatalogService svc, CancellationToken ct) =>
         {
@@ -357,12 +386,15 @@ public static class SkillEndpoints
         provenance = s.Provenance.ToApiString(),
         source_repository = s.SourceRepository,
         source_location = s.SourceLocation,
+        marketplace_name = s.MarketplaceName,
         status = s.Status.ToApiString(),
         content_hash = s.ContentHash,
         created_at = s.CreatedAt,
         updated_at = s.UpdatedAt,
     };
 
+    public sealed record MarketplaceBrowseRequest(string? Query);
+    public sealed record MarketplaceImportRequest(IReadOnlyList<string>? Locations);
     public sealed record ImportPreviewRequest(string? RepoUrl);
     public sealed record ImportRequest(string? RepoUrl, IReadOnlyList<string>? Locations);
     public sealed record CreateSkillRequest(string? Name, string? DisplayName, string? Description, string? Instructions);

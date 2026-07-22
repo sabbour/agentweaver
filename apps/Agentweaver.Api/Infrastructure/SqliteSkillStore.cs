@@ -26,10 +26,10 @@ public sealed class SqliteSkillStore : ISkillStore
         command.CommandText =
             """
             INSERT INTO skills (skill_id, project_id, name, description, instructions, resources,
-                                provenance, source_repository, source_location, content_hash, status,
+                                provenance, source_repository, source_location, marketplace_name, content_hash, status,
                                 created_at, updated_at)
             VALUES ($skillId, $projectId, $name, $description, $instructions, $resources,
-                    $provenance, $sourceRepository, $sourceLocation, $contentHash, $status,
+                    $provenance, $sourceRepository, $sourceLocation, $marketplaceName, $contentHash, $status,
                     $createdAt, $updatedAt);
             """;
         BindSkill(command, skill);
@@ -45,7 +45,7 @@ public sealed class SqliteSkillStore : ISkillStore
             UPDATE skills
                SET name = $name, description = $description, instructions = $instructions,
                    resources = $resources, provenance = $provenance,
-                   source_repository = $sourceRepository, source_location = $sourceLocation,
+                   source_repository = $sourceRepository, source_location = $sourceLocation, marketplace_name = $marketplaceName,
                    content_hash = $contentHash, status = $status, updated_at = $updatedAt
              WHERE project_id = $projectId AND skill_id = $skillId;
             """;
@@ -172,7 +172,7 @@ public sealed class SqliteSkillStore : ISkillStore
         command.CommandText =
             """
             SELECT s.skill_id, s.project_id, s.name, s.description, s.instructions, s.resources,
-                   s.provenance, s.source_repository, s.source_location, s.content_hash, s.status,
+                   s.provenance, s.source_repository, s.source_location, s.marketplace_name, s.content_hash, s.status,
                    s.created_at, s.updated_at
               FROM skills AS s
               INNER JOIN skill_assignments a
@@ -236,10 +236,10 @@ public sealed class SqliteSkillStore : ISkillStore
             command.CommandText =
                 """
                 INSERT INTO skills (skill_id, project_id, name, description, instructions, resources,
-                                    provenance, source_repository, source_location, content_hash, status,
+                                    provenance, source_repository, source_location, marketplace_name, content_hash, status,
                                     created_at, updated_at)
                 VALUES ($skillId, $projectId, $name, $description, $instructions, $resources,
-                        $provenance, $sourceRepository, $sourceLocation, $contentHash, $status,
+                        $provenance, $sourceRepository, $sourceLocation, $marketplaceName, $contentHash, $status,
                         $createdAt, $updatedAt);
                 """;
             BindSkill(command, skill);
@@ -339,6 +339,7 @@ public sealed class SqliteSkillStore : ISkillStore
         command.Parameters.AddWithValue("$provenance", skill.Provenance.ToApiString());
         command.Parameters.AddWithValue("$sourceRepository", (object?)skill.SourceRepository ?? DBNull.Value);
         command.Parameters.AddWithValue("$sourceLocation", (object?)skill.SourceLocation ?? DBNull.Value);
+        command.Parameters.AddWithValue("$marketplaceName", (object?)skill.MarketplaceName ?? DBNull.Value);
         command.Parameters.AddWithValue("$contentHash", skill.ContentHash);
         command.Parameters.AddWithValue("$status", skill.Status.ToApiString());
         command.Parameters.AddWithValue("$createdAt", Ts(skill.CreatedAt));
@@ -351,7 +352,7 @@ public sealed class SqliteSkillStore : ISkillStore
     private const string SelectSql =
         """
         SELECT skill_id, project_id, name, description, instructions, resources,
-               provenance, source_repository, source_location, content_hash, status,
+               provenance, source_repository, source_location, marketplace_name, content_hash, status,
                created_at, updated_at
           FROM skills
         """;
@@ -367,10 +368,11 @@ public sealed class SqliteSkillStore : ISkillStore
         Provenance = SkillProvenanceExtensions.ParseProvenance(r.GetString(6)),
         SourceRepository = r.IsDBNull(7) ? null : r.GetString(7),
         SourceLocation = r.IsDBNull(8) ? null : r.GetString(8),
-        ContentHash = r.GetString(9),
-        Status = SkillStatusExtensions.ParseStatus(r.GetString(10)),
-        CreatedAt = DateTimeOffset.Parse(r.GetString(11), null, DateTimeStyles.RoundtripKind),
-        UpdatedAt = DateTimeOffset.Parse(r.GetString(12), null, DateTimeStyles.RoundtripKind),
+        MarketplaceName = r.IsDBNull(9) ? null : r.GetString(9),
+        ContentHash = r.GetString(10),
+        Status = SkillStatusExtensions.ParseStatus(r.GetString(11)),
+        CreatedAt = DateTimeOffset.Parse(r.GetString(12), null, DateTimeStyles.RoundtripKind),
+        UpdatedAt = DateTimeOffset.Parse(r.GetString(13), null, DateTimeStyles.RoundtripKind),
     };
 
     private static string SerializeResources(IReadOnlyList<SkillResource> resources) =>

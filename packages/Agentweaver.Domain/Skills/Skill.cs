@@ -47,6 +47,9 @@ public sealed record Skill
     /// <summary>Path within the source (e.g. ".github/skills/pr-review") when applicable.</summary>
     public string? SourceLocation { get; init; }
 
+    /// <summary>Administrator-curated marketplace identity when <see cref="Provenance"/> is Marketplace.</summary>
+    public string? MarketplaceName { get; init; }
+
     /// <summary>Stable content hash over name + description + instructions + resources. Drives idempotency.</summary>
     public required string ContentHash { get; init; }
 

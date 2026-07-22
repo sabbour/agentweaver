@@ -114,6 +114,7 @@ function isSkillDto(value: unknown): value is SkillDto {
     && isSkillProvenance(value.provenance)
     && isOptionalString(value.source_repository)
     && isOptionalString(value.source_location)
+    && isOptionalString(value.marketplace_name)
     && isSkillStatus(value.status)
     && typeof value.content_hash === 'string'
     && typeof value.resource_count === 'number'
@@ -135,6 +136,7 @@ function isSkillDetailDto(value: unknown): value is SkillDetailDto {
     && isSkillProvenance(value.provenance)
     && isOptionalString(value.source_repository)
     && isOptionalString(value.source_location)
+    && isOptionalString(value.marketplace_name)
     && isSkillStatus(value.status)
     && typeof value.content_hash === 'string'
     && typeof value.created_at === 'string'
@@ -651,6 +653,18 @@ export class AgentweaverApiClient {
 
   importSkills(projectId: string, repoUrl: string, locations?: string[]): Promise<import('./types').SkillAcquisitionResponse> {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import`, { repoUrl, locations });
+  }
+
+  listSkillMarketplaces(): Promise<import('./types').SkillMarketplaceDto[]> {
+    return this.request<import('./types').SkillMarketplaceDto[]>('GET', '/skill-marketplaces');
+  }
+
+  browseSkillMarketplace(projectId: string, marketplace: string, query?: string): Promise<import('./types').SkillMarketplaceBrowseResponse> {
+    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query });
+  }
+
+  importMarketplaceSkills(projectId: string, marketplace: string, locations: string[]): Promise<import('./types').SkillAcquisitionResponse> {
+    return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/import`, { locations });
   }
 
   // Multipart upload of skill file(s)/folder/archive. Bypasses request<T> to send FormData.
