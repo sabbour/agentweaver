@@ -98,31 +98,6 @@ npm run azure:provision-infra</code></pre>
     </ol>
   </section>
 
-  <section class="aw-workflow-editor" aria-labelledby="workflow-editor-title">
-    <div class="aw-section-heading">
-      <h2 id="workflow-editor-title">Define your deterministic workflows.</h2>
-      <p>
-        Start from a template or describe the work in plain language, then declare the stages
-        every run must follow. Edit the YAML or shape it in the drag-and-drop graph editor,
-        then add Build &amp; Test, RAI, and Human Review gates where they belong. Schedule a
-        workflow when the same checked path needs to run again.
-      </p>
-    </div>
-    <ClientOnly>
-      <WorkflowEditorProof />
-      <template #fallback>
-        <figure class="aw-proof-frame aw-workflow-editor-fallback">
-          <img
-            :src="withBase('/screenshots/workflow-run-graph.png')"
-            alt="An Agentweaver workflow graph showing connected stages"
-            loading="lazy"
-          />
-          <figcaption><span>Turn on JavaScript to edit the example workflow.</span></figcaption>
-        </figure>
-      </template>
-    </ClientOnly>
-  </section>
-
   <section class="aw-team-story" aria-labelledby="team-title">
     <div class="aw-team-copy">
       <h2 id="team-title">Cast a team for the job.</h2>
