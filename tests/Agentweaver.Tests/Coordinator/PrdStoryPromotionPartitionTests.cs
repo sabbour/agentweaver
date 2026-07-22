@@ -6,6 +6,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -156,6 +157,7 @@ public sealed class PrdStoryPromotionPartitionTests
             services.GetRequiredService<IServiceScopeFactory>(),
             NullLoggerFactory.Instance,
             classifier,
+            new FakeAssemblyGateCodeClassifier(),
             "gpt-5-mini",
             "http://localhost",
             null);
