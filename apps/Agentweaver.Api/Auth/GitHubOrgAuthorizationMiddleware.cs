@@ -43,7 +43,6 @@ public sealed class GitHubOrgAuthorizationMiddleware
         // GitHub webhook receiver (issue #53 follow-up): GitHub's delivery has no Agentweaver bearer
         // token/org membership to check — the HMAC-SHA256 signature verification inside the endpoint
         // itself (GitHubWebhookEndpoints) IS this path's authentication.
-        "/api/webhooks/github",
     ];
 
     public GitHubOrgAuthorizationMiddleware(
@@ -198,6 +197,10 @@ public sealed class GitHubOrgAuthorizationMiddleware
 
     private static bool IsExempt(PathString path)
     {
+        if (path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
+            && path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true)
+            return true;
+
         foreach (var prefix in ExemptPrefixes)
         {
             if (path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase))

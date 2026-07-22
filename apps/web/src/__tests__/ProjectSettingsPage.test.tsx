@@ -17,6 +17,7 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
+    rotateProjectWebhookSecret: vi.fn(),
     updateProjectProviderSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
   },
@@ -96,6 +97,19 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
 
     await waitFor(() => expect(screen.getByText('Sandbox enabled')).toBeDefined());
+  });
+
+  it('reveals a rotated GitHub webhook secret once', async () => {
+    vi.mocked(apiClient.rotateProjectWebhookSecret).mockResolvedValue({ secret: 'new-secret' } as never);
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate secret' }));
+
+    await waitFor(() => expect(apiClient.rotateProjectWebhookSecret).toHaveBeenCalledWith('proj-1'));
+    expect(await screen.findByText('Copy this secret now. You won’t be able to see it again.')).toBeDefined();
+    expect(screen.getByDisplayValue('new-secret')).toBeDefined();
   });
 
   it('renders generation model overrides with blank fields inheriting gpt-5.4', async () => {

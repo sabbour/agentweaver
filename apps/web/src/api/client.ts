@@ -398,6 +398,14 @@ export class AgentweaverApiClient {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
+  rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
+    return this.request<import('./types').WebhookSecretRotationResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/webhook-secret/rotate`,
+      {},
+    );
+  }
+
   deleteProject(projectId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}?confirm=true`);
   }

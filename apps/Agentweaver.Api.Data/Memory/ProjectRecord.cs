@@ -15,6 +15,7 @@ public sealed class ProjectRecord
     public string State { get; set; } = "active";
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+    public string? WebhookSecret { get; set; }
     public long TeamRevision { get; set; }
     public int MaxReadyPerHeartbeat { get; set; } = 3;
     public bool PickupAutopilot { get; set; } = true;
