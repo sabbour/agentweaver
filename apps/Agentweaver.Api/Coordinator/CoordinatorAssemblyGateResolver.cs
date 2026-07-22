@@ -28,7 +28,8 @@ public static class CoordinatorAssemblyGateResolver
         var db = scopedServices.GetRequiredService<MemoryDbContext>();
         var projectStore = scopedServices.GetService<IProjectStore>();
         var workflowRegistry = scopedServices.GetService<WorkflowRegistry>();
-        return ResolveAsync(db, projectStore, workflowRegistry, workPlanId, ct);
+        var codeClassifier = scopedServices.GetService<IAssemblyGateCodeClassifier>();
+        return ResolveAsync(db, projectStore, workflowRegistry, codeClassifier, workPlanId, ct);
     }
 
     /// <summary>
@@ -37,10 +38,22 @@ public static class CoordinatorAssemblyGateResolver
     /// <see cref="CoordinatorGraphDescriptor.DefaultAssemblyGates"/> (RAI + Human Review) when the
     /// workflow can't be resolved, matching the historical default-gate behavior.
     /// </summary>
+    public static Task<IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode>> ResolveAsync(
+        MemoryDbContext db,
+        IProjectStore? projectStore,
+        WorkflowRegistry? workflowRegistry,
+        int workPlanId,
+        CancellationToken ct) =>
+        ResolveAsync(db, projectStore, workflowRegistry, null, workPlanId, ct);
+
+    /// <summary>
+    /// Resolves authored assembly gates with an optional semantic code-production classifier.
+    /// </summary>
     public static async Task<IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode>> ResolveAsync(
         MemoryDbContext db,
         IProjectStore? projectStore,
         WorkflowRegistry? workflowRegistry,
+        IAssemblyGateCodeClassifier? codeClassifier,
         int workPlanId,
         CancellationToken ct)
     {
@@ -49,7 +62,7 @@ public static class CoordinatorAssemblyGateResolver
 
         var plan = await db.WorkPlans.AsNoTracking()
             .Where(w => w.Id == workPlanId)
-            .Select(w => new { w.ProjectId, w.WorkflowId })
+            .Select(w => new { w.ProjectId, w.WorkflowId, w.CoordinatorRunId })
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
         if (plan is null || !ProjectId.TryParse(plan.ProjectId, out var projectId))
@@ -76,7 +89,22 @@ public static class CoordinatorAssemblyGateResolver
                 s.Title, s.Scope, s.Phase, s.DeclaredOutputPathsJson))
             .ToList();
 
-        return CoordinatorAssemblyService.ResolveAssemblyGates(workflow, ProducesCode(subtasks));
+        var submittingUser = await db.Runs.AsNoTracking()
+            .Where(r => r.RunId == plan.CoordinatorRunId)
+            .Select(r => r.SubmittingUser)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false) ?? "";
+        var classificationContext = new AssemblyGateCodeClassificationContext(
+            plan.CoordinatorRunId,
+            plan.ProjectId,
+            submittingUser,
+            "",
+            "",
+            []);
+        var producesCode = await ProducesCodeAsync(
+            subtasks, codeClassifier, classificationContext, ct).ConfigureAwait(false);
+
+        return CoordinatorAssemblyService.ResolveAssemblyGates(workflow, producesCode);
     }
 
     internal sealed record SubtaskGateMetadata(
@@ -102,74 +130,53 @@ public static class CoordinatorAssemblyGateResolver
 
     /// <summary>
     /// Classifies gate applicability from persisted subtask content as well as phase metadata. Planning
-    /// subtasks are non-code, while an execution subtask is also non-code when its declared outputs are
-    /// exclusively documentation files or its task text explicitly describes documentation-only work.
+    /// subtasks use the structural non-code fast path; every other subtask is classified by the model.
     /// Unknown work remains code-producing so the gate is only removed with positive evidence.
     /// </summary>
-    internal static bool ProducesCode(IReadOnlyCollection<SubtaskGateMetadata> subtasks)
+    internal static async Task<bool> ProducesCodeAsync(
+        IReadOnlyCollection<SubtaskGateMetadata> subtasks,
+        IAssemblyGateCodeClassifier? classifier,
+        AssemblyGateCodeClassificationContext context,
+        CancellationToken ct)
     {
         if (subtasks.Count == 0)
             return true;
 
-        return subtasks.Any(ProducesCode);
-    }
-
-    private static bool ProducesCode(SubtaskGateMetadata subtask)
-    {
-        if (string.Equals(subtask.Phase, "planning", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var outputPaths =
-            CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(subtask.DeclaredOutputPathsJson);
-        if (outputPaths.Count > 0)
+        foreach (var subtask in subtasks)
         {
-            if (outputPaths.Any(path => !IsDocumentationPath(path)))
+            if (string.Equals(subtask.Phase, "planning", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (classifier is null)
                 return true;
 
-            return !(outputPaths.All(IsClearlyDocumentationPath)
-                || IsExplicitDocumentationTask(subtask.Title, subtask.Scope));
+            var outputPaths =
+                CoordinatorOrchestratorExecutor.DeserializeDeclaredOutputPaths(subtask.DeclaredOutputPathsJson);
+            bool? classification;
+            try
+            {
+                classification = await classifier.ClassifyAsync(
+                    context with
+                    {
+                        Title = subtask.Title,
+                        Scope = subtask.Scope,
+                        DeclaredOutputPaths = outputPaths,
+                    },
+                    ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return true;
+            }
+            catch (Exception)
+            {
+                return true;
+            }
+
+            if (classification is not false)
+                return true;
         }
 
-        return !IsExplicitDocumentationTask(subtask.Title, subtask.Scope);
-    }
-
-    private static bool IsDocumentationPath(string path)
-    {
-        var fileName = Path.GetFileName(path);
-        if (fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase)
-            || fileName.StartsWith("CHANGELOG", StringComparison.OrdinalIgnoreCase)
-            || fileName.StartsWith("CONTRIBUTING", StringComparison.OrdinalIgnoreCase)
-            || fileName.StartsWith("LICENSE", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        return Path.GetExtension(fileName).ToLowerInvariant() is
-            ".md" or ".markdown" or ".mdx" or ".rst" or ".adoc" or ".txt";
-    }
-
-    private static bool IsClearlyDocumentationPath(string path)
-    {
-        var normalized = path.Replace('\\', '/');
-        var fileName = Path.GetFileName(normalized);
-        return normalized.StartsWith("docs/", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("/docs/", StringComparison.OrdinalIgnoreCase)
-            || fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase)
-            || fileName.StartsWith("CHANGELOG", StringComparison.OrdinalIgnoreCase)
-            || fileName.StartsWith("CONTRIBUTING", StringComparison.OrdinalIgnoreCase)
-            || fileName.StartsWith("LICENSE", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsExplicitDocumentationTask(string title, string scope)
-    {
-        var text = $"{title}\n{scope}".ToLowerInvariant();
-        var hasDocumentationAction = new[]
-        {
-            "write", "update", "add", "edit", "revise", "create", "draft", "document",
-        }.Any(text.Contains);
-        var hasDocumentationSubject = new[]
-        {
-            "documentation", "readme", "docs", "changelog", "release notes", "user guide",
-        }.Any(text.Contains);
-
-        return hasDocumentationAction && hasDocumentationSubject;
+        return false;
     }
 }

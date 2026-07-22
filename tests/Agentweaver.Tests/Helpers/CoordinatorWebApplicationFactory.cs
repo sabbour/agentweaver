@@ -63,6 +63,7 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
     /// </summary>
     public FakeOutcomeSpecReplyClassifier ReplyClassifier { get; } = new();
     public FakeStoryIndependenceClassifier StoryIndependenceClassifier { get; } = new();
+    public FakeAssemblyGateCodeClassifier AssemblyGateCodeClassifier { get; } = new();
 
     private HttpClient CreateClientWithKey(string apiKey)
     {
@@ -133,6 +134,9 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
 
             RemoveService<Agentweaver.Api.Coordinator.IStoryIndependenceClassifier>(services);
             services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClassifier>(StoryIndependenceClassifier);
+
+            RemoveService<Agentweaver.Api.Coordinator.IAssemblyGateCodeClassifier>(services);
+            services.AddSingleton<Agentweaver.Api.Coordinator.IAssemblyGateCodeClassifier>(AssemblyGateCodeClassifier);
 
             // Any other agent path still fails closed (signed out) so it never reaches the network.
             // This is a real IGitHubTokenStore, not a mock.
