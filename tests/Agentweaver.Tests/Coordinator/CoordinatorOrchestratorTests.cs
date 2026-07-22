@@ -141,6 +141,78 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
             "to the assigned role's non-empty default model (claude-opus-4.8)");
     }
 
+    [Fact]
+    public async Task Confirm_AutoSelectedPmDiscovery_CodeDecomposition_ReSelectsWorkflowWithBuildTest()
+    {
+        var projectId = await CreateProjectAsync();
+        _factory.WorkflowSelectionModel.Override = context =>
+            context.AvailableWorkflows.Any(w => w.Id == "pm-discovery")
+                ? """{"selected":"pm-discovery","rationale":"Discovery appears suitable."}"""
+                : """{"selected":"software-delivery","rationale":"Code requires delivery gates."}""";
+        _factory.AssemblyGateCodeClassifier.Override = _ => true;
+
+        var runId = await StartOrchestrationAsync(projectId, "Implement a new API endpoint");
+        await WaitForGateAsync(runId);
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var workPlan = await PollAsync(async db =>
+            await db.WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+
+        workPlan.Should().NotBeNull();
+        workPlan!.WorkflowId.Should().BeOneOf("bug-fix", "software-delivery",
+            "code-producing work must be re-selected onto an available topology with Build & Test");
+        _factory.AssemblyGateCodeClassifier.CallCount.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task Confirm_AutoSelectedPmDiscovery_NonCodeDecomposition_KeepsPmDiscovery()
+    {
+        var projectId = await CreateProjectAsync();
+        _factory.WorkflowSelectionModel.Override = _ =>
+            """{"selected":"pm-discovery","rationale":"This is document-only discovery."}""";
+
+        var runId = await StartOrchestrationAsync(projectId, "Research customer needs and draft a PRD");
+        await WaitForGateAsync(runId);
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var workPlan = await PollAsync(async db =>
+            await db.WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+
+        workPlan.Should().NotBeNull();
+        workPlan!.WorkflowId.Should().Be("pm-discovery");
+        _factory.AssemblyGateCodeClassifier.CallCount.Should().Be(0,
+            "planning-phase decomposition is a confident non-code fast path");
+    }
+
+    [Fact]
+    public async Task Confirm_ExplicitPmDiscovery_CodeDecomposition_HonorsOverrideAndSurfacesWarning()
+    {
+        var projectId = await CreateProjectAsync();
+        _factory.AssemblyGateCodeClassifier.Override = _ => true;
+
+        var runId = await StartOrchestrationAsync(
+            projectId, "Implement a new API endpoint", workflowOverrideId: "pm-discovery");
+        await WaitForGateAsync(runId);
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var workPlan = await PollAsync(async db =>
+            await db.WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+        workPlan.Should().NotBeNull();
+        workPlan!.WorkflowId.Should().Be("pm-discovery", "explicit workflow overrides remain honored");
+
+        var entry = _factory.Services.GetRequiredService<RunStreamStore>().Get(runId);
+        var events = await PollForWorkPlanEventsAsync(entry!);
+        var payload = JsonSerializer.SerializeToElement(events.Single().Payload);
+        payload.GetProperty("warnings").EnumerateArray().Select(w => w.GetString())
+            .Any(w => w is not null
+                && w.Contains("no Build & Test stage", StringComparison.Ordinal)
+                && w.Contains("override was honored", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -202,11 +274,15 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         return body.GetProperty("project_id").GetString()!;
     }
 
-    private async Task<string> StartOrchestrationAsync(string projectId, string goal, string? modelId = null)
+    private async Task<string> StartOrchestrationAsync(
+        string projectId,
+        string goal,
+        string? modelId = null,
+        string? workflowOverrideId = null)
     {
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations",
-            modelId is null ? new { goal } : (object)new { goal, modelId });
+            new { goal, modelId, workflow_override_id = workflowOverrideId });
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("runId").GetString()!;
