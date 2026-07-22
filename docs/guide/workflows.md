@@ -87,6 +87,49 @@ Each workflow row shows whether it is **Manual only** or has a schedule, includi
 
 For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily, weekly, or monthly at a UTC time. Removing the schedule returns the workflow to manual-only operation.
 
+## Triggering workflows from GitHub
+
+Each GitHub-connected project can receive repository events through its own webhook. Open the
+project's **Settings → Webhooks** page, then select **Generate secret**. Copy the generated value
+immediately: it is shown once only. In your GitHub repository, go to **Settings → Webhooks → Add
+webhook** and configure:
+
+- **Payload URL:** the project-specific URL displayed in Agentweaver:
+  `https://your-agentweaver-host/api/projects/<project-id>/webhooks/github`
+- **Content type:** `application/json`
+- **Secret:** the generated project secret
+- **Events:** choose the GitHub events your workflow needs.
+
+GitHub signs each delivery with the project's secret. Agentweaver rejects unsigned or invalid
+deliveries, and rotating a secret invalidates the old value immediately. The old global
+`/api/webhooks/github` URL is no longer supported.
+
+An event delivery named by GitHub's `X-GitHub-Event` header fires `github.<event>` (for example,
+`github.push` or `github.issues`). When the payload has an `action`, it also fires the more specific
+`github.<event>.<action>` name, such as `github.issues.opened` or
+`github.pull_request.opened`.
+
+For example, this project workflow starts whenever an issue is opened:
+
+```yaml
+id: triage-new-issue
+name: Triage newly opened issue
+start: triage
+nodes:
+  - id: triage
+    type: prompt
+    role: backend-engineer
+    prompt: Triage the newly opened GitHub issue.
+  - id: done
+    type: terminal
+edges:
+  - from: triage
+    to: done
+trigger:
+  type: event
+  event_name: github.issues.opened
+```
+
 ### Generate from description
 
 Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. If the description includes a recurring cadence such as "Every Monday", the draft uses a `schedule` trigger with a cadence like `weekly:monday`. If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL — generation keeps that target repository in the prompt context so the draft acts against the intended repo.

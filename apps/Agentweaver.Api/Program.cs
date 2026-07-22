@@ -389,9 +389,6 @@ builder.Services.AddSingleton<Agentweaver.Api.Blueprints.CatalogConformanceSnaps
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
 // GitHub webhook receiver (issue #53 follow-up): the real external event source wired to the event
-// trigger mechanism above. See Webhooks/GitHubWebhookOptions.cs — secret is config-only, never hardcoded.
-builder.Services.Configure<Agentweaver.Api.Webhooks.GitHubWebhookOptions>(
-    builder.Configuration.GetSection(Agentweaver.Api.Webhooks.GitHubWebhookOptions.SectionName));
 builder.Services.AddHostedService<Agentweaver.Api.Workflows.WorkflowScheduleTriggerService>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();

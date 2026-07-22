@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -115,6 +116,28 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var result = await response.Content.ReadFromJsonAsync<ProjectResponse>();
         result!.ProjectId.Should().Be(id);
         result.Name.Should().Be("Show Project");
+    }
+
+    [Fact]
+    public async Task RotateWebhookSecret_ReturnsSecretOnceAndStoresItOutsideProjectMetadata()
+    {
+        var id = await CreateBlankProjectAsync("Webhook Project");
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/webhook-secret/rotate", new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<WebhookSecretRotationResponse>();
+        body!.Secret.Should().NotBeNullOrWhiteSpace();
+
+        var detail = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{id}");
+        detail.TryGetProperty("webhook_secret", out _).Should().BeFalse();
+
+        using var scope = _factory.Services.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+        var secretStore = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+        var project = await store.GetAsync(ProjectId.Parse(id));
+        project!.WebhookSecret.Should().NotBeNullOrWhiteSpace();
+        (await secretStore.GetSecretAsync(project.WebhookSecret!)).Value.Should().Be(body.Secret);
     }
 
     // =========================================================================

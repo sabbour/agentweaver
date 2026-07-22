@@ -7,6 +7,15 @@ public interface IProjectStore
     Task<IReadOnlyList<Project>> ListAsync(CancellationToken ct = default);
     Task UpdateNameAsync(ProjectId id, string name, DateTimeOffset updatedAt, CancellationToken ct = default);
     Task UpdateProviderSettingsAsync(ProjectId id, ProjectProviderSettings settings, DateTimeOffset updatedAt, CancellationToken ct = default);
+    /// <summary>
+    /// Updates the secret-store reference for GitHub webhook verification. The default preserves
+    /// lightweight test doubles written before per-project webhooks were introduced.
+    /// </summary>
+    Task UpdateWebhookSecretAsync(
+        ProjectId id,
+        string? webhookSecret,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default) => Task.CompletedTask;
 
     /// <summary>
     /// Sets the project's origin (Blank or FromGitHub with its "owner/repo" source repository), used to

@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
@@ -129,6 +130,31 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     return updated ? Results.NoContent() : Results.NotFound();
 });
+
+// POST /api/projects/{id}/webhook-secret/rotate — generate and reveal a GitHub webhook secret once.
+app.MapPost("/api/projects/{id}/webhook-secret/rotate", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    ISecretStore secretStore,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+    var secretKey = project.WebhookSecret ?? $"github-webhook:{projectId}";
+    await secretStore.SetSecretAsync(secretKey, secret, ct: ct);
+    await projectStore.UpdateWebhookSecretAsync(projectId, secretKey, DateTimeOffset.UtcNow, ct);
+
+    return Results.Ok(new WebhookSecretRotationResponse(secret));
+})
+    .WithName("RotateProjectWebhookSecret")
+    .WithTags("Projects");
 
 // GET /api/projects/{id}/github/repository-owners — accounts a new repo could be created under
 app.MapGet("/api/projects/{id}/github/repository-owners", async (
