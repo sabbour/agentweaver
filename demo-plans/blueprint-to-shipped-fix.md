@@ -51,7 +51,7 @@ browser alive for the whole recording.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Create project from an empty repo" --description="Connect the seeded GitHub repository and create the project." --duration=14000
+playwright-cli video-chapter "Create the project" --description="Point Agentweaver at an empty GitHub repo and name the project." --duration=14000
 playwright-cli click "getByRole('button', { name: 'Create from GitHub' })"
 playwright-cli click "getByRole('textbox', { name: 'Or paste any repository' })"
 playwright-cli type "https://github.com/sabbour/agentweaver-demo-dryrun"
@@ -61,8 +61,8 @@ playwright-cli type "blueprint-demo"
 playwright-cli snapshot
 ```
 
-Narration: “We begin with a deliberately empty GitHub repository and turn it into a
-fresh Agentweaver project.”
+Narration: “Here’s an empty GitHub repo. I paste the URL and give the project a
+name.”
 
 Pacing: leave action callouts on while typing; pause briefly on the repository URL.
 
@@ -73,7 +73,7 @@ Pacing: leave action callouts on while typing; pause briefly on the repository U
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Cast a cross-functional team" --description="Select the Product & Software Delivery template." --duration=12000
+playwright-cli video-chapter "Cast the team" --description="Pick the Product & Software Delivery template." --duration=12000
 playwright-cli click "getByRole('button', { name: 'Templates' })"
 playwright-cli click "getByRole('radio', { name: 'Product & Software Delivery' })"
 playwright-cli snapshot
@@ -81,8 +81,8 @@ playwright-cli click "getByRole('button', { name: 'Create' })"
 playwright-cli snapshot
 ```
 
-Narration: “This template brings together product management, customer research,
-marketing, design, engineering, QA, and delivery.”
+Narration: “This template comes with a product manager, a researcher, marketing,
+design, engineering, QA, and delivery.”
 
 Pacing: linger on the template preview before Create.
 
@@ -96,7 +96,7 @@ there is no separate cast-confirmation gate.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Inspect the team behind the blueprint" --description="Show the cast, reusable skills, and durable team memory." --duration=14000
+playwright-cli video-chapter "See who's on the team" --description="Look at the agents, the skills they share, and the team's memory." --duration=14000
 playwright-cli click "getByRole('link', { name: 'Agents', exact: true })"
 playwright-cli hover "getByRole('list', { name: 'Project agents' })"
 playwright-cli hover "getByRole('button', { name: 'Active Ripley Lead PM' })"
@@ -108,9 +108,8 @@ playwright-cli click "getByRole('link', { name: 'Memories', exact: true })"
 playwright-cli snapshot
 ```
 
-**DRAFT VO — only record once verified:** “The blueprint is an operating team, not a
-generic prompt: its members have named roles, reusable skills, and a shared record of
-decisions.”
+**DRAFT VO — only record once verified:** “Each agent has a name and a role, a set of
+skills, and a shared record of the decisions they make.”
 
 Pacing: hold on the agents list, then on assigned skills.
 
@@ -125,7 +124,7 @@ real captured decision only after a later workflow creates one.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Frame one small feature" --description="Ask PM to define a tiny, testable first slice." --duration=18000
+playwright-cli video-chapter "Frame the feature" --description="Ask the PM to define a small, testable first slice." --duration=18000
 playwright-cli click "getByTestId('start-task-topbar-action')"
 playwright-cli select "getByLabel('Workflow', { exact: true })" "pm-discovery"
 playwright-cli click "getByRole('textbox', { name: 'Goal' })"
@@ -135,8 +134,8 @@ playwright-cli click "getByRole('button', { name: 'Define Outcome', exact: true 
 playwright-cli snapshot
 ```
 
-Narration: “PM starts by defining one user problem, one small outcome, and clear
-success criteria.”
+Narration: “The PM defines one user problem, one small outcome, and how we’ll know it
+worked.”
 
 Pacing: type naturally; pause before Define Outcome. Select Product Management
 Discovery with the verified `pm-discovery` value before entering the goal.
@@ -152,7 +151,7 @@ do not record idle polling.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Confirm the outcome plan" --description="Review scope, opt into independent task promotion, and dispatch deliberately." --duration=14000
+playwright-cli video-chapter "Confirm the plan" --description="Check the scope, allow independent tasks, and confirm the plan." --duration=14000
 playwright-cli hover "getByRole('checkbox', { name: 'Independent task promotion Allow standalone backlog tasks for independent deliverables' })"
 playwright-cli click "getByRole('checkbox', { name: 'Independent task promotion Allow standalone backlog tasks for independent deliverables' })"
 playwright-cli hover "getByRole('button', { name: 'Clarify plan', exact: true })"
@@ -162,9 +161,8 @@ playwright-cli click "getByRole('button', { name: 'Confirm plan', exact: true })
 playwright-cli snapshot
 ```
 
-Narration: “Before work dispatches, we inspect the Outcome plan. We allow genuinely
-independent deliverables to become standalone backlog tasks, then explicitly confirm
-the plan.”
+Narration: “I read the plan first. I let the independent pieces become their own
+backlog tasks, then confirm.”
 
 Pacing: do not click Clarify plan in this take; it is the alternative path for
 revision. Pause before Confirm plan so the human decision is legible.
@@ -179,15 +177,14 @@ is “Outcome plan confirmed … Dispatch is unblocked,” followed by Break int
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Check live notifications" --description="Show the notification feed without leaving the run." --duration=8000
+playwright-cli video-chapter "Check live notifications" --description="Open the notification feed without leaving the run." --duration=8000
 playwright-cli click "getByTestId('notification-bell')"
 playwright-cli hover "getByRole('switch', { name: 'Sound on' })"
 playwright-cli snapshot
 playwright-cli click "getByTestId('notification-bell')"
 ```
 
-Narration: “While agents work asynchronously, notifications keep attention items
-visible without interrupting the run.”
+Narration: “The agents work in the background. Anything that needs me shows up here.”
 
 Pacing: use a real incoming notification if available; the verified empty state is
 “Nothing needs your attention right now.”
@@ -202,7 +199,7 @@ triggered before the take. An empty notification tray does not earn a chapter.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Follow work through the topology graph" --description="Focus coordinator, plan, and research nodes." --duration=12000
+playwright-cli video-chapter "Follow the graph" --description="Focus the coordinator, plan, and research nodes." --duration=12000
 playwright-cli click "getByTestId('open-topology-minimap')"
 playwright-cli click "getByRole('button', { name: /Coordinator/ })"
 playwright-cli snapshot
@@ -214,8 +211,8 @@ playwright-cli click "getByRole('button', { name: 'Fit to view' })"
 playwright-cli click "getByRole('button', { name: 'Close panel' })"
 ```
 
-Narration: “The graph is active evidence, not a status list: selecting a node focuses
-its part of the workflow, and zoom makes the active path readable.”
+Narration: “Click a node and the graph focuses that part of the run. Zoom in to read
+the path the agents are taking.”
 
 Pacing: let each selected-node label settle. The verified graph focused Coordinator
 and Work plan at 130%; Zoom in on Research reached 156%.
@@ -227,12 +224,12 @@ and Work plan at 130%; Zoom in on Research reached 156%.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Review customer research" --description="Inspect the PM workflow's research subtask." --duration=10000
+playwright-cli video-chapter "Review customer research" --description="Open the research subtask from the PM run." --duration=10000
 playwright-cli snapshot
 ```
 
-**DRAFT VO — only record once verified:** “Customer research grounds the feature in a
-problem space before the team names or builds anything.”
+**DRAFT VO — only record once verified:** “The researcher looks at the problem before
+anyone names or builds the feature.”
 
 **NOT YET VERIFIED — needs follow-up run:** the completed PM graph showed the research
 task Ready for assembly, but no standalone output panel was exposed. Capture its real
@@ -245,12 +242,12 @@ output selector before recording this chapter.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Name and position the idea" --description="Turn validated evidence into a concise market position." --duration=10000
+playwright-cli video-chapter "Name and position the idea" --description="Turn the research into a name and a market position." --duration=10000
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-**DRAFT VO — only record once verified:** “With evidence in hand, the team turns the
-idea into a name, a tagline, and a credible positioning statement.”
+**DRAFT VO — only record once verified:** “Now the team gives the idea a name, a
+tagline, and a place in the market.”
 
 **NOT YET VERIFIED — needs follow-up run:** no live positioning-output surface was
 reached; do not invent its task or output selectors.
@@ -262,12 +259,12 @@ reached; do not invent its task or output selectors.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Generate launch messaging" --description="Create concise launch copy from the chosen position." --duration=10000
+playwright-cli video-chapter "Write the launch copy" --description="Write the launch copy from that position." --duration=10000
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-**DRAFT VO — only record once verified:** “Marketing turns the positioned idea into
-launch-ready copy and a concise announcement.”
+**DRAFT VO — only record once verified:** “Marketing writes the announcement and the
+copy that goes with the launch.”
 
 **NOT YET VERIFIED — needs follow-up run:** no marketing run or output surface was
 verified.
@@ -279,13 +276,13 @@ verified.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Break the plan into tasks" --description="Preview the proposed backlog before creating task cards." --duration=12000
+playwright-cli video-chapter "Break work into tasks" --description="Preview the backlog before any task cards get created." --duration=12000
 playwright-cli click "getByRole('button', { name: 'Break into tasks', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “After outcome confirmation, we preview the compact backlog before
-creating any task cards.”
+Narration: “With the plan confirmed, I preview the backlog before creating any
+cards.”
 
 Pacing: hold on the dialog titled “Preview proposed backlog items” and read one
 proposed title and its state.
@@ -301,7 +298,7 @@ an empty Board for the missing import result.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Show the imported task board" --description="Create the reviewed backlog and inspect the resulting cards." --duration=12000
+playwright-cli video-chapter "Show the task board" --description="Create the backlog and look at the cards it makes." --duration=12000
 playwright-cli click "getByRole('button', { name: 'Create tasks', exact: true })"
 playwright-cli click "getByRole('link', { name: 'Board', exact: true })"
 playwright-cli hover "getByRole('region', { name: 'Backlog column' })"
@@ -309,8 +306,8 @@ playwright-cli hover "getByRole('region', { name: 'Ready column' })"
 playwright-cli snapshot
 ```
 
-**DRAFT VO — only record once verified:** “Once the compact backlog is accepted, its
-cards appear on the board, ready for the smallest shippable slice.”
+**DRAFT VO — only record once verified:** “Accept the backlog and the cards land on
+the board, starting with the smallest slice we can ship.”
 
 Pacing: do not linger or move a card until a real imported card is visible.
 
@@ -325,12 +322,12 @@ the card-import result until it is visible.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Implement the first slice" --description="Show engineering execution, code, and tests." --duration=16000
+playwright-cli video-chapter "Implement the first slice" --description="Watch engineering write the code and the tests." --duration=16000
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “The first ready task enters an engineering workflow that combines design,
-implementation, and test evidence.”
+Narration: “The first task goes to engineering, which designs it, builds it, and backs
+it with tests.”
 
 **NOT YET VERIFIED — needs follow-up run:** no task-card-to-engineering execution
 path was validated.
@@ -342,7 +339,7 @@ path was validated.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Review and merge the first slice" --description="Show human review before merge." --duration=14000
+playwright-cli video-chapter "Review and merge the first slice" --description="A person reviews the work before it merges." --duration=14000
 # Only when a live review gate is present:
 playwright-cli hover "getByRole('button', { name: 'Approve & merge', exact: true })"
 # [PAUSE 700ms]
@@ -350,8 +347,8 @@ playwright-cli click "getByRole('button', { name: 'Approve & merge', exact: true
 playwright-cli snapshot
 ```
 
-Narration: “Nothing merges silently. A person reviews the assembled result and makes
-the explicit merge decision.”
+Narration: “Nothing merges on its own. Someone reviews the result and makes the call
+to merge.”
 
 Human-review automation: **Approve & merge** is verified on a live review gate; use
 the pause so the automated click still reads as intentional.
@@ -366,14 +363,14 @@ completed in the primary PM scenario.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Inspect the shipped files" --description="Move from merged PR diff to Agentweaver workspace." --duration=12000
+playwright-cli video-chapter "Inspect the shipped files" --description="Go from the merged PR diff back to the workspace." --duration=12000
 playwright-cli click "getByRole('link', { name: 'Workspace' })"
 playwright-cli click "getByRole('combobox', { name: 'Branch or worktree' })"
 playwright-cli snapshot
 ```
 
-Narration: “After merge, we inspect precisely what changed, then return to the
-project workspace and its merged branch.”
+Narration: “After the merge, I check exactly what changed, then come back to the
+workspace on the merged branch.”
 
 **NOT YET VERIFIED — needs follow-up run:** Workspace and its branch/worktree picker
 are verified, but a generated merged PR and its Files changed tab are not. Capture the
@@ -391,7 +388,7 @@ for that tab if the recorder does not carry them across.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Review post-ship health" --description="Show throughput, quality, cost, traces, and agent telemetry." --duration=14000
+playwright-cli video-chapter "Check project health" --description="Look at throughput, quality, cost, and traces per agent." --duration=14000
 playwright-cli click "getByRole('link', { name: 'Dashboard', exact: true })"
 playwright-cli hover "getByRole('heading', { name: 'Operational signals' })"
 playwright-cli hover "getByRole('table', { name: 'Agent leaderboard' })"
@@ -401,9 +398,8 @@ playwright-cli click "getByRole('tab', { name: 'Agents', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “The project’s result is visible beyond code: Dashboard summarizes
-throughput and quality, while Observability shows model use, AIC, latency, traces, and
-agent-level telemetry.”
+Narration: “The Dashboard shows throughput and quality. Observability shows model use,
+cost, latency, and traces down to each agent.”
 
 Pacing: do not hard-code changing counts. The live controls verified here are Dashboard
 Refresh and Time range, Observability time range and Refresh, and Overview, Traces,
@@ -416,14 +412,14 @@ and Agents tabs.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Return to team memory" --description="Show the decision or learning retained after the run." --duration=8000
+playwright-cli video-chapter "Return to team memory" --description="Show the decision the run wrote down." --duration=8000
 playwright-cli click "getByRole('link', { name: 'Memories', exact: true })"
 playwright-cli click "getByRole('tab', { name: 'Decisions', exact: true })"
 playwright-cli snapshot
 ```
 
-**DRAFT VO — only record once verified:** “The team’s decision is now durable context
-for the next piece of work.”
+**DRAFT VO — only record once verified:** “That decision is now saved for the next
+piece of work.”
 
 Reason for placement: this pays off Beat 2a after a workflow has had an opportunity to
 write a decision, instead of presenting the currently empty memory page as evidence.
@@ -438,12 +434,12 @@ project; cut this chapter until one is visible.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Pivot to the seeded bug" --description="Use the existing GitHub issue as the repair starting point." --duration=8000
+playwright-cli video-chapter "Pivot to the seeded bug" --description="Start the repair from the existing GitHub issue." --duration=8000
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-**DRAFT VO — only record once verified:** “With the feature story complete, we pivot
-to the pre-seeded narrow-tablet welcome-banner bug.”
+**DRAFT VO — only record once verified:** “With the feature shipped, I turn to a filed
+bug: the welcome banner overlaps on a narrow tablet.”
 
 **NOT YET VERIFIED — needs follow-up run:** no Agentweaver issue-list or linked-issue
 surface was validated. Keep the GitHub issue as pre-recording setup.
@@ -455,7 +451,7 @@ surface was validated. Keep the GitHub issue as pre-recording setup.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Launch assisted bug triage" --description="Ask the operator assistant to inspect the seeded issue and start a governed repair." --duration=14000
+playwright-cli video-chapter "Ask the assistant to triage" --description="Have the assistant read the issue and kick off a Bug Fix workflow." --duration=14000
 playwright-cli click "getByRole('button', { name: 'New session', exact: true })"
 playwright-cli click "getByRole('textbox', { name: 'Message the assistant...' })"
 playwright-cli type "Triage https://github.com/sabbour/agentweaver-demo-dryrun/issues/1. Investigate the narrow-tablet welcome-banner overlap, propose a minimal fix and test plan, then use the Bug Fix workflow."
@@ -463,9 +459,9 @@ playwright-cli snapshot
 playwright-cli click "getByRole('button', { name: 'Send', exact: true })"
 ```
 
-Narration: “The operator assistant can inspect the issue, propose the smallest safe
-fix and test plan, and start a governed Bug Fix workflow. State-changing actions still
-require approval.”
+Narration: “The assistant reads the issue, proposes the smallest safe fix and a test
+plan, and starts a Bug Fix workflow. Anything that changes state still waits for my
+approval.”
 
 Pacing: pause after typing, then allow the first streamed reply to appear.
 
@@ -483,12 +479,12 @@ verified, but this issue-specific prompt was not sent and its output was not rec
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Read and scope the bug" --description="Show diagnosis, expected behavior, and the smallest safe repair." --duration=10000
+playwright-cli video-chapter "Read and scope the bug" --description="Show the diagnosis, the expected behavior, and the smallest safe fix." --duration=10000
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “Before code changes, the bug workflow makes the failing behavior,
-expectation, and safe scope explicit.”
+Narration: “Before touching code, the workflow spells out what’s broken, what should
+happen, and how small the fix can stay.”
 
 **NOT YET VERIFIED — needs follow-up run:** capture real bug-output selectors from
 the assistant-created run.
@@ -500,11 +496,11 @@ the assistant-created run.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Implement and test the repair" --description="Show the fix and its test evidence." --duration=14000
+playwright-cli video-chapter "Implement and test the repair" --description="Show the fix and the tests that prove it." --duration=14000
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “Engineering diagnoses, repairs, and proves the fix with tests.”
+Narration: “Engineering finds the cause, fixes it, and proves it with tests.”
 
 **NOT YET VERIFIED — needs follow-up run:** no issue-specific implementation run was
 validated.
@@ -516,11 +512,11 @@ validated.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Preview the repaired behavior" --description="Show the narrow-tablet fix before merge." --duration=10000
+playwright-cli video-chapter "Preview the repaired behavior" --description="Show the narrow-tablet layout working before merge." --duration=10000
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “The repair gets the same live preview discipline as the feature.”
+Narration: “We preview the fix the same way we previewed the feature.”
 
 **NOT YET VERIFIED — needs follow-up run:** no bug-preview surface was reached.
 
@@ -531,7 +527,7 @@ Narration: “The repair gets the same live preview discipline as the feature.�
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Approve the bug fix" --description="Make the final human merge decision." --duration=10000
+playwright-cli video-chapter "Approve the bug fix" --description="A person makes the final merge decision." --duration=10000
 # Only when a live review gate is present:
 playwright-cli hover "getByRole('button', { name: 'Approve & merge', exact: true })"
 # [PAUSE 700ms]
@@ -539,8 +535,7 @@ playwright-cli click "getByRole('button', { name: 'Approve & merge', exact: true
 playwright-cli snapshot
 ```
 
-Narration: “The repair remains at a human review gate until someone explicitly
-approves merge.”
+Narration: “The fix waits at a review gate until someone approves the merge.”
 
 Human-review automation: use the verified **Approve & merge** locator only for the
 review gate belonging to the bug-fix run.
@@ -554,12 +549,12 @@ review gate belonging to the bug-fix run.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Close the issue-to-fix loop" --description="Show the merged PR and its link to the original issue." --duration=10000
+playwright-cli video-chapter "Close the loop on the issue" --description="Show the merged PR linked back to the original issue." --duration=10000
 playwright-cli video-stop
 ```
 
-Narration: “We close the loop from product idea to shipped feature to a repaired,
-issue-linked fix.”
+Narration: “That closes the loop: from an idea, to a shipped feature, to a fixed bug
+linked back to its issue.”
 
 **NOT YET VERIFIED — needs follow-up run:** no bug-fix merge or issue-linked PR was
 generated. Record this final image only once those real artifacts exist.
