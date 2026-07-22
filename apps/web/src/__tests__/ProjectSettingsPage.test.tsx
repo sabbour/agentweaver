@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { API_URL } from '../config';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectSettingsPage } from '../pages/ProjectSettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -110,6 +111,17 @@ describe('ProjectSettingsPage', () => {
     await waitFor(() => expect(apiClient.rotateProjectWebhookSecret).toHaveBeenCalledWith('proj-1'));
     expect(await screen.findByText('Copy this secret now. You won’t be able to see it again.')).toBeDefined();
     expect(screen.getByDisplayValue('new-secret')).toBeDefined();
+  });
+
+  it('uses the configured API origin for the GitHub webhook URL', async () => {
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
+
+    expect(screen.getByDisplayValue(
+      `${API_URL.replace(/\/$/, '')}/api/projects/proj-1/webhooks/github`,
+    )).toBeDefined();
   });
 
   it('renders generation model overrides with blank fields inheriting gpt-5.4', async () => {
