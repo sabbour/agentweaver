@@ -595,6 +595,7 @@ bounds concurrent in-process Scribe pipelines.
 |---|---:|---|
 | `Coordinator:FinalScribeMaxConcurrency` | `2` | Maximum final-Scribe recovery pipelines admitted concurrently in this process; values below `1` are floored to `1`. |
 | `Coordinator:FinalScribeMaxAttempts` | `3` | Maximum Failed final-Scribe child attempts before recovery stops admitting another attempt; values below `1` are floored to `1`. |
+| `Coordinator:FinalScribeTimeoutSeconds` | `120` | Maximum time the terminal assembly path retains the per-run AgentHost pod for the final Scribe turn before recording a non-fatal timeout and releasing run resources; values below `0.1` are floored to `0.1`. |
 
 ### Reaper as the 3rd heartbeat phase
 
