@@ -1,11 +1,28 @@
 # Blueprint to shipped fix
 
-## Dry-run findings (2026-07-22)
+## Dry-run findings (Beats 1-9, 2026-07-22)
 
-- **Blocked before Beat 1:** the provided Playwright auth state (`C:\Users\asabbour\.copilot\session-state\15b0c7c4-9d50-4b25-a48b-e530292d7f98\files\staging-auth.json`) reloaded into a signed-out staging session, and the app rendered the **Sign in with GitHub** page instead of an authenticated dashboard.
-- **No authenticated selectors were validated yet:** because team policy forbids bypassing or shortcutting auth, this dry run stopped immediately after confirming the stale/expired auth state and did **not** attempt Beats 1-9.
-- **Scenario setup that is now ready:** the dry-run repo exists at `https://github.com/sabbour/agentweaver-demo-dryrun`, and the seeded bug issue exists at `https://github.com/sabbour/agentweaver-demo-dryrun/issues/1` (`Bug: welcome banner overlaps primary action on narrow tablet width`).
-- **Follow-up needed before recording:** a human must sign in on staging, refresh/save a valid Playwright storage state, and rerun this plan to replace the remaining `[VERIFY SELECTOR]` placeholders from live authenticated snapshots.
+- **Authentication:** passed. A human completed GitHub OAuth in a headed Edge session; the refreshed authenticated state was saved to `C:\Users\asabbour\.copilot\session-state\15b0c7c4-9d50-4b25-a48b-e530292d7f98\files\staging-auth.json`.
+- **Scenario setup:** the dry-run repo is `https://github.com/sabbour/agentweaver-demo-dryrun`; its seeded bug is [issue #1](https://github.com/sabbour/agentweaver-demo-dryrun/issues/1).
+
+### Beat results
+
+1. **PASS — pick repo and create project.** From the authenticated `Projects` page, use `getByRole('button', { name: 'Create from GitHub' })`, `getByRole('textbox', { name: 'Or paste any repository' })`, `getByRole('button', { name: 'Go →' })`, `getByRole('textbox', { name: 'Project name' })`, and `getByRole('button', { name: 'Create' })`. This created **blueprint-demo** at `https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610`.
+2. **BLOCKED — the planned cast-confirmation gate is absent.** `getByRole('button', { name: 'Templates' })` exposes `getByRole('radio', { name: 'Product & Software Delivery' })`; its live preview contains Lead PM, Customer Researcher, Product Marketing Manager, and engineering roles. Selecting it and creating the project immediately cast 12 project agents (plus system agents); no human confirmation dialog/button appeared. The resulting team is verifiable through the `Agents` project-nav link and includes the required roles, but the recording cannot show the described approval gate.
+3. **BLOCKED — PM workflow accepted but cannot execute.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e), but it remains `Coordinator: Pending` with `0.0000 AIC`; no PM output/run card is available.
+4. **BLOCKED — depends on the unavailable PM output and an executing orchestration.**
+5. **BLOCKED — depends on the unavailable research output.**
+6. **BLOCKED — depends on the unavailable positioning output.**
+7. **BLOCKED — the planned ranked backlog cannot be produced while the orchestration is pending.** The observed run surface does expose `getByRole('button', { name: 'Break into tasks' })`, but invoking it would not satisfy the planned output without a completed PM run.
+8. **BLOCKED — depends on a generated backlog task and executable workflow.**
+9. **BLOCKED — depends on completed implementation and a reachable human-review/preview state.**
+
+### Recording-plan corrections required
+
+- Replace the landing-page/create-project placeholders with the Beat 1 locators above.
+- Use the **Product & Software Delivery** template; it is the verified template containing PM, research, marketing, and engineering roles.
+- Remove or rewrite the Beat 2 human cast-confirmation scene: staging casts the selected template during project creation without that gate.
+- Fund or repair staging AI execution before rerunning Beats 3-9; do not claim output, backlog, preview, approval, merge, PR, or selector validation beyond the observed surfaces above.
 
 ## Status: planning only
 
