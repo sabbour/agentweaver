@@ -3,6 +3,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Notifications;
 
