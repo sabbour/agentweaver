@@ -435,6 +435,7 @@ html.dark .mermaid .sequenceNumber {
 
 .aw-live-proof,
 .aw-control-sequence,
+.aw-workflow-editor,
 .aw-team-story,
 .aw-evidence,
 .aw-observability {
@@ -502,6 +503,30 @@ html.dark .mermaid .sequenceNumber {
 .aw-workflow-proof {
   overflow: hidden;
   background: var(--aw-surface);
+}
+
+.aw-workflow-editor {
+  width: min(100%, calc(var(--aw-max) + 48px));
+  margin: 0 auto;
+  padding: clamp(84px, 10vw, 144px) 24px;
+}
+
+.aw-workflow-editor .aw-section-heading {
+  margin-bottom: 44px;
+}
+
+.aw-workflow-editor-proof {
+  overflow: hidden;
+  border: 1px solid var(--aw-line);
+  border-radius: 16px;
+  background: var(--aw-surface);
+  box-shadow: 0 20px 60px rgba(39, 35, 32, 0.08);
+}
+
+.aw-workflow-editor-fallback img {
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: top;
 }
 
 .aw-proof-fallback {
@@ -982,6 +1007,7 @@ html.dark .mermaid .sequenceNumber {
 
   .aw-live-proof,
   .aw-control-sequence,
+  .aw-workflow-editor,
   .aw-team-story,
   .aw-evidence,
   .aw-observability {
