@@ -89,8 +89,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     internal const string AssemblyScribeSubtaskId = "assembly-scribe";
     internal const int DefaultFinalScribeMaxConcurrency = 2;
     internal const int DefaultFinalScribeMaxAttempts = 3;
+    internal const double DefaultFinalScribeTimeoutSeconds = 120;
     private const string FinalScribeMaxConcurrencyConfigurationKey = "Coordinator:FinalScribeMaxConcurrency";
     private const string FinalScribeMaxAttemptsConfigurationKey = "Coordinator:FinalScribeMaxAttempts";
+    private const string FinalScribeTimeoutConfigurationKey = "Coordinator:FinalScribeTimeoutSeconds";
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly CoordinatorAssemblyStore _assemblyStore;
@@ -120,6 +122,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly TimeSpan _assemblyLeaseStaleTtl;
     private readonly SemaphoreSlim _finalScribeConcurrency;
     private readonly int _finalScribeMaxAttempts;
+    private readonly TimeSpan _finalScribeTimeout;
     private readonly IPreviewClassifier? _previewClassifier;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
@@ -202,6 +205,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             finalScribeMaxConcurrency,
             finalScribeMaxConcurrency);
         _finalScribeMaxAttempts = GetFinalScribeMaxAttempts(configuration);
+        var finalScribeTimeoutSeconds = configuration?.GetValue(
+            FinalScribeTimeoutConfigurationKey,
+            DefaultFinalScribeTimeoutSeconds) ?? DefaultFinalScribeTimeoutSeconds;
+        _finalScribeTimeout = TimeSpan.FromSeconds(Math.Max(0.1, finalScribeTimeoutSeconds));
     }
 
     /// <summary>The integration branch name (D1) derived from the coordinator run id.</summary>
@@ -1728,59 +1735,83 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         string? mergeResult,
         CancellationToken ct)
     {
-        await _assemblyStore.SetStageAsync(workPlanId, AssemblyStage.Scribe, ct).ConfigureAwait(false);
-        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeStarted, new { workPlanId });
-
-        var coordinatorRun = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
-        if (coordinatorRun is null)
-            return;
-
-        var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
-            coordinatorRun,
-            terminalStatus,
-            mergeResult,
-            ct).ConfigureAwait(false);
-        if (!shouldExecute || scribeRun is null)
-        {
-            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
-            return;
-        }
-
-        var scribeSucceeded = true;
         try
         {
-            await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
-                context.CoordinatorRunId,
-                context.ProjectId?.Value.ToString(),
-                AgentName: "coordinator",
-                SubmittingUser: coordinatorRun.SubmittingUser,
-                context.RepositoryPath,
-                ModelSource.GitHubCopilot.ToString(),
-                ModelId: coordinatorRun.ModelId,
-                RunStartedAt: coordinatorRun.StartedAt,
-                TerminalStatus: terminalStatus,
-                MergeResult: mergeResult), ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            scribeSucceeded = false;
-            _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
-                context.CoordinatorRunId);
-            Emit(context.CoordinatorRunId, "run.scribe_failed", new
-            {
-                workPlanId,
-                reason = ex.Message,
-            });
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ex.Message, ct).ConfigureAwait(false);
-        }
+            await _assemblyStore.SetStageAsync(workPlanId, AssemblyStage.Scribe, ct).ConfigureAwait(false);
+            await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeStarted, new { workPlanId });
 
-        if (scribeSucceeded)
-        {
+            var coordinatorRun = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+            if (coordinatorRun is null)
+                return;
+
+            var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
+                coordinatorRun,
+                terminalStatus,
+                mergeResult,
+                ct).ConfigureAwait(false);
+            if (!shouldExecute || scribeRun is null)
+            {
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+                return;
+            }
+
+            var scribeSucceeded = true;
+            string? failureReason = null;
+            using var scribeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            scribeCts.CancelAfter(_finalScribeTimeout);
+            try
+            {
+                await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
+                    context.CoordinatorRunId,
+                    context.ProjectId?.Value.ToString(),
+                    AgentName: "coordinator",
+                    SubmittingUser: coordinatorRun.SubmittingUser,
+                    context.RepositoryPath,
+                    ModelSource.GitHubCopilot.ToString(),
+                    ModelId: coordinatorRun.ModelId,
+                    RunStartedAt: coordinatorRun.StartedAt,
+                    TerminalStatus: terminalStatus,
+                    MergeResult: mergeResult), scribeCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && scribeCts.IsCancellationRequested)
+            {
+                scribeSucceeded = false;
+                failureReason = $"Scribe pass timed out after {_finalScribeTimeout.TotalSeconds:0.###} seconds.";
+                _logger.LogWarning(ex,
+                    "Collective assembly: scribe pass timed out for run {RunId} after {TimeoutSeconds}s (non-fatal)",
+                    context.CoordinatorRunId, _finalScribeTimeout.TotalSeconds);
+            }
+            catch (Exception ex)
+            {
+                scribeSucceeded = false;
+                failureReason = ex.Message;
+                _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
+                    context.CoordinatorRunId);
+            }
+
+            if (!scribeSucceeded)
+            {
+                Emit(context.CoordinatorRunId, "run.scribe_failed", new
+                {
+                    workPlanId,
+                    reason = failureReason,
+                });
+                await _runStore.TrySetTerminalStatusAsync(
+                    scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, failureReason, ct).ConfigureAwait(false);
+                return;
+            }
+
             await _runStore.TrySetTerminalStatusAsync(
                 scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, terminalStatus, ct).ConfigureAwait(false);
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+        }
+        finally
+        {
+            // The coordinator Scribe uses the same per-run A2A pod as the assembly gates. Keep that
+            // pod alive through the bounded Scribe turn, then release it and the detached worktree.
+            await CleanupAssemblyBuildTestResourcesAsync(
+                context.CoordinatorRunId, context.RepositoryPath, CancellationToken.None).ConfigureAwait(false);
         }
     }
 
@@ -3748,24 +3779,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
     /// list and run detail surface why assembly ended (instead of leaving the run InProgress, which a
     /// later restart would sweep to a bare "Failed"). A no-op when the run row is absent or already
-    /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>).
+    /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>). Resource
+    /// cleanup is intentionally deferred to <see cref="RunCoordinatorScribeAsync"/> so the shared
+    /// per-run AgentHost pod remains available for the final A2A Scribe turn.
     /// </summary>
     private async Task TerminalizeCoordinatorRunAsync(
         string coordinatorRunId, RunStatus status, string result, CancellationToken ct)
     {
-        string? repositoryPath = null;
         if (RunId.TryParse(coordinatorRunId, out var id))
         {
-            var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
-            repositoryPath = run?.RepositoryPath;
             await _runStore.TrySetTerminalStatusAsync(id, status, DateTimeOffset.UtcNow, result, ct)
                 .ConfigureAwait(false);
         }
-
-        // CRITICAL (orphan cleanup): when assembly blocks/fails (e.g. ineligible_subtasks, rai_blocked,
-        // review_timeout) the coordinator run terminates but its AgentHost pod (2 CPU / 4 Gi) would
-        // otherwise keep running and eventually exhaust the namespace CPU quota. Release it best-effort.
-        await CleanupAssemblyBuildTestResourcesAsync(coordinatorRunId, repositoryPath, ct).ConfigureAwait(false);
     }
 
     private async Task MarkCoordinatorAwaitingReviewAsync(string coordinatorRunId, CancellationToken ct)
