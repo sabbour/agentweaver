@@ -17,6 +17,7 @@
 8. **BLOCKED — depends on a generated backlog task and executable workflow.**
 9. **BLOCKED — depends on completed implementation and a reachable human-review/preview state.**
 9a. **PARTIAL — post-merge workspace is verified; a live PR diff is not yet available.** `getByRole('link', { name: 'Workspace' })` opens the read-only Workspace, which exposes `getByRole('combobox', { name: 'Branch or worktree' })` and a visible branch/file tree. The current project is on `master (base)`. This dry run has not produced a merged PR or integration changes, so no **Files changed** tab/selector was fabricated; capture that selector from the generated PR only after Beat 9 genuinely completes.
+9b. **PASS — project Dashboard and Observability views are available.** `getByRole('link', { name: 'Dashboard', exact: true })` opens Dashboard with throughput, live pressure, run totals, task totals, quality evidence, model performance, and an Agent leaderboard. `getByRole('link', { name: 'Observability', exact: true })` opens telemetry with verified `Overview`, `Traces`, and `Agents` tabs, time-range and refresh controls, model-call count, AIC usage, model mix, and latency-percentile tables.
 
 ### Recording-plan corrections required
 
@@ -442,6 +443,33 @@ Recording notes:
 - The Workspace selector is verified live. Its header identifies the current branch and the main pane reads `Files — <branch>`.
 - The PR diff target is intentionally unresolved: the current dry run has no merged PR or changed files. Capture `REF_VERIFIED_PR_FILES_CHANGED_TAB` from the real generated PR at recording time; do not replace it with a guessed locator.
 - Hold briefly on a changed file in the PR, then on that file’s post-merge location in the Workspace tree.
+
+---
+
+## Beat 9b — Review project health and observability
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Review post-ship health" --description="Show throughput, run history, quality, cost, and latency after the feature ships." --duration=14000
+playwright-cli click "getByRole('link', { name: 'Dashboard', exact: true })"
+playwright-cli snapshot
+playwright-cli hover "getByRole('heading', { name: 'Operational signals' })"
+playwright-cli hover "getByRole('table', { name: 'Agent leaderboard' })"
+playwright-cli click "getByRole('link', { name: 'Observability', exact: true })"
+playwright-cli snapshot
+playwright-cli click "getByRole('tab', { name: 'Traces', exact: true })"
+playwright-cli snapshot
+playwright-cli click "getByRole('tab', { name: 'Agents', exact: true })"
+playwright-cli snapshot
+```
+
+Narration: “The shipped result is visible not only in the repository: the Dashboard summarizes throughput and quality, while Observability shows model calls, AI credit usage, latency, traces, and agent-level telemetry.”
+
+Recording notes:
+
+- Dashboard live surfaces include Operational signals, model performance, and the Agent leaderboard.
+- Observability’s verified Overview includes a time range, Refresh, model-call count, AI credit usage, model mix, and latency percentiles. Show Traces and Agents only when they contain useful run evidence.
 
 ---
 
