@@ -11,6 +11,25 @@ live run verified the Outcome-plan confirmation flow. Do not represent a later
 unverified flow as completed: each such beat below is explicitly marked **NOT YET
 VERIFIED — needs follow-up run**.
 
+## Recording order and verification status
+
+Use this execution order; the lettered labels preserve the narrative grouping from
+earlier planning but are not chronological: **1, 2, 2a, 3, 3c, 3a, 3b, 4, 5, 6,
+7, 7a, 8, 9, 9a, 9b, 9c, 10, 10a, 11, 12, 13, 14, 15**.
+
+| Beats | Status | Recording use |
+| --- | --- | --- |
+| 1–3, 3c, 3b, 7 | Verified | Record with the stated live selectors. |
+| 2a, 3a, 9a, 9b, 9c, 10a | Nav-only / partial | Record only the verified surface; respect the stated cut condition. |
+| 4–6, 7a–8, 9–10, 11–15 | Unverified | Do not include in a finished cut until a follow-up run supplies the missing artifact. |
+
+### Wait handling for every take
+
+Never record real-time idle polling. Fresh orchestrations can remain **Pending** for
+about two minutes, and the verified PM workflow took more than 16 minutes end to end.
+For every kickoff-to-result transition, either use a pre-warmed run that is already at
+the next verified state or insert a time-lapse/speed-ramp and resume the take there.
+
 ## Preflight
 
 ```bash
@@ -89,8 +108,9 @@ playwright-cli click "getByRole('link', { name: 'Memories', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “The blueprint is an operating team, not a generic prompt: its members
-have named roles, reusable skills, and a shared record of decisions.”
+**DRAFT VO — only record once verified:** “The blueprint is an operating team, not a
+generic prompt: its members have named roles, reusable skills, and a shared record of
+decisions.”
 
 Pacing: hold on the agents list, then on assigned skills.
 
@@ -107,7 +127,7 @@ real captured decision only after a later workflow creates one.
 ```bash
 playwright-cli video-chapter "Frame one small feature" --description="Ask PM to define a tiny, testable first slice." --duration=18000
 playwright-cli click "getByTestId('start-task-topbar-action')"
-playwright-cli click "getByLabel('Workflow', { exact: true })"
+playwright-cli select "getByLabel('Workflow', { exact: true })" "pm-discovery"
 playwright-cli click "getByRole('textbox', { name: 'Goal' })"
 playwright-cli type "Frame a tiny first feature for this empty repo. Define the problem, target user, success criteria, and keep scope to one very small MVP slice only."
 playwright-cli hover "getByRole('button', { name: 'Define Outcome', exact: true })"
@@ -119,7 +139,11 @@ Narration: “PM starts by defining one user problem, one small outcome, and cle
 success criteria.”
 
 Pacing: type naturally; pause before Define Outcome. Select Product Management
-Discovery in the Workflow control before recording this take.
+Discovery with the verified `pm-discovery` value before entering the goal.
+
+Transition to Beat 3c: the Outcome plan can remain Pending for roughly two minutes.
+Time-lapse that wait or cut to a pre-warmed run when the confirmation panel is ready;
+do not record idle polling.
 
 ---
 
@@ -168,6 +192,9 @@ visible without interrupting the run.”
 Pacing: use a real incoming notification if available; the verified empty state is
 “Nothing needs your attention right now.”
 
+Cut candidate: include this beat only when a notification can be deliberately
+triggered before the take. An empty notification tray does not earn a chapter.
+
 ---
 
 ## Beat 3b — Follow the topology graph
@@ -177,9 +204,9 @@ Pacing: use a real incoming notification if available; the verified empty state 
 ```bash
 playwright-cli video-chapter "Follow work through the topology graph" --description="Focus coordinator, plan, and research nodes." --duration=12000
 playwright-cli click "getByTestId('open-topology-minimap')"
-playwright-cli click "getByRole('button', { name: 'Coordinator: In Progress' })"
+playwright-cli click "getByRole('button', { name: /Coordinator/ })"
 playwright-cli snapshot
-playwright-cli click "getByRole('button', { name: 'Work plan: Complete' })"
+playwright-cli click "getByRole('button', { name: /Work plan/ })"
 playwright-cli click "getByRole('button', { name: /Research the problem space/ })"
 playwright-cli click "getByRole('button', { name: 'Zoom in' })"
 playwright-cli snapshot
@@ -204,8 +231,8 @@ playwright-cli video-chapter "Review customer research" --description="Inspect t
 playwright-cli snapshot
 ```
 
-Narration: “Customer research grounds the feature in a problem space before the team
-names or builds anything.”
+**DRAFT VO — only record once verified:** “Customer research grounds the feature in a
+problem space before the team names or builds anything.”
 
 **NOT YET VERIFIED — needs follow-up run:** the completed PM graph showed the research
 task Ready for assembly, but no standalone output panel was exposed. Capture its real
@@ -222,8 +249,8 @@ playwright-cli video-chapter "Name and position the idea" --description="Turn va
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “With evidence in hand, the team turns the idea into a name, a tagline,
-and a credible positioning statement.”
+**DRAFT VO — only record once verified:** “With evidence in hand, the team turns the
+idea into a name, a tagline, and a credible positioning statement.”
 
 **NOT YET VERIFIED — needs follow-up run:** no live positioning-output surface was
 reached; do not invent its task or output selectors.
@@ -239,8 +266,8 @@ playwright-cli video-chapter "Generate launch messaging" --description="Create c
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “Marketing turns the positioned idea into launch-ready copy and a concise
-announcement.”
+**DRAFT VO — only record once verified:** “Marketing turns the positioned idea into
+launch-ready copy and a concise announcement.”
 
 **NOT YET VERIFIED — needs follow-up run:** no marketing run or output surface was
 verified.
@@ -263,6 +290,10 @@ creating any task cards.”
 Pacing: hold on the dialog titled “Preview proposed backlog items” and read one
 proposed title and its state.
 
+Transition to Beat 7a: this is a result boundary, not a wait screen. If the preview
+is slow, speed-ramp to it or resume from a pre-warmed confirmed plan. Do not substitute
+an empty Board for the missing import result.
+
 ---
 
 ## Beat 7a — Create tasks and show the board
@@ -278,10 +309,10 @@ playwright-cli hover "getByRole('region', { name: 'Ready column' })"
 playwright-cli snapshot
 ```
 
-Narration: “Once the compact backlog is accepted, its cards should appear on the
-board, ready for the smallest shippable slice.”
+**DRAFT VO — only record once verified:** “Once the compact backlog is accepted, its
+cards appear on the board, ready for the smallest shippable slice.”
 
-Pacing: linger on the imported card title before moving it.
+Pacing: do not linger or move a card until a real imported card is visible.
 
 **NOT YET VERIFIED — needs follow-up run:** Create tasks was observed in the preview,
 but the completed Board check still showed zero Backlog and Ready cards. Do not claim
@@ -348,6 +379,11 @@ project workspace and its merged branch.”
 are verified, but a generated merged PR and its Files changed tab are not. Capture the
 PR-diff selector from the real PR rather than inventing one.
 
+External-surface requirement: the merged PR diff is expected on **github.com**, in a
+deliberately opened second browser tab. Capture its selectors separately; do not imply
+that Agentweaver’s Workspace is the PR-diff page, and re-enable cursor/action callouts
+for that tab if the recorder does not carry them across.
+
 ---
 
 ## Beat 9b — Review project health and observability
@@ -375,6 +411,28 @@ and Agents tabs.
 
 ---
 
+## Beat 9c — Return to captured team memory
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Return to team memory" --description="Show the decision or learning retained after the run." --duration=8000
+playwright-cli click "getByRole('link', { name: 'Memories', exact: true })"
+playwright-cli click "getByRole('tab', { name: 'Decisions', exact: true })"
+playwright-cli snapshot
+```
+
+**DRAFT VO — only record once verified:** “The team’s decision is now durable context
+for the next piece of work.”
+
+Reason for placement: this pays off Beat 2a after a workflow has had an opportunity to
+write a decision, instead of presenting the currently empty memory page as evidence.
+
+**NOT YET VERIFIED — needs follow-up run:** no decision card was present in this
+project; cut this chapter until one is visible.
+
+---
+
 ## Beat 10 — Pivot to the seeded bug
 
 **video-chapter**
@@ -384,8 +442,8 @@ playwright-cli video-chapter "Pivot to the seeded bug" --description="Use the ex
 # NOT YET VERIFIED — needs follow-up run.
 ```
 
-Narration: “With the feature story complete, we pivot to the pre-seeded narrow-tablet
-welcome-banner bug.”
+**DRAFT VO — only record once verified:** “With the feature story complete, we pivot
+to the pre-seeded narrow-tablet welcome-banner bug.”
 
 **NOT YET VERIFIED — needs follow-up run:** no Agentweaver issue-list or linked-issue
 surface was validated. Keep the GitHub issue as pre-recording setup.
@@ -410,6 +468,10 @@ fix and test plan, and start a governed Bug Fix workflow. State-changing actions
 require approval.”
 
 Pacing: pause after typing, then allow the first streamed reply to appear.
+
+Transition to Beat 11: assistant-created orchestration may sit Pending for about two
+minutes, and a full PM-style workflow can take 16 or more minutes. Use a speed-ramp or
+resume a pre-warmed bug run at its first real output; never record the idle wait.
 
 **NOT YET VERIFIED — needs follow-up run:** the console, textbox, and Send action were
 verified, but this issue-specific prompt was not sent and its output was not recorded.
@@ -501,3 +563,7 @@ issue-linked fix.”
 
 **NOT YET VERIFIED — needs follow-up run:** no bug-fix merge or issue-linked PR was
 generated. Record this final image only once those real artifacts exist.
+
+External-surface requirement: show the issue-linked PR in a deliberate second
+**github.com** tab, with separately captured selectors and cursor/action-callout
+behavior. Do not imply that this evidence is an in-app Agentweaver page.
