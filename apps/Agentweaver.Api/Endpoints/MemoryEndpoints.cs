@@ -131,7 +131,9 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
     };
     memoryDb.AgentMemory.Add(memory);
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    // The database write is the durable record. Filesystem export rewrites the full project
+    // memory snapshot and may target a remote workspace volume, so it must not delay this
+    // latency-sensitive agent tool call. Scribe invokes /memory/export explicitly at run end.
     return Results.Created($"/api/projects/{id}/agents/{name}/memory/{memory.Id}", new
     {
         memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,

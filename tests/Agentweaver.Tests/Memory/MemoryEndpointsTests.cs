@@ -270,6 +270,36 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
     }
 
     [Fact]
+    public async Task Test_Memory_Record_DoesNotSynchronouslyExportWorkspaceSnapshot()
+    {
+        var workingDirectory = _factory.NewWorkingDirectory();
+        var projectId = await CreateProjectAsync(workingDirectory);
+        var decisionsPath = Path.Combine(workingDirectory, ".squad", "decisions.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(decisionsPath)!);
+        await File.WriteAllTextAsync(decisionsPath, "sentinel");
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var response = await _client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/agents/smith/memory",
+            new
+            {
+                type = "learning",
+                importance = "high",
+                content = "persist without blocking on workspace export",
+            },
+            timeout.Token);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await File.ReadAllTextAsync(decisionsPath)).Should().Be("sentinel",
+            "record_memory must only perform the durable database write; the explicit export endpoint owns workspace mirroring");
+
+        var memories = await GetItemsAsync(
+            await _client.GetAsync($"/api/projects/{projectId}/agents/smith/memory", timeout.Token));
+        memories.Should().ContainSingle(m =>
+            m.GetProperty("content").GetString() == "persist without blocking on workspace export");
+    }
+
+    [Fact]
     public async Task Test_Memory_FiltersTypeAndImportance()
     {
         var projectId = await CreateProjectAsync();
@@ -524,13 +554,13 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
             "re-submitting a slug whose entry is already rejected must return 409");
     }
 
-    private async Task<string> CreateProjectAsync()
+    private async Task<string> CreateProjectAsync(string? workingDirectory = null)
     {
         var response = await _client.PostAsJsonAsync("/api/projects", new
         {
             name = $"Memory Test {Guid.NewGuid():N}",
             origin = "blank",
-            working_directory = _factory.NewWorkingDirectory(),
+            working_directory = workingDirectory ?? _factory.NewWorkingDirectory(),
         });
         response.StatusCode.Should().Be(HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
         return (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
