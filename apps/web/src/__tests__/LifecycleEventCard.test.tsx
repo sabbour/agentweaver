@@ -19,6 +19,25 @@ function makeEvent(type: string, payload: Record<string, unknown> = {}): RunStre
   return { sequence: 1, type: type as RunStreamEvent['type'], payload };
 }
 
+describe('LifecycleEventCard — coordinator.work_plan', () => {
+  it('surfaces independent-promotion classification degradation as a warning', () => {
+    const warning = 'Independent task promotion could not classify 2 component(s); kept inline: product-a, product-b.';
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('coordinator.work_plan', {
+            subtasks: [{ id: 1 }, { id: 2 }],
+            warnings: [warning],
+          })}
+          runId="run-warning"
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText(warning)).toBeDefined();
+  });
+});
+
 describe('LifecycleEventCard — tool.approval_required', () => {
   it('renders the card with tool name and Allow once/Allow this run/Always allow (session)/Deny buttons', () => {
     render(

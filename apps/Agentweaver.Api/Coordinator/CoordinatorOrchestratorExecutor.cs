@@ -234,7 +234,13 @@ public sealed class CoordinatorOrchestratorExecutor
             .ConfigureAwait(false);
 
         var workPlanStatus = inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned;
-        EmitWorkPlanEvent(input.RunId, workPlanId, selectedWorkflow?.Id, workPlanStatus, persisted);
+        EmitWorkPlanEvent(
+            input.RunId,
+            workPlanId,
+            selectedWorkflow?.Id,
+            workPlanStatus,
+            persisted,
+            partition.Warnings);
         return new CoordinatorOrchestrationResult(workPlanId, inlineDrafts.Count, promotedTaskIds);
     }
 
@@ -1446,9 +1452,9 @@ public sealed class CoordinatorOrchestratorExecutor
         CancellationToken ct)
     {
         if (drafts.Count == 0)
-            return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal));
+            return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal), []);
         if (!spec.AllowTaskPromotion)
-            return new PromotionPartitionResult([], Enumerable.Range(0, drafts.Count).ToList(), new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal));
+            return new PromotionPartitionResult([], Enumerable.Range(0, drafts.Count).ToList(), new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal), []);
 
         var adjacency = new List<HashSet<int>>(Enumerable.Range(0, drafts.Count).Select(_ => new HashSet<int>()));
         for (var i = 0; i < drafts.Count; i++)
@@ -1463,13 +1469,8 @@ public sealed class CoordinatorOrchestratorExecutor
             }
         }
 
-        var promoted = new List<int>();
-        var inline = new List<int>();
-        var reasons = new Dictionary<int, string>();
-        var promotedKeys = new HashSet<string>(StringComparer.Ordinal);
-        var auditRationales = new Dictionary<string, string>(StringComparer.Ordinal);
         var visited = new bool[drafts.Count];
-
+        var components = new List<IReadOnlyList<int>>();
         for (var start = 0; start < drafts.Count; start++)
         {
             if (visited[start])
@@ -1491,13 +1492,18 @@ public sealed class CoordinatorOrchestratorExecutor
                     queue.Enqueue(next);
                 }
             }
+            components.Add(component.OrderBy(i => i).ToList());
+        }
 
+        var decisions = await Task.WhenAll(components.Select(async component =>
+        {
             var runOverride = component.Where(i => string.Equals(drafts[i].PromotionOverride, "run", StringComparison.OrdinalIgnoreCase)).ToList();
             var inlineOverride = component.Where(i => string.Equals(drafts[i].PromotionOverride, "inline", StringComparison.OrdinalIgnoreCase)).ToList();
             if (runOverride.Count > 0 && inlineOverride.Count > 0)
                 throw new InvalidOperationException("conflicting_promotion_overrides");
 
             var promote = false;
+            var classificationDegraded = false;
             var rootIndex = component.OrderBy(i => i).First();
             string rootReason;
             string? rootAuditRationale = null;
@@ -1524,11 +1530,36 @@ public sealed class CoordinatorOrchestratorExecutor
                 }
                 else
                 {
+                    classificationDegraded = classification is null;
                     rootReason = classification is null
                         ? "Classifier unavailable; kept inline by fail-closed default."
                         : $"Kept inline: {classification.IndependenceRationale}";
                 }
             }
+
+            return new ComponentPromotionDecision(
+                component,
+                promote,
+                rootIndex,
+                rootReason,
+                rootAuditRationale,
+                classificationDegraded);
+        })).ConfigureAwait(false);
+
+        var promoted = new List<int>();
+        var inline = new List<int>();
+        var reasons = new Dictionary<int, string>();
+        var promotedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var auditRationales = new Dictionary<string, string>(StringComparer.Ordinal);
+        var degradedStoryKeys = new List<string>();
+
+        foreach (var decision in decisions)
+        {
+            var component = decision.Component;
+            var promote = decision.Promote;
+            var rootIndex = decision.RootIndex;
+            var rootReason = decision.RootReason;
+            var rootAuditRationale = decision.RootAuditRationale;
 
             foreach (var index in component.OrderBy(i => i))
             {
@@ -1548,6 +1579,9 @@ public sealed class CoordinatorOrchestratorExecutor
                 }
             }
 
+            if (decision.ClassificationDegraded)
+                degradedStoryKeys.Add(drafts[rootIndex].StoryKey);
+
             if (promote && !string.IsNullOrWhiteSpace(rootAuditRationale))
             {
                 _logger.LogInformation(
@@ -1558,7 +1592,15 @@ public sealed class CoordinatorOrchestratorExecutor
             }
         }
 
-        return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys, auditRationales);
+        var warnings = degradedStoryKeys.Count == 0
+            ? []
+            : new List<string>
+            {
+                $"Independent task promotion could not classify {degradedStoryKeys.Count} component(s); " +
+                $"kept inline: {string.Join(", ", degradedStoryKeys)}.",
+            };
+
+        return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys, auditRationales, warnings);
     }
 
     private static StoryIndependenceClassificationContext BuildStoryClassificationContext(
@@ -1755,7 +1797,13 @@ public sealed class CoordinatorOrchestratorExecutor
         return (workPlan.Id, persisted);
     }
 
-    private void EmitWorkPlanEvent(string runId, int workPlanId, string? workflowId, string status, List<PersistedSubtask> subtasks)
+    private void EmitWorkPlanEvent(
+        string runId,
+        int workPlanId,
+        string? workflowId,
+        string status,
+        List<PersistedSubtask> subtasks,
+        IReadOnlyList<string> warnings)
     {
         var entry = _streamStore.Get(runId);
         entry?.RecordNext(EventTypes.CoordinatorWorkPlan, new
@@ -1763,6 +1811,7 @@ public sealed class CoordinatorOrchestratorExecutor
             workPlanId,
             status,
             workflowId,
+            warnings,
             subtasks = subtasks.Select(s => new
             {
                 id = s.Id,
@@ -1873,7 +1922,16 @@ public sealed class CoordinatorOrchestratorExecutor
         IReadOnlyList<int> InlineIndices,
         IReadOnlyDictionary<int, string> PromotionReasons,
         IReadOnlySet<string> PromotedKeys,
-        IReadOnlyDictionary<string, string> ComponentAuditRationalesByStoryKey);
+        IReadOnlyDictionary<string, string> ComponentAuditRationalesByStoryKey,
+        IReadOnlyList<string> Warnings);
+
+    private sealed record ComponentPromotionDecision(
+        IReadOnlyList<int> Component,
+        bool Promote,
+        int RootIndex,
+        string RootReason,
+        string? RootAuditRationale,
+        bool ClassificationDegraded);
 
     internal sealed record PromotionOverrideParseResult(string? Override, string CleanTitle, bool IsValid);
 }
