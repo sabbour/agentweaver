@@ -17,6 +17,7 @@
 7. **BLOCKED — the planned ranked backlog cannot be produced while the orchestration is pending.** The observed run surface does expose `getByRole('button', { name: 'Break into tasks' })`, but invoking it would not satisfy the planned output without a completed PM run.
 8. **BLOCKED — depends on a generated backlog task and executable workflow.**
 9. **BLOCKED — depends on completed implementation and a reachable human-review/preview state.**
+9a. **PARTIAL — post-merge workspace is verified; a live PR diff is not yet available.** `getByRole('link', { name: 'Workspace' })` opens the read-only Workspace, which exposes `getByRole('combobox', { name: 'Branch or worktree' })` and a visible branch/file tree. The current project is on `master (base)`. This dry run has not produced a merged PR or integration changes, so no **Files changed** tab/selector was fabricated; capture that selector from the generated PR only after Beat 9 genuinely completes.
 
 ### Recording-plan corrections required
 
@@ -391,6 +392,33 @@ playwright-cli hover <REF_PR_LINK_OR_MERGE_CONFIRMATION [VERIFY SELECTOR]>
 playwright-cli click <REF_PR_LINK_OR_MERGE_CONFIRMATION [VERIFY SELECTOR]>
 playwright-cli snapshot
 ```
+
+---
+
+## Beat 9a — Show the shipped diff and workspace
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Inspect the shipped files" --description="Show the merged PR diff, then the repository workspace on its post-merge branch." --duration=16000
+# Open the PR produced by Beat 9 and capture its actual Files changed tab locator.
+playwright-cli snapshot
+# [STOP: do not substitute a guessed selector if no merged PR is available.]
+playwright-cli click <REF_VERIFIED_PR_FILES_CHANGED_TAB>
+playwright-cli snapshot
+playwright-cli click "getByRole('link', { name: 'Workspace' })"
+playwright-cli snapshot
+playwright-cli click "getByRole('combobox', { name: 'Branch or worktree' })"
+playwright-cli snapshot
+```
+
+Narration: “After the merge, we inspect exactly what shipped in the PR diff, then return to Agentweaver’s read-only workspace to see the merged branch and resulting file tree.”
+
+Recording notes:
+
+- The Workspace selector is verified live. Its header identifies the current branch and the main pane reads `Files — <branch>`.
+- The PR diff target is intentionally unresolved: the current dry run has no merged PR or changed files. Capture `REF_VERIFIED_PR_FILES_CHANGED_TAB` from the real generated PR at recording time; do not replace it with a guessed locator.
+- Hold briefly on a changed file in the PR, then on that file’s post-merge location in the Workspace tree.
 
 ---
 
