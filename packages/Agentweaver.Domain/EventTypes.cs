@@ -230,7 +230,7 @@ public static class EventTypes
     /// a persisted work plan (WorkPlan + Subtask rows + SubtaskDependency edges). Carries the full
     /// plan-time snapshot so clients can render the plan without any client-side computation. The
     /// richer <c>coordinator.topology</c> delta stream (dispatch/observe transitions) is a later wave.
-    /// Payload: { workPlanId, status, subtasks: [ { id, title, assignedAgent, selectedModelId,
+    /// Payload: { workPlanId, status, warnings: string[], subtasks: [ { id, title, assignedAgent, selectedModelId,
     /// phase, isolation, dependsOn: number[] } ] }
     /// </summary>
     public const string CoordinatorWorkPlan = "coordinator.work_plan";
