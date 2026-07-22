@@ -9,12 +9,11 @@
 
 1. **PASS — pick repo and create project.** From the authenticated `Projects` page, use `getByRole('button', { name: 'Create from GitHub' })`, `getByRole('textbox', { name: 'Or paste any repository' })`, `getByRole('button', { name: 'Go →' })`, `getByRole('textbox', { name: 'Project name' })`, and `getByRole('button', { name: 'Create' })`. This created **blueprint-demo** at `https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610`.
 2. **BLOCKED — the planned cast-confirmation gate is absent.** `getByRole('button', { name: 'Templates' })` exposes `getByRole('radio', { name: 'Product & Software Delivery' })`; its live preview contains Lead PM, Customer Researcher, Product Marketing Manager, and engineering roles. Selecting it and creating the project immediately cast 12 project agents (plus system agents); no human confirmation dialog/button appeared. The resulting team is verifiable through the `Agents` project-nav link and includes the required roles, but the recording cannot show the described approval gate.
-3. **PARTIAL — PM workflow is executing and its graph is verified.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e). `getByTestId('open-topology-minimap')` opens the **Topology** dialog with graph controls (`getByRole('button', { name: 'Fit to view' })`, `getByRole('button', { name: 'Tidy' })`) and the graph region. Live nodes use role selectors: `getByRole('button', { name: 'Coordinator: In Progress' })`, `getByRole('button', { name: 'Work plan: Complete' })`, and `getByRole('button', { name: /Research the problem space/ })`. Each updates the dialog’s `Selected:` focus; selecting Coordinator focused/zoomed the graph to 130%, selecting Research then using `getByRole('button', { name: 'Zoom in' })` reached 156%, and selecting Work plan refocused the graph at 130%. At 6m50s the graph showed Work plan, Review Gate, and Merge completed; research and PM synthesis ready for assembly; Coordinator and Scribe running. At 8m37s, it remained in Scribing with 7 tasks, 0 pending, 0 waiting and 26.38 AIC consumed. The initial `Coordinator: Pending`/`0.0000 AIC` snapshot was the normal early startup state, not a credit failure.
+3. **PASS — PM workflow completed and its graph is verified.** The actual start surface is `getByTestId('start-task-topbar-action')`, with `getByLabel('Workflow', { exact: true })` value `pm-discovery`, `getByRole('textbox', { name: 'Goal' })`, and `getByRole('button', { name: 'Direct' })`. It created [orchestration b3bda0e2](https://agentweaver.6a5efff1a270d8000126291b.westus2.staging.aksapp.io/projects/8b4ba3ca-b7b0-4e40-b8d3-3d64d3502610/orchestrations/b3bda0e2-2a6b-4e29-9a88-0566178f681e), which completed after 16m22s. `getByTestId('open-topology-minimap')` opens the **Topology** dialog with graph controls (`getByRole('button', { name: 'Fit to view' })`, `getByRole('button', { name: 'Tidy' })`) and the graph region. Live nodes use role selectors: `getByRole('button', { name: 'Coordinator: In Progress' })`, `getByRole('button', { name: 'Work plan: Complete' })`, and `getByRole('button', { name: /Research the problem space/ })`. Each updates the dialog’s `Selected:` focus; selecting Coordinator focused/zoomed the graph to 130%, selecting Research then using `getByRole('button', { name: 'Zoom in' })` reached 156%, and selecting Work plan refocused the graph at 130%. The initial `Coordinator: Pending`/`0.0000 AIC` snapshot was the normal early startup state, not a credit failure.
 4. **PARTIAL — customer research is a generated PM-workflow subtask.** The graph exposes `getByRole('treeitem', { name: /Research the problem space and target user/ })`; the task reached **Ready for assembly**. Its output has not yet been surfaced as a standalone results panel, so no output selector is claimed.
 5. **PASS — notifications affordance verified.** `getByTestId('notification-bell')` opens the **Notifications** panel (`getByRole('button', { name: 'Notifications' })`). This run displayed the empty-state text “Nothing needs your attention right now” and the `getByRole('switch', { name: 'Sound on' })` control.
-5. **BLOCKED — depends on the unavailable research output.**
-6. **BLOCKED — depends on the unavailable positioning output.**
-7. **BLOCKED — the planned ranked backlog cannot be produced while the orchestration is pending.** The observed run surface does expose `getByRole('button', { name: 'Break into tasks' })`, but invoking it would not satisfy the planned output without a completed PM run.
+6. **BLOCKED — depends on the unavailable research output.**
+7. **BLOCKED — no task-import confirmation was emitted after the completed PM workflow.** The Board is reachable with `getByRole('link', { name: 'Board', exact: true })` and exposes `getByRole('region', { name: 'Agent task board' })`, `getByRole('region', { name: 'Backlog column' })`, and `getByRole('region', { name: 'Ready column' })`. After the PM run completed, both Backlog and Ready showed 0 queued tasks; no `Create tasks` action or imported task card appeared. The separate `getByRole('button', { name: 'Import from workspace' })` dialog exposes `Preview tasks`, not the required PM-output `Create tasks` confirmation.
 8. **BLOCKED — depends on a generated backlog task and executable workflow.**
 9. **BLOCKED — depends on completed implementation and a reachable human-review/preview state.**
 9a. **PARTIAL — post-merge workspace is verified; a live PR diff is not yet available.** `getByRole('link', { name: 'Workspace' })` opens the read-only Workspace, which exposes `getByRole('combobox', { name: 'Branch or worktree' })` and a visible branch/file tree. The current project is on `master (base)`. This dry run has not produced a merged PR or integration changes, so no **Files changed** tab/selector was fabricated; capture that selector from the generated PR only after Beat 9 genuinely completes.
@@ -319,6 +318,30 @@ Narration: “Instead of generating a giant plan, we ask for a tiny ranked backl
 Recording notes:
 
 - If the board requires drag-and-drop from Backlog to Ready, capture that in the next beat rather than here.
+
+---
+
+## Beat 7a — Confirm imported tasks on the board
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Show the imported task board" --description="Confirm the PM backlog import, then show the resulting task cards in their board columns." --duration=12000
+# [STOP: only continue when the completed PM flow exposes a real Create tasks confirmation.
+# Record that observed locator here; no selector is supplied because staging did not render one.]
+playwright-cli click "getByRole('link', { name: 'Board', exact: true })"
+playwright-cli snapshot
+playwright-cli hover "getByRole('region', { name: 'Backlog column' })"
+playwright-cli hover "getByRole('region', { name: 'Ready column' })"
+playwright-cli snapshot
+```
+
+Narration: “We confirm the compact backlog and immediately see the imported tasks land on the board, ready for the smallest shippable slice to move into execution.”
+
+Recording notes:
+
+- The Board, Agent task board, Backlog column, and Ready column locators are verified live.
+- **BLOCKED in this dry run:** the PM workflow completed, but it did not show `Create tasks` or add imported cards; Backlog and Ready each showed zero tasks. Do not record this beat until a real import-confirmation control and resulting cards are available.
 
 ---
 
