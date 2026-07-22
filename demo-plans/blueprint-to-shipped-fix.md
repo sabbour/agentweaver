@@ -14,12 +14,12 @@ VERIFIED — needs follow-up run**.
 ## Recording order and verification status
 
 Record the beats in order, top to bottom: **1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 2.5,
-2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7**.
+2.6, 2.7, 2.8, 2.9, 2.10, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1**.
 
 | Beats | Status | Recording use |
 | --- | --- | --- |
 | 1.1, 2.1, 2.2 | Verified | Record with the stated live selectors. |
-| 1.2, 1.3, 2.4, 2.6, 2.7, 2.8 | Nav-only / partial | Record only the verified surface; respect each cut condition and the "verify in mapping pass" notes. |
+| 1.2, 1.3, 2.4, 2.6, 2.7, 2.8, 2.9, 2.10, 4.1 | Nav-only / partial | Record only the verified surface; respect each cut condition and the "verify in mapping pass" notes. |
 | 2.3, 2.5, 3.1–3.7 | Unverified | Do not include in a finished cut until a follow-up run supplies the missing artifact. |
 
 New UI surfaces added in this pass — the **Generate a Blueprint** option, the **Import
@@ -391,6 +391,58 @@ cut this beat until a real decision is visible.
 
 ---
 
+## Beat 2.9 — Put it on a schedule
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Put it on a schedule" --description="Open the workflow that just ran and set it to run on a recurring cadence." --duration=12000
+# Workflows page and the just-run workflow row — selectors unknown, verify in mapping pass.
+playwright-cli click "TODO(mapping): 'Workflows' nav link"
+playwright-cli click "TODO(mapping): row for the workflow that just ran"
+# 'Add schedule' control and cadence selectors — verify in mapping pass.
+playwright-cli click "TODO(mapping): 'Add schedule' button"
+playwright-cli click "TODO(mapping): cadence selector (daily, weekly, or monthly, in UTC)"
+playwright-cli snapshot
+```
+
+Narration: “Open Workflows and pick the workflow that just delivered. Add a schedule,
+set a daily, weekly, or monthly cadence in UTC, and it runs on its own from here on.”
+
+Pacing: hover the cadence options long enough to read them before picking one.
+
+**Verify in mapping pass:** the **Add schedule** control and the cadence selectors are
+not mapped yet; let Trinity confirm the real refs before recording.
+
+---
+
+## Beat 2.10 — Trigger it from GitHub
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Trigger it from GitHub" --description="Generate a webhook secret in Project Settings and wire it into a real GitHub repo webhook." --duration=14000
+playwright-cli click "getByRole('link', { name: 'Project Settings', exact: true })"
+# Webhooks tab, generate-secret control, and payload URL — selectors unknown, verify in mapping pass.
+playwright-cli click "TODO(mapping): 'Webhooks' tab"
+playwright-cli click "TODO(mapping): generate-secret control (reveal-once)"
+playwright-cli click "TODO(mapping): payload URL field"
+playwright-cli snapshot
+```
+
+Narration: “A schedule covers time. Project Settings, Webhooks covers events: generate a
+secret, copy the payload URL, and wire it into a real GitHub repo webhook, so a push or
+a merge kicks off the same run.”
+
+Pacing: reveal the secret once, and let the callout capture that reveal-once state
+before you move on to the payload URL.
+
+**Verify in mapping pass:** the Webhooks tab path, the generate-secret control, and the
+payload URL selectors are not mapped yet; let Trinity confirm the real refs before
+recording.
+
+---
+
 # Act 3 — Triage the seeded bug
 
 With the feature shipped and the decisions saved, you turn to a bug that was already
@@ -517,7 +569,6 @@ gate belonging to the bug-fix run.
 
 ```bash
 playwright-cli video-chapter "Close the loop on the issue" --description="Show the merged PR linked back to the original issue." --duration=10000
-playwright-cli video-stop
 ```
 
 Narration: “That closes the loop: from an idea, to a shipped feature, to a fixed bug
@@ -529,3 +580,37 @@ generated. Record this final image only once those real artifacts exist.
 External-surface requirement: show the issue-linked PR in a deliberate second
 **github.com** tab, with separately captured selectors and cursor/action-callout
 behavior. Do not imply that this evidence is an in-app Agentweaver page.
+
+---
+
+# Coda — Bring your own tools
+
+## Beat 4.1 — Drive it from your own tools
+
+**video-chapter**
+
+```bash
+playwright-cli video-chapter "Drive it from your own tools" --description="Copy the MCP server URL and ready-to-paste client configs from Account settings, and confirm the bearer token stays masked." --duration=12000
+playwright-cli click "getByRole('link', { name: 'Account settings', exact: true })"
+# 'MCP clients' nav path and 'Copy config' buttons — selectors unknown, verify in mapping pass.
+playwright-cli click "TODO(mapping): 'MCP clients' nav item"
+playwright-cli hover "TODO(mapping): masked bearer token"
+playwright-cli click "TODO(mapping): 'Copy config' button (Claude Desktop)"
+playwright-cli click "TODO(mapping): 'Copy config' button (VS Code)"
+playwright-cli click "TODO(mapping): 'Copy config' button (Copilot CLI)"
+playwright-cli snapshot
+playwright-cli video-stop
+```
+
+Narration: “None of this needs a browser. Connect Agentweaver to Claude Desktop, VS
+Code, or Copilot CLI over MCP, copy the config, and drive the same team and the same
+workflows from your own tools.”
+
+Pacing: keep the bearer token masked in every frame; copy each client config in turn and
+let the “Copied” state register before you move to the next one.
+
+Reason for placement: this closes the demo on its widest surface, the team and workflows
+you cast now reach past the browser into whatever tool you already use.
+
+**Verify in mapping pass:** the Account settings → MCP clients nav path and the **Copy
+config** buttons are not mapped yet; let Trinity confirm the real refs before recording.
