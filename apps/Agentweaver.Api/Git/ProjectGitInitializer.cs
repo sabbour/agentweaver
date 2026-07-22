@@ -174,4 +174,48 @@ public class ProjectGitInitializer
             "Clone complete; default branch is {Branch}", defaultBranch);
         return defaultBranch;
     }
+
+    /// <summary>
+    /// Points the local repository at <paramref name="workingDirectory"/> at a newly created GitHub
+    /// remote and pushes <paramref name="branchName"/> to it, so a project's existing local history
+    /// (e.g. a <c>Blank</c>-origin project's commits) is published to a repo attached after the fact,
+    /// rather than leaving the new GitHub repository empty (issue: allow creating a GitHub repository
+    /// for a project that has none connected). Adds an <c>origin</c> remote if none exists yet, or
+    /// reconfigures the URL of an existing one — Blank projects never have a remote, but this is
+    /// defensive against a caller re-running the flow. The credential is ephemeral and is NEVER stored
+    /// or logged.
+    /// </summary>
+    public virtual void PushToNewRemote(string workingDirectory, string remoteUrl, string branchName, string accessToken)
+    {
+        using var repo = new Repository(workingDirectory);
+
+        var origin = repo.Network.Remotes["origin"];
+        if (origin is null)
+            repo.Network.Remotes.Add("origin", remoteUrl);
+        else if (!string.Equals(origin.Url, remoteUrl, StringComparison.Ordinal))
+            repo.Network.Remotes.Update("origin", r => r.Url = remoteUrl);
+
+        origin = repo.Network.Remotes["origin"];
+
+        var branch = repo.Branches[branchName];
+        if (branch is null)
+            throw new InvalidOperationException($"Local branch '{branchName}' was not found in '{workingDirectory}'.");
+
+        var pushOptions = new PushOptions
+        {
+            CredentialsProvider = (_, _, _) =>
+                new UsernamePasswordCredentials
+                {
+                    Username = "x-access-token",
+                    Password = accessToken   // ephemeral; never stored or logged
+                }
+        };
+
+        repo.Network.Push(origin, branch.CanonicalName, pushOptions);
+        repo.Branches.Update(branch, b => b.Remote = "origin", b => b.UpstreamBranch = branch.CanonicalName);
+
+        _logger.LogInformation(
+            "Pushed branch {Branch} from {Path} to newly connected remote {RemoteUrl}",
+            branchName, workingDirectory, remoteUrl);
+    }
 }

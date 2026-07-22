@@ -191,4 +191,9 @@ internal sealed class NoOpProjectGitInitializer : ProjectGitInitializer
         Directory.CreateDirectory(workingDirectory);
         return "main";
     }
+
+    public override void PushToNewRemote(string workingDirectory, string remoteUrl, string branchName, string accessToken)
+    {
+        // No-op: tests never need a real remote push.
+    }
 }

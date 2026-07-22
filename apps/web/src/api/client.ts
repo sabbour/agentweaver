@@ -20,7 +20,9 @@ import type {
   ClusterDiagnosticsDto,
   CommitResponse,
   ConfirmProposalRequest,
+  ConnectedRepository,
   CoordinatorChildResponse,
+  CreateProjectRepositoryRequest,
   CreateProjectRequest,
   CreateProjectRunRequest,
   CreateProposalRequest,
@@ -43,6 +45,7 @@ import type {
   PagedResult,
   Project,
   RequestChangesResponse,
+  RepositoryOwner,
   ReroleRequest,
   RetriableReviewErrorBody,
   RetryRunResponse,
@@ -479,6 +482,15 @@ export class AgentweaverApiClient {
   listGitHubRepos(account?: string): Promise<GitHubRepo[]> {
     const path = account ? `/github/repos?account=${encodeURIComponent(account)}` : '/github/repos';
     return this.request<GitHubRepo[]>('GET', path);
+  }
+
+  // Post-creation GitHub connection for a currently-unconnected (blank-origin) project.
+  listProjectRepositoryOwners(projectId: string): Promise<RepositoryOwner[]> {
+    return this.request<RepositoryOwner[]>('GET', `/projects/${encodeURIComponent(projectId)}/github/repository-owners`);
+  }
+
+  createProjectRepository(projectId: string, req: CreateProjectRepositoryRequest): Promise<ConnectedRepository> {
+    return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository`, req);
   }
 
   // Catalog

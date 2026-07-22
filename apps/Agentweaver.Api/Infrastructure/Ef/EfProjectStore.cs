@@ -138,6 +138,17 @@ public sealed class EfProjectStore : IProjectStore
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
+    public async Task UpdateOriginAsync(ProjectId id, ProjectOrigin origin, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        var pid = id.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.Projects.Where(p => p.ProjectId == pid)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.OriginKind, origin.ToApiString())
+                .SetProperty(p => p.SourceRepository, origin.SourceRepository)
+                .SetProperty(p => p.UpdatedAt, updatedAt), ct);
+    }
+
     public async Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default)
     {
         var pid = id.ToString();
