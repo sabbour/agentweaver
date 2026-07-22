@@ -285,6 +285,111 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
+    // HM-4b — Regression for #427. When the merge takes the RECONCILE path
+    // (the working tree is dirty in a way that trips IsWorkingTreeMergeSafe —
+    // here a stale staged deletion whose content is unchanged by the merge, the
+    // #348 shape), harmless UNTRACKED build artifacts left behind by a
+    // kept-alive preview (e.g. an untracked node_modules/ directory in a demo
+    // app that has no .gitignore) must NOT block the merge. They are absent from
+    // the merge result tree and a hard reset never touches them, so they are
+    // always safe to leave in place — exactly as IsWorkingTreeReconcilable's own
+    // doc contract states. Before the fix, IsWorkingTreeReconcilable blocked on
+    // any untracked path absent from the result tree, so this merge failed 100%
+    // of the time with "uncommitted content diverges from the merge result".
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_ReconcilePath_UntrackedArtifacts_DoNotBlock()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
+
+        // Trip IsWorkingTreeMergeSafe (so the reconcile path is exercised) with a
+        // stale staged deletion of readme.txt whose content the merge leaves unchanged —
+        // this is itself safely reconcilable.
+        using (var repo = new Repository(repoPath))
+        {
+            Commands.Remove(repo, "readme.txt", removeFromWorkingDirectory: true);
+        }
+
+        // Simulate a kept-alive preview (npm run dev) leaving untracked build artifacts
+        // in the pod-local working tree: an untracked node_modules/ directory that is
+        // absent from the merge result tree and harmless to leave behind.
+        var nodeModules = Path.Combine(repoPath, "node_modules", "left-pad");
+        Directory.CreateDirectory(nodeModules);
+        File.WriteAllText(Path.Combine(nodeModules, "index.js"), "module.exports = () => {};");
+        File.WriteAllText(Path.Combine(nodeModules, "package.json"), "{\"name\":\"left-pad\"}");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "untracked build artifacts that are absent from the merge result tree (node_modules/) " +
+            "must not block an otherwise-reconcilable merge (#427)");
+
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+        result.MergeResult.Should().StartWith("merged:");
+
+        // The reconcile must have restored the staged-deleted tracked file...
+        File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("initial content",
+            "reconciliation must restore readme.txt since the merge result tree still contains it");
+
+        // ...advanced the branch to include the agent's file...
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().NotBeNull(
+            "the reconciled merge must advance the main branch ref to include the agent's file");
+
+        // ...and left the untracked artifacts completely untouched on disk.
+        File.Exists(Path.Combine(nodeModules, "index.js")).Should().BeTrue(
+            "a hard reset never touches untracked paths the result tree does not reference — " +
+            "the preview's node_modules/ artifacts must survive the merge intact");
+        File.ReadAllText(Path.Combine(nodeModules, "index.js")).Should().Be("module.exports = () => {};");
+    }
+
+    // =========================================================================
+    // HM-4c — Companion to HM-4b proving the fix does NOT weaken real safety.
+    // The reconcile path is entered the same way (stale staged deletion) and
+    // harmless untracked node_modules/ artifacts are present, but there is ALSO
+    // a genuinely divergent uncommitted edit to a TRACKED file. The untracked
+    // artifacts must not mask that real divergence: the merge must still block.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_ReconcilePath_UntrackedArtifacts_StillBlockOnDivergentTrackedEdit()
+    {
+        // The agent adds a second tracked file "extra.txt" on main so we have a tracked
+        // file (readme.txt) the run leaves untouched to diverge locally.
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
+
+        // Genuinely divergent local edit to a tracked file the merge result still holds
+        // with its ORIGINAL content — this content exists nowhere else and must be preserved.
+        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "unsaved local work that diverges");
+
+        // Preview leftovers: harmless untracked artifacts alongside the real divergence.
+        var nodeModules = Path.Combine(repoPath, "node_modules", "left-pad");
+        Directory.CreateDirectory(nodeModules);
+        File.WriteAllText(Path.Combine(nodeModules, "index.js"), "module.exports = () => {};");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "a real divergent edit to a tracked file must still block even when harmless untracked " +
+            "artifacts are also present — the #427 fix must not weaken tracked-content safety");
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("awaiting_review");
+        body.GetProperty("error").GetString().Should().Contain("cannot be safely reconciled");
+
+        // The divergent local edit must be untouched, and the ref must not have advanced.
+        File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("unsaved local work that diverges",
+            "a blocked merge must not touch the divergent tracked file");
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().BeNull(
+            "a blocked merge must not mutate the originating branch ref");
+    }
+
+    // =========================================================================
     // HM-5 — Checked-out branch, in-progress merge (MERGE_HEAD present) → 409
     // retriable. The sequencer-detection guard must fire.
     // =========================================================================
