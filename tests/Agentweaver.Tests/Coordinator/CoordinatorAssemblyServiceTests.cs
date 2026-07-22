@@ -49,6 +49,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private readonly CoordinatorSteeringWaitRegistry _steeringWaits = new();
     private readonly ConfigurableRotationSelector _rotation = new();
     private readonly FakeChildRevisionHandoff _handoff;
+    private readonly FakePreviewClassifier _previewClassifier = new();
     private readonly CoordinatorAssemblyService _sut;
     private readonly CoordinatorSteeringService _steering;
 
@@ -112,7 +113,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             _provider,
             new TestHostApplicationLifetime(),
             NullLogger<CoordinatorAssemblyService>.Instance,
-            steeringWaits: _steeringWaits);
+            steeringWaits: _steeringWaits,
+            previewClassifier: _previewClassifier);
         _steering = new CoordinatorSteeringService(
             _streamStore,
             new RunWorkflowRegistry(),
@@ -2067,6 +2069,91 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PreviewApplicability_DocsOnlyClassification_SkipsPreview()
+    {
+        const string diff = "diff --git a/docs/guide.md b/docs/guide.md\n+documentation\n";
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => false;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "docs-tree", diff);
+
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_skipped_not_applicable");
+        _previewClassifier.LastApplicabilityContext!.AggregateDiff.Should().Be(diff);
+    }
+
+    [Fact]
+    public async Task PreviewApplicability_ServerCodeClassification_RequiresPreview()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => true;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(
+            coordinatorRunId, workPlanId, "server-tree", "diff --git a/src/OrdersApi.cs b/src/OrdersApi.cs\n+endpoint\n");
+
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+    }
+
+    [Fact]
+    public async Task PreviewApplicability_AmbiguousDiff_UsesClassifierDecision()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => true;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(
+            coordinatorRunId, workPlanId, "ambiguous-tree", "diff --git a/renamed/item b/renamed/item\n+change\n");
+
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+    }
+
+    [Fact]
+    public async Task PreviewApplicability_UnavailableOrFailingClassifier_RequiresPreview()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => null;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "timeout-tree", "diff --git a/a b/a");
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+
+        _previewClassifier.ApplicabilityOverride = null;
+        _previewClassifier.ApplicabilityException = new TimeoutException();
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "error-tree", "diff --git a/b b/b");
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+    }
+
+    [Fact]
+    public async Task PreviewOnlyFeedback_UsesClassifierForPreviewBuildAndMixedFeedback()
+    {
+        _previewClassifier.FeedbackOverride = context => context.Feedback switch
+        {
+            "Preview link was unavailable." => true,
+            _ => false,
+        };
+
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview link was unavailable.")).Should().BeTrue();
+        (await InvokeIsPreviewOnlyFeedbackAsync("The build fails before the preview starts.")).Should().BeFalse();
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview is broken and the test suite fails.")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PreviewOnlyFeedback_UnavailableOrFailingClassifier_PreservesFeedback()
+    {
+        _previewClassifier.FeedbackOverride = _ => null;
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview link was unavailable.")).Should().BeFalse();
+
+        _previewClassifier.FeedbackOverride = null;
+        _previewClassifier.FeedbackException = new TimeoutException();
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview link was unavailable.")).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task PreviewGuard_StalePendingFromPriorTree_DoesNotDelayLaterAssemblyPass()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -2888,6 +2975,20 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await task.ConfigureAwait(false);
     }
 
+    private string PreviewApplicabilityState(string coordinatorRunId) =>
+        JsonSerializer.SerializeToNode(_streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Last(e => e.Type == EventTypes.SandboxPreviewApplicability).Payload)!
+            .AsObject()["state"]!.GetValue<string>();
+
+    private async Task<bool> InvokeIsPreviewOnlyFeedbackAsync(string feedback)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "IsPreviewOnlyFeedbackAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull();
+        return await (Task<bool>)method!.Invoke(_sut, [Context(RunId.New().ToString()), feedback, CancellationToken.None])!;
+    }
+
     private async Task InvokeEnsurePreviewApplicabilityRecordedAsync(
         string coordinatorRunId,
         int workPlanId,
@@ -2906,6 +3007,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             workPlanId,
             treeHash,
             aggregateDiff,
+            "alice",
+            null,
             ct,
         ])!;
         await task.ConfigureAwait(false);

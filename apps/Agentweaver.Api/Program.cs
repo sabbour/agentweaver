@@ -180,6 +180,8 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClas
     Agentweaver.Api.Coordinator.CopilotStoryIndependenceClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IAssemblyGateCodeClassifier,
     Agentweaver.Api.Coordinator.CopilotAssemblyGateCodeClassifier>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IPreviewClassifier,
+    Agentweaver.Api.Coordinator.CopilotPreviewClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
