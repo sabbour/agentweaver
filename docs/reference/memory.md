@@ -51,6 +51,10 @@ The most recent open `SessionContext` (no `EndedAt`) for the project. Provides t
 ### `AgentMemory`
 
 Per-agent long-term memory. Written by agents during runs via `record_memory` / `submit_inbox_entry`, merged by Scribe.
+`record_memory` commits directly to the memory database and returns without rebuilding the
+filesystem snapshot. This keeps the agent tool call independent of remote workspace-volume
+latency; `export_memory` refreshes `.squad/` and `.agentweaver/context/` explicitly at the end
+of the Scribe pass.
 
 | Field | Description |
 |-------|-------------|
