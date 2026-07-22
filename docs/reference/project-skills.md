@@ -22,6 +22,9 @@ All routes are project-scoped under `/api/projects/{id}/skills`.
 | `POST` | `/api/projects/{id}/skills/import/preview` | Preview candidate skills from `owner/repo`, a `https://github.com` repo/tree/blob URL, or a raw `https://raw.githubusercontent.com` SKILL.md URL. |
 | `POST` | `/api/projects/{id}/skills/import` | Import selected candidates from `owner/repo`, a `https://github.com` repo/tree/blob URL, or a raw `https://raw.githubusercontent.com` SKILL.md URL. |
 | `POST` | `/api/projects/{id}/skills/upload` | Upload files, folders, or a `.zip` archive as skill content. |
+| `GET` | `/api/skill-marketplaces` | List enabled administrator-curated marketplaces. |
+| `POST` | `/api/projects/{id}/skill-marketplaces/{marketplace}/browse` | Browse or search a curated marketplace without changing the catalog. |
+| `POST` | `/api/projects/{id}/skill-marketplaces/{marketplace}/import` | Import selected marketplace candidates through the normal repository-import pipeline. |
 | `GET` | `/api/projects/{id}/skills/assignments` | List all skill-to-agent assignments in the project. |
 | `PUT` | `/api/projects/{id}/skills/{skillId}/assignments/{agentName}` | Assign a skill to an agent. |
 | `DELETE` | `/api/projects/{id}/skills/{skillId}/assignments/{agentName}` | Unassign a skill from an agent. |
@@ -48,6 +51,7 @@ raw.githubusercontent.com are allowed."* This is an SSRF guard, not a convenienc
 | `provenance` | `connected-repo-sync`, `repo-import`, `file-upload`, or `manual`. |
 | `source_repository` | Connected repo identifier or imported repo URL when applicable. |
 | `source_location` | Skill folder path in the source when applicable. |
+| `marketplace_name` | Curated marketplace identity when provenance is `marketplace`. |
 | `status` | `active`, `missing`, or `malformed`. |
 | `content_hash` | Stable hash used for idempotent sync/import/upload. |
 | `resource_count` | Number of bundled text resources. |
@@ -94,3 +98,7 @@ See the generated [MCP tool index](./mcp-tools.md) for the full authoritative to
 | Web client route wrappers and multipart upload | `apps/web/src/api/client.ts:373` |
 | TypeScript DTOs | `apps/web/src/api/types.ts:1306` |
 | MCP skill tools | `apps/Agentweaver.Mcp/Tools/SkillTools.cs:40` |
+
+## Curated marketplaces
+
+Administrators configure trusted marketplace definitions in the API `SkillMarketplaces:Definitions` configuration section. Each definition has a name, GitHub repository, optional subpath/layout note, branch, and `enabled` flag. Disabled or removed definitions disappear from browse results but never delete skills already imported from them. The built-in configuration includes GitHub Awesome Copilot (`github/awesome-copilot`) and Azure Skills (`microsoft/skills` at `.github/plugins/azure-skills`). Browse failures return an unavailable-source response and do not modify the project catalog.

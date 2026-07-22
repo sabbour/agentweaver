@@ -204,6 +204,7 @@ public sealed class SqliteDb
                 provenance        TEXT NOT NULL,
                 source_repository TEXT,
                 source_location   TEXT,
+                marketplace_name  TEXT,
                 content_hash      TEXT NOT NULL,
                 status            TEXT NOT NULL DEFAULT 'active',
                 created_at        TEXT NOT NULL,
@@ -225,6 +226,7 @@ public sealed class SqliteDb
                     REFERENCES skills (project_id, skill_id) ON DELETE CASCADE
             );
             """, ct);
+        await TryAlterAsync(connection, "ALTER TABLE skills ADD COLUMN marketplace_name TEXT;", ct);
         await EnsureSkillOwnershipConstraintsAsync(connection, ct).ConfigureAwait(false);
         await TryAlterAsync(connection,
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_project_name ON skills (project_id, name COLLATE NOCASE);", ct);
@@ -336,6 +338,7 @@ public sealed class SqliteDb
                 provenance        TEXT NOT NULL,
                 source_repository TEXT,
                 source_location   TEXT,
+                marketplace_name  TEXT,
                 content_hash      TEXT NOT NULL,
                 status            TEXT NOT NULL DEFAULT 'active',
                 created_at        TEXT NOT NULL,

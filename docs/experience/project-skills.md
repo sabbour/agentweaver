@@ -33,7 +33,8 @@ The Catalog toolbar supports three acquisition paths:
    supported source URLs — `owner/repo`, a `https://github.com` repo URL, a GitHub `tree`/`blob`
    folder URL, or a raw `https://raw.githubusercontent.com/.../SKILL.md` URL. Preview lists every
    candidate skill discovered at the source so you can select which ones to import.
-4. **Sync connected repo**: scans `.github/skills`, `.copilot/skills`, `.claude/skills`, and
+4. **Browse marketplaces**: select a trusted administrator-curated marketplace, search its available skills, then import selected candidates. Marketplace imports retain both the marketplace name and upstream GitHub repository/path in provenance.
+5. **Sync connected repo**: scans `.github/skills`, `.copilot/skills`, `.claude/skills`, and
    `.agents/skills` in the project repository.
 
 Imports accept a single `SKILL.md`, a folder of `<name>/SKILL.md` directories, or recognized repo

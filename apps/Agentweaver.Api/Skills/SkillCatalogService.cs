@@ -40,6 +40,7 @@ public sealed record SkillView
     [JsonPropertyName("provenance")] public required string Provenance { get; init; }
     [JsonPropertyName("source_repository")] public string? SourceRepository { get; init; }
     [JsonPropertyName("source_location")] public string? SourceLocation { get; init; }
+    [JsonPropertyName("marketplace_name")] public string? MarketplaceName { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
     [JsonPropertyName("content_hash")] public required string ContentHash { get; init; }
     [JsonPropertyName("resource_count")] public int ResourceCount { get; init; }
@@ -55,6 +56,7 @@ public sealed record SkillView
         Provenance = s.Provenance.ToApiString(),
         SourceRepository = s.SourceRepository,
         SourceLocation = s.SourceLocation,
+        MarketplaceName = s.MarketplaceName,
         Status = s.Status.ToApiString(),
         ContentHash = s.ContentHash,
         ResourceCount = s.Resources.Count,
@@ -317,7 +319,7 @@ public sealed class SkillCatalogService
     }
 
     public async Task<SkillAcquisitionResult> ImportFromRepoAsync(
-        ProjectId projectId, string repoUrl, IReadOnlyList<string>? locations, CallerContext caller, CancellationToken ct)
+        ProjectId projectId, string repoUrl, IReadOnlyList<string>? locations, CallerContext caller, CancellationToken ct, string? marketplaceName = null)
     {
         var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
         if (project is null || !caller.Owns(project.Owner))
@@ -363,7 +365,7 @@ public sealed class SkillCatalogService
             var results = new List<SkillUpsertView>();
             foreach (var raw in chosen)
             {
-                var upsert = await UpsertAsync(projectId, raw, SkillProvenance.RepoImport, source.SourceRepository, raw.RelativeLocation, ct)
+                var upsert = await UpsertAsync(projectId, raw, marketplaceName is null ? SkillProvenance.RepoImport : SkillProvenance.Marketplace, source.SourceRepository, raw.RelativeLocation, ct, marketplaceName)
                     .ConfigureAwait(false);
                 results.Add(upsert);
             }
@@ -426,7 +428,7 @@ public sealed class SkillCatalogService
 
     // ── Core upsert (idempotent by content hash, name-keyed) ──────────────────────
     private async Task<SkillUpsertView> UpsertAsync(
-        ProjectId projectId, RawSkill raw, SkillProvenance provenance, string? sourceRepo, string? location, CancellationToken ct)
+        ProjectId projectId, RawSkill raw, SkillProvenance provenance, string? sourceRepo, string? location, CancellationToken ct, string? marketplaceName = null)
     {
         var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
         if (!parsed.IsValid)
@@ -469,6 +471,7 @@ public sealed class SkillCatalogService
                 Provenance = provenance,
                 SourceRepository = sourceRepo,
                 SourceLocation = location,
+                MarketplaceName = marketplaceName,
                 ContentHash = hash,
                 Status = SkillStatus.Active,
                 CreatedAt = now,
@@ -489,6 +492,7 @@ public sealed class SkillCatalogService
             Provenance = provenance,
             SourceRepository = sourceRepo,
             SourceLocation = location,
+            MarketplaceName = marketplaceName,
             ContentHash = hash,
             Status = SkillStatus.Active,
             UpdatedAt = now,

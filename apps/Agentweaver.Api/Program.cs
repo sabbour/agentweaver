@@ -364,7 +364,9 @@ builder.Services.AddSingleton<ProjectService>();
     }
 }
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
+builder.Services.Configure<Agentweaver.Api.Skills.SkillMarketplaceOptions>(builder.Configuration.GetSection("SkillMarketplaces"));
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillMarketplaceRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
