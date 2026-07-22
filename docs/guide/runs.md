@@ -136,6 +136,8 @@ The event timeline lists every event the agent emitted:
 
 Events stream live over SSE and are persisted before fan-out. If you open the page after the run completes, all events load from the persisted log.
 
+When you expand a tool call, its arguments are shown as labeled fields. Long values, such as file contents, can be expanded individually without obscuring the other arguments.
+
 ### Question gate
 
 When an agent asks a question, the run **pauses** at a question gate until you answer. The question appears in the event timeline with an answer input. Type your answer and submit — the agent continues.
