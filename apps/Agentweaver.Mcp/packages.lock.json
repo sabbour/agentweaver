@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.IdentityModel.JsonWebTokens": {
+        "type": "Direct",
+        "requested": "[8.3.0, )",
+        "resolved": "8.3.0",
+        "contentHash": "4SVXLT8sDG7CrHiszEBrsDYi+aDW0W9d+fuWUGdZPBdan56aM6fGXJDjbI0TVGEDjJhXbACQd8F/BnC7a+m2RQ==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Tokens": "8.3.0"
+        }
+      },
+      "Microsoft.IdentityModel.Tokens": {
+        "type": "Direct",
+        "requested": "[8.3.0, )",
+        "resolved": "8.3.0",
+        "contentHash": "yGzqmk+kInH50zeSEH/L1/J0G4/yqTQNq4YmdzOhpE7s/86tz37NS2YbbY2ievbyGjmeBI1mq26QH+yBR6AK3Q==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Logging": "8.3.0"
+        }
+      },
+      "ModelContextProtocol.AspNetCore": {
+        "type": "Direct",
+        "requested": "[0.3.0-preview.2, )",
+        "resolved": "0.3.0-preview.2",
+        "contentHash": "YJPTc8UbPOfscs+2xyhwKgw80It17ymxNzupjv4FvM4fPTGQtaKszbgNdzyt3LMUrwX3MUhxWTJtoSHnqji3zA==",
+        "dependencies": {
+          "ModelContextProtocol": "0.3.0-preview.2"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "9.6.0",
+        "contentHash": "xGO7rHg3qK8jRdriAxIrsH4voNemCf8GVmgdcPXI5gpZ6lZWqOEM4ZO8yfYxUmg7+URw2AY1h7Uc/H17g7X1Kw=="
+      },
+      "Microsoft.IdentityModel.Abstractions": {
+        "type": "Transitive",
+        "resolved": "8.3.0",
+        "contentHash": "jNin7yvWZu+K3U24q+6kD+LmGSRfbkHl9Px8hN1XrGwq6ZHgKGi/zuTm5m08G27fwqKfVXIWuIcUeq4Y1VQUOg=="
+      },
+      "Microsoft.IdentityModel.Logging": {
+        "type": "Transitive",
+        "resolved": "8.3.0",
+        "contentHash": "4w4pSIGHhCCLTHqtVNR2Cc/zbDIUWIBHTZCu/9ZHm2SVwrXY3RJMcZ7EFGiKqmKZMQZJzA0bpwCZ6R8Yb7i5VQ==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Abstractions": "8.3.0"
+        }
+      },
+      "ModelContextProtocol": {
+        "type": "Transitive",
+        "resolved": "0.3.0-preview.2",
+        "contentHash": "tC4pwKzNPFXFqyqhAcq40QnkSF+md29UKGsaDkF9Pw8oinWqFoC3Nr9AF+YbpIWo8Jc6Nz9S7+LuJwqpZWfLOw==",
+        "dependencies": {
+          "ModelContextProtocol.Core": "0.3.0-preview.2"
+        }
+      },
+      "ModelContextProtocol.Core": {
+        "type": "Transitive",
+        "resolved": "0.3.0-preview.2",
+        "contentHash": "pM25u8vx2RximQMIU9/b0Nwg201SI4B87wNgaxO3FhAksWFbL7ApRcNdYnyj8qfwEdAY+wIksdYoIBcyb5Aipw==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "9.6.0"
+        }
+      }
+    }
+  }
+}

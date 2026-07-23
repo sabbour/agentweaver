@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.Extensions.Configuration.Abstractions": {
+        "type": "Direct",
+        "requested": "[10.0.8, )",
+        "resolved": "10.0.8",
+        "contentHash": "I63esIFbL3h5pSt7gXpXOlmcwDmYBUoYNEglKfDPFUqtYvSV84f2l28hO2lfVXsV0wdlplgAM7IVz16matapSg==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.8"
+        }
+      },
+      "Microsoft.Extensions.Logging.Abstractions": {
+        "type": "Direct",
+        "requested": "[10.0.8, )",
+        "resolved": "10.0.8",
+        "contentHash": "fdVadZmsC8jRP0KvKy8mO8f6GV/HyBvElfcSxEhd+5FM5boAw/01iSaCto5G3G37ApJira4A3pNaVvBv8cUiLQ==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.8"
+        }
+      },
+      "Sabbour.Mxc.Sdk": {
+        "type": "Direct",
+        "requested": "[0.1.2, )",
+        "resolved": "0.1.2",
+        "contentHash": "2YCLNowN+QRJR1YxvtzpcBIOTKsIWGj1hIyS7X0aBosoBXYASf7EN91Bq1HPpDKg3dLH6svkl2Eho2ytOtrjTg==",
+        "dependencies": {
+          "NuGet.Versioning": "6.13.2",
+          "Porta.Pty": "1.0.7"
+        }
+      },
+      "Microsoft.AgentGovernance": {
+        "type": "Transitive",
+        "resolved": "4.0.0",
+        "contentHash": "+KFzoPekc2xJIrwyXvgul7l42ubb3E3YLgkVHR6B9QCvNO0v95t2Ww8S4sF0YV2cBTSAZHBrbKLipCLx98Mc8A==",
+        "dependencies": {
+          "YamlDotNet": "18.0.0"
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.8",
+        "contentHash": "21nbDV60SRPWGIivsyl6lqBeEJNG1sginhhfWgRrr3Ais7aQ12To25OAHQxgoiJkjqy1aQ6RxpZBGYuTi7Ge6A=="
+      },
+      "Microsoft.Extensions.FileSystemGlobbing": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "jSOCVxEwCd4Aq925kJVz1kSO1EpX2OHYKL04qVREXkDU7Ce3pVDdHPYm+fEy8y/th2kJf/DAstRHpJAqoNWP8w=="
+      },
+      "Microsoft.Extensions.Primitives": {
+        "type": "Transitive",
+        "resolved": "10.0.8",
+        "contentHash": "OBPo4nYhMyIbtueoC10CBm6AGAbo/A9IV8QQ/6ryZS7VvmqpGT7hunazeHLxFawRzn3oLOq4jhqhpBX4tfswWQ=="
+      },
+      "NuGet.Versioning": {
+        "type": "Transitive",
+        "resolved": "6.13.2",
+        "contentHash": "pGYNyvCVM+Z9jITTiJiuxFC8oJXFdh2k25ZDV4tSAOSuKyAWvh1VcfJy0WZGWdI6J7Avkbl0qra7XENYFSy4Ng=="
+      },
+      "Porta.Pty": {
+        "type": "Transitive",
+        "resolved": "1.0.7",
+        "contentHash": "ARvF8LQTu9qPK7O+i9Mb0bZPuYTt7tdBhhFdCq3FmghIEasJYN3hHToKX6uWaSI6SEOpe2kmhinV74RzdN6gJg==",
+        "dependencies": {
+          "Vanara.PInvoke.Kernel32": "4.2.1"
+        }
+      },
+      "Vanara.Core": {
+        "type": "Transitive",
+        "resolved": "4.2.1",
+        "contentHash": "S6Hk/up/27HfKK2PaXx0oWE8szV0dktT0u2n5xL7iNFbS/zC7K7ZA7i1h6I8LpHwQNbvPddWewb/mSEmZl00/Q=="
+      },
+      "Vanara.PInvoke.Kernel32": {
+        "type": "Transitive",
+        "resolved": "4.2.1",
+        "contentHash": "RDHekPrUI+u8+3Iy6/X7wV+TDTSf+OwWLhmWhQBUgk2QfK6a0jjWzJvxowC6NQXCHk18s7z3cFaoQXlnbMymqg==",
+        "dependencies": {
+          "Vanara.Core": "4.2.1",
+          "Vanara.PInvoke.Shared": "4.2.1"
+        }
+      },
+      "Vanara.PInvoke.Shared": {
+        "type": "Transitive",
+        "resolved": "4.2.1",
+        "contentHash": "EVLvS02V6mL3xWo4cMv0OCo5H3uVR0eWxb0TtfcoI/SVaCKYWi1F000nax+uuEBJGmS90cfpYDvsgPn408b2ag==",
+        "dependencies": {
+          "Vanara.Core": "4.2.1"
+        }
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "18.0.0",
+        "contentHash": "ptHVgcYmLejGuWXV7RMFoEqFKYMXnieOlWLPzEslfDtzZ9ngMhjYwykfqjBN2+fMEAEyobozkj07lKEpR4dssA=="
+      },
+      "agentweaver.domain": {
+        "type": "Project"
+      },
+      "agentweaver.sandboxfs": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Domain": "[1.0.0, )",
+          "Microsoft.AgentGovernance": "[4.0.0, )",
+          "Microsoft.Extensions.FileSystemGlobbing": "[10.0.10, )"
+        }
+      }
+    }
+  }
+}

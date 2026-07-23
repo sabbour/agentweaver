@@ -16,8 +16,10 @@
 // assignment is skipped with a warning when absent, matching the bash
 // script's `[[ -z "${IDENTITY_CLIENT_ID:-}" ]]` guard).
 
+import os from "node:os";
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
+import * as secretDefault from "../lib/secret.mjs";
 
 export const LOG_ANALYTICS_WORKSPACE_NAME = "agentweaver-logs";
 export const APP_INSIGHTS_NAME = "agentweaver-insights";
@@ -30,7 +32,7 @@ export const APP_INSIGHTS_NAME = "agentweaver-insights";
  * @param {object} [opts] Injectable collaborators, primarily for testing.
  */
 export async function run(cfg, opts = {}) {
-  const { exec = execDefault, log = logDefault } = opts;
+  const { exec = execDefault, log = logDefault, secret = secretDefault, scratchDir = os.tmpdir() } = opts;
 
   log.info("");
   log.section("Provision Monitoring");
@@ -190,19 +192,21 @@ export async function run(cfg, opts = {}) {
     "--output",
     "tsv",
   ]);
-  await exec.capture("az", [
-    "keyvault",
-    "secret",
-    "set",
-    "--vault-name",
-    cfg.KEYVAULT_NAME,
-    "--name",
-    "appinsights-connection-string",
-    "--value",
-    CONN_STR,
-    "--output",
-    "none",
-  ]);
+  await secret.withSecretFile(scratchDir, "appinsights-connection-string", CONN_STR, (filePath) =>
+    exec.capture("az", [
+      "keyvault",
+      "secret",
+      "set",
+      "--vault-name",
+      cfg.KEYVAULT_NAME,
+      "--name",
+      "appinsights-connection-string",
+      "--file",
+      filePath,
+      "--output",
+      "none",
+    ]),
+  );
   log.info("  [stored] appinsights-connection-string in Key Vault.");
 
   // -- 5. Enable AKS Managed Prometheus --
