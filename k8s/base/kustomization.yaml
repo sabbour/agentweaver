@@ -20,6 +20,7 @@ resources:
   - namespace.yaml
   - serviceaccount-api.yaml
   - serviceaccount-agenthost.yaml
+  - serviceaccount-mcp.yaml
   - secret-provider-class.yaml
   - rbac-api.yaml
   - quota.yaml

@@ -89,6 +89,54 @@ public sealed class KubernetesRemoteApiManifestTests
                 && manifest.Contains("app: agentweaver-agent-host", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void SandboxEgress_IsScopedToPublicHttpsAndDeniesClusterAndPrivateRanges()
+    {
+        var document = DocumentNamed(
+            ReadManifest("networkpolicy-sandbox.yaml"),
+            "sandbox-egress-allowlist");
+
+        // Public egress is restricted to TCP/443 (no more allow-all-ports).
+        document.Should().MatchRegex(
+            @"(?s)- ipBlock:\s+cidr: 0\.0\.0\.0/0\s+except:.*ports:\s+- protocol: TCP\s+port: 443");
+
+        // Cluster/private/link-local ranges are denied to block lateral movement + IMDS SSRF.
+        document.Should().Contain("10.0.0.0/8");
+        document.Should().Contain("172.16.0.0/12");
+        document.Should().Contain("192.168.0.0/16");
+        document.Should().Contain("169.254.0.0/16");
+
+        // The previous effective allow-all (0.0.0.0/0 excepting ONLY link-local, all ports) is gone.
+        document.Should().NotContain("Unrestricted outbound egress");
+    }
+
+    [Fact]
+    public void PublicMcp_UsesDedicatedLeastPrivilegeServiceAccount()
+    {
+        var deployment = ReadManifest("mcp-deployment.yaml");
+        deployment.Should().Contain("serviceAccountName: agentweaver-mcp");
+        deployment.Should().NotContain("serviceAccountName: agentweaver-api");
+
+        var serviceAccount = ReadManifest("serviceaccount-mcp.yaml");
+        serviceAccount.Should().MatchRegex(@"(?m)^\s+name: agentweaver-mcp\s*$");
+        serviceAccount.Should().Contain("automountServiceAccountToken: false");
+
+        // The MCP identity must NOT be bound to the pod-create/exec sandbox Role.
+        var rbac = ReadManifest("rbac-api.yaml");
+        rbac.Should().NotContain("agentweaver-mcp");
+    }
+
+    [Fact]
+    public void ProductionOverlay_EnablesAgentHostMtls()
+    {
+        var patch = ReadOverlayManifest("production", "patch-agenthost-mtls.yaml");
+
+        patch.Should().Contain("name: agenthost-config");
+        patch.Should().Contain("\"RequireMtls\": true");
+        patch.Should().Contain("\"RequireClientCertificate\": true");
+        patch.Should().Contain("\"SkipTlsHostnameVerification\": false");
+    }
+
     private static string EnvironmentValue(string manifest, string variable)
     {
         var match = Regex.Match(
@@ -107,6 +155,9 @@ public sealed class KubernetesRemoteApiManifestTests
 
     private static string ReadManifest(string fileName) =>
         File.ReadAllText(Path.Combine(RepositoryRoot(), "k8s", "base", fileName));
+
+    private static string ReadOverlayManifest(string overlay, string fileName) =>
+        File.ReadAllText(Path.Combine(RepositoryRoot(), "k8s", "overlays", overlay, fileName));
 
     private static string RepositoryRoot()
     {
