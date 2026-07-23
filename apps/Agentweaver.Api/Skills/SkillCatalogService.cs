@@ -124,6 +124,19 @@ public sealed class SkillCatalogService
     private static readonly Regex SkillNameRegex = new("^[a-z0-9][a-z0-9-]{0,63}$", RegexOptions.Compiled);
     private static readonly HttpClient RawHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
 
+    /// <summary>Message surfaced when a curated marketplace source could not be reached in time.</summary>
+    internal const string MarketplaceTimeoutMessage =
+        "Timed out while reading the marketplace source. Please try again in a moment.";
+
+    /// <summary>Message surfaced when a curated marketplace source is unreachable or misconfigured.</summary>
+    internal const string MarketplaceUnavailableMessage =
+        "Could not reach the marketplace source. Check network/GitHub access and try again.";
+
+    /// <summary>Hard ceiling on how long a marketplace browse/import may spend fetching from GitHub.</summary>
+    private static readonly TimeSpan MarketplaceFetchTimeout = TimeSpan.FromSeconds(60);
+    private const int MarketplaceFetchConcurrency = 16;
+    private const long MaxMarketplaceSubtreeBytes = 32L * 1024 * 1024;
+
     private readonly ISkillStore _skills;
     private readonly IProjectStore _projects;
     private readonly ProjectGitInitializer _gitInit;
@@ -131,6 +144,7 @@ public sealed class SkillCatalogService
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    private readonly IGitHubSkillTreeClient? _treeClient;
     private readonly ILogger<SkillCatalogService> _logger;
 
     public SkillCatalogService(
@@ -141,7 +155,8 @@ public sealed class SkillCatalogService
         IGitHubTokenScopeProvider scopeProvider,
         IGitHubTokenStore tokenStore,
         ILogger<SkillCatalogService> logger,
-        IGitHubAccessTokenProvider? accessTokenProvider = null)
+        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        IGitHubSkillTreeClient? treeClient = null)
     {
         _skills = skills;
         _projects = projects;
@@ -150,6 +165,7 @@ public sealed class SkillCatalogService
         _scopeProvider = scopeProvider;
         _tokenStore = tokenStore;
         _accessTokenProvider = accessTokenProvider;
+        _treeClient = treeClient;
         _logger = logger;
     }
 
@@ -286,19 +302,7 @@ public sealed class SkillCatalogService
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
                 discovered = DiscoverSkills(cloneDir, subpath);
             }
-            var candidates = discovered.Select(raw =>
-            {
-                var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
-                return new SkillCandidateView
-                {
-                    Location = raw.RelativeLocation,
-                    Name = parsed.Name,
-                    Description = parsed.Description,
-                    Valid = parsed.IsValid,
-                    ResourceCount = raw.Resources.Count,
-                    Errors = parsed.Errors,
-                };
-            }).ToList();
+            var candidates = BuildCandidates(discovered);
             if (candidates.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
             return (SkillOutcome.Ok, null, candidates);
@@ -384,6 +388,175 @@ public sealed class SkillCatalogService
         {
             TryDeleteDirectory(cloneDir);
         }
+    }
+
+    // ── Curated marketplaces ───────────────────────────────────────────────────────
+    // Marketplace repos are large (tens of MB + full history), so a LibGit2Sharp clone of them can
+    // take ~100s and used to hang the "Browse marketplaces" dialog with no timeout. Instead of
+    // cloning, fetch only the blobs under the marketplace's subpath via the GitHub Trees API, bound
+    // the whole operation by a hard timeout, and surface a clear error rather than an infinite spin.
+
+    public async Task<(SkillOutcome Outcome, string? Error, IReadOnlyList<SkillCandidateView>? Candidates)> BrowseMarketplaceAsync(
+        ProjectId projectId, string owner, string repo, string branch, string subpath, CallerContext caller, CancellationToken ct)
+    {
+        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null || !caller.Owns(project.Owner))
+            return (SkillOutcome.NotFound, null, null);
+        if (_treeClient is null)
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+
+        string? tempDir = null;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(MarketplaceFetchTimeout);
+        try
+        {
+            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            var candidates = BuildCandidates(DiscoverSkills(tempDir, subpath));
+            if (candidates.Count == 0)
+                return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
+            return (SkillOutcome.Ok, null, candidates);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Marketplace browse timed out reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return (SkillOutcome.SourceUnavailable, MarketplaceTimeoutMessage, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Marketplace browse failed reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+        }
+        finally
+        {
+            TryDeleteDirectory(tempDir);
+        }
+    }
+
+    public async Task<SkillAcquisitionResult> ImportMarketplaceAsync(
+        ProjectId projectId, string owner, string repo, string branch, string subpath,
+        IReadOnlyList<string>? locations, CallerContext caller, string marketplaceName, CancellationToken ct)
+    {
+        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null || !caller.Owns(project.Owner))
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.NotFound };
+        if (_treeClient is null)
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = MarketplaceUnavailableMessage };
+
+        string? tempDir = null;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(MarketplaceFetchTimeout);
+        try
+        {
+            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            var discovered = DiscoverSkills(tempDir, subpath);
+            if (discovered.Count == 0)
+                return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
+
+            IEnumerable<RawSkill> chosen = discovered;
+            if (locations is { Count: > 0 })
+            {
+                var set = new HashSet<string>(locations, StringComparer.OrdinalIgnoreCase);
+                chosen = discovered.Where(d => set.Contains(d.RelativeLocation));
+            }
+            else if (discovered.Count > 1)
+            {
+                return new SkillAcquisitionResult
+                {
+                    Outcome = SkillOutcome.Invalid,
+                    Error = "Repository contains multiple skills; specify which location(s) to import.",
+                };
+            }
+
+            var sourceRepo = $"{owner}/{repo}";
+            var results = new List<SkillUpsertView>();
+            foreach (var raw in chosen)
+            {
+                var upsert = await UpsertAsync(projectId, raw, SkillProvenance.Marketplace, sourceRepo, raw.RelativeLocation, cts.Token, marketplaceName)
+                    .ConfigureAwait(false);
+                results.Add(upsert);
+            }
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.Ok, Results = results };
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Marketplace import timed out reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = MarketplaceTimeoutMessage };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Marketplace import failed reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = MarketplaceUnavailableMessage };
+        }
+        finally
+        {
+            TryDeleteDirectory(tempDir);
+        }
+    }
+
+    private IReadOnlyList<SkillCandidateView> BuildCandidates(IReadOnlyList<RawSkill> discovered) =>
+        discovered.Select(raw =>
+        {
+            var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
+            return new SkillCandidateView
+            {
+                Location = raw.RelativeLocation,
+                Name = parsed.Name,
+                Description = parsed.Description,
+                Valid = parsed.IsValid,
+                ResourceCount = raw.Resources.Count,
+                Errors = parsed.Errors,
+            };
+        }).ToList();
+
+    /// <summary>
+    /// Downloads only the text blobs under <paramref name="subpath"/> into a fresh temp directory,
+    /// preserving repo-root-relative paths so <see cref="DiscoverSkills"/> can scan it exactly as if
+    /// the repository had been cloned. Oversized and binary blobs are skipped (they never contribute
+    /// to skill discovery). Runs bounded by <paramref name="ct"/> and a total-byte ceiling.
+    /// </summary>
+    private async Task<string> FetchSubtreeToTempAsync(
+        string owner, string repo, string branch, string subpath, string projectOwner, CancellationToken ct)
+    {
+        var token = await ResolveTokenAsync(projectOwner, ct).ConfigureAwait(false);
+        var blobs = await _treeClient!.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token, ct).ConfigureAwait(false);
+
+        var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        using var gate = new SemaphoreSlim(MarketplaceFetchConcurrency);
+        var totalBytes = 0L;
+        var perFileCap = (long)SkillParser.MaxResourceBytes * 2;
+
+        var downloads = blobs
+            .Where(b => b.Size <= perFileCap)
+            .Select(async blob =>
+            {
+                await gate.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    if (Interlocked.Read(ref totalBytes) > MaxMarketplaceSubtreeBytes)
+                        return;
+                    var text = await _treeClient!.GetRawTextAsync(owner, repo, branch, blob.Path, token, perFileCap, ct)
+                        .ConfigureAwait(false);
+                    if (text is null)
+                        return;
+                    if (Interlocked.Add(ref totalBytes, Encoding.UTF8.GetByteCount(text)) > MaxMarketplaceSubtreeBytes)
+                        return;
+                    var safe = SkillPaths.NormalizeRelative(blob.Path);
+                    if (safe is null)
+                        return;
+                    var full = Path.Combine(dir, safe.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                    await File.WriteAllTextAsync(full, text, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            });
+
+        await Task.WhenAll(downloads).ConfigureAwait(false);
+        return dir;
     }
 
     // ── Upload ────────────────────────────────────────────────────────────────────

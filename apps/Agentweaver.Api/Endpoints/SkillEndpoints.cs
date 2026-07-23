@@ -202,7 +202,9 @@ public static class SkillEndpoints
             var definition = marketplaces.FindEnabled(marketplace);
             if (definition is null) return Results.NotFound();
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var (outcome, error, candidates) = await svc.PreviewRepoCandidatesAsync(projectId, SkillMarketplaceRegistry.ToImportUrl(definition), caller, ct);
+            var (owner, repo) = SplitRepository(definition.Repository);
+            var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
+                projectId, owner, repo, definition.Branch ?? "main", definition.Subpath ?? "", caller, ct);
             if (outcome != SkillOutcome.Ok) return outcome == SkillOutcome.NotFound ? Results.NotFound() : Results.UnprocessableEntity(new { error });
             var query = body?.Query?.Trim();
             var filtered = string.IsNullOrEmpty(query) ? candidates! : candidates!.Where(c => $"{c.Name} {c.Description} {c.Location} {definition.Name} {definition.Repository}".Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -216,7 +218,9 @@ public static class SkillEndpoints
             var definition = marketplaces.FindEnabled(marketplace);
             if (definition is null) return Results.NotFound();
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var result = await svc.ImportFromRepoAsync(projectId, SkillMarketplaceRegistry.ToImportUrl(definition), body?.Locations, caller, ct, definition.Name);
+            var (owner, repo) = SplitRepository(definition.Repository);
+            var result = await svc.ImportMarketplaceAsync(
+                projectId, owner, repo, definition.Branch ?? "main", definition.Subpath ?? "", body?.Locations, caller, definition.Name, ct);
             return MapAcquisition(result);
         }).WithName("ImportSkillMarketplace").WithTags("Skills");
 
@@ -307,6 +311,13 @@ public static class SkillEndpoints
             var outcome = await svc.UnassignAsync(projectId, sid, agentName, caller, ct);
             return outcome == SkillOutcome.Ok ? Results.NoContent() : Results.NotFound();
         });
+    }
+
+    private static (string Owner, string Repo) SplitRepository(string repository)
+    {
+        var trimmed = (repository ?? string.Empty).Trim().Trim('/');
+        var slash = trimmed.IndexOf('/');
+        return slash < 0 ? (trimmed, string.Empty) : (trimmed[..slash], trimmed[(slash + 1)..]);
     }
 
     private static IResult MapAcquisition(SkillAcquisitionResult result) => result.Outcome switch
