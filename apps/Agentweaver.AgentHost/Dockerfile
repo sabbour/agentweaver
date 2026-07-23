@@ -55,7 +55,7 @@ ARG IMAGE_TAG=dev
 ARG GIT_SHA=unknown
 # Pinned tool versions — bumped by Dependabot / weekly maintenance workflow
 ARG NODE_MAJOR=24
-ARG YQ_VERSION=4.44.3
+ARG YQ_VERSION=4.53.3
 
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
@@ -120,7 +120,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── GitHub CLI ────────────────────────────────────────────────────────────────
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+# `apt-get install gh` (no version pin) previously let GHA's Docker layer cache
+# silently keep serving whatever `gh` build got baked into the cache the first
+# time this layer ran — `apt-get update` re-runs but BuildKit reuses the whole
+# RUN's cached *result* verbatim as long as the instruction text is unchanged,
+# so the actually-latest `gh` package was never re-fetched. ARG GH_CLI_CACHE_BUST
+# is interpolated into the RUN command so bumping it (Dependabot / maintenance
+# workflow) forces a fresh apt-get update+install, closing gh's embedded
+# Go stdlib/grpc-go CVEs (e.g. GHSA-hrxh-6v49-42gf) as new gh releases ship.
+ARG GH_CLI_CACHE_BUST=2026-07-23
+RUN echo "cache-bust: ${GH_CLI_CACHE_BUST}" \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list \
