@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.10.1
+
+### Patch Changes
+
+- b732690: Added a Content-Security-Policy and defense-in-depth security headers
+  (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`) to
+  the `Agentweaver.Web` static host response pipeline, addressing a Low-severity
+  security-assessment finding (missing security headers/CSP). The CSP is
+  same-origin (`default-src 'self'`) with a strict `script-src 'self'` (no
+  `unsafe-inline`/`unsafe-eval`) and `style-src 'self' 'unsafe-inline'` (required
+  by @fluentui/react-components' runtime style injection).
+
+  Also documented the accepted residual risk for the companion Low-severity
+  finding (OAuth session token stored in `sessionStorage`, JS-readable) with a
+  code comment in `apps/web/src/config.ts` — the token is not duplicated across
+  storage locations or logged today, and a full migration to an HttpOnly/Secure
+  session cookie (which also requires adding CSRF protection) is tracked as a
+  separate, larger follow-up rather than attempted in this pass.
+
+- bc99875: Enforce project ownership on all project-scoped memory, decision, session, and casting
+  endpoints. Previously these routes verified only that a project existed, so any
+  authenticated organization member who learned another project's UUID could read or modify
+  its memory, sessions, and decisions or hijack its agent-team casting. Because active
+  decisions are compiled verbatim into future agent system prompts, this also closed a
+  stored cross-project prompt-injection (XPIA) vector. A centralized `ProjectAuthorization`
+  guard now authorizes the caller against the project owner (the trusted internal
+  service identity used for a run's own agent callbacks remains exempt), covering both the
+  direct API and the MCP tools that proxy to these same routes.
+- 73e3026: Harden agent-runtime tool gating against three security-review findings. (1) Native Copilot shell now fails closed for **every** run: the SDK's in-process native shell (which bypasses `ISandboxExecutor`/bubblewrap and was only working-directory-checked) is rejected in both `CopilotAIAgent` and `GitHubCopilotAgentRunner`, and shell is exposed solely through the sandboxed `run_command` tool. (2) The "tool-less" LLM classifiers (`CopilotWorkflowSelectionModel`, `OutcomeSpecReplyClassifier`, `AssemblyGateCodeClassifier`, `StoryIndependenceClassifier`, `PreviewClassifier`) now set `AvailableTools = []` and install a deny-by-default `OnPermissionRequest` handler, since `Tools = []` alone does not disable the SDK's built-in native tools against prompt-injected input. (3) `OperatorToolApprovalPolicy` is now fail-closed: only an explicit allow-list of read/low-consequence tools runs without an operator prompt, so consequential mutators (including `sandbox_policy_set`, `memory_import`, `skill_import`, `skill_assign`, `workflow_save`) and any unrecognized/new MCP tool require approval by default, with a reflection-based coverage test guarding against classification drift.
+- 2289ccf: Bump the vendored `@github/copilot-linux-x64` CLI binary in the AgentHost image from 1.0.67 to 1.0.71-3, self-update npm before installing global tooling, bump `yq` from 4.44.3 to 4.53.3 (dominant source of the remaining HIGH/CRITICAL findings), and add a cache-busting `GH_CLI_CACHE_BUST` ARG to the GitHub CLI apt-install layer so it stops silently reusing a stale, CVE-carrying cached `gh` build across CI runs. Add a narrowly-scoped `.trivyignore` for the handful of CVEs confirmed to have no fix in the newest upstream `yq`/`gh` releases (transitive Go stdlib/grpc-go/x-net/x-text baked into third-party compiled binaries we cannot patch). Also fix the actual Trivy CVE gate in `agent-host-maintenance.yml` to scan with `format: table` instead of `format: sarif` — Trivy has a known bug where `.trivyignore` isn't reliably honored before the exit-code check runs in SARIF mode (aquasecurity/trivy#9487), so the table-format scan is now the real HIGH/CRITICAL gate and the SARIF step is upload-only (non-gating) for the Security tab. Severity/exit-code/ignore-unfixed settings on the gate itself are unchanged, so any CVE not explicitly listed in `.trivyignore` still fails the build.
+- 3b66282: Fix `extractChangelogSection` to accept an optional `v` prefix inside bracketed changelog headings (e.g. `## [v0.9.70]`), so `release:sync-dev`'s pre-flight version check no longer fails on historical hand-authored CHANGELOG.md entries.
+- 52f8818: Harden K8s/Kata sandbox isolation (security):
+
+  - **Sandbox egress**: `sandbox-egress-allowlist` no longer permits `0.0.0.0/0` on
+    all ports. It is now scoped to public TCP/443 only and denies RFC1918, CGNAT/link-local,
+    and IPv6 ULA/link-local ranges — blocking lateral movement to in-cluster
+    Services/nodes/VNet and IMDS SSRF, matching the proven `agenthost-egress-allowlist`.
+  - **Public MCP identity**: the internet-exposed MCP now runs as a dedicated,
+    least-privilege `agentweaver-mcp` ServiceAccount (no binding to the pod-create/exec
+    sandbox Role, default token automount disabled) instead of sharing `agentweaver-api`,
+    removing a namespace privilege-escalation path.
+  - **AgentHost A2A mTLS**: the production overlay enables mutual TLS + hostname
+    verification for the `/configure` credential channel (encrypts the GitHub/turn tokens
+    that previously crossed the pod network over plain HTTP).
+
+  Shared RWX workspace per-run isolation (Alert 2) is documented as follow-up
+  architectural work; the compounding egress and identity controls are hardened here.
+
+- 71a4509: Harden the supply chain across CI, container builds, and provisioning scripts: pin the `agent-host-maintenance` workflow's Trivy scan action to a reviewed full commit SHA (was `@master`) and add a Sigstore-backed build provenance attestation instead of relying solely on a mutable ACR tag; verify checksums for every tool downloaded during Dockerfile builds (Copilot CLI, Node.js, yq) and replace the mutable NodeSource `curl | bash` install with a checksum-verified tarball and exact-pinned npm globals (also bumping pnpm 10.34.5 -> 11.5.3 to close a HIGH CVE, CVE-2026-55697, caught by the Trivy CVE gate); pin previously-floating NuGet package versions and commit `packages.lock.json` for every project, with `RestorePackagesWithLockFile`/`RestoreLockedMode` enabled so CI restores fail loudly instead of silently resolving a new dependency version; and route Key Vault secret writes in the Azure provisioning scripts through short-lived, mode-0600 scratch files (`scripts/azure/lib/secret.mjs`) instead of passing secret values as CLI arguments, closing a `ps`/`/proc` process-listing exposure window.
+- fcb6b3e: Resolve symlinks and reparse points before workspace file-access containment checks so a
+  repository-planted symlink can no longer escape the workspace root. Previously the checks were
+  lexical only (`Path.GetFullPath` + string prefix), which validated the pathname but still
+  followed a symlink on read or write — allowing a malicious repo to disclose or overwrite files
+  outside its worktree (e.g. a mounted secrets store). Workspace read and write endpoints now share
+  a single `WorkspacePathGuard` that resolves the real target and rejects any path landing outside
+  the workspace root.
+- e1600d3: Harden the GitHub webhook trust boundary with regression tests that lock in existing
+  security properties: reject a delivery signed with a different project's secret (proving
+  per-project secret scoping, not a shared global secret), and prove prompt-injection text
+  smuggled in issue/comment payload fields never reaches the fired backlog task. Also correct
+  a stale doc comment that claimed no webhook receiver was wired.
+- 5676f49: Harden GitHub OAuth refresh-token and web sign-in `state` handling (security):
+
+  - **Fail closed on refresh org re-check.** `/oauth/token` refresh now denies (403) when the
+    brokered GitHub token is missing/expired or the org-membership re-check is inconclusive, instead
+    of silently falling back to the issuance-time org claim. A user removed from the required org can
+    no longer keep minting access tokens through the refresh chain by revoking/expiring their GitHub
+    token. The membership check runs on a non-consuming peek, so a transient (inconclusive) denial
+    leaves the refresh token usable once membership can be confirmed again; a definitive
+    non-membership revokes the whole refresh chain.
+  - **Atomic single-use refresh-token consumption.** Refresh rotation now claims the presented token
+    with a single conditional compare-and-swap (`ConsumedAt IS NULL`), so a concurrent replay of the
+    same refresh token can no longer fork two independent live refresh branches; the loser triggers
+    reuse detection and the chain is revoked.
+  - **No SAML bypass via public membership.** A SAML-enforcement (`403`) response on the authenticated
+    private org-membership check is now treated as "SSO required" and is no longer overridden by the
+    unauthenticated public-membership fallback.
+  - **Browser-bound OAuth `state`.** The web sign-in `state` is bound to the initiating browser via a
+    Secure, HttpOnly, SameSite=Lax cookie (double-submit) and validated on callback, mitigating
+    login-CSRF where an attacker grafts their pre-authorized `state`/`code` onto a victim's browser.
+
 ## 0.10.0
 
 ### Minor Changes
