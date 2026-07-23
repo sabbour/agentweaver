@@ -155,6 +155,8 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
             {
                 SystemMessage = new SystemMessageConfig { Mode = SystemMessageMode.Append, Content = charter },
                 Tools = [],
+                AvailableTools = [],
+                OnPermissionRequest = CopilotWorkflowSelectionModel.RejectAllToolPermissionHandler,
                 Model = _modelId,
                 EnableConfigDiscovery = false,
                 Streaming = true,

@@ -55,7 +55,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS0419;CS1570;CS1573;CS1574;CS1587;CS1591;CS1734</NoWarn>
+    <!-- SDK PermissionDecision/PermissionRequest Rpc types are marked [Experimental("GHCP001")];
+         suppress since the tool-less classifiers intentionally use them for deny-by-default
+         OnPermissionRequest handlers (mirrors Agentweaver.AgentRuntime.csproj). -->
+    <NoWarn>$(NoWarn);CS0419;CS1570;CS1573;CS1574;CS1587;CS1591;CS1734;GHCP001</NoWarn>
     <PreserveCompilationContext>true</PreserveCompilationContext>
     <UserSecretsId>agentweaver-api-dev</UserSecretsId>
   </PropertyGroup>
