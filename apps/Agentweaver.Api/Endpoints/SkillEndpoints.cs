@@ -203,12 +203,20 @@ public static class SkillEndpoints
             if (definition is null) return Results.NotFound();
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
             var (owner, repo) = SplitRepository(definition.Repository);
-            var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
-                projectId, owner, repo, definition.Branch ?? "main", definition.Subpath ?? "", caller, ct);
+            var page = body?.Page ?? 1;
+            var pageSize = body?.PageSize ?? SkillCatalogService.DefaultMarketplacePageSize;
+            var (outcome, error, result) = await svc.BrowseMarketplaceAsync(
+                projectId, owner, repo, definition.Branch ?? "main", definition.Subpath ?? "", body?.Query, page, pageSize, caller, ct);
             if (outcome != SkillOutcome.Ok) return outcome == SkillOutcome.NotFound ? Results.NotFound() : Results.UnprocessableEntity(new { error });
-            var query = body?.Query?.Trim();
-            var filtered = string.IsNullOrEmpty(query) ? candidates! : candidates!.Where(c => $"{c.Name} {c.Description} {c.Location} {definition.Name} {definition.Repository}".Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-            return Results.Ok(new { marketplace = definition.Name, candidates = filtered });
+            return Results.Ok(new
+            {
+                marketplace = definition.Name,
+                candidates = result!.Candidates,
+                total = result.Total,
+                page = result.Page,
+                page_size = result.PageSize,
+                has_more = result.HasMore,
+            });
         }).WithName("BrowseSkillMarketplace").WithTags("Skills");
 
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/import", async (
@@ -404,7 +412,7 @@ public static class SkillEndpoints
         updated_at = s.UpdatedAt,
     };
 
-    public sealed record MarketplaceBrowseRequest(string? Query);
+    public sealed record MarketplaceBrowseRequest(string? Query, int? Page, int? PageSize);
     public sealed record MarketplaceImportRequest(IReadOnlyList<string>? Locations);
     public sealed record ImportPreviewRequest(string? RepoUrl);
     public sealed record ImportRequest(string? RepoUrl, IReadOnlyList<string>? Locations);

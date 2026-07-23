@@ -861,10 +861,55 @@ describe('SkillsPage — curated marketplaces', () => {
     browse.resolve({
       marketplace: 'GitHub Awesome Copilot',
       candidates: [{ location: 'skills/pr-review', name: 'pr-review', description: 'Reviews PRs.', valid: true, resource_count: 0, errors: [] }],
+      total: 1,
+      page: 1,
+      page_size: 25,
+      has_more: false,
     });
 
     expect(await screen.findByText('pr-review')).toBeTruthy();
     expect(screen.getByText('Reviews PRs.')).toBeTruthy();
+  });
+
+  it('paginates the browse: Load more requests the next page and appends candidates', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.listSkillMarketplaces).mockResolvedValue([marketplace]);
+    vi.mocked(apiClient.browseSkillMarketplace)
+      .mockResolvedValueOnce({
+        marketplace: 'GitHub Awesome Copilot',
+        candidates: [{ location: 'skills/a', name: 'skill-a', description: 'First.', valid: true, resource_count: 0, errors: [] }],
+        total: 2,
+        page: 1,
+        page_size: 25,
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        marketplace: 'GitHub Awesome Copilot',
+        candidates: [{ location: 'skills/b', name: 'skill-b', description: 'Second.', valid: true, resource_count: 0, errors: [] }],
+        total: 2,
+        page: 2,
+        page_size: 25,
+        has_more: false,
+      });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse marketplaces' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'GitHub Awesome Copilot' }));
+
+    expect(await screen.findByText('skill-a')).toBeTruthy();
+    expect(screen.getByText('Showing 1 of 2')).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+
+    // Page 2 candidates are appended (page 1 remains visible), and the Load more control is gone.
+    expect(await screen.findByText('skill-b')).toBeTruthy();
+    expect(screen.getByText('skill-a')).toBeTruthy();
+    expect(screen.getByText('Showing 2 of 2')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+
+    expect(vi.mocked(apiClient.browseSkillMarketplace)).toHaveBeenNthCalledWith(1, expect.any(String), 'GitHub Awesome Copilot', undefined, 1, 25);
+    expect(vi.mocked(apiClient.browseSkillMarketplace)).toHaveBeenNthCalledWith(2, expect.any(String), 'GitHub Awesome Copilot', undefined, 2, 25);
   });
 
   it('surfaces a browse error inside the dialog instead of freezing', async () => {

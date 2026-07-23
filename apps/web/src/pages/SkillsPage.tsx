@@ -136,6 +136,7 @@ function formatApiError(err: unknown): string {
 }
 
 const FALLBACK_DEFAULTS_BLUEPRINT_ID = 'blueprint-software-development';
+const MARKETPLACE_PAGE_SIZE = 25;
 
 function structuredBlockedPreview(err: unknown): BlueprintSkillDefaultsPreviewResponse | null {
   if (err instanceof ApiError
@@ -249,6 +250,9 @@ export function SkillsPage() {
   const [marketplaceCandidates, setMarketplaceCandidates] = useState<SkillCandidateDto[] | null>(null);
   const [marketplaceError, setMarketplaceError] = useState<string | null>(null);
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
+  const [marketplacePage, setMarketplacePage] = useState(1);
+  const [marketplaceTotal, setMarketplaceTotal] = useState(0);
+  const [marketplaceHasMore, setMarketplaceHasMore] = useState(false);
   const [sourceUrl, setSourceUrl] = useState('');
   const [candidates, setCandidates] = useState<SkillCandidateDto[] | null>(null);
   const [selectedLocations, setSelectedLocations] = useState<Set<string>>(new Set());
@@ -549,16 +553,19 @@ export function SkillsPage() {
     }
   };
 
-  const browseMarketplace = async (marketplace: string, query = '') => {
+  const browseMarketplace = async (marketplace: string, query = '', page = 1, append = false) => {
     if (!projectId) return;
-    setBusy('marketplace-browse');
+    setBusy(append ? 'marketplace-more' : 'marketplace-browse');
     setMutationError(null);
     setMarketplaceError(null);
     try {
-      const result = await apiClient.browseSkillMarketplace(projectId, marketplace, query || undefined);
+      const result = await apiClient.browseSkillMarketplace(projectId, marketplace, query || undefined, page, MARKETPLACE_PAGE_SIZE);
       setSelectedMarketplace(result.marketplace);
-      setMarketplaceCandidates(result.candidates);
-      setSelectedLocations(new Set());
+      setMarketplacePage(result.page);
+      setMarketplaceTotal(result.total);
+      setMarketplaceHasMore(result.has_more);
+      setMarketplaceCandidates((previous) => (append && previous ? [...previous, ...result.candidates] : result.candidates));
+      if (!append) setSelectedLocations(new Set());
     } catch (err) { setMarketplaceError(formatApiError(err)); } finally { setBusy(null); }
   };
 
@@ -566,6 +573,9 @@ export function SkillsPage() {
     setMarketplaceOpen(true);
     setMarketplaceCandidates(null);
     setMarketplaceError(null);
+    setMarketplacePage(1);
+    setMarketplaceTotal(0);
+    setMarketplaceHasMore(false);
     try { setMarketplaces(await apiClient.listSkillMarketplaces()); } catch (err) { setMarketplaceError(formatApiError(err)); }
   };
 
@@ -1067,6 +1077,8 @@ export function SkillsPage() {
           {busy === 'marketplace-browse' && <LoadingState rows={3} />}
           {busy !== 'marketplace-browse' && !marketplaceError && selectedMarketplace && marketplaceCandidates?.length === 0 && <Text className={styles.itemMeta}>No skills matched. Try a different search or marketplace.</Text>}
           {busy !== 'marketplace-browse' && marketplaceCandidates?.map((candidate) => <div key={candidate.location} className={styles.candidate}><Checkbox label={candidate.name ?? candidate.location} checked={selectedLocations.has(candidate.location)} disabled={!candidate.valid || isBusy} onChange={(_, data) => setSelectedLocations((previous) => { const next = new Set(previous); if (data.checked) next.add(candidate.location); else next.delete(candidate.location); return next; })} />{candidate.description && <Text className={styles.itemMeta}>{candidate.description}</Text>}</div>)}
+          {busy !== 'marketplace-browse' && selectedMarketplace && marketplaceCandidates && marketplaceCandidates.length > 0 && <Text className={styles.itemMeta}>Showing {marketplaceCandidates.length} of {marketplaceTotal}</Text>}
+          {selectedMarketplace && marketplaceHasMore && <Button appearance="secondary" disabled={isBusy} onClick={() => void browseMarketplace(selectedMarketplace, marketplaceQuery, marketplacePage + 1, true)}>{busy === 'marketplace-more' ? 'Loading...' : 'Load more'}</Button>}
         </DialogContent><DialogActions><Button appearance="secondary" disabled={isBusy || !selectedMarketplace} onClick={() => selectedMarketplace && void browseMarketplace(selectedMarketplace, marketplaceQuery)}>Search</Button><Button appearance="primary" disabled={isBusy || selectedLocations.size === 0} onClick={() => void importMarketplace()}>{busy === 'marketplace-import' ? 'Importing...' : 'Import selected'}</Button></DialogActions></DialogBody></DialogSurface>
       </Dialog>
 

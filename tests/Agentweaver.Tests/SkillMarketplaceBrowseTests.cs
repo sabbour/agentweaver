@@ -102,12 +102,12 @@ public sealed class SkillMarketplaceBrowseTests
         // return a clear timeout error, not spin forever — the core of the browse-freeze fix.
         var svc = CreateService(new ThrowingTreeClient(() => throw new TaskCanceledException()));
 
-        var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
-            ProjectRef.Id, "acme", "repo", "main", "skills", Caller, CancellationToken.None);
+        var (outcome, error, page) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "acme", "repo", "main", "skills", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
 
         outcome.Should().Be(SkillOutcome.SourceUnavailable);
         error.Should().Be(SkillCatalogService.MarketplaceTimeoutMessage);
-        candidates.Should().BeNull();
+        page.Should().BeNull();
     }
 
     [Fact]
@@ -115,12 +115,12 @@ public sealed class SkillMarketplaceBrowseTests
     {
         var svc = CreateService(new ThrowingTreeClient(() => throw new HttpRequestException("boom")));
 
-        var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
-            ProjectRef.Id, "acme", "repo", "main", "skills", Caller, CancellationToken.None);
+        var (outcome, error, page) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "acme", "repo", "main", "skills", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
 
         outcome.Should().Be(SkillOutcome.SourceUnavailable);
         error.Should().Be(SkillCatalogService.MarketplaceUnavailableMessage);
-        candidates.Should().BeNull();
+        page.Should().BeNull();
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public sealed class SkillMarketplaceBrowseTests
         var svc = CreateService(treeClient: null);
 
         var (outcome, error, _) = await svc.BrowseMarketplaceAsync(
-            ProjectRef.Id, "acme", "repo", "main", "skills", Caller, CancellationToken.None);
+            ProjectRef.Id, "acme", "repo", "main", "skills", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
 
         outcome.Should().Be(SkillOutcome.SourceUnavailable);
         error.Should().Be(SkillCatalogService.MarketplaceUnavailableMessage);
@@ -213,14 +213,14 @@ public sealed class SkillMarketplaceBrowseTests
         text.Should().Be("# skill");
     }
 
-    // ── Browse builds an INDEX (name + short definition) without bulk-downloading resources ──
+    // ── Browse builds a PAGINATED index (name + short definition) without bulk-downloading ──
 
     [Fact]
     public async Task BrowseMarketplaceAsync_builds_index_from_skill_manifests_without_downloading_resources()
     {
-        // Product contract: browse is a lightweight index — each candidate carries a name + short
-        // definition read from SKILL.md frontmatter, but the skill's OTHER resource files are NEVER
-        // downloaded at browse time (only at import). This is the awesome-copilot 30s regression guard.
+        // Product contract: browse is a lightweight paginated index — each candidate carries a name +
+        // short definition read from SKILL.md frontmatter, but the skill's OTHER resource files are
+        // NEVER downloaded at browse time (only at import).
         var blobs = new List<GitHubTreeBlob>
         {
             new("skills/pr-review/SKILL.md", 40),
@@ -234,49 +234,99 @@ public sealed class SkillMarketplaceBrowseTests
             : throw new InvalidOperationException($"browse must not download resource blob {path}"));
         var svc = CreateService(tree);
 
-        var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
-            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", Caller, CancellationToken.None);
+        var (outcome, error, page) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
 
         outcome.Should().Be(SkillOutcome.Ok);
         error.Should().BeNull();
-        candidates!.Select(c => c.Location).Should().BeEquivalentTo("skills/pr-review", "skills/deploy");
+        page!.Total.Should().Be(2);
+        page.HasMore.Should().BeFalse();
+        page.Candidates.Select(c => c.Location).Should().BeEquivalentTo("skills/pr-review", "skills/deploy");
         // Each candidate carries a short definition parsed from its SKILL.md frontmatter.
-        candidates.Should().Contain(c => c.Location == "skills/pr-review"
+        page.Candidates.Should().Contain(c => c.Location == "skills/pr-review"
             && c.Name == "pr-review"
             && c.Description == "A short definition for pr-review.");
-        candidates.Should().OnlyContain(c => c.Description != null && c.Description.Length > 0);
+        page.Candidates.Should().OnlyContain(c => c.Description != null && c.Description.Length > 0);
         // ONLY the two SKILL.md manifests were fetched — never the reference/runbook/binary resources.
         tree.RawRequests.Should().BeEquivalentTo("skills/pr-review/SKILL.md", "skills/deploy/SKILL.md");
     }
 
     [Fact]
-    public async Task BrowseMarketplaceAsync_returns_within_a_hard_deadline_when_descriptions_are_slow()
+    public async Task BrowseMarketplaceAsync_page_1_returns_only_pageSize_items_and_fetches_only_their_descriptions()
     {
-        // The description hydration is bounded by a HARD wall-clock deadline: even when every SKILL.md
-        // fetch hangs (and ignores cancellation, as a stuck socket would), browse must still return
-        // promptly with the full candidate list — descriptions simply come back name-only. This is the
-        // guard for the 47s awesome-copilot regression, where a "soft budget" waited for all fetches.
-        var blobs = new List<GitHubTreeBlob>
-        {
-            new("skills/one/SKILL.md", 40),
-            new("skills/two/SKILL.md", 40),
-            new("skills/three/SKILL.md", 40),
-        };
-        var svc = CreateService(new HangingRawTreeClient(blobs));
+        // Pagination is what keeps browse fast for a huge marketplace: page 1 must return exactly
+        // pageSize candidates (each fully hydrated) and download SKILL.md for ONLY those candidates —
+        // never for the off-page ones. This is the 386-skill / 30-47s regression guard.
+        var svc = CreateService(new RecordingTreeClient(SkillBlobs(6), SkillFrontmatter));
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
-            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", Caller, CancellationToken.None);
-        sw.Stop();
+        var (outcome, _, page) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: null, page: 1, pageSize: 2, Caller, CancellationToken.None);
 
         outcome.Should().Be(SkillOutcome.Ok);
-        error.Should().BeNull();
-        candidates!.Select(c => c.Location).Should().BeEquivalentTo("skills/one", "skills/two", "skills/three");
-        // Descriptions could not be hydrated in time, so every candidate is listed name-only.
-        candidates.Should().OnlyContain(c => c.Description == null);
-        candidates.Should().Contain(c => c.Name == "one");
-        // Comfortably under the marketplace fetch ceiling (60s) — the hard deadline is ~6-7s.
-        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(20));
+        page!.Total.Should().Be(6);
+        page.Page.Should().Be(1);
+        page.PageSize.Should().Be(2);
+        page.HasMore.Should().BeTrue();
+        page.Candidates.Select(c => c.Location).Should().Equal("skills/skill-00", "skills/skill-01");
+        page.Candidates.Should().OnlyContain(c => c.Description != null && c.Description.Length > 0);
+    }
+
+    [Fact]
+    public async Task BrowseMarketplaceAsync_does_not_fetch_descriptions_for_off_page_candidates()
+    {
+        var tree = new RecordingTreeClient(SkillBlobs(6), SkillFrontmatter);
+        var svc = CreateService(tree);
+
+        _ = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: null, page: 1, pageSize: 2, Caller, CancellationToken.None);
+
+        // Only the two on-page SKILL.md manifests were downloaded, not the remaining four.
+        tree.RawRequests.Should().BeEquivalentTo("skills/skill-00/SKILL.md", "skills/skill-01/SKILL.md");
+    }
+
+    [Fact]
+    public async Task BrowseMarketplaceAsync_page_2_returns_the_next_distinct_offset()
+    {
+        var svc = CreateService(new RecordingTreeClient(SkillBlobs(5), SkillFrontmatter));
+
+        var (_, _, page2) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: null, page: 2, pageSize: 2, Caller, CancellationToken.None);
+        var (_, _, page3) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: null, page: 3, pageSize: 2, Caller, CancellationToken.None);
+
+        page2!.Candidates.Select(c => c.Location).Should().Equal("skills/skill-02", "skills/skill-03");
+        page2.HasMore.Should().BeTrue();
+        // Last page: one item, no more.
+        page3!.Candidates.Select(c => c.Location).Should().Equal("skills/skill-04");
+        page3.Total.Should().Be(5);
+        page3.HasMore.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task BrowseMarketplaceAsync_filters_by_query_before_paginating()
+    {
+        var blobs = new List<GitHubTreeBlob>
+        {
+            new("skills/azure-openai/SKILL.md", 40),
+            new("skills/azure-storage/SKILL.md", 40),
+            new("skills/github-actions/SKILL.md", 40),
+        };
+        var svc = CreateService(new RecordingTreeClient(blobs, SkillFrontmatter));
+
+        var (_, _, page) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: "azure", page: 1, pageSize: 25, Caller, CancellationToken.None);
+
+        page!.Total.Should().Be(2);
+        page.Candidates.Select(c => c.Location).Should().BeEquivalentTo("skills/azure-openai", "skills/azure-storage");
+    }
+
+    private static IReadOnlyList<GitHubTreeBlob> SkillBlobs(int count) =>
+        Enumerable.Range(0, count).Select(i => new GitHubTreeBlob($"skills/skill-{i:D2}/SKILL.md", 40)).ToList();
+
+    private static string SkillFrontmatter(string path)
+    {
+        var name = Path.GetFileName(Path.GetDirectoryName(path));
+        return $"---\nname: {name}\ndescription: A short definition for {name}.\n---\nInstructions.";
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────────────────────
@@ -358,31 +408,6 @@ public sealed class SkillMarketplaceBrowseTests
         {
             lock (_rawRequests) _rawRequests.Add(path);
             return Task.FromResult(content(path));
-        }
-    }
-
-    /// <summary>
-    /// Tree client whose raw-blob fetches hang indefinitely (ignoring cancellation, like a stuck
-    /// socket), used to prove the browse index returns under its hard description deadline regardless.
-    /// </summary>
-    private sealed class HangingRawTreeClient(IReadOnlyList<GitHubTreeBlob> blobs) : IGitHubSkillTreeClient
-    {
-        public Task<IReadOnlyList<GitHubTreeBlob>> ListSubtreeBlobsAsync(
-            string owner, string repo, string branch, string subpath, string? token, CancellationToken ct)
-        {
-            var normalized = subpath.Trim('/');
-            var prefix = normalized.Length == 0 ? string.Empty : normalized + "/";
-            IReadOnlyList<GitHubTreeBlob> scoped = blobs
-                .Where(b => normalized.Length == 0 || b.Path == normalized || b.Path.StartsWith(prefix, StringComparison.Ordinal))
-                .ToList();
-            return Task.FromResult(scoped);
-        }
-
-        public async Task<string?> GetRawTextAsync(
-            string owner, string repo, string branch, string path, string? token, long maxBytes, CancellationToken ct)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
-            return "# never observed";
         }
     }
 

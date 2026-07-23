@@ -185,14 +185,16 @@ public sealed class SkillTools(AgentweaverApiClient api)
     public async Task<string> SkillMarketplacesListAsync(CancellationToken ct = default) =>
         await ExecuteJsonAsync("skill_marketplaces_list", token => api.GetAsync<object>("api/skill-marketplaces", token), ct);
 
-    [McpServerTool(Name = "skill_marketplace_browse"), Description("Browse or search a curated marketplace without changing the project catalog.")]
+    [McpServerTool(Name = "skill_marketplace_browse"), Description("Browse or search a curated marketplace (paginated) without changing the project catalog.")]
     public async Task<string> SkillMarketplaceBrowseAsync(
         [Description("Project ID")] string project_id,
         [Description("Marketplace name as returned by skill_marketplaces_list")] string marketplace,
-        [Description("Optional skill name, description, or metadata search text")] string? query = null,
+        [Description("Optional skill name or location search text")] string? query = null,
+        [Description("1-based page number (default 1)")] int? page = null,
+        [Description("Candidates per page (default 25, max 50)")] int? page_size = null,
         CancellationToken ct = default) =>
         await ExecuteJsonAsync("skill_marketplace_browse", token => api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/browse", new { query }, token), ct);
+            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/browse", new { query, page, pageSize = page_size }, token), ct);
 
     [McpServerTool(Name = "skill_marketplace_import"), Description("Import selected candidates from a curated marketplace through the normal repository-import pipeline.")]
     public async Task<string> SkillMarketplaceImportAsync(
