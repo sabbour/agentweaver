@@ -1,4 +1,3 @@
-using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
@@ -107,12 +106,15 @@ public sealed class GitHubSkillTreeClient : IGitHubSkillTreeClient
 
     /// <summary>
     /// Sends the request built by <paramref name="buildRequest"/> and, when an <em>authenticated</em>
-    /// attempt is rejected with 401/403, retries the identical request once anonymously. The curated
-    /// marketplaces are PUBLIC repos, but a user's OAuth-App access token that has not been SSO-granted
-    /// for the repo's org (e.g. the SAML-enforced <c>microsoft</c> org) is refused on org resources via
-    /// the REST/raw APIs even though anonymous reads succeed. The unauthenticated 60/hr budget is ample
-    /// for a browse, so falling back keeps public marketplaces readable; the token is still tried first
-    /// to give SSO-authorized users the higher authenticated rate limit.
+    /// attempt fails with ANY non-success status, retries the identical request once anonymously. The
+    /// curated marketplaces are PUBLIC repos, but a user's OAuth-App access token that has not been
+    /// SSO-granted for the repo's org (e.g. the SAML-enforced <c>microsoft</c> org) is refused on org
+    /// resources even though anonymous reads succeed — and the refusal is not always a 401/403: the
+    /// REST Trees API returns 403 while <c>raw.githubusercontent.com</c> can return 404 for the same
+    /// un-authorized token, which is why the fallback triggers on any non-2xx rather than only
+    /// 401/403. The unauthenticated 60/hr budget is ample for a browse, so falling back keeps public
+    /// marketplaces readable; the token is still tried first to give SSO-authorized users the higher
+    /// authenticated rate limit.
     /// </summary>
     private static async Task<HttpResponseMessage> SendWithAnonymousFallbackAsync(
         HttpClient http, Func<string?, HttpRequestMessage> buildRequest, string? token, CancellationToken ct)
@@ -120,8 +122,7 @@ public sealed class GitHubSkillTreeClient : IGitHubSkillTreeClient
         var request = buildRequest(token);
         var response = await http.SendAsync(request, ct).ConfigureAwait(false);
         request.Dispose();
-        if (!string.IsNullOrWhiteSpace(token)
-            && (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden))
+        if (!string.IsNullOrWhiteSpace(token) && !response.IsSuccessStatusCode)
         {
             response.Dispose();
             var anonymous = buildRequest(null);

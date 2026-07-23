@@ -191,6 +191,28 @@ public sealed class SkillMarketplaceBrowseTests
         text.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetRawTextAsync_retries_anonymously_on_a_non_auth_failure()
+    {
+        // raw.githubusercontent.com does NOT always answer an un-SSO'd token with 401/403 — for a repo
+        // in a SAML-enforced org it can return 404 for the token yet 200 anonymously. The fallback must
+        // therefore trigger on ANY non-success status, not only 401/403, or browse descriptions come
+        // back empty for microsoft/skills even though the anonymous read would succeed.
+        var attempts = 0;
+        var client = new GitHubSkillTreeClient(new StubHttpClientFactory(new StubHandler(req =>
+        {
+            attempts++;
+            return req.Headers.Authorization is not null
+                ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("# skill", Encoding.UTF8) };
+        })));
+
+        var text = await client.GetRawTextAsync("microsoft", "skills", "main", "skills/x/SKILL.md", token: "un-sso'd-token", maxBytes: 1024, CancellationToken.None);
+
+        attempts.Should().Be(2);
+        text.Should().Be("# skill");
+    }
+
     // ── Browse builds an INDEX (name + short definition) without bulk-downloading resources ──
 
     [Fact]
@@ -225,6 +247,36 @@ public sealed class SkillMarketplaceBrowseTests
         candidates.Should().OnlyContain(c => c.Description != null && c.Description.Length > 0);
         // ONLY the two SKILL.md manifests were fetched — never the reference/runbook/binary resources.
         tree.RawRequests.Should().BeEquivalentTo("skills/pr-review/SKILL.md", "skills/deploy/SKILL.md");
+    }
+
+    [Fact]
+    public async Task BrowseMarketplaceAsync_returns_within_a_hard_deadline_when_descriptions_are_slow()
+    {
+        // The description hydration is bounded by a HARD wall-clock deadline: even when every SKILL.md
+        // fetch hangs (and ignores cancellation, as a stuck socket would), browse must still return
+        // promptly with the full candidate list — descriptions simply come back name-only. This is the
+        // guard for the 47s awesome-copilot regression, where a "soft budget" waited for all fetches.
+        var blobs = new List<GitHubTreeBlob>
+        {
+            new("skills/one/SKILL.md", 40),
+            new("skills/two/SKILL.md", 40),
+            new("skills/three/SKILL.md", 40),
+        };
+        var svc = CreateService(new HangingRawTreeClient(blobs));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", Caller, CancellationToken.None);
+        sw.Stop();
+
+        outcome.Should().Be(SkillOutcome.Ok);
+        error.Should().BeNull();
+        candidates!.Select(c => c.Location).Should().BeEquivalentTo("skills/one", "skills/two", "skills/three");
+        // Descriptions could not be hydrated in time, so every candidate is listed name-only.
+        candidates.Should().OnlyContain(c => c.Description == null);
+        candidates.Should().Contain(c => c.Name == "one");
+        // Comfortably under the marketplace fetch ceiling (60s) — the hard deadline is ~6-7s.
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(20));
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────────────────────
@@ -271,8 +323,7 @@ public sealed class SkillMarketplaceBrowseTests
     }
 
     private sealed class ThrowingTreeClient(Func<IReadOnlyList<GitHubTreeBlob>> onList) : IGitHubSkillTreeClient
-    {
-        public Task<IReadOnlyList<GitHubTreeBlob>> ListSubtreeBlobsAsync(
+    {        public Task<IReadOnlyList<GitHubTreeBlob>> ListSubtreeBlobsAsync(
             string owner, string repo, string branch, string subpath, string? token, CancellationToken ct) =>
             Task.FromResult(onList());
 
@@ -307,6 +358,31 @@ public sealed class SkillMarketplaceBrowseTests
         {
             lock (_rawRequests) _rawRequests.Add(path);
             return Task.FromResult(content(path));
+        }
+    }
+
+    /// <summary>
+    /// Tree client whose raw-blob fetches hang indefinitely (ignoring cancellation, like a stuck
+    /// socket), used to prove the browse index returns under its hard description deadline regardless.
+    /// </summary>
+    private sealed class HangingRawTreeClient(IReadOnlyList<GitHubTreeBlob> blobs) : IGitHubSkillTreeClient
+    {
+        public Task<IReadOnlyList<GitHubTreeBlob>> ListSubtreeBlobsAsync(
+            string owner, string repo, string branch, string subpath, string? token, CancellationToken ct)
+        {
+            var normalized = subpath.Trim('/');
+            var prefix = normalized.Length == 0 ? string.Empty : normalized + "/";
+            IReadOnlyList<GitHubTreeBlob> scoped = blobs
+                .Where(b => normalized.Length == 0 || b.Path == normalized || b.Path.StartsWith(prefix, StringComparison.Ordinal))
+                .ToList();
+            return Task.FromResult(scoped);
+        }
+
+        public async Task<string?> GetRawTextAsync(
+            string owner, string repo, string branch, string path, string? token, long maxBytes, CancellationToken ct)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
+            return "# never observed";
         }
     }
 
