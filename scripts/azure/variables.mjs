@@ -30,6 +30,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_REPO_ROOT = path.resolve(__dirname, "..", "..");
 
 export const IDENTITY_NAME = "agentweaver-api-identity";
+// Dedicated least-privilege identity for AgentHost sandbox pods (issue #471); no Key Vault roles.
+export const AGENTHOST_IDENTITY_NAME = "agentweaver-agenthost-identity";
 export const LOG_ANALYTICS_WORKSPACE_NAME = "agentweaver-logs";
 
 export const DEFAULTS = Object.freeze({
@@ -147,6 +149,15 @@ export async function resolveVariables(options = {}) {
     IDENTITY_CLIENT_ID = await az.getIdentityClientId(RESOURCE_GROUP, IDENTITY_NAME);
   }
 
+  // Dedicated AgentHost identity client id (issue #471). Resolved the same way as the API identity;
+  // stays '' when the identity has not been provisioned yet (older cluster) so the deploy degrades
+  // gracefully — an empty annotation just means the sandbox pod gets no workload identity, and the
+  // GitHub token is brokered via the API /configure call regardless.
+  let AGENTHOST_IDENTITY_CLIENT_ID = env.AGENTHOST_IDENTITY_CLIENT_ID || "";
+  if (!AGENTHOST_IDENTITY_CLIENT_ID && resolveLive) {
+    AGENTHOST_IDENTITY_CLIENT_ID = await az.getIdentityClientId(RESOURCE_GROUP, AGENTHOST_IDENTITY_NAME);
+  }
+
   let APPINSIGHTS_WORKSPACE_ID = env.APPINSIGHTS_WORKSPACE_ID || "";
   if (!APPINSIGHTS_WORKSPACE_ID && resolveLive) {
     APPINSIGHTS_WORKSPACE_ID = await az.getLogAnalyticsWorkspaceCustomerId(
@@ -180,6 +191,7 @@ export async function resolveVariables(options = {}) {
     GITHUB_ALLOWED_ORG,
     TENANT_ID,
     IDENTITY_CLIENT_ID,
+    AGENTHOST_IDENTITY_CLIENT_ID,
     APPINSIGHTS_WORKSPACE_ID,
   };
 }
@@ -200,5 +212,6 @@ export function printSummary(vars, log) {
   log.field("AgentHost KV", vars.AGENTHOST_KEYVAULT_URI);
   log.field("Tenant ID", vars.TENANT_ID || "<not set>");
   log.field("Identity client", vars.IDENTITY_CLIENT_ID || "<not set>");
+  log.field("AgentHost identity client", vars.AGENTHOST_IDENTITY_CLIENT_ID || "<not set>");
   log.field("AppInsights workspace", vars.APPINSIGHTS_WORKSPACE_ID || "<not set>");
 }

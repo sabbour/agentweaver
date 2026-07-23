@@ -133,6 +133,42 @@ public sealed class SkillCatalogTests : IDisposable
     }
 
     [Fact]
+    public void DiscoverSkills_SkipsResourcesInsideSymlinkedDirectory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aw-skill-link-" + Guid.NewGuid().ToString("N"));
+        var outside = Path.Combine(Path.GetTempPath(), "aw-skill-link-outside-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var skillDir = Path.Combine(root, "skills", "review");
+            Directory.CreateDirectory(skillDir);
+            Directory.CreateDirectory(outside);
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), SkillMd("review", "Reviews pull requests."));
+            File.WriteAllText(Path.Combine(skillDir, "local.md"), "local resource");
+            File.WriteAllText(Path.Combine(outside, "secret.txt"), "host secret");
+
+            try
+            {
+                Directory.CreateSymbolicLink(Path.Combine(skillDir, "linked"), outside);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return; // Symlink creation requires Developer Mode or elevated privileges on some Windows hosts.
+            }
+
+            var discovered = DiscoveryService().DiscoverSkills(root, "skills");
+
+            discovered.Should().ContainSingle();
+            discovered[0].Resources.Should().ContainSingle(resource => resource.RelativePath == "local.md");
+            discovered[0].Resources.Should().NotContain(resource => resource.Content == "host secret");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+            try { Directory.Delete(outside, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void BuiltInAwesomeCopilotMarketplace_TargetsRepositorySkillsDirectory()
     {
         var appSettings = Path.Combine(RepositoryRoot, "apps", "Agentweaver.Api", "appsettings.json");

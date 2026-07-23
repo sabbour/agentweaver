@@ -78,4 +78,4 @@ sandboxwarmpool.extensions.agents.x-k8s.io/agentweaver-agent-host
 | Pods stay Pending | `kubectl get runtimeclass`, `kubectl describe node`, and `katapool` capacity |
 | Image pull failure | image tag matches `AGENTHOST_IMAGE_TAG` and ACR is attached to AKS |
 | `/configure` or A2A fails | NetworkPolicies allow API/worker to AgentHost TCP `8088`; run `npm run azure:verify` |
-| Token fetch fails | service account `agentweaver-agent-host` has workload identity federation and Key Vault access |
+| Token delivery fails | service account `agentweaver-agent-host` has workload identity federation to the dedicated `agentweaver-agenthost-identity`; the run owner's GitHub token is brokered by the API in `/configure` (`gitHubAccessToken`) — the sandbox identity has no Key Vault access (issue #471) |

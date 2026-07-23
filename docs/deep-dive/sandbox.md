@@ -249,7 +249,7 @@ Per-run values are delivered by `POST /configure` after the claim binds:
 
 `AgentHostRuntimeState.TryConfigure(...)` stores the runtime values exactly once with `Interlocked.CompareExchange`; a second configure attempt returns `409`. `AgentHostStartupService.ConfigureAsync` uses `workingDirectory` to override the static `AgentHost__WorkingDirectory` env default before it calls `SetupAsync`. That keeps the pod's current file-tool root identical to `Run.WorktreePath`, which is the path the run's system prompt names, so sibling agents can hand files across decomposition, synthesis, and assembly stages without writing to divergent directories. `/configure` cannot be protected by the turn token because it delivers that token, so the guard is the NetworkPolicy that restricts AgentHost port `8088` to API/worker pods. The turn endpoint itself still requires `Authorization: Bearer ...` and reads the expected token from runtime state.
 
-The previous run-scoped CSI path is gone: the executor no longer creates per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. Instead `KeyVaultUserTokenProvider` fetches only the configured user's Key Vault secret via workload identity and caches it for the pod lifetime.
+The previous run-scoped CSI path is gone: the executor no longer creates per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. Instead the API resolves the run owner's token and brokers it to the pod in `/configure` (`gitHubAccessToken`); `KeyVaultUserTokenProvider` prefers that brokered token and caches it for the pod lifetime. The sandbox identity has no Key Vault access (issue #471), so the residual direct-fetch fallback fails closed.
 
 Where this lives:
 
@@ -265,7 +265,7 @@ Where this lives:
 
 ## Production pod isolation and hardening
 
-The AgentHost sandbox pod contains the runtime needed for live agent turns, but it is not privileged and should receive only the scoped identity needed to fetch the run owner token.
+The AgentHost sandbox pod contains the runtime needed for live agent turns, but it is not privileged. Because it executes untrusted shell/tool code, it runs as a dedicated managed identity with **no Key Vault role assignments** (issue #471); the run owner's token is brokered to it per-run by the API rather than fetched directly from the vault.
 
 The production template applies several important constraints:
 

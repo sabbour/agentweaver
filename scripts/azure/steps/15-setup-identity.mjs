@@ -2,10 +2,12 @@
 // (cross-checked against 15-setup-identity.ps1). Read both before changing
 // this file; they must stay in lockstep with this port's behavior.
 //
-// Creates: user-assigned managed identity, Key Vault (RBAC-authorized),
-// GitHub OAuth secrets, Key Vault role assignments, OIDC issuer + workload
-// identity on the cluster, and federated credentials for the api and
-// agent-host service accounts.
+// Creates: user-assigned managed identities (one for the API, one dedicated
+// least-privilege identity for AgentHost sandbox pods with NO Key Vault roles --
+// issue #471), Key Vault (RBAC-authorized), GitHub OAuth secrets, Key Vault role
+// assignments (API identity only), OIDC issuer + workload identity on the cluster,
+// and federated credentials for the api and agent-host service accounts (each on
+// its own identity).
 //
 // SECURITY NOTE (see .squad/decisions.md "Staging AKS recovery" entry): this
 // port intentionally does NOT auto-resolve GitHub OAuth credentials from any
@@ -27,6 +29,14 @@ import * as secretDefault from "../lib/secret.mjs";
 import os from "node:os";
 
 export const IDENTITY_NAME = "agentweaver-api-identity";
+
+// Dedicated, least-privilege managed identity for the AgentHost sandbox pods (issue #471).
+// This identity is granted NO Key Vault roles: the sandbox executes untrusted shell/tool code,
+// so it must NOT be able to exchange its projected workload-identity token for a Key Vault access
+// token and read every user's secrets. The run owner's GitHub token is brokered per-run through the
+// API's /configure call (see KubernetesSandboxExecutor.ResolveGitHubAccessTokenAsync ->
+// AgentHostRuntimeState.GitHubAccessToken) instead of a direct vault fetch.
+export const AGENTHOST_IDENTITY_NAME = "agentweaver-agenthost-identity";
 
 /** Resolves GitHub OAuth credentials from cfg, falling back to an interactive prompt when available. */
 export async function resolveGithubCredentials(cfg, { prompt = promptDefault } = {}) {
@@ -157,6 +167,50 @@ export async function run(cfg, opts = {}) {
   log.field("Identity object ID", IDENTITY_OBJECT_ID);
 
   log.info("");
+  log.section("Step 1b: Create dedicated AgentHost managed identity (no Key Vault roles)");
+  // Least-privilege identity for the sandbox pods (issue #471). Deliberately kept separate from the
+  // API identity and NEVER granted Key Vault roles below, so a compromised/abused sandbox cannot read
+  // other users' secrets. The AgentHost pod receives the run owner's token via the API /configure
+  // broker instead of a direct vault fetch.
+  await exec.run("az", [
+    "identity",
+    "create",
+    "--name",
+    AGENTHOST_IDENTITY_NAME,
+    "--resource-group",
+    cfg.RESOURCE_GROUP,
+    "--location",
+    cfg.LOCATION,
+  ]);
+
+  const { stdout: AGENTHOST_IDENTITY_CLIENT_ID } = await exec.capture("az", [
+    "identity",
+    "show",
+    "--name",
+    AGENTHOST_IDENTITY_NAME,
+    "--resource-group",
+    cfg.RESOURCE_GROUP,
+    "--query",
+    "clientId",
+    "-o",
+    "tsv",
+  ]);
+  const { stdout: AGENTHOST_IDENTITY_OBJECT_ID } = await exec.capture("az", [
+    "identity",
+    "show",
+    "--name",
+    AGENTHOST_IDENTITY_NAME,
+    "--resource-group",
+    cfg.RESOURCE_GROUP,
+    "--query",
+    "principalId",
+    "-o",
+    "tsv",
+  ]);
+  log.field("AgentHost identity client ID", AGENTHOST_IDENTITY_CLIENT_ID);
+  log.field("AgentHost identity object ID", AGENTHOST_IDENTITY_OBJECT_ID);
+
+  log.info("");
   log.section("Step 2: Create Key Vault");
   const kvShow = await exec.capture(
     "az",
@@ -214,6 +268,9 @@ export async function run(cfg, opts = {}) {
 
   log.info("");
   log.section("Step 4: Grant Key Vault roles to managed identity");
+  // These roles are granted to the API identity ONLY. The AgentHost identity
+  // (AGENTHOST_IDENTITY_NAME) is intentionally excluded (issue #471): sandbox pods must have no
+  // direct Key Vault access and instead receive the run owner's token via the API /configure broker.
   await createRoleAssignmentIdempotent(
     ["--role", "Key Vault Secrets User", "--assignee-object-id", IDENTITY_OBJECT_ID, "--assignee-principal-type", "ServicePrincipal", "--scope", KEYVAULT_ID],
     { exec },
@@ -290,10 +347,38 @@ export async function run(cfg, opts = {}) {
   }
 
   log.info("");
-  log.section("Step 7: Create federated credential for agent-host");
-  const agentHostFedCredExists = await exec.capture(
+  log.section("Step 7: Create federated credential for agent-host (dedicated identity)");
+  // issue #471: the agent-host federated credential lives on the DEDICATED, Key-Vault-less
+  // AGENTHOST_IDENTITY_NAME — NOT the API identity — so the sandbox's workload-identity token maps to
+  // an identity with no vault access. Migration: if the legacy fedcred still exists on the API
+  // identity (older deployments federated agentweaver-agent-host to agentweaver-api-identity), delete
+  // it so the sandbox can no longer assume the KV-privileged API identity.
+  const legacyAgentHostFedCred = await exec.capture(
     "az",
     ["identity", "federated-credential", "show", "--name", "agentweaver-agenthost-fedcred", "--identity-name", IDENTITY_NAME, "--resource-group", cfg.RESOURCE_GROUP],
+    { allowFailure: true },
+  );
+  if (legacyAgentHostFedCred.code === 0) {
+    log.warn(
+      "Removing legacy agent-host federated credential from the API identity so the sandbox no " +
+        "longer federates to the Key-Vault-privileged agentweaver-api-identity (issue #471).");
+    await exec.run("az", [
+      "identity",
+      "federated-credential",
+      "delete",
+      "--name",
+      "agentweaver-agenthost-fedcred",
+      "--identity-name",
+      IDENTITY_NAME,
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--yes",
+    ]);
+  }
+
+  const agentHostFedCredExists = await exec.capture(
+    "az",
+    ["identity", "federated-credential", "show", "--name", "agentweaver-agenthost-fedcred", "--identity-name", AGENTHOST_IDENTITY_NAME, "--resource-group", cfg.RESOURCE_GROUP],
     { allowFailure: true },
   );
   if (agentHostFedCredExists.code !== 0) {
@@ -304,7 +389,7 @@ export async function run(cfg, opts = {}) {
       "--name",
       "agentweaver-agenthost-fedcred",
       "--identity-name",
-      IDENTITY_NAME,
+      AGENTHOST_IDENTITY_NAME,
       "--resource-group",
       cfg.RESOURCE_GROUP,
       "--issuer",
@@ -321,15 +406,27 @@ export async function run(cfg, opts = {}) {
   log.info("");
   log.section("Summary");
   log.field("IDENTITY_CLIENT_ID", IDENTITY_CLIENT_ID);
+  log.field("AGENTHOST_IDENTITY_CLIENT_ID", AGENTHOST_IDENTITY_CLIENT_ID);
   log.field("KEYVAULT_NAME", cfg.KEYVAULT_NAME);
   log.field("TENANT_ID", TENANT_ID);
   log.info("");
-  log.info("Two federated credentials are now configured on agentweaver-api-identity:");
-  log.info(`  agentweaver-api-fedcred      -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-api`);
-  log.info(`  agentweaver-agenthost-fedcred -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-agent-host`);
+  log.info("Federated credentials are now configured on two separate identities:");
+  log.info(`  agentweaver-api-identity      / agentweaver-api-fedcred      -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-api`);
+  log.info(`  agentweaver-agenthost-identity / agentweaver-agenthost-fedcred -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-agent-host`);
+  log.info("");
+  log.info("The AgentHost identity has NO Key Vault role assignments (issue #471): the run owner's");
+  log.info("GitHub token is brokered per-run through the API /configure call, not a direct vault fetch.");
   log.info("");
   log.info("NOTE: Run scripts/azure/steps/16-provision-oauth-signing-key.mjs before the first");
   log.info("      deploy to provision the mcp-oauth-signing-key secret in Key Vault.");
 
-  return { IDENTITY_CLIENT_ID, IDENTITY_OBJECT_ID, KEYVAULT_ID, TENANT_ID, OIDC_ISSUER };
+  return {
+    IDENTITY_CLIENT_ID,
+    IDENTITY_OBJECT_ID,
+    AGENTHOST_IDENTITY_CLIENT_ID,
+    AGENTHOST_IDENTITY_OBJECT_ID,
+    KEYVAULT_ID,
+    TENANT_ID,
+    OIDC_ISSUER,
+  };
 }
