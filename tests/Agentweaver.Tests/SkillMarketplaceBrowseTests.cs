@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
@@ -338,6 +339,28 @@ public sealed class SkillMarketplaceBrowseTests
         // The tree-list call plus every per-page SKILL.md fetch was made without a token.
         tree.TokensSeen.Should().NotBeEmpty();
         tree.TokensSeen.Should().OnlyContain(t => t == null);
+    }
+
+    [Fact]
+    public async Task BrowseMarketplaceAsync_writes_placeholders_to_local_scratch_not_the_data_directory()
+    {
+        // Browse writes a throwaway placeholder tree so DiscoverSkills can derive candidate locations.
+        // In production AppPaths.DataDirectory is a CIFS/Azure Files SMB mount whose ~16-33ms per-file op
+        // latency made writing+scanning+deleting 386 placeholders take ~39s (scaling with TOTAL skill
+        // count). Those placeholders MUST live on local/ephemeral disk instead, so this guards that the
+        // browse scratch root is under the system temp dir and never under the (CIFS) data directory.
+        SkillCatalogService.BrowseScratchRoot.Should().StartWith(Path.GetTempPath());
+        SkillCatalogService.BrowseScratchRoot.Should().NotStartWith(AppPaths.DataDirectory);
+
+        var svc = CreateService(new RecordingTreeClient(SkillBlobs(3), SkillFrontmatter));
+        var (outcome, _, page) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
+
+        outcome.Should().Be(SkillOutcome.Ok);
+        page!.Total.Should().Be(3);
+        // Only the per-request GUID child is deleted, so the scratch ROOT persists — proving browse
+        // exercised the local scratch path rather than the data directory.
+        Directory.Exists(SkillCatalogService.BrowseScratchRoot).Should().BeTrue();
     }
 
     private static IReadOnlyList<GitHubTreeBlob> SkillBlobs(int count) =>
