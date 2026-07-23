@@ -18,7 +18,15 @@ COPY ["apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj", "apps/Agentweav
 COPY ["packages/", "packages/"]
 COPY Directory.Build.props .
 
-ARG COPILOT_CLI_VERSION=1.0.67
+# Bumped 1.0.67 -> 1.0.71-3 (latest published, 2026-07-15) to pick up whatever
+# Go stdlib / golang.org/x/net patch level GitHub compiled the CLI binary with.
+# The `copilot` binary is a prebuilt, third-party compiled artifact — we cannot
+# patch its embedded Go stdlib/x-net ourselves; bumping to the newest release is
+# the only lever available. If Trivy still reports "Package: stdlib" /
+# "Package: golang.org/x/net" CVEs against this binary after the bump, that is a
+# residual, accepted-risk finding pending an upstream copilot-cli release built
+# against a newer Go toolchain (see apps/Agentweaver.AgentHost/.trivyignore).
+ARG COPILOT_CLI_VERSION=1.0.71-3
 RUN mkdir -p /copilot-bin && \
     curl -fsSL "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" | \
     tar -xz --strip-components=1 -C /copilot-bin && \
@@ -47,7 +55,7 @@ ARG IMAGE_TAG=dev
 ARG GIT_SHA=unknown
 # Pinned tool versions — bumped by Dependabot / weekly maintenance workflow
 ARG NODE_MAJOR=24
-ARG YQ_VERSION=4.44.3
+ARG YQ_VERSION=4.53.3
 
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
@@ -112,7 +120,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── GitHub CLI ────────────────────────────────────────────────────────────────
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+# `apt-get install gh` (no version pin) previously let GHA's Docker layer cache
+# silently keep serving whatever `gh` build got baked into the cache the first
+# time this layer ran — `apt-get update` re-runs but BuildKit reuses the whole
+# RUN's cached *result* verbatim as long as the instruction text is unchanged,
+# so the actually-latest `gh` package was never re-fetched. ARG GH_CLI_CACHE_BUST
+# is interpolated into the RUN command so bumping it (Dependabot / maintenance
+# workflow) forces a fresh apt-get update+install, closing gh's embedded
+# Go stdlib/grpc-go CVEs (e.g. GHSA-hrxh-6v49-42gf) as new gh releases ship.
+ARG GH_CLI_CACHE_BUST=2026-07-23
+RUN echo "cache-bust: ${GH_CLI_CACHE_BUST}" \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list \
@@ -126,8 +144,15 @@ RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}
     && chmod +x /usr/local/bin/yq
 
 # ── Node.js (NodeSource) + npm globals ────────────────────────────────────────
+# npm is self-updated to latest *before* the global tool installs: the Node.js
+# apt package bundles an older npm whose own transitive deps (node-gyp -> tar /
+# undici) carry CVEs with upstream fixes (e.g. CVE-2026-59873/59874 in tar,
+# CVE-2026-12151 in undici). Newer npm pulls in patched node-gyp/tar/undici,
+# closing those out of the Trivy HIGH/CRITICAL gate without touching the scan
+# config itself.
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g npm@latest \
     && npm install -g nodemon typescript ts-node pnpm \
     && rm -rf /var/lib/apt/lists/*
 
