@@ -26,6 +26,14 @@ namespace: agentweaver
 resources:
   - ../../base
 
+# Production security hardening patches (applied on top of the PoC-safe base).
+#   * patch-agenthost-mtls.yaml — enable AgentHost A2A mutual TLS so /configure
+#     credentials are encrypted + the caller is authenticated (security Alert 5).
+#     Requires the a2a-tls / a2a-client-tls secrets to be provisioned first
+#     (gen-a2a-mtls-certs.sh); see that file's header.
+patches:
+  - path: patch-agenthost-mtls.yaml
+
 # Image tag / registry injection — replaces the old envsubst ACR_LOGIN_SERVER /
 # IMAGE_TAG / AGENTHOST_IMAGE_TAG substitution. `name` matches the base
 # manifests' placeholder image exactly; `newName`/`newTag` are rewritten per
