@@ -61,7 +61,193 @@ export async function text(question, opts = {}) {
 }
 
 /**
- * Numbered single-choice prompt.
+ * True when the current process can flip stdin into raw mode, i.e. arrow-key
+ * navigation is actually possible (a real TTY, not a pipe/redirect/CI
+ * pseudo-tty without setRawMode).
+ */
+function rawModeAvailable() {
+  return Boolean(process.stdin.isTTY && typeof process.stdin.setRawMode === "function");
+}
+
+/**
+ * Pure keypress -> next-state reducer for the arrow-key select() UI. Exported
+ * so it is unit-testable without a real TTY/raw-mode stdin.
+ * @param {{index:number, count:number}} state Current highlighted index and
+ *   total choice count (0-based index).
+ * @param {string} key One decoded key: `"\x1b[A"` (up), `"\x1b[B"` (down),
+ *   `"\r"`/`"\n"` (enter), `"\x03"` (Ctrl+C), a single digit char, or
+ *   anything else (ignored).
+ * @returns {{index:number, action:"none"|"accept"|"abort"}}
+ */
+export function reduceSelectKey(state, key) {
+  const { index, count } = state;
+  if (key === "\x1b[A") {
+    return { index: (index - 1 + count) % count, action: "none" };
+  }
+  if (key === "\x1b[B") {
+    return { index: (index + 1) % count, action: "none" };
+  }
+  if (key === "\r" || key === "\n") {
+    return { index, action: "accept" };
+  }
+  if (key === "\x03") {
+    return { index, action: "abort" };
+  }
+  if (count <= 9 && /^[1-9]$/.test(key)) {
+    const digit = Number.parseInt(key, 10);
+    if (digit <= count) {
+      return { index: digit - 1, action: "accept" };
+    }
+  }
+  return { index, action: "none" };
+}
+
+/** Redraws the choice list in place (used by the arrow-key raw-mode path). */
+function renderSelectList(normalized, activeIndex, isFirstRender) {
+  if (!isFirstRender) {
+    process.stdout.write(`\x1b[${normalized.length}A`);
+  }
+  normalized.forEach((c, i) => {
+    process.stdout.write("\x1b[2K");
+    const label = redact(c.label);
+    if (i === activeIndex) {
+      process.stdout.write(`\x1b[7m❯ ${label}\x1b[27m\n`);
+    } else {
+      process.stdout.write(`  ${label}\n`);
+    }
+  });
+}
+
+/** Clears the previously rendered choice list block (leaves cursor at its start). */
+function clearSelectList(count) {
+  process.stdout.write(`\x1b[${count}A`);
+  for (let i = 0; i < count; i++) {
+    process.stdout.write("\x1b[2K\n");
+  }
+  process.stdout.write(`\x1b[${count}A`);
+}
+
+/**
+ * Arrow-key navigable choice prompt (raw-mode stdin). Up/Down move the
+ * highlight (wrapping top/bottom), Enter accepts, a digit 1..N (when
+ * N<=9) jumps straight to that choice, and Ctrl+C aborts the process
+ * cleanly. Always restores stdin state (raw mode off, listener removed,
+ * paused) in a `finally`, even on abort/error, so the parent shell never
+ * inherits a broken terminal.
+ */
+async function selectArrowKey(question, normalized, opts) {
+  const defaultIndex =
+    Number.isInteger(opts.default) && opts.default >= 0 && opts.default < normalized.length ? opts.default : 0;
+  let state = { index: defaultIndex, count: normalized.length };
+
+  process.stdout.write(`${question}\n`);
+  renderSelectList(normalized, state.index, true);
+
+  let onData;
+  process.stdin.resume();
+  process.stdin.setRawMode(true);
+  try {
+    const outcome = await new Promise((resolve) => {
+      let pending = "";
+      const handleKey = (key) => {
+        const next = reduceSelectKey(state, key);
+        state = { index: next.index, count: state.count };
+        if (next.action === "abort") {
+          resolve({ aborted: true });
+          return;
+        }
+        if (next.action === "accept") {
+          resolve({ index: state.index });
+          return;
+        }
+        renderSelectList(normalized, state.index, false);
+      };
+      onData = (chunk) => {
+        pending += chunk.toString("utf8");
+        while (pending.length > 0) {
+          if (pending[0] === "\x1b") {
+            // Escape sequences of interest are 3 bytes (\x1b[A / \x1b[B); if
+            // a chunk boundary split it, wait for the rest to arrive.
+            if (pending.length < 3) return;
+            const key = pending.slice(0, 3);
+            pending = pending.slice(3);
+            handleKey(key);
+          } else {
+            const key = pending[0];
+            pending = pending.slice(1);
+            handleKey(key);
+          }
+        }
+      };
+      process.stdin.on("data", onData);
+    });
+
+    if (outcome.aborted) {
+      process.stdout.write("\n");
+      process.exitCode = 130;
+      process.exit(130);
+      return undefined; // unreachable, keeps linters happy
+    }
+
+    clearSelectList(normalized.length);
+    process.stdout.write(`${question}: ${redact(normalized[outcome.index].label)}\n`);
+    return normalized[outcome.index].value;
+  } finally {
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
+    if (onData) process.stdin.removeListener("data", onData);
+  }
+}
+
+/**
+ * Pure parser for the numbered-fallback prompt's typed answer. Exported so
+ * the "numbered fallback still parses input as before" behavior is
+ * unit-testable without a real TTY.
+ * @param {string} answer Trimmed raw text typed by the user.
+ * @param {number} count Number of choices (1-based valid range is 1..count).
+ * @param {number|undefined} defaultIndex 0-based default index, if any.
+ * @returns {number|null} 0-based index, or null when the answer is invalid.
+ */
+export function parseNumberedSelection(answer, count, defaultIndex) {
+  if (answer.length === 0 && defaultIndex !== undefined) {
+    return defaultIndex;
+  }
+  const index = Number.parseInt(answer, 10);
+  if (Number.isInteger(index) && index >= 1 && index <= count) {
+    return index - 1;
+  }
+  return null;
+}
+
+/** The original numbered-input select() body, used as a fallback when raw mode is unavailable. */
+async function selectNumbered(question, normalized, opts) {
+  const rl = openInterface();
+  try {
+    process.stdout.write(`${question}\n`);
+    normalized.forEach((c, i) => {
+      process.stdout.write(`  ${i + 1}) ${redact(c.label)}\n`);
+    });
+    const defaultIndex = opts.default;
+    const suffix = defaultIndex !== undefined ? ` [${defaultIndex + 1}]` : "";
+    for (;;) {
+      const answer = (await rl.question(`Select 1-${normalized.length}${suffix}: `)).trim();
+      const chosen = parseNumberedSelection(answer, normalized.length, defaultIndex);
+      if (chosen !== null) {
+        return normalized[chosen].value;
+      }
+      process.stdout.write(`Please enter a number between 1 and ${normalized.length}.\n`);
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Single-choice prompt. Uses arrow-key navigation (Up/Down + Enter, plus a
+ * 1..N digit shortcut when there are 9 or fewer choices, Ctrl+C to abort)
+ * when raw-mode stdin is available; falls back to the classic numbered
+ * "type a digit" prompt otherwise (no TTY raw-mode support, e.g. some CI
+ * pseudo-ttys or piped input that still reports isInteractive() === true).
  * @param {string} question
  * @param {Array<string|{label:string,value:any}>} choices
  * @param {{ default?: number }} [opts] default is a 0-based index.
@@ -75,28 +261,10 @@ export async function select(question, choices, opts = {}) {
   const normalized = choices.map((c) =>
     typeof c === "string" ? { label: c, value: c } : c,
   );
-  const rl = openInterface();
-  try {
-    process.stdout.write(`${question}\n`);
-    normalized.forEach((c, i) => {
-      process.stdout.write(`  ${i + 1}) ${redact(c.label)}\n`);
-    });
-    const defaultIndex = opts.default;
-    const suffix = defaultIndex !== undefined ? ` [${defaultIndex + 1}]` : "";
-    for (;;) {
-      const answer = (await rl.question(`Select 1-${normalized.length}${suffix}: `)).trim();
-      if (answer.length === 0 && defaultIndex !== undefined) {
-        return normalized[defaultIndex].value;
-      }
-      const index = Number.parseInt(answer, 10);
-      if (Number.isInteger(index) && index >= 1 && index <= normalized.length) {
-        return normalized[index - 1].value;
-      }
-      process.stdout.write(`Please enter a number between 1 and ${normalized.length}.\n`);
-    }
-  } finally {
-    rl.close();
+  if (rawModeAvailable()) {
+    return selectArrowKey(question, normalized, opts);
   }
+  return selectNumbered(question, normalized, opts);
 }
 
 /**

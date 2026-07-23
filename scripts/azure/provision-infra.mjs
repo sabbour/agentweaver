@@ -174,6 +174,10 @@ Flags:
   --github-client-secret <secret>   NEVER echoed/logged; prefer env/params-file/prompt instead.
   -h, --help                  Show this help.
 
+Need a GitHub OAuth App? Create one at https://github.com/settings/applications/new -- the
+interactive installer walks you through this (name, homepage, callback URL) before prompting
+for the client ID/secret.
+
 Config precedence: flags > env > params-file > detected defaults > prompt.
 Non-interactive (no TTY) never prompts -- missing required fields fail with a clear error.
 `;
@@ -256,6 +260,20 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   collected.KEYVAULT_NAME = await prompt.text("Key Vault name", { default: DEFAULTS.KEYVAULT_NAME });
 
   // --- GitHub OAuth credentials ---------------------------------------------
+  log.info("");
+  log.section("Create a GitHub OAuth App");
+  log.info("Before entering your GitHub OAuth client ID and secret, create (or reuse) a GitHub OAuth App:");
+  log.info("  1. Open https://github.com/settings/applications/new");
+  log.info("  2. Application name: e.g. 'Agentweaver' (or 'Agentweaver (staging)')");
+  log.info("  3. Homepage URL: your deployment's base URL (the final Gateway host is only assigned during this deploy)");
+  log.info("  4. Authorization callback URL:");
+  log.info("       - Local dev: http://localhost:5000/auth/github/callback");
+  log.info("       - Azure: https://<gateway-host>/auth/github/callback -- the exact <gateway-host> is printed as");
+  log.info("         'GitHub OAuth callback URL' in the OUTPUTS SUMMARY once this deploy finishes; come back and");
+  log.info("         update the OAuth App's callback URL to that value after deploy.");
+  log.info("  5. After creating the app: copy the Client ID, then click 'Generate a new client secret' and copy it");
+  log.info("     immediately -- GitHub only shows the secret once.");
+  log.info("");
   collected.GITHUB_CLIENT_ID = await prompt.text("GitHub OAuth client ID");
   const clientSecret = await prompt.secret("GitHub OAuth client secret");
   registerSecret(clientSecret, "GITHUB_CLIENT_SECRET"); // redact immediately, before it is stored anywhere
@@ -416,6 +434,11 @@ export async function run(opts = {}) {
     "GitHub OAuth callback URL",
     deployResult?.HOST ? `https://${deployResult.HOST}/auth/github/callback` : "<unknown -- see Gateway host above>",
   );
+  if (deployResult?.HOST) {
+    log.info(
+      `  -> Update the GitHub OAuth App's Authorization callback URL to the value above at https://github.com/settings/developers`,
+    );
+  }
   log.field("Verification", `${verifyResult.pass}/${verifyResult.pass + verifyResult.fail} checks passed`);
   // NEVER print GITHUB_CLIENT_SECRET or any credential value here.
 
