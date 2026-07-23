@@ -168,6 +168,79 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
+    // 7. GitHubOrgList.Parse: comma + semicolon + whitespace + case-insensitive dedupe,
+    //    order preserved; empty/whitespace => empty list (fail-closed).
+    // ---------------------------------------------------------------------
+    [Fact]
+    public void GitHubOrgList_Parse_SplitsTrimsDedupesPreservingOrder()
+    {
+        GitHubOrgList.Parse("microsoft, contoso ; microsoft ;Contoso, azure ")
+            .Should().Equal("microsoft", "contoso", "azure");
+
+        GitHubOrgList.Parse("microsoft").Should().Equal("microsoft");
+        GitHubOrgList.Parse("").Should().BeEmpty();
+        GitHubOrgList.Parse("   ").Should().BeEmpty();
+        GitHubOrgList.Parse(null).Should().BeEmpty();
+        GitHubOrgList.Parse(" , ; ,").Should().BeEmpty();
+    }
+
+    // ---------------------------------------------------------------------
+    // 8. Member of the SECOND allowed org only (private 204 for contoso) => Allowed.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Allows_WhenMemberOfSecondOrgOnly()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            req.RequestUri!.AbsolutePath == "/orgs/contoso/members/octocat"
+                ? HttpStatusCode.NoContent
+                : HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed);
+        // The first org (microsoft) is checked and definitively not-a-member before contoso confirms.
+        handler.RequestUris.Should().Contain(uri => uri.AbsolutePath == "/orgs/microsoft/members/octocat");
+        handler.RequestUris.Should().Contain(uri => uri.AbsolutePath == "/orgs/contoso/members/octocat");
+    }
+
+    // ---------------------------------------------------------------------
+    // 9. Member of NEITHER org, all checks definitive (404 everywhere) => Denied.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Denies_WhenMemberOfNeitherOrg_AllDefinitive()
+    {
+        var handler = new RoutingHttpMessageHandler(_ => HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Denied);
+    }
+
+    // ---------------------------------------------------------------------
+    // 10. Member of neither, but ONE org's primary authenticated check is inconclusive
+    //     (401 on the private endpoint + public 404) => Inconclusive, not a hard Denied.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Inconclusive_WhenOnePrimaryCheckIsInconclusive()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            // microsoft: definitive not-a-member. contoso: private 401 (token expired) → inconclusive,
+            // public 404 → cannot confirm. No org confirms, but one primary check was inconclusive.
+            if (req.RequestUri!.AbsolutePath == "/orgs/contoso/members/octocat")
+                return HttpStatusCode.Unauthorized;
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Inconclusive);
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
@@ -181,11 +254,12 @@ public sealed class GitHubOrgAuthorizationServiceTests
         req.RequestUri!.AbsolutePath.Contains("/teams/", StringComparison.Ordinal) &&
         req.RequestUri!.AbsolutePath.Contains("/memberships/", StringComparison.Ordinal);
 
-    private static GitHubOrgAuthorizationService BuildService(HttpMessageHandler handler, string? allowedTeam = null)
+    private static GitHubOrgAuthorizationService BuildService(
+        HttpMessageHandler handler, string? allowedTeam = null, string allowedOrg = "microsoft")
     {
         var settings = new Dictionary<string, string?>
         {
-            ["Auth:GitHub:AllowedOrg"] = "microsoft",
+            ["Auth:GitHub:AllowedOrg"] = allowedOrg,
         };
         if (allowedTeam is not null)
             settings["Auth:GitHub:AllowedTeam"] = allowedTeam;
