@@ -41,6 +41,7 @@ export const DEFAULTS = Object.freeze({
   NAMESPACE: "agentweaver",
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
+  GITHUB_ALLOWED_ORG: "microsoft",
 });
 
 /** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
@@ -134,6 +135,8 @@ export async function resolveVariables(options = {}) {
   const AGENTHOST_KEYVAULT_URI =
     env.AGENTHOST_KEYVAULT_URI || `https://${KEYVAULT_NAME}.vault.azure.net/`;
 
+  const GITHUB_ALLOWED_ORG = env.GITHUB_ALLOWED_ORG || DEFAULTS.GITHUB_ALLOWED_ORG;
+
   let TENANT_ID = env.TENANT_ID || "";
   if (!TENANT_ID && resolveLive) {
     TENANT_ID = await az.getTenantId();
@@ -174,6 +177,7 @@ export async function resolveVariables(options = {}) {
     ACR_LOGIN_SERVER,
     KEYVAULT_NAME,
     AGENTHOST_KEYVAULT_URI,
+    GITHUB_ALLOWED_ORG,
     TENANT_ID,
     IDENTITY_CLIENT_ID,
     APPINSIGHTS_WORKSPACE_ID,
