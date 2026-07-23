@@ -2,7 +2,7 @@ namespace Agentweaver.Mcp;
 
 using Agentweaver.Mcp.Tools;
 
-internal sealed class McpProgram
+public sealed class McpProgram
 {
     public static async Task<int> Main(string[] args)
     {
@@ -53,6 +53,20 @@ internal sealed class McpProgram
         {
             if (string.IsNullOrWhiteSpace(userToken) && !string.IsNullOrWhiteSpace(apiKey))
             {
+                var allowSharedKey = builder.Configuration["Agentweaver:AllowSharedKey"]
+                    ?? Environment.GetEnvironmentVariable("AGENTWEAVER_ALLOW_SHARED_KEY");
+
+                if (!string.Equals(allowSharedKey, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine(
+                        "[agentweaver-mcp] ERROR: Refusing to start stdio mode with the shared " +
+                        "AGENTWEAVER_API_KEY. This bypasses project-ownership checks and exposes " +
+                        "all projects. Set AGENTWEAVER_TOKEN to your per-user token (e.g. `gh auth token`). " +
+                        "To force the insecure fallback for a service account, set " +
+                        "AGENTWEAVER_ALLOW_SHARED_KEY=true. See docs/guide/mcp-cli.md.");
+                    return 1;
+                }
+
                 // The client is about to authenticate every backend call with the shared internal
                 // service credential, which the API treats as `agentweaver-internal` and EXEMPTS from
                 // project-ownership checks (#474). That grants this stdio client access to EVERY

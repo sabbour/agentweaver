@@ -25,7 +25,7 @@ enforces project ownership, so you only ever reach your own projects.
 trusted `agentweaver-internal` identity, which is **exempt from project-ownership checks** — a
 client holding it can read or mutate *any* project regardless of who owns it (see issue #474).
 Never configure it on a desktop/stdio MCP client. It exists only for in-process/service callers.
-If a stdio client starts with only `AGENTWEAVER_API_KEY` set, the server logs a prominent warning.
+If a stdio client starts with only `AGENTWEAVER_API_KEY` set, the server refuses to start to protect against silent credential leaks. Legitimate service-to-service usage must explicitly set `AGENTWEAVER_ALLOW_SHARED_KEY=true` to force the insecure fallback.
 :::
 
 Optionally override the API base URL (defaults to `http://localhost:5000`):

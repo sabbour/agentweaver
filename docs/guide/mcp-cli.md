@@ -46,7 +46,8 @@ attributes calls to you and enforces project ownership:
 `agentweaver-internal` identity, which is **exempt from project-ownership checks**, so a stdio
 client holding it could read or mutate *any* project regardless of ownership (issue #474). Use your
 personal `AGENTWEAVER_TOKEN` instead. If a stdio server starts with only `AGENTWEAVER_API_KEY` set,
-it logs a prominent warning on stderr.
+it refuses to start and logs an error to stderr. To force the insecure fallback for legitimate
+service-to-service use cases, you must explicitly set `AGENTWEAVER_ALLOW_SHARED_KEY=true`.
 :::
 
 ### Claude Desktop

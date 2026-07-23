@@ -22,7 +22,7 @@ Agentweaver keeps the MCP server intentionally thin:
 3. Forward the caller's bearer token to the backend API.
 4. Let the API enforce durable authorization, revocation, and data access.
 
-That design avoids a confused-deputy problem. If MCP used only a shared service key when calling the API, every tool call would appear to come from the MCP service. Instead, MCP forwards the user's own token whenever it has one, so the API sees the real caller and can apply user-specific policy. In stdio mode — where there is no inbound HTTP request — the operator supplies that per-user token via `AGENTWEAVER_TOKEN`. The shared `AGENTWEAVER_API_KEY` maps to the trusted `agentweaver-internal` identity that bypasses project-ownership checks, so it is reserved for in-process/service callers and must never be configured on a human/stdio client (issue #474).
+That design avoids a confused-deputy problem. If MCP used only a shared service key when calling the API, every tool call would appear to come from the MCP service. Instead, MCP forwards the user's own token whenever it has one, so the API sees the real caller and can apply user-specific policy. In stdio mode — where there is no inbound HTTP request — the operator supplies that per-user token via `AGENTWEAVER_TOKEN`. The shared `AGENTWEAVER_API_KEY` maps to the trusted `agentweaver-internal` identity that bypasses project-ownership checks, so it is reserved for in-process/service callers and must never be configured on a human/stdio client (issue #474). If it is the only credential provided in stdio mode, the server will hard-fail to prevent silent exposure, unless bypassed with `AGENTWEAVER_ALLOW_SHARED_KEY`.
 
 Key invariants to preserve when rebuilding:
 
