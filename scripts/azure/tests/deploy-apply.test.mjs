@@ -133,9 +133,10 @@ test("run(): applies manifests in the exact order groups (CRD present)", async (
   const expectedOrder = [
     "namespace.yaml",
     "serviceaccount-api.yaml",
+    "serviceaccount-worker.yaml",
     "serviceaccount-agenthost.yaml",
     "secret-provider-class.yaml",
-    ...IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(3),
+    ...IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(4),
     ...NETWORK_POLICY_MANIFESTS,
     ...SERVICES_GATEWAY_ROUTE_MANIFESTS.map((f) => f.replace(/^_/, "")),
     ...SANDBOX_MANIFESTS,

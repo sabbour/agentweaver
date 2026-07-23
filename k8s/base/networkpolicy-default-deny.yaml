@@ -8,12 +8,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: agentweaver
 spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/part-of: agentweaver
-    matchExpressions:
-      - key: gateway.networking.k8s.io/gateway-name
-        operator: DoesNotExist
+  podSelector: {}
   policyTypes:
     - Ingress
 ---

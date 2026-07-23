@@ -28,10 +28,8 @@ spec:
       annotations:
         secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
     spec:
-      # TODO(spec-018 §2.2): Split to a dedicated 'agentweaver-worker' ServiceAccount
-      # with its own federated credential and least-priv RBAC (sandbox Role only).
-      # Using agentweaver-api SA for now — it already has sandbox RBAC + workload identity.
-      serviceAccountName: agentweaver-api
+      # The worker only receives the sandbox lifecycle/exec permissions it needs.
+      serviceAccountName: agentweaver-worker
       # Allow enough time for in-flight runs to checkpoint + release leases before pod exit.
       # Must exceed the lease TTL (coordinate with Tank's lease schema).
       terminationGracePeriodSeconds: 120
