@@ -155,17 +155,20 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         // The deny-by-default OnPermissionRequest handler is the authoritative sandbox
         // gate: it fires for every native tool call (read/write/shell/mcp), maps it to a
         // governed tool name + path, and rejects anything outside the working directory or
-        // any non-file tool. We intentionally do NOT set AvailableTools: the SDK's native
-        // file tool is named "view" (not "read_file"), so an allowlist of logical names
-        // would offer the model no usable tools at all — leaving file operations broken and
-        // the permission gate never exercised.
+        // any non-file tool. Native SHELL is rejected outright (see BuildPermissionHandler):
+        // the SDK executes native shell in-process, bypassing ISandboxExecutor, so all shell
+        // is instead routed through the sandboxed run_command custom tool. We intentionally do
+        // NOT set AvailableTools for the remaining native tools: the SDK's native file tool is
+        // named "view" (not "read_file"), so an allowlist of logical names would offer the model
+        // no usable tools at all — leaving file operations broken and the permission gate never
+        // exercised.
         //
         // EnableConfigDiscovery is forced off so the session is hermetic: the SDK will not
         // auto-load MCP servers, skills, custom agents, or instruction files from disk. That
         // closes the one surface that could introduce tools which execute without passing
         // through OnPermissionRequest (an attacker who can write into or near the working
-        // directory cannot register a config-driven server/skill). Native file/shell tools
-        // remain governed by the handler above.
+        // directory cannot register a config-driven server/skill). Native file tools remain
+        // governed by the handler above; native shell is denied and replaced by run_command.
         //
         // The per-tool run events on this provider come from two correlated sources, both
         // keyed by the SDK's ToolCallId so each tool.call is emitted exactly once:
@@ -284,7 +287,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         // Emit configuration snapshot for debuggability.
         Emit("agent.system_prompt", new { provider = "copilot", prompt = AgentBasePrompt.Base, memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext), skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(systemPromptContext) });
         Emit("agent.task", new { task });
-        Emit("agent.tools", new { provider = "copilot", tools = new[] { "bash (native)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
+        Emit("agent.tools", new { provider = "copilot", tools = new[] { "run_command (sandboxed)", "read_file (native)", "write_file (native)", "create_file (native)", "str_replace_editor (native)", "grep (native)", "glob (native)", "report_intent (custom)", "report_outcome (custom)" } });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -336,10 +339,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             // Deterministic session ID enables history replay via ResumeSessionAsync.
             // Format: "agentweaver-run-{runId}" — unique per run, stable across restarts.
             SessionId = $"agentweaver-run-{runId}",
-            // Register only report_intent so the SDK knows about it as a custom tool
-            // and routes it through OnPermissionRequest. The full SandboxToolRegistry
-            // is NOT registered wholesale — that would conflict with native tools and
-            // bypass governance for sandbox operations.
+            // Register report_intent/report_outcome (and ask_question when a gate is wired) plus the
+            // sandboxed run_command tool so the SDK routes them through OnPermissionRequest. The full
+            // SandboxToolRegistry is NOT registered wholesale — that would conflict with native tools
+            // and bypass governance. Native shell is denied in the permission handler; run_command is
+            // the only shell path (ISandboxExecutor-backed).
             Tools = BuildSessionConfigTools(toolContext).Cast<AIFunctionDeclaration>().ToList(),
             // Append workflow instructions as a system message so the model receives them
             // before any user turn. SystemMessageMode.Append preserves Copilot's built-in
@@ -520,6 +524,25 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     {
         return (request, invocation) =>
         {
+            // SECURITY (native shell bypass): the Copilot SDK's native shell tool executes commands
+            // in-process and NEVER routes through ISandboxExecutor/bubblewrap — the permission gate
+            // below validates only the working directory, not the command text or the per-command
+            // filesystem confinement. Reject every native shell request so all shell execution is
+            // forced through the sandboxed run_command custom tool registered in
+            // BuildSessionConfigTools (backed by ISandboxExecutor + ShellCommandValidator).
+            if (request is PermissionRequestShell)
+            {
+                var shellCallId = GetToolCallId(request) ?? Guid.NewGuid().ToString("n");
+                var (_, shellArgs) = MapToToolCall(request);
+                shellArgs["directory"] = workingDirectory;
+                const string shellDenyReason =
+                    "Native Copilot shell is disabled; use the sandboxed run_command tool (routed through the sandbox executor).";
+                emitToolCallOnce(shellCallId, "run_command", shellArgs);
+                emitToolErrorOnce(shellCallId, shellDenyReason);
+                emit(EventTypes.RunDegraded, new { toolName = "run_command", reason = shellDenyReason });
+                return Task.FromResult<PermissionDecision>(PermissionDecision.Reject(shellDenyReason));
+            }
+
             // URL fetch (web_fetch) — surface a HITL approval gate rather than silently denying.
             // The handler blocks on the gate (RunContinuationsAsynchronously, no SyncContext on
             // SDK callback thread — safe to .GetAwaiter().GetResult()); the frontend renders a
@@ -886,9 +909,10 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     /// <summary>
     /// Builds the tool list for <see cref="SessionConfig.Tools"/>:
     /// <c>report_intent</c>, <c>report_outcome</c>, and (when a question gate is wired)
-    /// <c>ask_question</c>, wrapped as native overrides so the SDK accepts them. Registering
-    /// only these functions (not the full <see cref="SandboxToolRegistry.Build"/> list) prevents
-    /// conflicts with native tools and keeps governance tight.
+    /// <c>ask_question</c>, wrapped as native overrides so the SDK accepts them, plus the sandboxed
+    /// <c>run_command</c> tool when the registry exposes it. Registering only these functions (not
+    /// the full <see cref="SandboxToolRegistry.Build"/> list) prevents conflicts with native tools
+    /// and keeps governance tight.
     /// </summary>
     internal static IList<AIFunction> BuildSessionConfigTools(SandboxToolContext context)
     {
@@ -904,6 +928,15 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             var askFn = all.First(f => string.Equals(f.Name, "ask_question", StringComparison.Ordinal));
             tools.Add(new CopilotOverrideAIFunction(askFn));
         }
+
+        // SECURITY (native shell bypass): native shell is denied in BuildPermissionHandler, so expose
+        // shell ONLY through the sandboxed run_command tool (ISandboxExecutor-backed). It is present
+        // in the registry solely when the executor provides real isolation (or direct mode) AND policy
+        // shell is enabled; when absent, the run has no shell path at all (correct fail-closed). It has
+        // no native built-in counterpart, so it is NOT wrapped as a native override.
+        var runCommandFn = all.FirstOrDefault(f => string.Equals(f.Name, "run_command", StringComparison.Ordinal));
+        if (runCommandFn is not null)
+            tools.Add(runCommandFn);
 
         return tools;
     }
