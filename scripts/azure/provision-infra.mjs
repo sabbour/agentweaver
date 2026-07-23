@@ -36,8 +36,10 @@
 // first), resource group (existing list, or "Create new..."), location
 // (region list, smart default from variables.mjs's DEFAULTS.LOCATION),
 // cluster/ACR/Key Vault names (prefilled with variables.mjs defaults,
-// editable), and GitHub OAuth client id + secret (secret prompt, no echo).
-// The collected answers are injected as the HIGHEST-precedence config
+// editable), GitHub OAuth client id + secret (secret prompt, no echo,
+// preceded by step-by-step GitHub OAuth App creation guidance), and the
+// GitHub org(s) allowed to sign in (GITHUB_ALLOWED_ORG, comma-separated,
+// validated/reprompted on invalid input). The collected answers are injected as the HIGHEST-precedence config
 // source (same bucket as CLI flags) before lib/config.mjs's resolveConfig()
 // runs, so resolveConfig's own generic per-field prompt fallback never
 // re-prompts for anything the guided flow already collected.
@@ -141,6 +143,10 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--github-client-secret");
       flags.GITHUB_CLIENT_SECRET = value;
       i += consumed;
+    } else if (arg === "--github-allowed-org" || arg.startsWith("--github-allowed-org=")) {
+      const { value, consumed } = takeValue(i, "--github-allowed-org");
+      flags.GITHUB_ALLOWED_ORG = value;
+      i += consumed;
     } else {
       throw new Error(`Unknown argument: ${arg}. Run 'provision-infra --help' for usage.`);
     }
@@ -172,6 +178,7 @@ Flags:
   --namespace <name>
   --github-client-id <id>
   --github-client-secret <secret>   NEVER echoed/logged; prefer env/params-file/prompt instead.
+  --github-allowed-org <orgs>  Comma-separated GitHub org login(s) allowed to sign in (default: microsoft).
   -h, --help                  Show this help.
 
 Need a GitHub OAuth App? Create one at https://github.com/settings/applications/new -- the
@@ -181,6 +188,45 @@ for the client ID/secret.
 Config precedence: flags > env > params-file > detected defaults > prompt.
 Non-interactive (no TTY) never prompts -- missing required fields fail with a clear error.
 `;
+
+/**
+ * A plausible GitHub org login: starts with an alphanumeric, up to 39 chars
+ * total, letters/digits/hyphens only. Matches GitHub's own login constraints
+ * closely enough to catch typos without being a full API round-trip.
+ */
+const GITHUB_ORG_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+/**
+ * Validates a comma-separated GitHub org allowlist string. Returns `true`
+ * when every token is a plausible org login, or an actionable error message
+ * string otherwise (used both as prompt.text()'s reprompt validator and as a
+ * config.mjs field validator for the non-interactive path).
+ * @param {string} value
+ * @returns {true|string}
+ */
+export function validateGithubOrgList(value) {
+  const orgs = String(value ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  if (orgs.length === 0) {
+    return "Enter at least one GitHub org login (comma-separated), e.g. 'microsoft' or 'microsoft,azure-management-and-platforms'.";
+  }
+  const invalid = orgs.find((o) => !GITHUB_ORG_LOGIN_RE.test(o));
+  if (invalid) {
+    return `'${invalid}' doesn't look like a valid GitHub org login (letters, numbers, hyphens; max 39 characters).`;
+  }
+  return true;
+}
+
+/** Trims/dedupes-empty and rejoins a comma-separated GitHub org allowlist string. */
+export function normalizeGithubOrgList(value) {
+  return String(value ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0)
+    .join(",");
+}
 
 /** Builds the lib/config.mjs field schema for the AKS deploy config. */
 function buildSchema({ prompt, az }) {
@@ -200,6 +246,19 @@ function buildSchema({ prompt, az }) {
       secret: true,
       prompt: () => prompt.secret("GitHub OAuth client secret"),
     },
+    GITHUB_ALLOWED_ORG: {
+      default: DEFAULTS.GITHUB_ALLOWED_ORG,
+      parse: normalizeGithubOrgList,
+      validate: (value) => {
+        const result = validateGithubOrgList(value);
+        return result === true ? undefined : result;
+      },
+      prompt: () =>
+        prompt.text("GitHub org(s) allowed to sign in (comma-separated)", {
+          default: DEFAULTS.GITHUB_ALLOWED_ORG,
+          validate: validateGithubOrgList,
+        }),
+    },
   };
 }
 
@@ -215,7 +274,10 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   log.section("Agentweaver interactive installer");
 
   // --- Subscription ---------------------------------------------------------
-  const [subscriptions, current] = await Promise.all([az.listSubscriptions(), az.showAccount().catch(() => null)]);
+  const [subscriptions, current] = await Promise.all([
+    az.listSubscriptions().catch(() => []),
+    az.showAccount().catch(() => null),
+  ]);
   if (Array.isArray(subscriptions) && subscriptions.length > 0) {
     const currentId = current?.id;
     const ordered = [...subscriptions].sort((a, b) => (a.id === currentId ? -1 : b.id === currentId ? 1 : 0));
@@ -228,6 +290,13 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
       await az.setActiveSubscription(chosen.id);
     }
     collected.subscriptionId = chosen.id;
+  } else {
+    // az subscription discovery failed or returned none -- degrade to a
+    // manual text prompt (defaulting to the current subscription, if known)
+    // instead of aborting the whole installer.
+    collected.subscriptionId = await prompt.text("Azure subscription ID (leave blank to use the current default)", {
+      default: current?.id ?? "",
+    });
   }
 
   // --- Resource group --------------------------------------------------------
@@ -273,11 +342,20 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   log.info("         update the OAuth App's callback URL to that value after deploy.");
   log.info("  5. After creating the app: copy the Client ID, then click 'Generate a new client secret' and copy it");
   log.info("     immediately -- GitHub only shows the secret once.");
+  log.info("Note: sign-in is further restricted to members of the GitHub org(s) you allowlist next -- org SSO");
+  log.info("authorization may need to be granted on the OAuth App for private membership to be visible.");
   log.info("");
   collected.GITHUB_CLIENT_ID = await prompt.text("GitHub OAuth client ID");
   const clientSecret = await prompt.secret("GitHub OAuth client secret");
   registerSecret(clientSecret, "GITHUB_CLIENT_SECRET"); // redact immediately, before it is stored anywhere
   collected.GITHUB_CLIENT_SECRET = clientSecret;
+
+  // --- GitHub org allowlist ---------------------------------------------------
+  const allowedOrgs = await prompt.text("GitHub org(s) allowed to sign in (comma-separated)", {
+    default: DEFAULTS.GITHUB_ALLOWED_ORG,
+    validate: validateGithubOrgList,
+  });
+  collected.GITHUB_ALLOWED_ORG = normalizeGithubOrgList(allowedOrgs);
 
   return collected;
 }
@@ -351,6 +429,7 @@ export async function run(opts = {}) {
   log.field("Key Vault", config.KEYVAULT_NAME);
   log.field("Namespace", config.NAMESPACE);
   log.field("GitHub OAuth client ID", config.GITHUB_CLIENT_ID);
+  log.field("Allowed GitHub org(s)", config.GITHUB_ALLOWED_ORG);
 
   const envOverride = {
     RESOURCE_GROUP: config.RESOURCE_GROUP,
@@ -359,6 +438,7 @@ export async function run(opts = {}) {
     LOCATION: config.LOCATION,
     KEYVAULT_NAME: config.KEYVAULT_NAME,
     NAMESPACE: config.NAMESPACE,
+    GITHUB_ALLOWED_ORG: config.GITHUB_ALLOWED_ORG,
   };
   if (flags.IMAGE_TAG) envOverride.IMAGE_TAG = flags.IMAGE_TAG;
 
@@ -428,6 +508,7 @@ export async function run(opts = {}) {
   log.field("Namespace", cfg.NAMESPACE);
   log.field("Image tag", cfg.IMAGE_TAG);
   log.field("AgentHost image tag", cfg.AGENTHOST_IMAGE_TAG);
+  log.field("Allowed GitHub org(s)", cfg.GITHUB_ALLOWED_ORG);
   log.field("Gateway host", deployResult?.HOST ?? "<unknown>");
   log.field("Gateway IP", deployResult?.GATEWAY_IP ?? "<unknown>");
   log.field(

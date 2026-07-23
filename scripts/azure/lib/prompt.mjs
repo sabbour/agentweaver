@@ -42,22 +42,56 @@ function openInterface(opts = {}) {
 
 /**
  * Free-text prompt with an optional default value (used when the user
- * presses enter without typing anything).
+ * presses enter without typing anything) and an optional validator. When
+ * `opts.validate` is supplied, invalid answers (including an empty answer
+ * with no default) print the validator's error message and reprompt instead
+ * of ever returning or throwing -- this keeps the installer from crashing or
+ * silently proceeding on bad input.
  * @param {string} question
- * @param {{ default?: string }} [opts]
+ * @param {{ default?: string, validate?: (value: string) => true | string }} [opts]
  */
 export async function text(question, opts = {}) {
   assertInteractive(question);
   const suffix = opts.default !== undefined ? ` [${opts.default}]` : "";
   const rl = openInterface();
   try {
-    const answer = await rl.question(`${question}${suffix}: `);
-    const trimmed = answer.trim();
-    if (trimmed.length === 0 && opts.default !== undefined) return opts.default;
-    return trimmed;
+    for (;;) {
+      const answer = await rl.question(`${question}${suffix}: `);
+      const outcome = resolveTextAnswer(answer, opts);
+      if (outcome.done) {
+        return outcome.value;
+      }
+      process.stdout.write(`${outcome.error}\n`);
+    }
   } finally {
     rl.close();
   }
+}
+
+/**
+ * Pure raw-answer -> outcome reducer for text(), extracted so the
+ * validate/reprompt loop is unit-testable without a real TTY. Given the
+ * raw (untrimmed) answer typed by the user, returns either
+ * `{ done: true, value }` (accept and return `value`) or
+ * `{ done: false, error }` (print `error` and reprompt).
+ * @param {string} rawAnswer
+ * @param {{ default?: string, validate?: (value: string) => true | string }} [opts]
+ * @returns {{done: true, value: string} | {done: false, error: string}}
+ */
+export function resolveTextAnswer(rawAnswer, opts = {}) {
+  const trimmed = String(rawAnswer ?? "").trim();
+  const value = trimmed.length === 0 && opts.default !== undefined ? opts.default : trimmed;
+  if (typeof opts.validate !== "function") {
+    return { done: true, value };
+  }
+  if (value.length === 0) {
+    return { done: false, error: "This value is required." };
+  }
+  const result = opts.validate(value);
+  if (result === true) {
+    return { done: true, value };
+  }
+  return { done: false, error: typeof result === "string" ? result : "Invalid value." };
 }
 
 /**

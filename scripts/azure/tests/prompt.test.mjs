@@ -6,7 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reduceSelectKey, parseNumberedSelection } from "../lib/prompt.mjs";
+import { reduceSelectKey, parseNumberedSelection, resolveTextAnswer } from "../lib/prompt.mjs";
 
 test("reduceSelectKey: Down moves to the next index and wraps past the last", () => {
   const count = 3;
@@ -83,4 +83,35 @@ test("parseNumberedSelection: out-of-range or non-numeric answers are invalid", 
   assert.equal(parseNumberedSelection("0", 3, undefined), null);
   assert.equal(parseNumberedSelection("4", 3, undefined), null);
   assert.equal(parseNumberedSelection("abc", 3, undefined), null);
+});
+
+test("resolveTextAnswer: no validator returns the trimmed answer (or default if blank)", () => {
+  assert.deepEqual(resolveTextAnswer("  hello  "), { done: true, value: "hello" });
+  assert.deepEqual(resolveTextAnswer("", { default: "fallback" }), { done: true, value: "fallback" });
+  assert.deepEqual(resolveTextAnswer(""), { done: true, value: "" });
+});
+
+test("resolveTextAnswer: a validator rejects an invalid answer with its error message, surfaced for reprompting", () => {
+  const validate = (v) => (v === "good" ? true : `'${v}' is not allowed`);
+  const rejected = resolveTextAnswer("bad", { validate });
+  assert.equal(rejected.done, false);
+  assert.equal(rejected.error, "'bad' is not allowed");
+});
+
+test("resolveTextAnswer: invalid then valid input -- reprompt loop eventually accepts the valid value", () => {
+  const validate = (v) => (v === "good" ? true : "try again");
+  const attempts = ["bad", "still-bad", "good"];
+  let outcome;
+  for (const attempt of attempts) {
+    outcome = resolveTextAnswer(attempt, { validate });
+    if (outcome.done) break;
+    assert.equal(outcome.error, "try again");
+  }
+  assert.deepEqual(outcome, { done: true, value: "good" });
+});
+
+test("resolveTextAnswer: an empty answer with no default and a validator is rejected (required)", () => {
+  const outcome = resolveTextAnswer("   ", { validate: () => true });
+  assert.equal(outcome.done, false);
+  assert.match(outcome.error, /required/);
 });
