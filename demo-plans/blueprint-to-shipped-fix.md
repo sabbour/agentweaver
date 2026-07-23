@@ -165,7 +165,7 @@ playwright-cli video-chapter "Frame the product" --description="Pick the product
 playwright-cli click "getByTestId('start-task-topbar-action')"
 playwright-cli select "getByLabel('Workflow', { exact: true })" "pm-discovery"
 playwright-cli click "getByRole('textbox', { name: 'Goal' })"
-playwright-cli type "People come out of standup with a messy transcript and no clear record of what was decided or who owns what. I want to launch Standup Scribe, a tool that turns that raw transcript into a clean summary the whole team can share. Work out who this is really for, what they need, and how we'd position and message it. Then figure out the first experience that gets someone from a pile of text to a summary they trust, and start with the simplest thing we could put in front of a real user to prove it helps."
+playwright-cli type "People come out of standup with a messy transcript and no clear record of what was decided or who owns what. I want to launch Standup Scribe, a tool that turns that raw transcript into a clean summary the whole team can share. Work out who this is really for, what they need, and how we'd position and message it. Then figure out the first experience that gets someone from a pile of text to a summary they trust. As the first thing we can put in front of a real user, stand up a landing page that presents the value props as placeholder content, with real structure and stand-in copy, so we can see the story before we build the product behind it."
 playwright-cli hover "getByRole('button', { name: 'Define Outcome', exact: true })"
 playwright-cli click "getByRole('button', { name: 'Define Outcome', exact: true })"
 playwright-cli snapshot
@@ -205,9 +205,10 @@ playwright-cli click "getByRole('button', { name: 'Confirm plan', exact: true })
 playwright-cli snapshot
 ```
 
-Narration: “Read the OutcomeSpec the team came back with — it proposes a simple landing
-page as the first slice: a welcome banner and one ‘Paste transcript’ button. Use Clarify
-to tighten the scope, let the independent pieces run as their own tasks, and confirm.”
+Narration: “Read the OutcomeSpec the team came back with — its first slice is a value-prop
+landing page: a welcome banner, the value props as placeholders, and one ‘Paste
+transcript’ button. Use Clarify to tighten the scope, let the independent pieces run as
+their own tasks, and confirm.”
 
 Pacing: show the Clarify exchange, then pause before Confirm plan so the human decision is
 legible.
