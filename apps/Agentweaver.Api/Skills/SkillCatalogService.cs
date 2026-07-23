@@ -180,6 +180,7 @@ public sealed class SkillCatalogService
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     private readonly IGitHubSkillTreeClient? _treeClient;
+    private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
     private readonly ILogger<SkillCatalogService> _logger;
 
     public SkillCatalogService(
@@ -191,7 +192,8 @@ public sealed class SkillCatalogService
         IGitHubTokenStore tokenStore,
         ILogger<SkillCatalogService> logger,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
-        IGitHubSkillTreeClient? treeClient = null)
+        IGitHubSkillTreeClient? treeClient = null,
+        IMarketplaceCatalogIndexer? catalogIndexer = null)
     {
         _skills = skills;
         _projects = projects;
@@ -201,6 +203,7 @@ public sealed class SkillCatalogService
         _tokenStore = tokenStore;
         _accessTokenProvider = accessTokenProvider;
         _treeClient = treeClient;
+        _catalogIndexer = catalogIndexer;
         _logger = logger;
     }
 
@@ -511,6 +514,125 @@ public sealed class SkillCatalogService
         {
             TryDeleteDirectory(tempDir);
         }
+    }
+
+    // ── URL-source (auto-detected) marketplaces ────────────────────────────────────
+    // A marketplace source added by just a repo URL has NO configured subpath, so its skill layout is
+    // auto-detected instead of hardcoded. Browse lists the FULL recursive tree once (anonymous, cheap),
+    // then the catalog indexer derives the candidate skills from that tree — the deterministic SKILL.md
+    // heuristic covers both flat (github/awesome-copilot) and nested (microsoft/skills plugin) layouts
+    // with zero blob downloads; a bounded, fail-closed LLM classifier is the fallback only when the tree
+    // has no SKILL.md at all. The parsed catalog is cached per repo revision (tree fingerprint), so the
+    // LLM fires at most once per revision, never per page. Pagination, query-before-paginate, anonymous
+    // reads and page-only description hydration all match the config-source browse path exactly; import
+    // of a selected candidate needs no change (its location is passed as the import subpath).
+    public async Task<(SkillOutcome Outcome, string? Error, MarketplaceBrowsePage? Page)> BrowseMarketplaceAutoAsync(
+        ProjectId projectId, string owner, string repo, string branch,
+        string? query, int page, int pageSize, CallerContext caller, CancellationToken ct)
+    {
+        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null || !caller.Owns(project.Owner))
+            return (SkillOutcome.NotFound, null, null);
+        if (_treeClient is null || _catalogIndexer is null)
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+
+        var normalizedPage = page < 1 ? 1 : page;
+        var normalizedSize = pageSize <= 0 ? DefaultMarketplacePageSize : Math.Min(pageSize, MaxMarketplacePageSize);
+        var normalizedQuery = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(MarketplaceFetchTimeout);
+        try
+        {
+            // Anonymous-first, full recursive tree (subpath ""), no placeholder scratch files: candidates
+            // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
+            var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
+            var index = await _catalogIndexer.GetOrBuildAsync(
+                owner, repo, branch, blobs, submittingUser: project.Owner, parseStrategy: null, cts.Token).ConfigureAwait(false);
+
+            if (index.Entries.Count == 0)
+                return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
+
+            var matched = normalizedQuery is null
+                ? index.Entries
+                : index.Entries
+                    .Where(e => e.Name.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                             || e.Location.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                             || (e.Description is not null && e.Description.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+            var total = matched.Count;
+            var pageEntries = matched.Skip((normalizedPage - 1) * normalizedSize).Take(normalizedSize).ToList();
+
+            // Prefer a description already present in the cached catalog (LLM path); otherwise hydrate the
+            // page's SKILL.md frontmatter — only for entries missing a description, only for this page.
+            var toHydrate = pageEntries
+                .Where(e => string.IsNullOrWhiteSpace(e.Description))
+                .Select(e => new MarketplaceCandidate(e.Location, e.Name))
+                .ToList();
+            var descriptions = await HydratePageDescriptionsAsync(owner, repo, branch, toHydrate, token: null, cts.Token).ConfigureAwait(false);
+
+            var candidates = pageEntries.Select(e => BuildAutoCandidate(e, descriptions)).ToList();
+            var hasMore = (long)normalizedPage * normalizedSize < total;
+            return (SkillOutcome.Ok, null, new MarketplaceBrowsePage(candidates, total, normalizedPage, normalizedSize, hasMore));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Marketplace auto-browse timed out reading {Owner}/{Repo}", owner, repo);
+            return (SkillOutcome.SourceUnavailable, MarketplaceTimeoutMessage, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Marketplace auto-browse failed reading {Owner}/{Repo}", owner, repo);
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+        }
+    }
+
+    /// <summary>
+    /// Builds a browse-page candidate for an auto-detected catalog entry, preferring the catalog's own
+    /// description (LLM path) and otherwise the page-hydrated SKILL.md frontmatter (heuristic path).
+    /// </summary>
+    private SkillCandidateView BuildAutoCandidate(MarketplaceCatalogEntry entry, IReadOnlyDictionary<string, string> descriptions)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.Description))
+        {
+            return new SkillCandidateView
+            {
+                Location = entry.Location,
+                Name = entry.Name,
+                Description = entry.Description,
+                Valid = true,
+                ResourceCount = 0,
+                Errors = Array.Empty<string>(),
+            };
+        }
+
+        if (descriptions.TryGetValue(ManifestPathFor(entry.Location), out var markdown) && !string.IsNullOrWhiteSpace(markdown))
+        {
+            var parsed = _parser.Parse(markdown);
+            if (!string.IsNullOrWhiteSpace(parsed.Name) || !string.IsNullOrWhiteSpace(parsed.Description))
+            {
+                return new SkillCandidateView
+                {
+                    Location = entry.Location,
+                    Name = string.IsNullOrWhiteSpace(parsed.Name) ? entry.Name : parsed.Name,
+                    Description = parsed.Description,
+                    Valid = parsed.IsValid,
+                    ResourceCount = 0,
+                    Errors = parsed.IsValid ? Array.Empty<string>() : parsed.Errors,
+                };
+            }
+        }
+
+        return new SkillCandidateView
+        {
+            Location = entry.Location,
+            Name = entry.Name,
+            Description = null,
+            Valid = true,
+            ResourceCount = 0,
+            Errors = Array.Empty<string>(),
+        };
     }
 
     public async Task<SkillAcquisitionResult> ImportMarketplaceAsync(
