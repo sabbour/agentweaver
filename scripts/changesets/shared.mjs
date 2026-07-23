@@ -41,7 +41,7 @@ export function assertVersionMirrors(repoRoot, options) {
 }
 
 export function extractChangelogSection(content, version) {
-  const heading = new RegExp(`^##\\s+(?:\\[?${version.replace(/\./g, "\\.")}\\]?)(?:\\s|$).*?$`, "m");
+  const heading = new RegExp(`^##\\s+(?:\\[?v?${version.replace(/\./g, "\\.")}\\]?)(?:\\s|$).*?$`, "m");
   const match = heading.exec(content);
   if (!match) {
     throw new Error(`CHANGELOG.md has no section for ${version}`);
