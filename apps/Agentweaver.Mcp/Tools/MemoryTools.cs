@@ -206,7 +206,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
 
     // ── Agent Memory ─────────────────────────────────────────────────────────
 
-    [McpServerTool(Name = "memory_record"), Description("Add a memory entry for an agent.")]
+    [McpServerTool(Name = "memory_record"), Description("Add an agent-authored, untrusted memory entry.")]
     public async Task<string> MemoryAddAsync(
         [Description("Project ID")] string project_id,
         [Description("Agent name")] string agent_name,

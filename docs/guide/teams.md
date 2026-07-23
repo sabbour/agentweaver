@@ -136,6 +136,14 @@ Every agent's context for a run is compiled from four layers, in order of priori
 3. **Learnings and patterns** — the top high-importance entries from prior runs. These accumulate over time.
 4. **Open session** — the current run's working context.
 
+Memory entries carry provenance: `agent-authored`, `human-reviewed`, or `system-generated`.
+The agent-facing `record_memory` / `memory_record` tools always create `agent-authored`
+entries server-side, even if a caller tries to claim a trusted provenance. When future
+prompts include those entries — including high-importance `cross-team` memories — Agentweaver
+JSON-encodes them inside an explicit untrusted-data fence. The tag expands retrieval scope;
+it does not grant instruction authority. Human-reviewed and system-generated entries may be
+rendered as trusted context.
+
 ### Decision types
 
 Agents submit entries to the **Decision Inbox** with a type:

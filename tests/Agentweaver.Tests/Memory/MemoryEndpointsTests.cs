@@ -254,8 +254,12 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
             importance = "high",
             content = "remember this",
             session_id = "sess-1",
+            provenance = "human-reviewed",
         });
         create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var createdMemory = await create.Content.ReadFromJsonAsync<JsonElement>();
+        createdMemory.GetProperty("provenance").GetString().Should().Be(MemoryProvenance.AgentAuthored,
+            "the agent-facing endpoint must not let callers self-assert trusted provenance");
 
         var response = await _client.GetAsync($"/api/projects/{projectId}/agents/smith/memory");
 
@@ -267,6 +271,7 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         memory.GetProperty("importance").GetString().Should().Be("high");
         memory.GetProperty("content").GetString().Should().Be("remember this");
         memory.GetProperty("sessionId").GetString().Should().Be("sess-1");
+        memory.GetProperty("provenance").GetString().Should().Be(MemoryProvenance.AgentAuthored);
     }
 
     [Fact]

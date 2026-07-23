@@ -72,6 +72,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .IsRequired(false);
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.AgentName });
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.Type });
+        model.Entity<AgentMemory>()
+            .Property(m => m.Provenance)
+            .HasDefaultValue(MemoryProvenance.AgentAuthored);
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.EndedAt });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);

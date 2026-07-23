@@ -61,7 +61,7 @@ app.MapGet("/api/projects/{id}/memory", async (
         .OrderByDescending(m => m.CreatedAt)
         .Select(m => new
         {
-            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
+            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags, m.Provenance,
             created_at = m.CreatedAt, updated_at = m.UpdatedAt,
         })
         .ToList();
@@ -95,7 +95,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
         .OrderByDescending(m => m.CreatedAt)
         .Select(m => new
         {
-            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
+            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags, m.Provenance,
             created_at = m.CreatedAt, updated_at = m.UpdatedAt,
         })
         .ToList();
@@ -135,6 +135,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         Content = request.Content!,
         Tags = normalizedTags,
         SessionId = request.SessionId,
+        Provenance = MemoryProvenance.AgentAuthored,
         CreatedAt = now,
         UpdatedAt = now,
     };
@@ -146,6 +147,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
     return Results.Created($"/api/projects/{id}/agents/{name}/memory/{memory.Id}", new
     {
         memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        memory.Provenance,
         created_at = memory.CreatedAt,
     });
 });
@@ -171,6 +173,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}", async (
     return Results.Ok(new
     {
         memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        memory.Provenance,
         created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
     });
 });

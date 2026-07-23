@@ -104,7 +104,7 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 | `memory_get` | Get a single memory entry. |
 | `memory_import` | Import .squad/decisions/inbox/*.md files into the project memory DB. |
 | `memory_list` | List memory entries for a specific agent. |
-| `memory_record` | Add a memory entry for an agent. |
+| `memory_record` | Add an agent-authored, untrusted memory entry. |
 | `memory_search` | Cross-agent memory search across the whole project. |
 | `session_current` | Get the current open session for a project. |
 | `session_start` | Start a new work session for a project. |

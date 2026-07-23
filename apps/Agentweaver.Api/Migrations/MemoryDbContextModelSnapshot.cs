@@ -365,6 +365,12 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Provenance")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("agent-authored");
+
                     b.Property<string>("SessionId")
                         .HasColumnType("TEXT");
 

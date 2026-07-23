@@ -1215,6 +1215,7 @@ public sealed class CastingService
                     Importance = "high",
                     Content = charter,
                     Tags = null,
+                    Provenance = MemoryProvenance.SystemGenerated,
                     CreatedAt = now,
                     UpdatedAt = now,
                 });
