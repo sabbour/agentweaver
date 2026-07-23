@@ -330,6 +330,68 @@ public sealed class CoordinatorGraphDescriptorTests
     }
 
     [Fact]
+    public void Build_WithDelegatedPlan_MarksSkippedAssemblyNodesDelegated()
+    {
+        // When every story is promoted to the Board as an independent backlog task (0 inline
+        // subtasks), the coordinator run finalizes as delegated_to_backlog. The collective-assembly
+        // stages (RAI / Human Review / Merge / Scribe) are intentionally skipped — never run — so
+        // the descriptor marks them with the authoritative "delegated" status. This is the single
+        // source of truth the run tree uses to render them terminal ("Delegated to backlog")
+        // instead of Pending forever.
+        var (subtasks, deps) = SamplePlan();
+
+        var d = CoordinatorGraphDescriptor.Build(
+            "coord_run",
+            subtasks,
+            deps,
+            assemblyStage: null,
+            workPlanStatus: WorkPlanStatus.Delegated);
+
+        // Coordinator carries the delegated work-plan status (terminal by design).
+        d.Nodes.Single(n => n.Id == "coordinator").Status.Should().Be(WorkPlanStatus.Delegated);
+
+        // Every skipped assembly stage is marked delegated but stays "planned" kind (never executed).
+        foreach (var nodeId in new[]
+                 {
+                     CoordinatorGraphDescriptor.AssemblyRaiNodeId,
+                     CoordinatorGraphDescriptor.AssemblyReviewNodeId,
+                     CoordinatorGraphDescriptor.AssemblyMergeNodeId,
+                     CoordinatorGraphDescriptor.AssemblyScribeNodeId,
+                 })
+        {
+            var node = d.Nodes.Single(n => n.Id == nodeId);
+            node.Status.Should().Be(WorkPlanStatus.Delegated, $"{node.Label} is skipped on a delegated run");
+            node.Kind.Should().Be("planned", $"{node.Label} never ran");
+        }
+    }
+
+    [Fact]
+    public void Build_WithNonDelegatedActivePlan_DoesNotMarkAssemblyNodesDelegated()
+    {
+        // Regression guard: the delegated marker must ONLY appear for delegated plans. An ordinary
+        // planned/dispatching run leaves the never-reached assembly nodes' Status null.
+        var (subtasks, deps) = SamplePlan();
+
+        var d = CoordinatorGraphDescriptor.Build(
+            "coord_run",
+            subtasks,
+            deps,
+            assemblyStage: null,
+            workPlanStatus: WorkPlanStatus.Dispatching);
+
+        foreach (var nodeId in new[]
+                 {
+                     CoordinatorGraphDescriptor.AssemblyRaiNodeId,
+                     CoordinatorGraphDescriptor.AssemblyReviewNodeId,
+                     CoordinatorGraphDescriptor.AssemblyMergeNodeId,
+                     CoordinatorGraphDescriptor.AssemblyScribeNodeId,
+                 })
+        {
+            d.Nodes.Single(n => n.Id == nodeId).Status.Should().BeNull();
+        }
+    }
+
+    [Fact]
     public void BuildEmpty_ProducesCoordinatorVariant_WithNoSubtasks_AndPlannedAssemblyStage()
     {
         // Pre-confirmation / pre-decomposition: a coordinator run has no work plan yet. The graph

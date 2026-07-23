@@ -115,3 +115,42 @@ export const COORDINATOR_GRAPH_DESCRIPTOR_LOOPBACKS: GraphDescriptor = {
   ],
 };
 
+/**
+ * Coordinator-variant descriptor for a DELEGATED-to-backlog run: every story was promoted to the
+ * Board as an independent task (0 inline subtasks), so the coordinator run finalized as
+ * `delegated_to_backlog`. The coordinator node carries status `delegated` and the skipped
+ * collective-assembly stages (RAI / Human Review / Merge / Scribe) each carry the authoritative
+ * `status: 'delegated'` marker (server-side single source of truth) so the run tree renders them as
+ * a terminal "Delegated to backlog" state instead of Pending forever.
+ */
+export const COORDINATOR_GRAPH_DESCRIPTOR_DELEGATED: GraphDescriptor = {
+  graph_id: 'coordinator:coord-run-delegated',
+  variant: 'coordinator',
+  start_node_id: 'coordinator',
+  nodes: [
+    { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent', status: 'delegated' },
+    {
+      id: 'plan:subtask-1', label: 'Subtask 1', role: 'subtask', kind: 'live', node_type: 'subtask',
+      child_graph_ref: 'run:child-run-1', child_run_id: 'child-run-1',
+    },
+    {
+      id: 'plan:subtask-2', label: 'Subtask 2', role: 'subtask', kind: 'live', node_type: 'subtask',
+      child_graph_ref: 'run:child-run-2', child_run_id: 'child-run-2',
+    },
+    { id: 'planned:assembly-rai',    label: 'RAI Review',   role: 'rai',    kind: 'planned', node_type: 'gate',   status: 'delegated' },
+    { id: 'planned:assembly-review', label: 'Human Review', role: 'review', kind: 'planned', node_type: 'gate',   status: 'delegated' },
+    { id: 'planned:assembly-merge',  label: 'Merge',        role: 'merge',  kind: 'planned', node_type: 'action', status: 'delegated' },
+    { id: 'planned:assembly-scribe', label: 'Scribe',       role: 'scribe', kind: 'planned', node_type: 'action', status: 'delegated' },
+  ],
+  edges: [
+    { from: 'coordinator',             to: 'plan:subtask-1',          cardinality: 'direct', loopback: false },
+    { from: 'coordinator',             to: 'plan:subtask-2',          cardinality: 'direct', loopback: false },
+    { from: 'plan:subtask-1',          to: 'planned:assembly-rai',    cardinality: 'fanin',  loopback: false },
+    { from: 'plan:subtask-2',          to: 'planned:assembly-rai',    cardinality: 'fanin',  loopback: false },
+    { from: 'planned:assembly-rai',    to: 'planned:assembly-review', cardinality: 'direct', loopback: false },
+    { from: 'planned:assembly-review', to: 'planned:assembly-merge',  cardinality: 'direct', loopback: false },
+    { from: 'planned:assembly-merge',  to: 'planned:assembly-scribe', cardinality: 'direct', loopback: false },
+  ],
+};
+
+
