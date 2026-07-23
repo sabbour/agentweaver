@@ -4,3 +4,7 @@ metadata:
   name: agentweaver
   labels:
     app.kubernetes.io/part-of: agentweaver
+    # Baseline blocks privileged containers, host namespaces, and hostPath volumes.
+    # Restricted cannot be enforced yet because the API and worker pod specs do not
+    # uniformly meet its seccomp requirements.
+    pod-security.kubernetes.io/enforce: baseline

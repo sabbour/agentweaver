@@ -2,12 +2,13 @@
 // (cross-checked against 15-setup-identity.ps1). Read both before changing
 // this file; they must stay in lockstep with this port's behavior.
 //
-// Creates: user-assigned managed identities (one for the API, one dedicated
-// least-privilege identity for AgentHost sandbox pods with NO Key Vault roles --
-// issue #471), Key Vault (RBAC-authorized), GitHub OAuth secrets, Key Vault role
-// assignments (API identity only), OIDC issuer + workload identity on the cluster,
-// and federated credentials for the api and agent-host service accounts (each on
-// its own identity).
+// Creates: user-assigned managed identities (one shared by the API and worker
+// service accounts, one dedicated least-privilege identity for AgentHost sandbox
+// pods with NO Key Vault roles -- issue #471), Key Vault (RBAC-authorized),
+// GitHub OAuth secrets, Key Vault role assignments (API/worker identity only),
+// OIDC issuer + workload identity on the cluster, and federated credentials for
+// the api, worker, and agent-host service accounts (agent-host on its own
+// dedicated identity).
 //
 // SECURITY NOTE (see .squad/decisions.md "Staging AKS recovery" entry): this
 // port intentionally does NOT auto-resolve GitHub OAuth credentials from any
@@ -347,7 +348,36 @@ export async function run(cfg, opts = {}) {
   }
 
   log.info("");
-  log.section("Step 7: Create federated credential for agent-host (dedicated identity)");
+  log.section("Step 7: Create federated credential for worker");
+  const workerFedCredExists = await exec.capture(
+    "az",
+    ["identity", "federated-credential", "show", "--name", "agentweaver-worker-fedcred", "--identity-name", IDENTITY_NAME, "--resource-group", cfg.RESOURCE_GROUP],
+    { allowFailure: true },
+  );
+  if (workerFedCredExists.code !== 0) {
+    await exec.run("az", [
+      "identity",
+      "federated-credential",
+      "create",
+      "--name",
+      "agentweaver-worker-fedcred",
+      "--identity-name",
+      IDENTITY_NAME,
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--issuer",
+      OIDC_ISSUER,
+      "--subject",
+      `system:serviceaccount:${cfg.NAMESPACE}:agentweaver-worker`,
+      "--audience",
+      "api://AzureADTokenExchange",
+    ]);
+  } else {
+    log.ok("Worker federated credential already exists.");
+  }
+
+  log.info("");
+  log.section("Step 8: Create federated credential for agent-host (dedicated identity)");
   // issue #471: the agent-host federated credential lives on the DEDICATED, Key-Vault-less
   // AGENTHOST_IDENTITY_NAME — NOT the API identity — so the sandbox's workload-identity token maps to
   // an identity with no vault access. Migration: if the legacy fedcred still exists on the API
@@ -412,6 +442,7 @@ export async function run(cfg, opts = {}) {
   log.info("");
   log.info("Federated credentials are now configured on two separate identities:");
   log.info(`  agentweaver-api-identity      / agentweaver-api-fedcred      -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-api`);
+  log.info(`  agentweaver-api-identity      / agentweaver-worker-fedcred   -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-worker`);
   log.info(`  agentweaver-agenthost-identity / agentweaver-agenthost-fedcred -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-agent-host`);
   log.info("");
   log.info("The AgentHost identity has NO Key Vault role assignments (issue #471): the run owner's");

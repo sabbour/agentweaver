@@ -1,0 +1,32 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sandbox-exec-only
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods/exec"]
+        operations: ["CONNECT", "CREATE"]
+  matchConditions:
+    - name: "is-agentweaver-sa"
+      expression: "request.userInfo.username in ['system:serviceaccount:agentweaver:agentweaver-api', 'system:serviceaccount:agentweaver:agentweaver-worker']"
+  validations:
+    # VAP for pods/exec evaluates against PodExecOptions which lacks pod labels.
+    # We match on the deterministic sandbox pod name prefix instead.
+    - expression: "request.name.startsWith('agentweaver-agent-host-')"
+      message: "Exec is only allowed for agent host sandbox pods"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sandbox-exec-only-binding
+spec:
+  policyName: sandbox-exec-only
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: agentweaver

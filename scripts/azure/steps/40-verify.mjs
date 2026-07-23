@@ -34,11 +34,8 @@ const HTTP_ROUTES = ["agentweaver-api-route", "agentweaver-frontend-route", "age
 
 const SECRET_PROVIDER_CLASSES = ["agentweaver-secrets", "agentweaver-user-tokens"];
 
-const API_SANDBOX_RESOURCES = [
+const SANDBOX_CREATE_RESOURCES = [
   "sandboxclaims.extensions.agents.x-k8s.io",
-  "sandboxtemplates.extensions.agents.x-k8s.io",
-  "sandboxwarmpools.extensions.agents.x-k8s.io",
-  "secretproviderclasses.secrets-store.csi.x-k8s.io",
   "pods/exec",
 ];
 
@@ -250,15 +247,32 @@ export async function run(cfg, opts = {}) {
 
   const apiServiceAccount = `system:serviceaccount:${NAMESPACE}:agentweaver-api`;
   let canCreateAll = true;
-  for (const resource of API_SANDBOX_RESOURCES) {
+  for (const resource of SANDBOX_CREATE_RESOURCES) {
     const canCreate = await kubectlOk(["auth", "can-i", "create", resource, `--as=${apiServiceAccount}`, "--namespace", NAMESPACE], { exec });
     if (!canCreate) canCreateAll = false;
   }
   record(
     canCreateAll,
     canCreateAll
-      ? "API ServiceAccount can create SandboxClaims, run-scoped templates/pools/SPCs, and pods/exec"
-      : "API ServiceAccount lacks required sandbox or run-scoped SPC permissions",
+      ? "API ServiceAccount can create SandboxClaims and use legacy pods/exec"
+      : "API ServiceAccount lacks required sandbox permissions",
+  );
+
+  const workerRoleOk = await kubectlOk(["get", "role", "agentweaver-worker-sandbox", "--namespace", NAMESPACE], { exec });
+  const workerRoleBindingOk = await kubectlOk(["get", "rolebinding", "agentweaver-worker-sandbox", "--namespace", NAMESPACE], { exec });
+  record(workerRoleOk && workerRoleBindingOk, workerRoleOk && workerRoleBindingOk ? "Worker sandbox Role and RoleBinding exist" : "Worker sandbox Role/RoleBinding missing");
+
+  const workerServiceAccount = `system:serviceaccount:${NAMESPACE}:agentweaver-worker`;
+  let workerCanCreateAll = true;
+  for (const resource of SANDBOX_CREATE_RESOURCES) {
+    const canCreate = await kubectlOk(["auth", "can-i", "create", resource, `--as=${workerServiceAccount}`, "--namespace", NAMESPACE], { exec });
+    if (!canCreate) workerCanCreateAll = false;
+  }
+  record(
+    workerCanCreateAll,
+    workerCanCreateAll
+      ? "Worker ServiceAccount can create SandboxClaims and use legacy pods/exec"
+      : "Worker ServiceAccount lacks required sandbox permissions",
   );
 
   log.info("");
