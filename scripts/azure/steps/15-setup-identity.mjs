@@ -4,8 +4,8 @@
 //
 // Creates: user-assigned managed identity, Key Vault (RBAC-authorized),
 // GitHub OAuth secrets, Key Vault role assignments, OIDC issuer + workload
-// identity on the cluster, and federated credentials for the api and
-// agent-host service accounts.
+// identity on the cluster, and federated credentials for the api, worker,
+// and agent-host service accounts.
 //
 // SECURITY NOTE (see .squad/decisions.md "Staging AKS recovery" entry): this
 // port intentionally does NOT auto-resolve GitHub OAuth credentials from any
@@ -290,7 +290,36 @@ export async function run(cfg, opts = {}) {
   }
 
   log.info("");
-  log.section("Step 7: Create federated credential for agent-host");
+  log.section("Step 7: Create federated credential for worker");
+  const workerFedCredExists = await exec.capture(
+    "az",
+    ["identity", "federated-credential", "show", "--name", "agentweaver-worker-fedcred", "--identity-name", IDENTITY_NAME, "--resource-group", cfg.RESOURCE_GROUP],
+    { allowFailure: true },
+  );
+  if (workerFedCredExists.code !== 0) {
+    await exec.run("az", [
+      "identity",
+      "federated-credential",
+      "create",
+      "--name",
+      "agentweaver-worker-fedcred",
+      "--identity-name",
+      IDENTITY_NAME,
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--issuer",
+      OIDC_ISSUER,
+      "--subject",
+      `system:serviceaccount:${cfg.NAMESPACE}:agentweaver-worker`,
+      "--audience",
+      "api://AzureADTokenExchange",
+    ]);
+  } else {
+    log.ok("Worker federated credential already exists.");
+  }
+
+  log.info("");
+  log.section("Step 8: Create federated credential for agent-host");
   const agentHostFedCredExists = await exec.capture(
     "az",
     ["identity", "federated-credential", "show", "--name", "agentweaver-agenthost-fedcred", "--identity-name", IDENTITY_NAME, "--resource-group", cfg.RESOURCE_GROUP],
@@ -324,8 +353,9 @@ export async function run(cfg, opts = {}) {
   log.field("KEYVAULT_NAME", cfg.KEYVAULT_NAME);
   log.field("TENANT_ID", TENANT_ID);
   log.info("");
-  log.info("Two federated credentials are now configured on agentweaver-api-identity:");
+  log.info("Three federated credentials are now configured on agentweaver-api-identity:");
   log.info(`  agentweaver-api-fedcred      -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-api`);
+  log.info(`  agentweaver-worker-fedcred   -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-worker`);
   log.info(`  agentweaver-agenthost-fedcred -> system:serviceaccount:${cfg.NAMESPACE}:agentweaver-agent-host`);
   log.info("");
   log.info("NOTE: Run scripts/azure/steps/16-provision-oauth-signing-key.mjs before the first");

@@ -19,6 +19,7 @@ namespace: agentweaver
 resources:
   - namespace.yaml
   - serviceaccount-api.yaml
+  - serviceaccount-worker.yaml
   - serviceaccount-agenthost.yaml
   - serviceaccount-mcp.yaml
   - secret-provider-class.yaml

@@ -10,13 +10,21 @@ rules:
       - extensions.agents.x-k8s.io
     resources:
       - sandboxclaims
-      - sandboxtemplates
-      - sandboxwarmpools
     verbs:
       - get
       - list
       - create
       - delete
+  # Templates and warm pools are deployed manifests. The API only reads them for
+  # sandbox diagnostics; it must not be able to alter the pod template.
+  - apiGroups:
+      - extensions.agents.x-k8s.io
+    resources:
+      - sandboxtemplates
+      - sandboxwarmpools
+    verbs:
+      - get
+      - list
   - apiGroups:
       - ""
     resources:
@@ -24,8 +32,9 @@ rules:
     verbs:
       - get
       - list
-      - create
       - patch
+  # Legacy generic sandbox commands still use exec. Pod creation is deliberately
+  # delegated to the SandboxClaim controller, never granted to this identity.
   - apiGroups:
       - ""
     resources:
@@ -42,8 +51,6 @@ rules:
       - list
       - create
       - delete
-      - patch
-      - update
   # Dynamic per-preview HTTPRoute objects — created/deleted by the API sandbox preview manager.
   - apiGroups:
       - gateway.networking.k8s.io
@@ -56,17 +63,6 @@ rules:
       - delete
       - patch
       - update
-  # SecretProviderClass CRDs — the API creates/deletes per-run user-token SPCs mounted
-  # into agent-host pods via CSI.
-  - apiGroups:
-      - secrets-store.csi.x-k8s.io
-    resources:
-      - secretproviderclasses
-    verbs:
-      - get
-      - list
-      - create
-      - delete
   # ResourceQuota — read by DiagnosticsService.CheckAgentPodQuotaDetailedAsync for the
   # Cluster health page (agent_pod_quota check).
   - apiGroups:
@@ -91,3 +87,54 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: agentweaver-api-sandbox
+---
+# Worker sandbox-dispatch permissions. Keep this distinct from the API Role:
+# worker jobs do not manage browser-preview Services/HTTPRoutes or patch pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentweaver-worker-sandbox
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+rules:
+  - apiGroups:
+      - extensions.agents.x-k8s.io
+    resources:
+      - sandboxclaims
+    verbs:
+      - get
+      - list
+      - create
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+  # Required only by the legacy generic command executor. Sandbox pod creation
+  # remains exclusively with the SandboxClaim controller.
+  - apiGroups:
+      - ""
+    resources:
+      - pods/exec
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentweaver-worker-sandbox
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+subjects:
+  - kind: ServiceAccount
+    name: agentweaver-worker
+    namespace: agentweaver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentweaver-worker-sandbox

@@ -164,7 +164,7 @@ test("15-setup-identity: setSecretWithRetry throws immediately on a non-RBAC fai
   await assert.rejects(() => setupIdentity.setSecretWithRetry("agentweaver-kv", "github-client-id", "value", { exec, log, sleep: async () => {} }));
 });
 
-test("15-setup-identity: run() creates federated credentials only when they do not already exist", async () => {
+test("15-setup-identity: run() skips all federated credentials when they already exist", async () => {
   const exec = fakeExec({
     captureImpl: (cmd, args) => {
       if (cmd === "az" && args[0] === "identity" && args[1] === "federated-credential" && args[2] === "show") {

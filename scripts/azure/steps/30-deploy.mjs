@@ -44,6 +44,7 @@ export const DEFAULT_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 // ordering/grouping without needing a live kubectl.
 export const IDENTITY_RBAC_QUOTA_PVC_MANIFESTS = [
   "serviceaccount-api.yaml",
+  "serviceaccount-worker.yaml",
   "serviceaccount-agenthost.yaml",
   // (kubectl wait on serviceaccount/agentweaver-api happens between these two groups -- see run())
   "secret-provider-class.yaml",
@@ -305,6 +306,7 @@ export async function run(cfg, opts = {}) {
     log.info("");
     log.info("Applying identity, secrets, RBAC, quotas, and PVCs...");
     await applyRendered("serviceaccount-api.yaml");
+    await applyRendered("serviceaccount-worker.yaml");
     await applyRendered("serviceaccount-agenthost.yaml");
     await execRun("kubectl", [
       "wait",
@@ -319,7 +321,7 @@ export async function run(cfg, opts = {}) {
       "  [note] secret-provider-class.yaml is static only: agentweaver-user-tokens contains ghtok-installation; " +
         "per-run user-token SPCs are created/deleted by the API at AgentHost launch/release.",
     );
-    for (const fname of IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(3)) {
+    for (const fname of IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(4)) {
       await applyRendered(fname);
     }
 

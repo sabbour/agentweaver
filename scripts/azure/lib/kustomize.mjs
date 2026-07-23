@@ -56,6 +56,7 @@ export const FILE_RESOURCES = Object.freeze({
   "namespace.yaml": [{ kind: "Namespace", name: "agentweaver" }],
   "_agentweaver-runtime-config.yaml": [{ kind: "ConfigMap", name: "agentweaver-runtime-config" }],
   "serviceaccount-api.yaml": [{ kind: "ServiceAccount", name: "agentweaver-api" }],
+  "serviceaccount-worker.yaml": [{ kind: "ServiceAccount", name: "agentweaver-worker" }],
   "serviceaccount-agenthost.yaml": [{ kind: "ServiceAccount", name: "agentweaver-agent-host" }],
   "secret-provider-class.yaml": [
     { kind: "SecretProviderClass", name: "agentweaver-secrets" },
@@ -64,6 +65,8 @@ export const FILE_RESOURCES = Object.freeze({
   "rbac-api.yaml": [
     { kind: "Role", name: "agentweaver-api-sandbox" },
     { kind: "RoleBinding", name: "agentweaver-api-sandbox" },
+    { kind: "Role", name: "agentweaver-worker-sandbox" },
+    { kind: "RoleBinding", name: "agentweaver-worker-sandbox" },
   ],
   "quota.yaml": [
     { kind: "ResourceQuota", name: "agentweaver-quota" },

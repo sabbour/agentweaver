@@ -153,7 +153,7 @@ Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
-The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing warm AgentHost pods to call Key Vault directly with workload identity.
+The API, worker, and AgentHost ServiceAccounts are each federated to the user-assigned `agentweaver-api-identity` through the cluster's OIDC issuer (`agentweaver-api-fedcred`, `agentweaver-worker-fedcred`, and `agentweaver-agenthost-fedcred`). The worker has its own Kubernetes RBAC identity and receives only sandbox lifecycle and legacy exec permissions; it does not inherit the API's preview-management permissions.
 
 One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
 
