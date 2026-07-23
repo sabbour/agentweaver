@@ -449,8 +449,12 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            var token = await ResolveTokenAsync(project.Owner, cts.Token).ConfigureAwait(false);
-            var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token, cts.Token).ConfigureAwait(false);
+            // Curated marketplaces are PUBLIC repos, so browse goes ANONYMOUS on the happy path: no
+            // user token is attached to the tree call or the per-page description fetches. This avoids a
+            // slow token round-trip (and a token→403/hang→anon-retry) on every request; anonymous reads
+            // are fast and 26 requests/page is far under the 60/hr unauthenticated limit. The tree
+            // client still keeps an anonymous fallback as a safety net. (Import keeps its auth behavior.)
+            var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token: null, cts.Token).ConfigureAwait(false);
 
             // Build the FULL candidate list (name + location) from the tree metadata alone — zero blob
             // downloads. Placeholders let DiscoverSkills compute locations byte-identically to import.
@@ -478,7 +482,7 @@ public sealed class SkillCatalogService
             // Fetch SKILL.md frontmatter descriptions ONLY for this page's items (never resource blobs,
             // never off-page candidates). A page is at most MaxMarketplacePageSize small fetches, so the
             // whole page is fully hydrated in a few seconds for any marketplace — no partial rows.
-            var descriptions = await HydratePageDescriptionsAsync(owner, repo, branch, pageItems, token, cts.Token).ConfigureAwait(false);
+            var descriptions = await HydratePageDescriptionsAsync(owner, repo, branch, pageItems, token: null, cts.Token).ConfigureAwait(false);
             var candidates = pageItems.Select(c => BuildPagedCandidate(c, descriptions)).ToList();
 
             var hasMore = (long)normalizedPage * normalizedSize < total;
