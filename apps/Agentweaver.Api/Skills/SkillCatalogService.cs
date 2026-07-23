@@ -585,18 +585,41 @@ public sealed class SkillCatalogService
     private static IReadOnlyList<SkillResource> ReadResources(string skillDir)
     {
         var resources = new List<SkillResource>();
-        foreach (var file in Directory.EnumerateFiles(skillDir, "*", SearchOption.AllDirectories))
+        if (IsReparsePoint(skillDir))
+            return resources;
+
+        var directories = new Stack<string>();
+        directories.Push(skillDir);
+        while (directories.Count > 0)
         {
-            if (string.Equals(Path.GetFileName(file), "SKILL.md", StringComparison.Ordinal)
-                && string.Equals(Path.GetDirectoryName(file), skillDir, StringComparison.Ordinal))
-                continue;
-            if (IsReparsePoint(file))
-                continue;
-            var text = SafeReadText(file);
-            if (text is null)
-                continue; // unreadable/binary — skipped; validation size caps still apply
-            var rel = Path.GetRelativePath(skillDir, file).Replace(Path.DirectorySeparatorChar, '/');
-            resources.Add(new SkillResource { RelativePath = rel, Content = text });
+            var directory = directories.Pop();
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                // Do not descend into directory symlinks/junctions or read file symlinks.
+                if (IsReparsePoint(entry))
+                    continue;
+
+                if (Directory.Exists(entry))
+                {
+                    if (WorkspacePathGuard.TryResolveContainedPath(skillDir, entry, out var safeDirectory))
+                        directories.Push(safeDirectory);
+                    continue;
+                }
+
+                if (!File.Exists(entry) ||
+                    !WorkspacePathGuard.TryResolveContainedPath(skillDir, entry, out var safeFile))
+                    continue;
+
+                if (string.Equals(Path.GetFileName(safeFile), "SKILL.md", StringComparison.Ordinal)
+                    && string.Equals(Path.GetDirectoryName(safeFile), skillDir, StringComparison.Ordinal))
+                    continue;
+
+                var text = SafeReadText(safeFile);
+                if (text is null)
+                    continue; // unreadable/binary — skipped; validation size caps still apply
+                var rel = Path.GetRelativePath(skillDir, safeFile).Replace(Path.DirectorySeparatorChar, '/');
+                resources.Add(new SkillResource { RelativePath = rel, Content = text });
+            }
         }
         return resources;
     }
