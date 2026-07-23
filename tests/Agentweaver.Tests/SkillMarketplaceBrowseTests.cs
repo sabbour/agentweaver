@@ -135,6 +135,93 @@ public sealed class SkillMarketplaceBrowseTests
         error.Should().Be(SkillCatalogService.MarketplaceUnavailableMessage);
     }
 
+    // ── GitHubSkillTreeClient: anonymous fallback for public repos on 401/403 ───────────
+
+    [Fact]
+    public async Task ListSubtreeBlobsAsync_retries_anonymously_when_the_token_is_rejected()
+    {
+        // microsoft/skills is public but lives in a SAML-enforced org: an un-SSO'd OAuth token gets
+        // 403 on the Trees API even though anonymous reads return 200. The client must fall back.
+        var attempts = 0;
+        var client = new GitHubSkillTreeClient(new StubHttpClientFactory(new StubHandler(req =>
+        {
+            attempts++;
+            return req.Headers.Authorization is not null
+                ? new HttpResponseMessage(HttpStatusCode.Forbidden)
+                : Json("""{"tree":[{"path":"skills/pr-review/SKILL.md","type":"blob","size":20}],"truncated":false}""");
+        })));
+
+        var blobs = await client.ListSubtreeBlobsAsync("microsoft", "skills", "main", "skills", token: "un-sso'd-token", CancellationToken.None);
+
+        attempts.Should().Be(2);
+        blobs.Select(b => b.Path).Should().ContainSingle().Which.Should().Be("skills/pr-review/SKILL.md");
+    }
+
+    [Fact]
+    public async Task GetRawTextAsync_retries_anonymously_when_the_token_is_rejected()
+    {
+        var attempts = 0;
+        var client = new GitHubSkillTreeClient(new StubHttpClientFactory(new StubHandler(req =>
+        {
+            attempts++;
+            return req.Headers.Authorization is not null
+                ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("# skill", Encoding.UTF8) };
+        })));
+
+        var text = await client.GetRawTextAsync("microsoft", "skills", "main", "skills/pr-review/SKILL.md", token: "un-sso'd-token", maxBytes: 1024, CancellationToken.None);
+
+        attempts.Should().Be(2);
+        text.Should().Be("# skill");
+    }
+
+    [Fact]
+    public async Task GetRawTextAsync_does_not_retry_when_already_anonymous()
+    {
+        var attempts = 0;
+        var client = new GitHubSkillTreeClient(new StubHttpClientFactory(new StubHandler(_ =>
+        {
+            attempts++;
+            return new HttpResponseMessage(HttpStatusCode.Forbidden);
+        })));
+
+        var text = await client.GetRawTextAsync("acme", "repo", "main", "skills/x/SKILL.md", token: null, maxBytes: 1024, CancellationToken.None);
+
+        attempts.Should().Be(1);
+        text.Should().BeNull();
+    }
+
+    // ── Browse lists candidates from SKILL.md manifests only (no resource downloads) ─────
+
+    [Fact]
+    public async Task BrowseMarketplaceAsync_downloads_only_skill_manifests_not_resources()
+    {
+        // Regression guard for the awesome-copilot browse timeout: browse must NOT pull every resource
+        // blob under the subpath, only the SKILL.md manifests it needs to list candidate skills.
+        var blobs = new List<GitHubTreeBlob>
+        {
+            new("skills/pr-review/SKILL.md", 40),
+            new("skills/pr-review/reference.md", 100),
+            new("skills/pr-review/diagram.bin", 100),
+            new("skills/deploy/SKILL.md", 40),
+            new("skills/deploy/runbook.md", 100),
+        };
+        var tree = new RecordingTreeClient(blobs, path => path.EndsWith("/SKILL.md", StringComparison.Ordinal)
+            ? $"---\nname: {Path.GetFileName(Path.GetDirectoryName(path))}\ndescription: A curated skill.\n---\nDo the thing."
+            : "resource body");
+        var svc = CreateService(tree);
+
+        var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", Caller, CancellationToken.None);
+
+        outcome.Should().Be(SkillOutcome.Ok);
+        error.Should().BeNull();
+        candidates!.Select(c => c.Location).Should().BeEquivalentTo("skills/pr-review", "skills/deploy");
+        candidates.Should().OnlyContain(c => c.Valid);
+        // Only the two manifests were downloaded — never the reference/runbook/binary resources.
+        tree.RawRequests.Should().BeEquivalentTo("skills/pr-review/SKILL.md", "skills/deploy/SKILL.md");
+    }
+
     // ── Fixtures ──────────────────────────────────────────────────────────────────────
 
     private static readonly Project ProjectRef = new()
@@ -187,6 +274,35 @@ public sealed class SkillMarketplaceBrowseTests
         public Task<string?> GetRawTextAsync(
             string owner, string repo, string branch, string path, string? token, long maxBytes, CancellationToken ct) =>
             Task.FromResult<string?>(null);
+    }
+
+    /// <summary>
+    /// Tree client backed by a fixed blob list that records every raw-blob path actually downloaded,
+    /// so tests can assert browse pulls only SKILL.md manifests. Mirrors the real client's subpath
+    /// filtering on the tree listing.
+    /// </summary>
+    private sealed class RecordingTreeClient(IReadOnlyList<GitHubTreeBlob> blobs, Func<string, string?> content) : IGitHubSkillTreeClient
+    {
+        private readonly List<string> _rawRequests = new();
+        public IReadOnlyList<string> RawRequests => _rawRequests;
+
+        public Task<IReadOnlyList<GitHubTreeBlob>> ListSubtreeBlobsAsync(
+            string owner, string repo, string branch, string subpath, string? token, CancellationToken ct)
+        {
+            var normalized = subpath.Trim('/');
+            var prefix = normalized.Length == 0 ? string.Empty : normalized + "/";
+            IReadOnlyList<GitHubTreeBlob> scoped = blobs
+                .Where(b => normalized.Length == 0 || b.Path == normalized || b.Path.StartsWith(prefix, StringComparison.Ordinal))
+                .ToList();
+            return Task.FromResult(scoped);
+        }
+
+        public Task<string?> GetRawTextAsync(
+            string owner, string repo, string branch, string path, string? token, long maxBytes, CancellationToken ct)
+        {
+            lock (_rawRequests) _rawRequests.Add(path);
+            return Task.FromResult(content(path));
+        }
     }
 
     private sealed class SingleProjectStore(Project project) : IProjectStore
