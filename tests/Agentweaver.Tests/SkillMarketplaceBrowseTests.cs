@@ -191,13 +191,14 @@ public sealed class SkillMarketplaceBrowseTests
         text.Should().BeNull();
     }
 
-    // ── Browse lists candidates from SKILL.md manifests only (no resource downloads) ─────
+    // ── Browse lists candidates from tree metadata only (ZERO blob downloads) ───────────
 
     [Fact]
-    public async Task BrowseMarketplaceAsync_downloads_only_skill_manifests_not_resources()
+    public async Task BrowseMarketplaceAsync_lists_candidates_without_downloading_any_blob()
     {
-        // Regression guard for the awesome-copilot browse timeout: browse must NOT pull every resource
-        // blob under the subpath, only the SKILL.md manifests it needs to list candidate skills.
+        // Regression guard for the awesome-copilot browse timeout: browse must build the candidate
+        // list from the Git Trees metadata ALONE and download ZERO blobs — not even the SKILL.md
+        // manifests — so it stays fast no matter how large the marketplace is.
         var blobs = new List<GitHubTreeBlob>
         {
             new("skills/pr-review/SKILL.md", 40),
@@ -206,9 +207,7 @@ public sealed class SkillMarketplaceBrowseTests
             new("skills/deploy/SKILL.md", 40),
             new("skills/deploy/runbook.md", 100),
         };
-        var tree = new RecordingTreeClient(blobs, path => path.EndsWith("/SKILL.md", StringComparison.Ordinal)
-            ? $"---\nname: {Path.GetFileName(Path.GetDirectoryName(path))}\ndescription: A curated skill.\n---\nDo the thing."
-            : "resource body");
+        var tree = new RecordingTreeClient(blobs, _ => throw new InvalidOperationException("browse must not download any blob"));
         var svc = CreateService(tree);
 
         var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
@@ -217,9 +216,11 @@ public sealed class SkillMarketplaceBrowseTests
         outcome.Should().Be(SkillOutcome.Ok);
         error.Should().BeNull();
         candidates!.Select(c => c.Location).Should().BeEquivalentTo("skills/pr-review", "skills/deploy");
+        // Name is derived from the skill directory name (tree metadata), not parsed from SKILL.md.
+        candidates.Should().Contain(c => c.Location == "skills/pr-review" && c.Name == "pr-review");
         candidates.Should().OnlyContain(c => c.Valid);
-        // Only the two manifests were downloaded — never the reference/runbook/binary resources.
-        tree.RawRequests.Should().BeEquivalentTo("skills/pr-review/SKILL.md", "skills/deploy/SKILL.md");
+        // No blob content was fetched at all — only the tree listing.
+        tree.RawRequests.Should().BeEmpty();
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────────────────────

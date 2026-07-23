@@ -137,6 +137,9 @@ public sealed class SkillCatalogService
     private const int MarketplaceFetchConcurrency = 16;
     private const long MaxMarketplaceSubtreeBytes = 32L * 1024 * 1024;
 
+    /// <summary>Hard ceiling on how many candidate skills a single marketplace browse will list.</summary>
+    private const int MaxMarketplaceCandidates = 500;
+
     private readonly ISkillStore _skills;
     private readonly IProjectStore _projects;
     private readonly ProjectGitInitializer _gitInit;
@@ -396,10 +399,12 @@ public sealed class SkillCatalogService
     // cloning, fetch only the blobs under the marketplace's subpath via the GitHub Trees API, bound
     // the whole operation by a hard timeout, and surface a clear error rather than an infinite spin.
     //
-    // Browse only needs to LIST candidate skills (name/description/valid), so it downloads just the
-    // SKILL.md manifests — never the bundled resource blobs. Fetching every resource under a large
-    // marketplace subpath (github/awesome-copilot) is what pushed browse past its timeout; resources
-    // are fetched only at import time, for the skills the user actually selected.
+    // Browse only needs to LIST candidate skills (name + location), so it downloads NOTHING at browse
+    // time: it reads the recursive Git Trees metadata once and materializes the skill layout from the
+    // SKILL.md paths alone (empty placeholder files), then discovers locations exactly as a clone
+    // would. Downloading blob content at browse — even just the SKILL.md manifests — is what pushed a
+    // large marketplace like github/awesome-copilot (~400 skills) past ~30s on staging. Blob content
+    // (SKILL.md + resources) is fetched only at import time, for the skills the user actually selected.
 
     public async Task<(SkillOutcome Outcome, string? Error, IReadOnlyList<SkillCandidateView>? Candidates)> BrowseMarketplaceAsync(
         ProjectId projectId, string owner, string repo, string branch, string subpath, CallerContext caller, CancellationToken ct)
@@ -415,8 +420,8 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, IsSkillManifest, cts.Token).ConfigureAwait(false);
-            var candidates = BuildCandidates(DiscoverSkills(tempDir, subpath));
+            tempDir = await FetchManifestTreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            var candidates = BuildMarketplaceCandidates(DiscoverSkills(tempDir, subpath));
             if (candidates.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
             return (SkillOutcome.Ok, null, candidates);
@@ -452,7 +457,7 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, includeBlob: null, cts.Token).ConfigureAwait(false);
+            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
             var discovered = DiscoverSkills(tempDir, subpath);
             if (discovered.Count == 0)
                 return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
@@ -513,23 +518,85 @@ public sealed class SkillCatalogService
             };
         }).ToList();
 
+    /// <summary>
+    /// Builds browse candidates from discovered skill LOCATIONS alone (tree metadata) — no
+    /// <c>SKILL.md</c> content is parsed at browse time, so the display name is the skill's directory
+    /// name and validity is assumed. Import re-downloads and re-parses each selected skill and rejects
+    /// anything malformed, so optimistic validity here never lets a bad skill through. Keeping browse
+    /// content-free is what makes it fast for large marketplaces.
+    /// </summary>
+    private static IReadOnlyList<SkillCandidateView> BuildMarketplaceCandidates(IReadOnlyList<RawSkill> discovered) =>
+        discovered.Select(raw => new SkillCandidateView
+        {
+            Location = raw.RelativeLocation,
+            Name = MarketplaceCandidateName(raw.RelativeLocation),
+            Description = null,
+            Valid = true,
+            ResourceCount = 0,
+            Errors = Array.Empty<string>(),
+        }).ToList();
+
+    /// <summary>Display name for a marketplace candidate: the skill's directory name from its location.</summary>
+    private static string MarketplaceCandidateName(string location)
+    {
+        var trimmed = location.EndsWith("/SKILL.md", StringComparison.Ordinal)
+            ? location[..^"/SKILL.md".Length]
+            : location;
+        if (trimmed.Length == 0)
+            trimmed = location;
+        var slash = trimmed.LastIndexOf('/');
+        return slash >= 0 ? trimmed[(slash + 1)..] : trimmed;
+    }
+
     /// <summary>True for a repository-root-relative path that is a skill manifest (<c>SKILL.md</c>).</summary>
     private static bool IsSkillManifest(GitHubTreeBlob blob) =>
         blob.Path.Equals("SKILL.md", StringComparison.Ordinal)
         || blob.Path.EndsWith("/SKILL.md", StringComparison.Ordinal);
 
     /// <summary>
+    /// Materializes the skill LAYOUT under <paramref name="subpath"/> from the Git Trees metadata
+    /// ALONE: one recursive tree listing, then an empty placeholder file is written for each
+    /// <c>SKILL.md</c> path (capped at <see cref="MaxMarketplaceCandidates"/>). NO blob content is
+    /// downloaded. <see cref="DiscoverSkills"/> then enumerates the exact same skill
+    /// directories/locations it would find in a full clone — so browse can list candidates in a few
+    /// seconds no matter how large the marketplace is. Blob content is fetched only at import time.
+    /// </summary>
+    private async Task<string> FetchManifestTreeToTempAsync(
+        string owner, string repo, string branch, string subpath, string projectOwner, CancellationToken ct)
+    {
+        var token = await ResolveTokenAsync(projectOwner, ct).ConfigureAwait(false);
+        var blobs = await _treeClient!.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token, ct).ConfigureAwait(false);
+
+        var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        var written = 0;
+        foreach (var blob in blobs)
+        {
+            if (!IsSkillManifest(blob))
+                continue;
+            if (written >= MaxMarketplaceCandidates)
+                break;
+            var safe = SkillPaths.NormalizeRelative(blob.Path);
+            if (safe is null)
+                continue;
+            var full = Path.Combine(dir, safe.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            await File.WriteAllTextAsync(full, string.Empty, ct).ConfigureAwait(false);
+            written++;
+        }
+        return dir;
+    }
+
+    /// <summary>
     /// Downloads the text blobs under <paramref name="subpath"/> into a fresh temp directory,
     /// preserving repo-root-relative paths so <see cref="DiscoverSkills"/> can scan it exactly as if
-    /// the repository had been cloned. When <paramref name="includeBlob"/> is supplied only matching
-    /// blobs are pulled — browse passes <see cref="IsSkillManifest"/> so it fetches just the
-    /// <c>SKILL.md</c> manifests it needs to list candidates, never the (potentially thousands of)
-    /// resource blobs. Oversized and binary blobs are skipped (they never contribute to skill
-    /// discovery). Runs bounded by <paramref name="ct"/> and a total-byte ceiling.
+    /// the repository had been cloned. Used at IMPORT time, where the full skill payload (SKILL.md +
+    /// bundled resources) is needed. Oversized and binary blobs are skipped (they never contribute to
+    /// skill discovery). Runs bounded by <paramref name="ct"/> and a total-byte ceiling.
     /// </summary>
     private async Task<string> FetchSubtreeToTempAsync(
-        string owner, string repo, string branch, string subpath, string projectOwner,
-        Func<GitHubTreeBlob, bool>? includeBlob, CancellationToken ct)
+        string owner, string repo, string branch, string subpath, string projectOwner, CancellationToken ct)
     {
         var token = await ResolveTokenAsync(projectOwner, ct).ConfigureAwait(false);
         var blobs = await _treeClient!.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token, ct).ConfigureAwait(false);
@@ -543,7 +610,6 @@ public sealed class SkillCatalogService
 
         var downloads = blobs
             .Where(b => b.Size <= perFileCap)
-            .Where(b => includeBlob is null || includeBlob(b))
             .Select(async blob =>
             {
                 await gate.WaitAsync(ct).ConfigureAwait(false);
