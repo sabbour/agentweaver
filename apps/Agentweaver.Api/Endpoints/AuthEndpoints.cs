@@ -28,11 +28,19 @@ public static class AuthEndpoints
     public static void MapAuthEndpoints(this WebApplication app)
     {
 // GET /auth/github/authorize — begin OAuth redirect flow
-app.MapGet("/auth/github/authorize", async (GitHubOAuthRedirectService oauthService, CancellationToken ct) =>
+app.MapGet("/auth/github/authorize", async (HttpContext httpContext, GitHubOAuthRedirectService oauthService, CancellationToken ct) =>
 {
     try
     {
         var url = await oauthService.BeginAuthorizationAsync(ct);
+        // Login-CSRF protection (Seraph findings-auth Alert 6): bind the OAuth `state` to THIS browser
+        // by echoing it into a Secure, HttpOnly, SameSite=Lax cookie (double-submit pattern). The
+        // callback requires the cookie to match the `state` returned by GitHub, so an attacker cannot
+        // graft their own pre-authorized state/code onto a victim's browser (the victim's browser never
+        // holds a cookie for the attacker's state).
+        var state = OAuthStateCookie.ExtractState(url);
+        if (state is not null)
+            OAuthStateCookie.Set(httpContext, state);
         return Results.Redirect(url);
     }
     catch (GitHubNotConfiguredException ex)
@@ -47,6 +55,7 @@ app.MapGet("/auth/github/authorize", async (GitHubOAuthRedirectService oauthServ
 // belongs to a pending MCP authorization, the brokered path issues an authorization code back to
 // the MCP client's loopback/registered redirect URI; otherwise the existing web path runs.
 app.MapGet("/auth/github/callback", async (
+    HttpContext httpContext,
     string? code,
     string? state,
     string? error,
@@ -86,6 +95,15 @@ app.MapGet("/auth/github/callback", async (
 
     if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
         return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
+
+    // Login-CSRF protection (Seraph findings-auth Alert 6): the `state` returned by GitHub MUST match
+    // the session-bound cookie armed at /auth/github/authorize. A missing or mismatched cookie means
+    // this callback was not initiated by this browser (e.g. an attacker's pre-authorized state grafted
+    // onto the victim), so reject it before redeeming the code. The cookie is always cleared afterwards.
+    var boundState = OAuthStateCookie.Read(httpContext);
+    OAuthStateCookie.Clear(httpContext);
+    if (string.IsNullOrEmpty(boundState) || !OAuthStateCookie.ConstantTimeEquals(boundState, state))
+        return Results.Redirect($"{frontendUrl}/?auth=error&reason=state_mismatch");
 
     try
     {
@@ -385,6 +403,62 @@ app.MapPost("/api/auth/github/sign-out", async (
     return Results.NoContent();
 });
     }
+}
+
+/// <summary>
+/// Helpers for the browser-session binding of the web sign-in OAuth <c>state</c> (Seraph findings-auth
+/// Alert 6, login-CSRF). The <c>state</c> issued at <c>/auth/github/authorize</c> is echoed into a
+/// Secure, HttpOnly, SameSite=Lax cookie; <c>/auth/github/callback</c> requires the cookie to match the
+/// <c>state</c> GitHub returns (double-submit-cookie pattern), proving the callback was initiated by
+/// this same browser. Only the web sign-in leg uses this; the MCP broker leg is a native-client flow.
+/// </summary>
+internal static class OAuthStateCookie
+{
+    public const string Name = "aw_oauth_state";
+    private const string Path = "/auth/github";
+
+    /// <summary>Extracts the <c>state</c> query value from a GitHub authorize URL, or null if absent.</summary>
+    public static string? ExtractState(string authorizeUrl)
+    {
+        if (!Uri.TryCreate(authorizeUrl, UriKind.Absolute, out var uri))
+            return null;
+
+        foreach (var pair in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (pair.StartsWith("state=", StringComparison.Ordinal))
+                return Uri.UnescapeDataString(pair["state=".Length..]);
+        }
+        return null;
+    }
+
+    public static void Set(HttpContext ctx, string state) =>
+        ctx.Response.Cookies.Append(Name, state, new CookieOptions
+        {
+            HttpOnly = true,
+            // Secure whenever the request is HTTPS (always true in prod); relaxed on plain-HTTP localhost
+            // dev so the cookie is still delivered there.
+            Secure = ctx.Request.IsHttps,
+            SameSite = SameSiteMode.Lax,
+            Path = Path,
+            MaxAge = TimeSpan.FromMinutes(10),
+        });
+
+    public static string? Read(HttpContext ctx) =>
+        ctx.Request.Cookies.TryGetValue(Name, out var value) ? value : null;
+
+    public static void Clear(HttpContext ctx) =>
+        ctx.Response.Cookies.Append(Name, string.Empty, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = ctx.Request.IsHttps,
+            SameSite = SameSiteMode.Lax,
+            Path = Path,
+            Expires = DateTimeOffset.UnixEpoch,
+        });
+
+    public static bool ConstantTimeEquals(string a, string b) =>
+        System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.UTF8.GetBytes(a), System.Text.Encoding.UTF8.GetBytes(b));
 }
 
 /// <summary>Minimal GitHub API repo shape for GET /api/github/repos deserialization.</summary>

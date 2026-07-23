@@ -105,7 +105,31 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
-    // 5a. Team configured + team membership confirmed (200) → Allowed.
+    // 4b. SECURITY (Seraph findings-auth Alert 5): a SAML-enforcement 403 on the AUTHENTICATED
+    //     private-members endpoint must NOT be overridden by a public-membership 204. The org
+    //     actively enforces SAML SSO for this token, so the result must be OrgAccessNotGranted
+    //     (deny, require SSO) — a public member with a non-SAML-authorized token must not slip
+    //     through the unauthenticated public-membership fallback.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_DoesNotLetPublicMembershipBypassSamlEnforcement()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            if (IsPrivateMembers(req)) return HttpStatusCode.Forbidden;   // 403 SAML SSO enforcement
+            if (IsPublicMembers(req))  return HttpStatusCode.NoContent;   // publicized member
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler);
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
+            "a SAML-enforcement 403 on the private endpoint must require SSO, not be satisfied by public membership");
+        handler.RequestUris.Should().NotContain(uri =>
+            uri.AbsolutePath.Contains("/public_members/", StringComparison.Ordinal),
+            "the public-membership fallback must be skipped entirely once SAML enforcement is detected");
+    }
     // ---------------------------------------------------------------------
     [Fact]
     public async Task CheckMembershipAsync_Allows_WhenOrgAndTeamMembershipConfirmed()
