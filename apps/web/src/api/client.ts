@@ -679,8 +679,8 @@ export class AgentweaverApiClient {
     return this.request<import('./types').SkillMarketplaceDto[]>('GET', '/skill-marketplaces');
   }
 
-  browseSkillMarketplace(projectId: string, marketplace: string, query?: string): Promise<import('./types').SkillMarketplaceBrowseResponse> {
-    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query });
+  browseSkillMarketplace(projectId: string, marketplace: string, query?: string, page?: number, pageSize?: number): Promise<import('./types').SkillMarketplaceBrowseResponse> {
+    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query, page, pageSize });
   }
 
   importMarketplaceSkills(projectId: string, marketplace: string, locations: string[]): Promise<import('./types').SkillAcquisitionResponse> {

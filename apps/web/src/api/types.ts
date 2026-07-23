@@ -1601,7 +1601,7 @@ export interface SkillImportPreviewResponse {
 }
 
 export interface SkillMarketplaceDto { name: string; repository: string; subpath?: string | null; layout_note?: string | null; }
-export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; }
+export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; total: number; page: number; page_size: number; has_more: boolean; }
 
 export interface CreateSkillRequest {
   name: string;
