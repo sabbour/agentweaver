@@ -528,7 +528,7 @@ public sealed class SkillCatalogService
     // of a selected candidate needs no change (its location is passed as the import subpath).
     public async Task<(SkillOutcome Outcome, string? Error, MarketplaceBrowsePage? Page)> BrowseMarketplaceAutoAsync(
         ProjectId projectId, string owner, string repo, string branch,
-        string? query, int page, int pageSize, CallerContext caller, CancellationToken ct)
+        string? query, int page, int pageSize, CallerContext caller, CancellationToken ct, string? parseStrategy = null)
     {
         var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
         if (project is null || !caller.Owns(project.Owner))
@@ -548,7 +548,7 @@ public sealed class SkillCatalogService
             // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
             var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
             var index = await _catalogIndexer.GetOrBuildAsync(
-                owner, repo, branch, blobs, submittingUser: project.Owner, parseStrategy: null, cts.Token).ConfigureAwait(false);
+                owner, repo, branch, blobs, submittingUser: project.Owner, parseStrategy: parseStrategy, cts.Token).ConfigureAwait(false);
 
             if (index.Entries.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
