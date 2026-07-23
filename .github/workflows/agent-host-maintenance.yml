@@ -76,15 +76,34 @@ jobs:
       # behavior. v0.36.0 is the first clean release tag after the March 2026
       # trivy-action supply-chain incident (CVE-2026-33634); update this pin
       # deliberately via a reviewed PR, not Dependabot auto-merge.
-      - name: Run Trivy vulnerability scan
+      #
+      # Trivy's SARIF format + exit-code combination has a known bug where
+      # .trivyignore entries are not reliably honored before the exit-code
+      # check runs (https://github.com/aquasecurity/trivy/discussions/9487),
+      # so the actual HIGH/CRITICAL gate is enforced here via `format: table`
+      # (exit-code 1). The SARIF step below is upload-only (exit-code 0) and
+      # never gates the build — it exists purely to populate the Security tab.
+      - name: Run Trivy vulnerability scan (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"          # Fail the build on HIGH/CRITICAL CVEs
+          ignore-unfixed: true    # Only flag CVEs that have a fix available
+          trivyignores: apps/Agentweaver.AgentHost/.trivyignore
+
+      - name: Run Trivy vulnerability scan (SARIF for Security tab)
+        if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
           format: sarif
           output: trivy-results.sarif
           severity: HIGH,CRITICAL
-          exit-code: "1"          # Fail the build on HIGH/CRITICAL CVEs
-          ignore-unfixed: true    # Only flag CVEs that have a fix available
+          exit-code: "0"          # Non-gating - the table step above is the real gate
+          ignore-unfixed: true
+          trivyignores: apps/Agentweaver.AgentHost/.trivyignore
 
       - name: Upload Trivy SARIF to GitHub Security tab
         if: always()              # Upload even on scan failure so results are visible
