@@ -144,12 +144,21 @@ public sealed class SkillCatalogService
     private const int MarketplaceIndexConcurrency = 32;
 
     /// <summary>
-    /// Soft budget for hydrating candidate descriptions during browse. The full candidate list (name +
-    /// location) always comes back; descriptions are read from each <c>SKILL.md</c> until this budget
-    /// elapses, so the index endpoint returns in a few seconds even for very large marketplaces.
-    /// Candidates whose description isn't fetched in time are returned name-only.
+    /// HARD wall-clock deadline for hydrating candidate descriptions during browse. The full candidate
+    /// list (name + location) always comes back from the tree metadata; descriptions are read from each
+    /// <c>SKILL.md</c> concurrently, but hydration stops being awaited once this deadline elapses so the
+    /// index endpoint returns in a few seconds for ANY marketplace regardless of size. Candidates whose
+    /// description isn't fetched in time are returned name-only (Ahmed explicitly accepts partial
+    /// definitions). This is a real deadline on the AWAIT — it does not rely on per-request HTTP
+    /// cancellation firing, which is why an oversized marketplace can no longer stall the browse.
     /// </summary>
-    private static readonly TimeSpan MarketplaceIndexDescriptionBudget = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MarketplaceIndexDescriptionDeadline = TimeSpan.FromSeconds(6);
+
+    /// <summary>
+    /// Extra grace, after the description deadline elapses, to let cancelled in-flight fetches unwind
+    /// before the temp directory is torn down. Bounded so the total browse budget stays a few seconds.
+    /// </summary>
+    private static readonly TimeSpan MarketplaceIndexDrainGrace = TimeSpan.FromMilliseconds(750);
 
     private readonly ISkillStore _skills;
     private readonly IProjectStore _projects;
@@ -432,8 +441,9 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            tempDir = await FetchSkillIndexToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
-            var candidates = BuildMarketplaceCandidates(DiscoverSkills(tempDir, subpath));
+            var index = await FetchSkillIndexToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            tempDir = index.Dir;
+            var candidates = BuildMarketplaceCandidates(DiscoverSkills(tempDir, subpath), index.Descriptions);
             if (candidates.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
             return (SkillOutcome.Ok, null, candidates);
@@ -532,18 +542,27 @@ public sealed class SkillCatalogService
 
     /// <summary>
     /// Builds browse INDEX candidates from discovered skills. Each candidate carries its location plus
-    /// a short definition: when the skill's <c>SKILL.md</c> frontmatter was hydrated (see
-    /// <see cref="FetchSkillIndexToTempAsync"/>) the parsed name/description/validity are used;
-    /// otherwise (the description budget elapsed for a very large marketplace) the candidate is
-    /// returned name-only, with the name derived from the skill directory. Import always re-downloads
-    /// and re-validates the selected skill, so optimistic validity here never lets a bad skill through.
+    /// a short definition: when the skill's <c>SKILL.md</c> was hydrated within the description deadline
+    /// (see <see cref="FetchSkillIndexToTempAsync"/>) its frontmatter is parsed for name/description/
+    /// validity; otherwise (the deadline elapsed for a very large marketplace) the candidate is returned
+    /// name-only, with the name derived from the skill directory. Hydrated <c>SKILL.md</c> content is
+    /// looked up from <paramref name="descriptions"/> (keyed by repo-root-relative <c>SKILL.md</c> path)
+    /// rather than re-read from disk, so a background fetch completing during listing can never drop a
+    /// candidate. Import always re-downloads and re-validates the selected skill, so optimistic validity
+    /// here never lets a bad skill through.
     /// </summary>
-    private IReadOnlyList<SkillCandidateView> BuildMarketplaceCandidates(IReadOnlyList<RawSkill> discovered) =>
+    private IReadOnlyList<SkillCandidateView> BuildMarketplaceCandidates(
+        IReadOnlyList<RawSkill> discovered, IReadOnlyDictionary<string, string> descriptions) =>
         discovered.Select(raw =>
         {
-            if (!string.IsNullOrWhiteSpace(raw.SkillMarkdown))
+            var manifestPath = raw.RelativeLocation.EndsWith("/SKILL.md", StringComparison.Ordinal)
+                || raw.RelativeLocation.Equals("SKILL.md", StringComparison.Ordinal)
+                ? raw.RelativeLocation
+                : raw.RelativeLocation + "/SKILL.md";
+
+            if (descriptions.TryGetValue(manifestPath, out var markdown) && !string.IsNullOrWhiteSpace(markdown))
             {
-                var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
+                var parsed = _parser.Parse(markdown);
                 if (!string.IsNullOrWhiteSpace(parsed.Name) || !string.IsNullOrWhiteSpace(parsed.Description))
                 {
                     return new SkillCandidateView
@@ -558,7 +577,7 @@ public sealed class SkillCatalogService
                 }
             }
 
-            // Not hydrated within the description budget — return a name-only index entry.
+            // Not hydrated within the description deadline — return a name-only index entry.
             return new SkillCandidateView
             {
                 Location = raw.RelativeLocation,
@@ -593,11 +612,15 @@ public sealed class SkillCatalogService
     /// <see cref="MaxMarketplaceCandidates"/>); an empty placeholder is written for each so
     /// <see cref="DiscoverSkills"/> reports the exact same locations a clone would. Each candidate's
     /// short definition is then hydrated by downloading its <c>SKILL.md</c> ONLY (never the skill's
-    /// other resource files), concurrently and bounded by <see cref="MarketplaceIndexDescriptionBudget"/>
-    /// so the endpoint returns in a few seconds; any candidate not hydrated in time keeps its
-    /// placeholder and is listed name-only. Full skill content is downloaded only at import time.
+    /// other resource files), concurrently and bounded by a HARD wall-clock deadline
+    /// (<see cref="MarketplaceIndexDescriptionDeadline"/>) so the endpoint returns in a few seconds
+    /// regardless of how many skills the marketplace has. Hydrated <c>SKILL.md</c> content is collected
+    /// into an in-memory map (keyed by repo-root-relative <c>SKILL.md</c> path) rather than written back
+    /// to the placeholder files, so a slow fetch that completes after the deadline can never race the
+    /// directory scan and drop a candidate. Any candidate not hydrated in time is listed name-only. Full
+    /// skill content is downloaded only at import time.
     /// </summary>
-    private async Task<string> FetchSkillIndexToTempAsync(
+    private async Task<(string Dir, IReadOnlyDictionary<string, string> Descriptions)> FetchSkillIndexToTempAsync(
         string owner, string repo, string branch, string subpath, string projectOwner, CancellationToken ct)
     {
         var token = await ResolveTokenAsync(projectOwner, ct).ConfigureAwait(false);
@@ -607,7 +630,7 @@ public sealed class SkillCatalogService
         Directory.CreateDirectory(dir);
 
         var perFileCap = (long)SkillParser.MaxResourceBytes * 2;
-        var manifests = new List<(GitHubTreeBlob Blob, string Full)>();
+        var manifests = new List<GitHubTreeBlob>();
         foreach (var blob in blobs)
         {
             if (!IsSkillManifest(blob))
@@ -619,49 +642,66 @@ public sealed class SkillCatalogService
                 continue;
             var full = Path.Combine(dir, safe.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-            // Placeholder guarantees the candidate is listed even if its description isn't hydrated in time.
+            // Empty placeholder guarantees the candidate is LISTED (via DiscoverSkills) even if its
+            // description is never hydrated; descriptions are delivered out-of-band via the map below.
             await File.WriteAllTextAsync(full, string.Empty, ct).ConfigureAwait(false);
-            manifests.Add((blob, full));
+            manifests.Add(blob);
         }
 
-        // Hydrate short definitions from SKILL.md frontmatter only, bounded by a soft time budget so
-        // the index endpoint returns quickly regardless of how many skills the marketplace has.
-        using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        budgetCts.CancelAfter(MarketplaceIndexDescriptionBudget);
-        using var gate = new SemaphoreSlim(MarketplaceIndexConcurrency);
-        var hydrations = manifests.Select(async entry =>
+        var descriptions = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        if (manifests.Count == 0)
+            return (dir, descriptions);
+
+        // Hydrate short definitions from SKILL.md frontmatter only, concurrently, bounded by a HARD
+        // wall-clock deadline. We stop AWAITING at the deadline (Task.WhenAny against a timer) rather
+        // than relying on per-request HTTP cancellation firing, so an oversized or slow marketplace can
+        // never stall the browse. In-flight fetches are then signalled to abandon; whatever landed in
+        // the map is what the index shows.
+        var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var gate = new SemaphoreSlim(MarketplaceIndexConcurrency);
+        var hydrations = manifests.Select(async blob =>
         {
             try
             {
                 await gate.WaitAsync(budgetCts.Token).ConfigureAwait(false);
                 try
                 {
-                    var text = await _treeClient!.GetRawTextAsync(owner, repo, branch, entry.Blob.Path, token, perFileCap, budgetCts.Token)
+                    var text = await _treeClient!.GetRawTextAsync(owner, repo, branch, blob.Path, token, perFileCap, budgetCts.Token)
                         .ConfigureAwait(false);
                     if (!string.IsNullOrEmpty(text))
-                        await File.WriteAllTextAsync(entry.Full, text, CancellationToken.None).ConfigureAwait(false);
+                        descriptions[blob.Path] = text;
                 }
                 finally
                 {
                     gate.Release();
                 }
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            catch
             {
-                // Description budget elapsed — leave the placeholder; the candidate is listed name-only.
+                // Best-effort: a rejected/oversized/cancelled fetch just leaves the candidate name-only.
             }
-        });
+        }).ToArray();
 
+        var all = Task.WhenAll(hydrations);
         try
         {
-            await Task.WhenAll(hydrations).ConfigureAwait(false);
+            await all.WaitAsync(MarketplaceIndexDescriptionDeadline, ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (TimeoutException)
         {
-            // Budget elapsed with in-flight downloads — return the partially hydrated index.
+            // HARD deadline hit: abandon in-flight fetches and return the partially hydrated index.
+            budgetCts.Cancel();
+            try { await all.WaitAsync(MarketplaceIndexDrainGrace, ct).ConfigureAwait(false); }
+            catch (TimeoutException) { /* stragglers ignored; they only mutate the concurrent map */ }
+        }
+        finally
+        {
+            // Dispose only after every task has truly finished so a late fetch never touches a disposed
+            // gate/token; the tasks never fault (all exceptions are swallowed above).
+            _ = all.ContinueWith(_ => { gate.Dispose(); budgetCts.Dispose(); }, TaskScheduler.Default);
         }
 
-        return dir;
+        return (dir, descriptions);
     }
 
     /// <summary>
