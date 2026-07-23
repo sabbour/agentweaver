@@ -23,6 +23,8 @@ import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
 import * as azDefault from "../lib/az.mjs";
 import * as promptDefault from "../lib/prompt.mjs";
+import * as secretDefault from "../lib/secret.mjs";
+import os from "node:os";
 
 export const IDENTITY_NAME = "agentweaver-api-identity";
 
@@ -51,18 +53,26 @@ export async function resolveGithubCredentials(cfg, { prompt = promptDefault } =
   return { clientId, clientSecret };
 }
 
-/** Sets a Key Vault secret, tolerating transient RBAC-propagation Forbidden errors with bounded retry. */
+/**
+ * Sets a Key Vault secret, tolerating transient RBAC-propagation Forbidden errors with bounded retry.
+ * Writes `value` to a short-lived private (0600) scratch file and passes it via `az`'s '--file'
+ * parameter instead of '--value', so the secret never appears in this process's argv -- argv is
+ * readable by any co-resident process/user via `ps`/`/proc/<pid>/cmdline` for the command's entire
+ * runtime, unlike a file that's deleted immediately after the command exits.
+ */
 export async function setSecretWithRetry(
   keyvaultName,
   name,
   value,
-  { exec = execDefault, log = logDefault, maxAttempts = 12, sleep = defaultSleep } = {},
+  { exec = execDefault, log = logDefault, maxAttempts = 12, sleep = defaultSleep, secret = secretDefault, scratchDir = os.tmpdir() } = {},
 ) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const result = await exec.capture(
-      "az",
-      ["keyvault", "secret", "set", "--vault-name", keyvaultName, "--name", name, "--value", value, "--output", "none"],
-      { allowFailure: true },
+    const result = await secret.withSecretFile(scratchDir, `kv-secret-${name}`, value, (filePath) =>
+      exec.capture(
+        "az",
+        ["keyvault", "secret", "set", "--vault-name", keyvaultName, "--name", name, "--file", filePath, "--output", "none"],
+        { allowFailure: true },
+      ),
     );
     if (result.code === 0) return;
     const isRbacPropagating = /Forbidden|ForbiddenByRbac|not authorized/i.test(result.stderr || "");

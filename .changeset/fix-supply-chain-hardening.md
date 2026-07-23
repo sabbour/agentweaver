@@ -1,0 +1,5 @@
+---
+"agentweaver": patch
+---
+
+Harden the supply chain across CI, container builds, and provisioning scripts: pin the `agent-host-maintenance` workflow's Trivy scan action to a reviewed full commit SHA (was `@master`) and add a Sigstore-backed build provenance attestation instead of relying solely on a mutable ACR tag; verify checksums for every tool downloaded during Dockerfile builds (Copilot CLI, Node.js, yq) and replace the mutable NodeSource `curl | bash` install with a checksum-verified tarball and exact-pinned npm globals (also bumping pnpm 10.34.5 -> 11.5.3 to close a HIGH CVE, CVE-2026-55697, caught by the Trivy CVE gate); pin previously-floating NuGet package versions and commit `packages.lock.json` for every project, with `RestorePackagesWithLockFile`/`RestoreLockedMode` enabled so CI restores fail loudly instead of silently resolving a new dependency version; and route Key Vault secret writes in the Azure provisioning scripts through short-lived, mode-0600 scratch files (`scripts/azure/lib/secret.mjs`) instead of passing secret values as CLI arguments, closing a `ps`/`/proc` process-listing exposure window.

@@ -27,9 +27,17 @@ COPY Directory.Build.props .
 # residual, accepted-risk finding pending an upstream copilot-cli release built
 # against a newer Go toolchain (see apps/Agentweaver.AgentHost/.trivyignore).
 ARG COPILOT_CLI_VERSION=1.0.71-3
+# SHA-1 shasum published by the npm registry for this exact tarball (from
+# `npm view @github/copilot-linux-x64@${COPILOT_CLI_VERSION} dist.shasum`).
+# Pinning + verifying this closes the "mutable remote tooling" supply-chain
+# gap: without it, a compromised/replaced tarball at this URL would be piped
+# straight into `tar` and run as part of the image with no integrity check.
+ARG COPILOT_CLI_SHA1=82ec5a02af1864e177da19bab4ff50c4840917f5
 RUN mkdir -p /copilot-bin && \
-    curl -fsSL "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" | \
-    tar -xz --strip-components=1 -C /copilot-bin && \
+    curl -fsSL -o /tmp/copilot.tgz "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" && \
+    echo "${COPILOT_CLI_SHA1}  /tmp/copilot.tgz" | sha1sum -c - && \
+    tar -xzf /tmp/copilot.tgz --strip-components=1 -C /copilot-bin && \
+    rm -f /tmp/copilot.tgz && \
     chmod +x /copilot-bin/copilot
 
 COPY apps/Agentweaver.AgentHost/ apps/Agentweaver.AgentHost/
@@ -53,9 +61,18 @@ WORKDIR /app
 
 ARG IMAGE_TAG=dev
 ARG GIT_SHA=unknown
-# Pinned tool versions — bumped by Dependabot / weekly maintenance workflow
-ARG NODE_MAJOR=24
+# Pinned tool versions — bumped by Dependabot / weekly maintenance workflow.
+# Downloads below are verified against independently-recorded sha256/sha1
+# checksums instead of trusting the mutable download URL alone (no
+# curl|bash execution of unpinned upstream scripts).
+ARG NODE_VERSION=24.18.0
+ARG NODE_SHA256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8
 ARG YQ_VERSION=4.53.3
+ARG YQ_SHA256=fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4
+ARG NODEMON_VERSION=3.1.14
+ARG TYPESCRIPT_VERSION=7.0.2
+ARG TS_NODE_VERSION=10.9.2
+ARG PNPM_VERSION=11.13.1
 
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
@@ -141,20 +158,30 @@ RUN echo "cache-bust: ${GH_CLI_CACHE_BUST}" \
 # ── yq (YAML processor) ───────────────────────────────────────────────────────
 RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" \
         -o /usr/local/bin/yq \
+    && echo "${YQ_SHA256}  /usr/local/bin/yq" | sha256sum -c - \
     && chmod +x /usr/local/bin/yq
 
-# ── Node.js (NodeSource) + npm globals ────────────────────────────────────────
-# npm is self-updated to latest *before* the global tool installs: the Node.js
-# apt package bundles an older npm whose own transitive deps (node-gyp -> tar /
-# undici) carry CVEs with upstream fixes (e.g. CVE-2026-59873/59874 in tar,
-# CVE-2026-12151 in undici). Newer npm pulls in patched node-gyp/tar/undici,
-# closing those out of the Trivy HIGH/CRITICAL gate without touching the scan
-# config itself.
-RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+# ── Node.js + npm globals ─────────────────────────────────────────────────────
+# Downloaded as a checksum-verified tarball from nodejs.org instead of piping
+# NodeSource's mutable setup_<major>.x script into bash — that script is
+# fetched and executed as root with no version pin or content verification.
+# npm is self-updated to latest *before* the global tool installs: the
+# bundled npm in this Node release has transitive deps (node-gyp -> tar /
+# undici) carrying CVEs with upstream fixes (e.g. CVE-2026-59873/59874 in
+# tar, CVE-2026-12151 in undici); newer npm pulls in patched versions,
+# closing those out of the Trivy HIGH/CRITICAL gate without touching the
+# scan config itself. npm global packages are pinned to exact versions
+# instead of resolving whatever "latest" happens to publish at build time.
+RUN curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+    && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
+    && rm -f /tmp/node.tar.gz \
     && npm install -g npm@latest \
-    && npm install -g nodemon typescript ts-node pnpm \
-    && rm -rf /var/lib/apt/lists/*
+    && npm install -g \
+        nodemon@${NODEMON_VERSION} \
+        typescript@${TYPESCRIPT_VERSION} \
+        ts-node@${TS_NODE_VERSION} \
+        pnpm@${PNPM_VERSION}
 
 # ── .NET 10 SDK — agents need to build .NET projects ──────────────────────────
 RUN curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb \

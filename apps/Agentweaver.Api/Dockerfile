@@ -14,9 +14,16 @@ COPY Directory.Build.props .
 # The EF bundle temp project at /tmp/ does NOT inherit /src/Directory.Build.props, so it downloads
 # exactly one copy on its own — no duplicates from /src/ projects to collide with.
 ARG COPILOT_CLI_VERSION=1.0.57
+# SHA-1 shasum published by the npm registry for this exact tarball (from
+# `npm view @github/copilot-linux-x64@${COPILOT_CLI_VERSION} dist.shasum`),
+# verified before extraction so a compromised/replaced tarball at this URL
+# can't be piped into `tar` and run unchecked as part of the image build.
+ARG COPILOT_CLI_SHA1=7938f9f6dfc3248efc1a23e1c76bf98fa4554141
 RUN mkdir -p /copilot-bin && \
-    curl -fsSL "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" | \
-    tar -xz --strip-components=1 -C /copilot-bin && \
+    curl -fsSL -o /tmp/copilot.tgz "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" && \
+    echo "${COPILOT_CLI_SHA1}  /tmp/copilot.tgz" | sha1sum -c - && \
+    tar -xzf /tmp/copilot.tgz --strip-components=1 -C /copilot-bin && \
+    rm -f /tmp/copilot.tgz && \
     chmod +x /copilot-bin/copilot
 
 COPY apps/Agentweaver.Api/ apps/Agentweaver.Api/
