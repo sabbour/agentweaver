@@ -37,6 +37,8 @@ vi.mock('../api/apiClient', () => ({
     listSkillMarketplaces: vi.fn(),
     browseSkillMarketplace: vi.fn(),
     importMarketplaceSkills: vi.fn(),
+    addSkillMarketplaceSource: vi.fn(),
+    removeSkillMarketplaceSource: vi.fn(),
     uploadSkills: vi.fn(),
     assignSkill: vi.fn(),
     unassignSkill: vi.fn(),
@@ -927,5 +929,111 @@ describe('SkillsPage — curated marketplaces', () => {
     await waitFor(() => expect(screen.getByText(/Timed out while reading the marketplace source/)).toBeTruthy());
     // The loading indicator must be gone once the error is shown.
     expect(screen.queryByLabelText('Loading')).toBeNull();
+  });
+});
+
+describe('SkillsPage — add/remove a marketplace source by URL', () => {
+  const configMarketplace: SkillMarketplaceDto = {
+    name: 'GitHub Awesome Copilot',
+    repository: 'github/awesome-copilot',
+    subpath: 'skills',
+    layout_note: null,
+  };
+  const projectSource: SkillMarketplaceDto = {
+    name: 'my-org/my-skills',
+    repository: 'my-org/my-skills',
+    branch: 'main',
+    subpath: null,
+    auto_detect: true,
+    parse_strategy: 'auto',
+    project_source: true,
+  };
+
+  it('adds a source by URL, refreshes the list, and browses it', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.listSkillMarketplaces)
+      .mockResolvedValueOnce([configMarketplace])
+      .mockResolvedValueOnce([configMarketplace, projectSource]);
+    vi.mocked(apiClient.addSkillMarketplaceSource).mockResolvedValue(projectSource);
+    vi.mocked(apiClient.browseSkillMarketplace).mockResolvedValue({
+      marketplace: 'my-org/my-skills',
+      candidates: [],
+      total: 0,
+      page: 1,
+      page_size: 25,
+      has_more: false,
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse marketplaces' }));
+    const repoInput = await screen.findByPlaceholderText('https://github.com/org/skills-repo');
+    fireEvent.change(repoInput, { target: { value: 'https://github.com/my-org/my-skills' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+
+    await waitFor(() => expect(apiClient.addSkillMarketplaceSource).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ repository: 'https://github.com/my-org/my-skills', parseStrategy: 'auto' }),
+    ));
+
+    // The list is refreshed and the new source shows up alongside the config one.
+    expect(await screen.findByRole('button', { name: 'my-org/my-skills' })).toBeTruthy();
+    // The newly added source is auto-browsed.
+    await waitFor(() => expect(apiClient.browseSkillMarketplace).toHaveBeenCalledWith(
+      expect.any(String), 'my-org/my-skills', undefined, 1, 25,
+    ));
+  });
+
+  it('surfaces a friendly 409 conflict message when adding a duplicate source', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.listSkillMarketplaces).mockResolvedValue([configMarketplace]);
+    vi.mocked(apiClient.addSkillMarketplaceSource).mockRejectedValue(
+      new ApiError(409, JSON.stringify({ error: 'A marketplace named "GitHub Awesome Copilot" already exists.' })),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse marketplaces' }));
+    const repoInput = await screen.findByPlaceholderText('https://github.com/org/skills-repo');
+    fireEvent.change(repoInput, { target: { value: 'github/awesome-copilot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+
+    await waitFor(() => expect(screen.getByText('A marketplace named "GitHub Awesome Copilot" already exists.')).toBeTruthy());
+  });
+
+  it('surfaces a friendly 422 message when the repository is not public', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.listSkillMarketplaces).mockResolvedValue([configMarketplace]);
+    vi.mocked(apiClient.addSkillMarketplaceSource).mockRejectedValue(new ApiError(422, JSON.stringify({})));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse marketplaces' }));
+    const repoInput = await screen.findByPlaceholderText('https://github.com/org/skills-repo');
+    fireEvent.change(repoInput, { target: { value: 'https://github.com/private/repo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+
+    await waitFor(() => expect(screen.getByText('That repository is not public or is unavailable right now.')).toBeTruthy());
+  });
+
+  it('shows a remove affordance only for project-added sources and removes on click', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.listSkillMarketplaces)
+      .mockResolvedValueOnce([configMarketplace, projectSource])
+      .mockResolvedValueOnce([configMarketplace]);
+    vi.mocked(apiClient.removeSkillMarketplaceSource).mockResolvedValue(undefined);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse marketplaces' }));
+    await screen.findByRole('button', { name: 'my-org/my-skills' });
+
+    // Built-in config sources have no remove affordance.
+    expect(screen.queryByRole('button', { name: 'Remove GitHub Awesome Copilot' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove my-org/my-skills' }));
+
+    await waitFor(() => expect(apiClient.removeSkillMarketplaceSource).toHaveBeenCalledWith(expect.any(String), 'my-org/my-skills'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'my-org/my-skills' })).toBeNull());
   });
 });
