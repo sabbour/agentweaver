@@ -121,17 +121,7 @@ test("dev sync validates branch and prepared release metadata", () => {
 
 test("getUnexpectedIgnoredFiles filters allowed ignored patterns", () => {
   const stdout = [
-    "!! node_modules/",
-    "!! apps/web/node_modules/",
-    "!! dist/",
-    "!! apps/web/dist/",
-    "!! obj/",
-    "!! bin/",
-    "!! packages/Agentweaver.SandboxExec/bin/Debug/",
-    "!! packages/Agentweaver.SandboxExec/bin/Release/",
-    "!! TestResults/",
     "!! .squad/",
-    "!! .vite/",
     "!! .idea/",
     "!! .vscode/",
     "!! .vs/",
@@ -143,10 +133,27 @@ test("getUnexpectedIgnoredFiles filters allowed ignored patterns", () => {
     "!! scripts/azure/tests/.scratch-123",
     "!! .security/",
     "!! test.user",
-    "!! test.tsbuildinfo",
+    "!! node_modules/",
+    "!! dist/",
     "!! malicious.js",
     "!! src/malicious.js"
   ].join("\n");
   const unexpected = getUnexpectedIgnoredFiles(stdout);
-  assert.deepEqual(unexpected, ["malicious.js", "src/malicious.js"]);
+  assert.deepEqual(unexpected, ["node_modules/", "dist/", "malicious.js", "src/malicious.js"]);
+});
+
+test("getUnexpectedIgnoredFiles catches attacker planted files in common build dirs", () => {
+  const stdout = [
+    "!! node_modules/malicious.js",
+    "!! dist/malicious.js",
+    "!! bin/malicious.js",
+    "!! obj/malicious.js"
+  ].join("\n");
+  const unexpected = getUnexpectedIgnoredFiles(stdout);
+  assert.deepEqual(unexpected, [
+    "node_modules/malicious.js",
+    "dist/malicious.js",
+    "bin/malicious.js",
+    "obj/malicious.js"
+  ]);
 });

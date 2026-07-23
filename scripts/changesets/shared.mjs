@@ -127,14 +127,6 @@ export function validateSyncBranch(branch) {
 
 export function getUnexpectedIgnoredFiles(stdout) {
   const allowedPatterns = [
-    /(^|\/)node_modules\//,
-    /(^|\/)dist\//,
-    /(^|\/)bin\//,
-    /(^|\/)obj\//,
-    /(^|\/)TestResults\//,
-    /(^|\/)\.vite\//,
-    /^tests\/e2e\/playwright-report\//,
-    /^tests\/e2e\/test-results\//,
     /^\.squad\//,
     /^\.idea\//,
     /^\.vscode\//,
@@ -146,8 +138,7 @@ export function getUnexpectedIgnoredFiles(stdout) {
     /^scripts\/azure\/params\..*\.json$/,
     /^scripts\/azure\/tests\/\.scratch-/,
     /^scripts\/azure\/steps\/\.rendered\//,
-    /\.(user|suo|userprefs)$/,
-    /\.tsbuildinfo$/
+    /\.(user|suo|userprefs)$/
   ];
 
   return stdout

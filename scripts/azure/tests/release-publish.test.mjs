@@ -10,7 +10,7 @@ function fakeExec({ wrongMain = false, tag = false, untracked = false, unexpecte
     calls.push({ cmd, args });
     if (args[0] === "diff") return { code: 0, stdout: "" };
     if (args[0] === "status" && args.includes("--untracked-files=all")) return { code: 0, stdout: untracked ? "?? poisoned-source.js\n" : "" };
-    if (args[0] === "status" && args.includes("--ignored=matching")) return { code: 0, stdout: unexpectedIgnored ? "!! malicious.js\n" : "!! node_modules/\n" };
+    if (args[0] === "status" && args.includes("--ignored=matching")) return { code: 0, stdout: unexpectedIgnored ? "!! malicious.js\n" : "" };
     if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: "abc" };
     if (args[0] === "rev-parse" && args[1] === "origin/main") return { code: 0, stdout: wrongMain ? "def" : "abc" };
     if (args[0] === "rev-parse") return { code: tag ? 0 : 1, stdout: "" };
