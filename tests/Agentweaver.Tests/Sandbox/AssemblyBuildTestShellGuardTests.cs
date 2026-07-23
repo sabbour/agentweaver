@@ -61,7 +61,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
 
         var rejected = result.Should().BeOfType<PermissionDecisionReject>().Subject;
         rejected.Feedback.Should().Be(
-            "Native Copilot shell is disabled for AssemblyBuildTest; use the controlled run_command tool.");
+            "Native Copilot shell is disabled; use the sandboxed run_command tool (routed through the sandbox executor).");
         errors.Should().ContainSingle().Which.Should().Be(rejected.Feedback);
     }
 

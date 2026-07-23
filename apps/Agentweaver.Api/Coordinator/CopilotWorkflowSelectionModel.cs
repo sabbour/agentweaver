@@ -1,5 +1,6 @@
 using System.Text;
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.GitHub.Copilot;
 using Microsoft.Extensions.AI;
@@ -77,9 +78,13 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
-            // Minimal session: empty Tools list means the SDK sends no tool definitions to the
-            // model. The model is physically unable to emit tool calls. No sandbox, no permission
-            // handler, no session store — this is a plain grounded single completion.
+            // Minimal, tool-less session. SECURITY (XPIA): the model consumes user-controlled text
+            // (task/workflow descriptions), so it MUST NOT be able to emit tool calls. Setting only
+            // Tools = [] is NOT sufficient — the Copilot SDK's built-in native tools (shell, file,
+            // search, web) are present by default and are removed from the model's tool surface only
+            // by the AvailableTools allowlist. Pair AvailableTools = [] (no tools exposed) with a
+            // deny-by-default permission handler so any injected tool call is rejected. No session
+            // store — this is a plain grounded single completion.
             var sessionConfig = new SessionConfig
             {
                 SystemMessage = new SystemMessageConfig
@@ -88,6 +93,8 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
                     Content = SelectionCharter,
                 },
                 Tools = [],
+                AvailableTools = [],
+                OnPermissionRequest = RejectAllToolPermissionHandler,
                 Model = _modelId,
                 EnableConfigDiscovery = false,
                 Streaming = true,
@@ -122,7 +129,27 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
     }
 
     /// <summary>
-    /// Accumulates text from a streaming response using both paths the Copilot SDK may use:
+    /// Deny-by-default permission handler shared by the "tool-less" LLM classifiers
+    /// (<see cref="CopilotWorkflowSelectionModel"/>, <c>OutcomeSpecReplyClassifier</c>,
+    /// <c>AssemblyGateCodeClassifier</c>, <c>StoryIndependenceClassifier</c>,
+    /// <c>PreviewClassifier</c>). These classifiers run a single grounded completion over
+    /// user-controlled text and must never call a tool.
+    ///
+    /// <para>
+    /// SECURITY (XPIA): <c>SessionConfig.Tools = []</c> only means "no custom tool declarations";
+    /// it does NOT disable the Copilot SDK's built-in native tools (shell/file/search/web), which
+    /// are present by default. Those are removed from the model's tool surface only by the
+    /// <c>AvailableTools</c> allowlist. This handler is the defense-in-depth backstop paired with
+    /// <c>AvailableTools = []</c>: it rejects every permission request so an injected tool call can
+    /// never touch the host shell, file system, or network.
+    /// </para>
+    /// </summary>
+    internal static Task<PermissionDecision> RejectAllToolPermissionHandler(
+        PermissionRequest request, PermissionInvocation invocation) =>
+        Task.FromResult<PermissionDecision>(PermissionDecision.Reject(
+            "Tool use is disabled for this classifier; it performs a single grounded text completion only."));
+
+    /// <summary>
     /// <list type="bullet">
     ///   <item>Incremental delta text carried as <see cref="AgentResponseUpdate.Text"/>.</item>
     ///   <item>The consolidated final-message content delivered via an

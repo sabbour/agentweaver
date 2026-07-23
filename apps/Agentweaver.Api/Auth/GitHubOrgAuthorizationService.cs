@@ -90,6 +90,20 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         // expired/network/5xx), fall back to the public members endpoint (UNAUTHENTICATED) before
         // deciding. This handles the common case where the token is not SAML-authorized so the private
         // endpoint returns 302/401 rather than a definitive answer.
+        // SECURITY (Seraph findings-auth Alert 5): when the AUTHENTICATED private-members check returns
+        // a definitive SAML-enforcement 403 (OrgAccessNotGranted), the org actively enforces SAML SSO
+        // for this token. We MUST treat that as a denial requiring SSO authorization and MUST NOT let an
+        // unauthenticated public-membership lookup silently satisfy it — otherwise a public member with
+        // a non-SAML-authorized (or compromised) token would bypass corporate SAML enforcement.
+        if (orgResult == CheckResult.OrgAccessNotGranted)
+        {
+            _logger.LogWarning(
+                "GitHub org '{Org}' membership check for '{Login}' returned SAML-enforcement (403). " +
+                "Requiring SSO authorization; NOT falling back to public membership.",
+                _allowedOrg, login);
+            return OrgAuthResult.OrgAccessNotGranted;
+        }
+
         // CRITICAL: This call MUST be unauthenticated. For a SAML-enforced org, GitHub applies SAML
         // enforcement to any AUTHENTICATED request whose token is not SAML-authorized — even against the
         // public_members endpoint — and returns 403 instead of the public 204. An UNAUTHENTICATED request

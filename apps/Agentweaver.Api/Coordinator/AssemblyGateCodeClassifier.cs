@@ -171,6 +171,8 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
                     Content = ClassifierCharter,
                 },
                 Tools = [],
+                AvailableTools = [],
+                OnPermissionRequest = CopilotWorkflowSelectionModel.RejectAllToolPermissionHandler,
                 Model = _modelId,
                 EnableConfigDiscovery = false,
                 Streaming = true,

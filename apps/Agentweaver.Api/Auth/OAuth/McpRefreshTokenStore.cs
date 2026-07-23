@@ -12,6 +12,14 @@ public sealed record McpRefreshGrant(string Subject, string GithubLogin, string 
 public sealed record RefreshRotationResult(McpRefreshGrant? Grant, string? NewRefreshToken, string? Error, string? ErrorDescription);
 
 /// <summary>
+/// Outcome of a non-consuming refresh-token inspection (<see cref="McpRefreshTokenStore.PeekAsync"/>).
+/// Used to re-validate org membership BEFORE the token is consumed, so a fail-closed org denial does
+/// not consume the presented token (which would otherwise force the client into reuse detection on
+/// its next attempt).
+/// </summary>
+public sealed record RefreshPeekResult(McpRefreshGrant? Grant, string? Error, string? ErrorDescription);
+
+/// <summary>
 /// Persistent store for rotating OAuth refresh tokens and the access-token <c>jti</c> denylist (T4).
 ///
 /// Tokens are stored only as SHA-256 hashes. Rotation is single-use: each refresh consumes the
@@ -59,8 +67,50 @@ public sealed class McpRefreshTokenStore
     }
 
     /// <summary>
+    /// Non-consuming inspection of a presented refresh token used to re-validate authorization
+    /// (e.g. org membership) BEFORE consumption. Validates existence, client binding, reuse, and
+    /// expiry, and returns the carried grant WITHOUT rotating. On reuse of an already-consumed or
+    /// revoked token the entire chain is revoked (same reuse-detection semantics as rotation), so a
+    /// stolen token surfaced here cannot be used to fish for a grant.
+    /// </summary>
+    public async Task<RefreshPeekResult> PeekAsync(string? presentedToken, string? clientId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(presentedToken))
+            return PeekInvalid("Refresh token is required.");
+
+        var hash = Hash(presentedToken);
+        var existing = await _db.McpRefreshTokens.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TokenHash == hash, ct).ConfigureAwait(false);
+        if (existing is null)
+            return PeekInvalid("Refresh token is invalid.");
+
+        if (!string.IsNullOrWhiteSpace(clientId) && !string.Equals(existing.ClientId, clientId, StringComparison.Ordinal))
+            return PeekInvalid("client_id does not match the refresh token.");
+
+        var now = DateTimeOffset.UtcNow;
+
+        if (existing.ConsumedAt is not null || existing.RevokedAt is not null)
+        {
+            await RevokeChainAsync(existing.ChainId, now, ct).ConfigureAwait(false);
+            return PeekInvalid("Refresh token has already been used or revoked; the token chain has been revoked.");
+        }
+
+        if (now > existing.ExpiresAt || now > existing.AbsoluteExpiresAt)
+            return PeekInvalid("Refresh token has expired.");
+
+        var grant = new McpRefreshGrant(existing.Subject, existing.GithubLogin, existing.ClientId, existing.Scope, existing.Org);
+        return new RefreshPeekResult(grant, null, null);
+    }
+
+    /// <summary>
     /// Rotates a presented refresh token: validates it, consumes it, and issues a new token in the
     /// same chain. On reuse of an already-consumed token the entire chain is revoked.
+    ///
+    /// Consumption is ATOMIC: the presented token is claimed with a single conditional
+    /// <c>UPDATE ... SET ConsumedAt = now WHERE TokenHash = @h AND ConsumedAt IS NULL AND RevokedAt
+    /// IS NULL</c>. Exactly one concurrent caller can win that compare-and-swap; any loser observes
+    /// zero rows affected and is treated as reuse (chain revoked). This defeats a concurrent replay
+    /// of the same refresh token establishing an independent live branch (RFC 6819 §5.2.2.3).
     /// </summary>
     public async Task<RefreshRotationResult> RotateAsync(string? presentedToken, string? clientId, CancellationToken ct = default)
     {
@@ -68,7 +118,10 @@ public sealed class McpRefreshTokenStore
             return Invalid("Refresh token is required.");
 
         var hash = Hash(presentedToken);
-        var existing = await _db.McpRefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == hash, ct).ConfigureAwait(false);
+        // Read-only snapshot for validation + successor metadata. AsNoTracking so it never interferes
+        // with the conditional ExecuteUpdate claim below (which bypasses the change tracker).
+        var existing = await _db.McpRefreshTokens.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TokenHash == hash, ct).ConfigureAwait(false);
         if (existing is null)
             return Invalid("Refresh token is invalid.");
 
@@ -87,13 +140,30 @@ public sealed class McpRefreshTokenStore
 
         if (now > existing.ExpiresAt || now > existing.AbsoluteExpiresAt)
         {
-            existing.RevokedAt = now;
-            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await _db.McpRefreshTokens
+                .Where(t => t.TokenHash == hash && t.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct).ConfigureAwait(false);
             return Invalid("Refresh token has expired.");
         }
 
-        // Consume the presented token and mint its successor in the same chain.
-        existing.ConsumedAt = now;
+        // Atomic single-use claim (compare-and-swap on ConsumedAt IS NULL). Only ONE concurrent caller
+        // can flip ConsumedAt from null → now; the DB's row-level write serialization guarantees this.
+        // The DateTimeOffset equality/null predicates and the constant assignment are translatable on
+        // both SQLite (dev/test) and Postgres (prod). Expiry is validated on the snapshot above rather
+        // than in this predicate (DateTimeOffset ordering is not translatable on SQLite).
+        var claimed = await _db.McpRefreshTokens
+            .Where(t => t.TokenHash == hash && t.ConsumedAt == null && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.ConsumedAt, now), ct).ConfigureAwait(false);
+
+        if (claimed == 0)
+        {
+            // Lost the race (or the token was consumed/revoked between the snapshot and the claim):
+            // treat as reuse and revoke the entire chain so neither branch survives.
+            await RevokeChainAsync(existing.ChainId, now, ct).ConfigureAwait(false);
+            return Invalid("Refresh token has already been used or revoked; the token chain has been revoked.");
+        }
+
+        // We won the claim — mint the successor in the same chain.
         var newPlaintext = GenerateOpaqueToken();
         var slidingExpiry = now.Add(SlidingLifetime);
         if (slidingExpiry > existing.AbsoluteExpiresAt)
@@ -175,6 +245,9 @@ public sealed class McpRefreshTokenStore
 
     private static RefreshRotationResult Invalid(string description) =>
         new(null, null, "invalid_grant", description);
+
+    private static RefreshPeekResult PeekInvalid(string description) =>
+        new(null, "invalid_grant", description);
 
     /// <summary>256-bit URL-safe random opaque token.</summary>
     public static string GenerateOpaqueToken() =>
