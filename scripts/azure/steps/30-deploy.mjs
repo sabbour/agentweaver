@@ -49,6 +49,7 @@ export const IDENTITY_RBAC_QUOTA_PVC_MANIFESTS = [
   // (kubectl wait on serviceaccount/agentweaver-api happens between these two groups -- see run())
   "secret-provider-class.yaml",
   "rbac-api.yaml",
+  "vap-sandbox-exec.yaml",
   "quota.yaml",
   "storageclass-workspace.yaml",
   "pvc-data.yaml",

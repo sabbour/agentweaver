@@ -68,6 +68,10 @@ export const FILE_RESOURCES = Object.freeze({
     { kind: "Role", name: "agentweaver-worker-sandbox" },
     { kind: "RoleBinding", name: "agentweaver-worker-sandbox" },
   ],
+  "vap-sandbox-exec.yaml": [
+    { kind: "ValidatingAdmissionPolicy", name: "sandbox-exec-only" },
+    { kind: "ValidatingAdmissionPolicyBinding", name: "sandbox-exec-only-binding" },
+  ],
   "quota.yaml": [
     { kind: "ResourceQuota", name: "agentweaver-quota" },
     { kind: "LimitRange", name: "agentweaver-default-limits" },
