@@ -605,27 +605,27 @@ behavior. Do not imply that this evidence is an in-app Agentweaver page.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Drive it from your own tools" --description="Copy the MCP server URL and ready-to-paste client configs from Account settings, and confirm the bearer token stays masked" --duration=12000
+playwright-cli video-chapter "Drive it from your own tools" --description="Copy the read-only MCP server URL from Account settings and confirm the bearer token stays masked" --duration=12000
 playwright-cli click "getByRole('link', { name: 'Account settings', exact: true })"
-# 'MCP clients' nav path and 'Copy config' buttons — selectors unknown, verify in mapping pass.
+# 'MCP clients' nav path and the server URL field — selectors unknown, verify in mapping pass.
 playwright-cli click "TODO(mapping): 'MCP clients' nav item"
 playwright-cli hover "TODO(mapping): masked bearer token"
-playwright-cli click "TODO(mapping): 'Copy config' button (Claude Desktop)"
-playwright-cli click "TODO(mapping): 'Copy config' button (VS Code)"
-playwright-cli click "TODO(mapping): 'Copy config' button (Copilot CLI)"
+# Copy the read-only MCP server URL — copy affordance unverified, verify in mapping pass.
+playwright-cli click "TODO(mapping): copy control on the MCP server URL field"
 playwright-cli snapshot
 playwright-cli video-stop
 ```
 
-Narration: “None of this needs a browser. Connect Agentweaver to Claude Desktop, VS
-Code, or Copilot CLI over MCP, copy the config, and drive the same team and workflows
-from your own tools.”
+Narration: “None of this needs a browser. Open Settings, copy your MCP server URL, and
+point Claude Desktop, VS Code, or Copilot CLI at it. The same bearer token signs you in,
+so you drive the same team and workflows from your own tools.”
 
-Pacing: keep the bearer token masked in every frame; copy each client config in turn and
-let the “Copied” state register before you move to the next one.
+Pacing: keep the bearer token masked in every frame; copy the server URL and let the
+“Copied” state register before you move on.
 
 Reason for placement: this closes the demo on its widest surface, the team and workflows
 you cast now reach past the browser into whatever tool you already use.
 
-**Verify in mapping pass:** the Account settings → MCP clients nav path and the **Copy
-config** buttons are not mapped yet; let Trinity confirm the real refs before recording.
+**Verify in mapping pass:** the Account settings → MCP clients nav path and the copy
+control on the MCP server URL field are not mapped yet; let Trinity confirm the real refs
+before recording.
