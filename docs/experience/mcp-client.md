@@ -25,7 +25,7 @@ A client configuration is conceptually one of these shapes:
 
 | Client mode | What the client points at | Auth shape |
 |---|---|---|
-| Local STDIO | A command such as `dotnet run --project apps/Agentweaver.Mcp -- --stdio` | Environment includes `AGENTWEAVER_API_URL`; when no per-request token exists, `AGENTWEAVER_API_KEY` is the backend bearer token. |
+| Local STDIO | A command such as `dotnet run --project apps/Agentweaver.Mcp -- --stdio` | Environment includes `AGENTWEAVER_API_URL` and `AGENTWEAVER_TOKEN` (your own per-user bearer, e.g. `gh auth token`), which is forwarded to the backend so project ownership is enforced. The shared `AGENTWEAVER_API_KEY` is an internal-only fallback that bypasses ownership checks and must not be used by human/stdio clients (#474). |
 | Hosted HTTP | The MCP server URL ending in `/mcp` | Each request sends `Authorization: Bearer <token>`. The server validates it, stores the resolved caller identity, and forwards the same bearer token to the Agentweaver API. |
 
 The HTTP server also exposes:

@@ -10,11 +10,23 @@ The Agentweaver MCP server exposes all Agentweaver operations as structured tool
 
 ## Setup
 
-Set the required environment variable before starting any MCP host that uses the server:
+Set your **own per-user bearer token** before starting any MCP host that uses the server:
 
 ```
-AGENTWEAVER_API_KEY=<your-api-key>
+AGENTWEAVER_TOKEN=$(gh auth token)
 ```
+
+`AGENTWEAVER_TOKEN` is your personal credential — an Agentweaver-minted OAuth access token or a
+GitHub token (e.g. from `gh auth token`). The backend attributes calls to the real user and
+enforces project ownership, so you only ever reach your own projects.
+
+::: danger Do not use the shared service key for human clients
+`AGENTWEAVER_API_KEY` is the **internal service-to-service** credential. The API maps it to the
+trusted `agentweaver-internal` identity, which is **exempt from project-ownership checks** — a
+client holding it can read or mutate *any* project regardless of who owns it (see issue #474).
+Never configure it on a desktop/stdio MCP client. It exists only for in-process/service callers.
+If a stdio client starts with only `AGENTWEAVER_API_KEY` set, the server logs a prominent warning.
+:::
 
 Optionally override the API base URL (defaults to `http://localhost:5000`):
 
@@ -83,8 +95,19 @@ avoid the collision.
 
 The MCP server forwards every tool call to the Agentweaver API as an authenticated HTTP request using a **bearer token** (`Authorization: Bearer <key>`).
 
-- **Shared key (default).** `AGENTWEAVER_API_KEY` is used for outbound API calls when no per-caller key is present.
-- **Per-caller key propagation.** When the MCP server itself is reached over HTTP with a bearer token (validated by `McpBearerTokenMiddleware`), that caller's key is stashed on the request (`HttpContext.Items["mcp.api_key"]`) and `AgentweaverApiClient.GetEffectiveApiKey()` uses it for the downstream API call — so each caller's identity flows through to the API rather than collapsing onto the shared key. SSE streams (`run_watch`) propagate the same effective key. When no per-caller key is present, the shared `AGENTWEAVER_API_KEY` is used.
+- **Per-user token (recommended).** `AGENTWEAVER_TOKEN` is your own bearer (OAuth access token or a
+  GitHub token). In stdio mode — where there is no inbound HTTP request to carry your identity — it
+  is what the server forwards to the backend, so the API attributes calls to the real user and
+  enforces project ownership. This is the correct credential for desktop/stdio MCP clients.
+- **Per-caller token propagation (HTTP mode).** When the MCP server itself is reached over HTTP with a
+  bearer token (validated by `McpBearerTokenMiddleware`), that caller's token is stashed on the
+  request (`HttpContext.Items["mcp.bearer_token"]`) and `AgentweaverApiClient.GetEffectiveApiKey()`
+  uses it for the downstream API call — so each caller's identity flows through to the API rather
+  than collapsing onto a shared key. SSE streams (`run_watch`) propagate the same effective token.
+- **Shared service key (`AGENTWEAVER_API_KEY`) — internal only.** Used as a last-resort fallback for
+  genuine in-process/service callers. It maps to the trusted `agentweaver-internal` identity that
+  **bypasses project-ownership checks**, so it must never be handed to a human/stdio client (#474).
+  Credential-selection precedence is: inbound per-request token &gt; `AGENTWEAVER_TOKEN` &gt; `AGENTWEAVER_API_KEY`.
 
 ## Health probe
 

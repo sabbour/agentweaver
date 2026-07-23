@@ -38,10 +38,42 @@ internal sealed class McpProgram
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_API_KEY")
             ?? string.Empty;
 
-        // In stdio mode, the MCP server forwards the caller's own Bearer token to the backend.
-        // A shared API key is no longer required.
+        // #474: the per-user bearer (AGENTWEAVER_TOKEN) — an Agentweaver-minted OAuth access token
+        // or a GitHub token (e.g. `gh auth token`). In stdio mode there is no inbound HTTP request to
+        // carry the caller's identity, so this configured token is what the server forwards to the
+        // backend. Forwarding the user's OWN token (instead of the shared AGENTWEAVER_API_KEY) makes
+        // the API attribute calls to the real user and enforce project ownership, closing the
+        // cross-project bypass where any stdio client holding the shared service key could reach any
+        // project via the trusted `agentweaver-internal` identity.
+        var userToken = builder.Configuration["Agentweaver:Token"]
+            ?? Environment.GetEnvironmentVariable("AGENTWEAVER_TOKEN")
+            ?? string.Empty;
 
-        var mcpConfig = new McpConfig(apiUrl, apiKey);
+        if (useStdio)
+        {
+            if (string.IsNullOrWhiteSpace(userToken) && !string.IsNullOrWhiteSpace(apiKey))
+            {
+                // The client is about to authenticate every backend call with the shared internal
+                // service credential, which the API treats as `agentweaver-internal` and EXEMPTS from
+                // project-ownership checks (#474). That grants this stdio client access to EVERY
+                // project on the backend, not just the operator's own. Steer to a per-user token.
+                Console.Error.WriteLine(
+                    "[agentweaver-mcp] WARNING: stdio mode is using the shared AGENTWEAVER_API_KEY. " +
+                    "This is the internal service credential and bypasses project-ownership checks, " +
+                    "giving this client access to ALL projects. Set AGENTWEAVER_TOKEN to your own " +
+                    "per-user token (e.g. `gh auth token`) so the backend enforces ownership. See " +
+                    "docs/guide/mcp-cli.md.");
+            }
+            else if (string.IsNullOrWhiteSpace(userToken) && string.IsNullOrWhiteSpace(apiKey))
+            {
+                Console.Error.WriteLine(
+                    "[agentweaver-mcp] WARNING: no credential configured for stdio mode. Set " +
+                    "AGENTWEAVER_TOKEN to your own per-user token (e.g. `gh auth token`); backend " +
+                    "calls will otherwise be rejected with 401.");
+            }
+        }
+
+        var mcpConfig = new McpConfig(apiUrl, apiKey, userToken);
         builder.Services.AddSingleton(mcpConfig);
         builder.Services.AddSingleton(sp =>
         {

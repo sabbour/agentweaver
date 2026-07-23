@@ -7,7 +7,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes
 | Environment variable     | Required | Description                          |
 |--------------------------|----------|--------------------------------------|
 | `AGENTWEAVER_API_URL`    | No       | Base URL of the Agentweaver API (default: `http://localhost:5000`) |
-| `AGENTWEAVER_API_KEY`    | Yes      | Bearer token for the Agentweaver API |
+| `AGENTWEAVER_TOKEN`      | Yes*     | Your **own** per-user bearer (OAuth access token or a GitHub token, e.g. `gh auth token`). Forwarded to the backend so calls are attributed to you and project ownership is enforced. |
+| `AGENTWEAVER_API_KEY`    | No       | **Internal service credential only.** Maps to the trusted `agentweaver-internal` identity that **bypasses project-ownership checks** — never set this on a human/stdio client (#474). Reserved for in-process/service callers. |
+
+\* Required for human/stdio clients. In HTTP mode the per-request caller token supersedes it.
 
 ## `.mcp.json` example
 
@@ -19,7 +22,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes
       "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
       "env": {
         "AGENTWEAVER_API_URL": "http://localhost:5000",
-        "AGENTWEAVER_API_KEY": "<your-key>"
+        "AGENTWEAVER_TOKEN": "<your-personal-token>"
       }
     }
   }
@@ -31,12 +34,18 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes
 The server authenticates every outbound API call with a **bearer token**
 (`Authorization: Bearer <key>`):
 
-- **Shared key** — `AGENTWEAVER_API_KEY` is the default token for outbound API calls.
-- **Per-caller key propagation** — when the MCP server is reached over HTTP with a bearer token
-  (validated by `McpBearerTokenMiddleware`), that caller's key is stashed on the request
-  (`HttpContext.Items["mcp.api_key"]`) and used for the downstream API call, so each caller's
-  identity flows through to the API instead of collapsing onto the shared key. SSE streams
-  (`run_watch`) propagate the same effective key.
+- **Per-user token (recommended)** — `AGENTWEAVER_TOKEN` is your own bearer (OAuth access token or a
+  GitHub token, e.g. `gh auth token`). In stdio mode (no inbound HTTP context) it is the credential
+  the server forwards, so the API attributes calls to the real user and enforces project ownership.
+- **Per-caller token propagation** — when the MCP server is reached over HTTP with a bearer token
+  (validated by `McpBearerTokenMiddleware`), that caller's token is stashed on the request
+  (`HttpContext.Items["mcp.bearer_token"]`) and used for the downstream API call, so each caller's
+  identity flows through to the API instead of collapsing onto a shared key. SSE streams
+  (`run_watch`) propagate the same effective token.
+- **Shared service key (internal only)** — `AGENTWEAVER_API_KEY` is a last-resort fallback for
+  in-process/service callers. It maps to the `agentweaver-internal` identity that **bypasses
+  project-ownership checks**, so it must never be set on a human/stdio client (#474). Selection
+  precedence: inbound per-request token → `AGENTWEAVER_TOKEN` → `AGENTWEAVER_API_KEY`.
 
 The server exposes an **unauthenticated** liveness probe at `GET /healthz` (→ `200 { "status":
 "healthy" }`), explicitly bypassed by the bearer-token middleware for container/Kubernetes probes.
