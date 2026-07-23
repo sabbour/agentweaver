@@ -163,6 +163,15 @@ public sealed class SkillCatalogService
     /// <summary>Hard ceiling on browse page size (a page fetches this many SKILL.md blobs).</summary>
     internal const int MaxMarketplacePageSize = 50;
 
+    /// <summary>
+    /// Root for browse's request-scoped placeholder scratch tree. Deliberately LOCAL/ephemeral
+    /// (system temp, typically ext4/tmpfs) rather than <see cref="AppPaths.DataDirectory"/>, which in
+    /// production is a CIFS/Azure Files SMB mount whose ~16-33ms per-file op latency made browsing large
+    /// marketplaces take tens of seconds. Placeholders are empty and deleted within the same request, so
+    /// they need no durability — see WriteCandidatePlaceholdersToTempAsync.
+    /// </summary>
+    internal static string BrowseScratchRoot => Path.Combine(Path.GetTempPath(), "agentweaver-skill-browse");
+
     private readonly ISkillStore _skills;
     private readonly IProjectStore _projects;
     private readonly ProjectGitInitializer _gitInit;
@@ -650,7 +659,12 @@ public sealed class SkillCatalogService
     /// </summary>
     private async Task<string> WriteCandidatePlaceholdersToTempAsync(IReadOnlyList<GitHubTreeBlob> blobs, CancellationToken ct)
     {
-        var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
+        // Browse writes an empty placeholder SKILL.md for EVERY skill in the tree just so DiscoverSkills
+        // can derive candidate locations byte-identically to import. These files are request-scoped
+        // throwaways with zero durability need, so they go to a LOCAL ephemeral scratch dir
+        // (BrowseScratchRoot) — never the CIFS-backed AppPaths.DataDirectory, whose per-file latency made
+        // browsing large marketplaces take tens of seconds. See BrowseScratchRoot for the full rationale.
+        var dir = Path.Combine(BrowseScratchRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
 
         var written = 0;
