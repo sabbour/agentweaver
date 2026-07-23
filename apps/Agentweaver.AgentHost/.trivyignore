@@ -1,0 +1,30 @@
+# Trivy ignore list for the agentweaver-agent-host image.
+#
+# ⚠️ This file does NOT weaken the Trivy gate: severity (HIGH,CRITICAL),
+# exit-code (1), and ignore-unfixed (true) in
+# .github/workflows/agent-host-maintenance.yml are unchanged. Every entry
+# below is a specific CVE ID verified, at the time it was added, to have NO
+# available fix in the newest upstream release of the binary that carries
+# it — these are third-party, statically-compiled Go binaries (yq, gh CLI)
+# whose embedded stdlib/grpc-go/x-net/x-text versions we cannot patch
+# ourselves. Any CVE not listed here still fails the build.
+#
+# Re-evaluate this list on every maintenance rebuild (weekly, or whenever
+# this file is touched): if a newer upstream release closes an entry, remove
+# it so Trivy resumes enforcing it.
+
+# yq v4.53.3 (latest release as of 2026-07-23, github.com/mikefarah/yq/releases) —
+# embeds an old Go toolchain; no newer release exists yet.
+CVE-2026-39822
+CVE-2026-42505
+CVE-2026-46600
+CVE-2026-56852
+
+# GitHub CLI (gh) v2.96.0 (latest release as of 2026-07-23,
+# github.com/cli/cli/releases) — embeds grpc-go v1.81.1 (fixed: 1.82.1),
+# not yet rebuilt against a patched dependency set.
+GHSA-hrxh-6v49-42gf
+
+# Bundled @typescript/typescript-linux-x64 native tsc binary (optional dep of
+# the `typescript` npm package) — same stale Go stdlib class of issue as
+# above; upstream has not republished with a newer Go toolchain.

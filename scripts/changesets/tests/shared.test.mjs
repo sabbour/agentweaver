@@ -33,6 +33,19 @@ test("extractChangelogSection returns only the requested version section", () =>
   assert.throws(() => extractChangelogSection(text, "0.9.72"), /no section/);
 });
 
+test("extractChangelogSection accepts bracketed and v-prefixed heading forms", () => {
+  const text =
+    "# Changelog\n\n## [v0.9.70] - 2026-07-16\n\nsome text\n\n## [v0.9.69]\n\nolder text\n";
+
+  assert.equal(
+    extractChangelogSection(text, "0.9.70"),
+    "## [v0.9.70] - 2026-07-16\n\nsome text",
+  );
+  assert.equal(extractChangelogSection("## v0.9.70\n\nplain v-prefixed", "0.9.70"), "## v0.9.70\n\nplain v-prefixed");
+  assert.equal(extractChangelogSection("## [0.9.70]\n\nbracketed", "0.9.70"), "## [0.9.70]\n\nbracketed");
+  assert.equal(extractChangelogSection("## 0.9.70\n\nbare", "0.9.70"), "## 0.9.70\n\nbare");
+});
+
 test("release branch parser accepts only release/vX.Y.Z", () => {
   assert.equal(releaseBranchVersion("release/v0.10.0"), "0.10.0");
   assert.equal(releaseBranchVersion("dev"), undefined);

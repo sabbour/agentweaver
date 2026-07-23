@@ -201,6 +201,14 @@ conventional-commit-style prefix:
 
 - **.NET**: follow the existing conventions in the file/module you're editing. Don't
   introduce a new formatting style into an existing file.
+- **.NET dependencies**: every project restores with `RestorePackagesWithLockFile=true`
+  (see `Directory.Build.props`) and commits a `packages.lock.json`, and CI restores with
+  `RestoreLockedMode=true` so an unreviewed dependency version change fails the build
+  instead of silently resolving a newer package. Use exact `PackageReference` versions
+  (no floating `1.*` or open ranges) for new/changed dependencies. After adding, removing,
+  or changing a package version, regenerate the affected lock file(s) with
+  `dotnet restore --force-evaluate` and commit the updated `packages.lock.json` alongside
+  the `.csproj` change.
 - **Node.js (`scripts/azure/`)**: ESM (`.mjs`), no bash/PowerShell — this toolchain is
   intentionally 100% cross-platform Node.js (it fully replaced the earlier
   bash/PowerShell scripts). Read the module header comment at the top of the relevant

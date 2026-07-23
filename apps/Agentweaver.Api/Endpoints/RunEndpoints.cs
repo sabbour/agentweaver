@@ -2129,7 +2129,12 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
             return Results.Conflict(new { error = "Worktree not available." });
 
         var worktreeRoot2 = run.WorktreePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var fullPath = Path.GetFullPath(Path.Combine(worktreeRoot2, normalizedPath));
+        var candidatePath = Path.GetFullPath(Path.Combine(worktreeRoot2, normalizedPath));
+
+        // Resolve symlinks/reparse points before opening: a repository-planted symlink inside the
+        // worktree could otherwise be followed out to a host/pod file (e.g. a secrets mount).
+        if (!WorkspacePathGuard.TryResolveContainedPath(worktreeRoot2, candidatePath, out var fullPath))
+            return Results.NotFound();
 
         if (!File.Exists(fullPath))
             return Results.NotFound();
