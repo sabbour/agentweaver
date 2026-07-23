@@ -91,4 +91,29 @@ public sealed class ShellCommandValidatorTests : IDisposable
         allowed.Should().BeTrue("a normal, well-formed command must be allowed");
         reason.Should().BeNull();
     }
+
+    [Fact]
+    public void Command_WithCrossRunSharedPath_IsDenied()
+    {
+        // #476: the declared working directory is legitimate (the sandbox root), but the
+        // command text reaches into a sibling project's tree under the shared /workspace PVC.
+        var (allowed, reason) = ShellCommandValidator.Validate(
+            "cat /workspace/other-project/secrets.txt",
+            _sandboxRoot, _sandboxRoot,
+            allowedRoots: new[] { "/local-workspace/run-1/tree" });
+
+        allowed.Should().BeFalse("absolute paths into another run's shared-PVC tree must be rejected");
+        reason.Should().Contain("/workspace");
+    }
+
+    [Fact]
+    public void Command_WithOwnSharedWorktreePath_IsAllowed()
+    {
+        var (allowed, _) = ShellCommandValidator.Validate(
+            "git -C /workspace/my-project status",
+            _sandboxRoot, _sandboxRoot,
+            allowedRoots: new[] { "/workspace/my-project" });
+
+        allowed.Should().BeTrue("the run's own worktree under the shared PVC is allowed");
+    }
 }

@@ -24,6 +24,13 @@
 # the security assessment called out — sandbox egress is locked to public HTTPS only
 # (networkpolicy-sandbox.yaml) and the public MCP no longer shares the pod-create/exec
 # identity (serviceaccount-mcp.yaml) — shrinking the exfiltration/escalation surface.
+#
+# COMPOUNDING CONTROL (#476, command-text guard): because the Kata-mode PassthroughExecutor has
+# no bwrap/mount view, the per-run filesystem policy is now ALSO enforced at the executor boundary.
+# SharedWorkspacePathGuard (packages/Agentweaver.SandboxFs) rejects any shell command that embeds
+# an absolute path under this shared /workspace mount but outside the run's own allowed roots
+# (e.g. `cat /workspace/<other-project>/secrets`). This is defense-in-depth, NOT a substitute for
+# the per-run-volume follow-up above — a text filter cannot catch every obfuscation.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
