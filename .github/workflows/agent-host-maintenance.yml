@@ -80,6 +80,20 @@ jobs:
           ignore-unfixed: true    # Only flag CVEs that have a fix available
           trivyignores: apps/Agentweaver.AgentHost/.trivyignore
 
+      # TEMP DEBUG: print human-readable table so we can see exactly which
+      # HIGH/CRITICAL findings are causing exit-code 1 above (sarif format is
+      # silent in the log). Non-blocking (exit-code 0). Remove once resolved.
+      - name: Debug - print Trivy table
+        if: always()
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          ignore-unfixed: true
+          trivyignores: apps/Agentweaver.AgentHost/.trivyignore
+
       - name: Upload Trivy SARIF to GitHub Security tab
         if: always()              # Upload even on scan failure so results are visible
         uses: github/codeql-action/upload-sarif@v3
