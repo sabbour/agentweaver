@@ -161,19 +161,20 @@ surfaces only once their selectors and a real result are captured.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Frame the product" --description="Pick the product workflow and ask the team to deliver a landing page" --duration=18000
+playwright-cli video-chapter "Frame the product" --description="Pick the product workflow and hand the team a real problem to solve" --duration=18000
 playwright-cli click "getByTestId('start-task-topbar-action')"
 playwright-cli select "getByLabel('Workflow', { exact: true })" "pm-discovery"
 playwright-cli click "getByRole('textbox', { name: 'Goal' })"
-playwright-cli type "Design and build the landing page for Standup Scribe, a tool that turns a pasted meeting transcript into a clean list of action items. The page has a welcome banner across the top that explains what the tool does, and directly below it one primary 'Paste transcript' call-to-action button that starts the flow. Keep scope to this one landing page: the welcome banner, the primary button, and a short supporting line. Define the problem, the target user, and the success criteria."
+playwright-cli type "People come out of standup with a messy transcript and no clear record of what was decided or who owns what. I want to launch Standup Scribe, a tool that turns that raw transcript into a clean summary the whole team can share. Work out who this is really for, what they need, and how we'd position and message it. Then figure out the first experience that gets someone from a pile of text to a summary they trust, and start with the simplest thing we could put in front of a real user to prove it helps."
 playwright-cli hover "getByRole('button', { name: 'Define Outcome', exact: true })"
 playwright-cli click "getByRole('button', { name: 'Define Outcome', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “Start the product workflow and ask the team to design and build a landing
-page: a welcome banner up top and one primary ‘Paste transcript’ button below it. That’s
-the page you’ll preview and ship.”
+Narration: “Start the product workflow and hand the team a real problem: standups end in a
+messy transcript with no shared record. Ask them to shape Standup Scribe from there —
+product, marketing, research, and design work out who it’s for and what the first
+experience should be.”
 
 Pacing: type the goal naturally; pause before Define Outcome. Select the product
 discovery workflow with the verified `pm-discovery` value before entering the goal.
@@ -204,8 +205,9 @@ playwright-cli click "getByRole('button', { name: 'Confirm plan', exact: true })
 playwright-cli snapshot
 ```
 
-Narration: “Read the OutcomeSpec first, then use Clarify to tighten the scope. Let the
-independent pieces become their own tasks, and confirm.”
+Narration: “Read the OutcomeSpec the team came back with — it proposes a simple landing
+page as the first slice: a welcome banner and one ‘Paste transcript’ button. Use Clarify
+to tighten the scope, let the independent pieces run as their own tasks, and confirm.”
 
 Pacing: show the Clarify exchange, then pause before Confirm plan so the human decision is
 legible.
