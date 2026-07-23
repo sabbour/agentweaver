@@ -28,8 +28,12 @@ Keys map to the user accountable for the runs they submit. Configure them under
 
 A single key is also accepted via `Auth:ApiKey` plus `Auth:User`. A request
 without a recognized key is rejected with `401`. A request for a run the caller
-does not own is rejected with `403`. When no keys are configured, every `/api`
-request is unauthorized.
+does not own is rejected with `403`. Project-scoped resources are likewise
+owner-scoped: memory, session, decision (inbox/promoted), and casting endpoints
+verify that the caller owns the target project and return `403` otherwise, so an
+authenticated caller cannot read or mutate another project's data by supplying its
+id (the trusted internal service identity used for a run's own agent callbacks is
+exempt). When no keys are configured, every `/api` request is unauthorized.
 
 ## Endpoints
 
