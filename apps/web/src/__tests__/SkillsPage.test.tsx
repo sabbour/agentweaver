@@ -19,6 +19,8 @@ import type {
   Project,
   SkillAcquisitionResponse,
   SkillDto,
+  SkillMarketplaceBrowseResponse,
+  SkillMarketplaceDto,
   TeamDto,
   TeamMemberDto,
 } from '../api/types';
@@ -32,6 +34,9 @@ vi.mock('../api/apiClient', () => ({
     syncSkills: vi.fn(),
     previewSkillImport: vi.fn(),
     importSkills: vi.fn(),
+    listSkillMarketplaces: vi.fn(),
+    browseSkillMarketplace: vi.fn(),
+    importMarketplaceSkills: vi.fn(),
     uploadSkills: vi.fn(),
     assignSkill: vi.fn(),
     unassignSkill: vi.fn(),
@@ -827,5 +832,55 @@ describe('SkillsPage — blueprint defaults', () => {
 
     await waitFor(() => expect(screen.getByText('API error 500: preview unavailable')).toBeTruthy());
     expect(screen.queryByText(/Blueprint defaults applied/)).toBeNull();
+  });
+});
+
+describe('SkillsPage — curated marketplaces', () => {
+  const marketplace: SkillMarketplaceDto = {
+    name: 'GitHub Awesome Copilot',
+    repository: 'github/awesome-copilot',
+    subpath: 'skills',
+    layout_note: null,
+  };
+
+  it('shows a loading state then renders candidates while browsing a marketplace', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.listSkillMarketplaces).mockResolvedValue([marketplace]);
+    const browse = deferred<SkillMarketplaceBrowseResponse>();
+    vi.mocked(apiClient.browseSkillMarketplace).mockReturnValue(browse.promise);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse marketplaces' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'GitHub Awesome Copilot' }));
+
+    // While the browse request is in-flight the dialog must not silently freeze: a loading
+    // indicator is shown (regression guard for the marketplace-browse hang).
+    await waitFor(() => expect(screen.getByLabelText('Loading')).toBeTruthy());
+
+    browse.resolve({
+      marketplace: 'GitHub Awesome Copilot',
+      candidates: [{ location: 'skills/pr-review', name: 'pr-review', description: 'Reviews PRs.', valid: true, resource_count: 0, errors: [] }],
+    });
+
+    expect(await screen.findByText('pr-review')).toBeTruthy();
+    expect(screen.getByText('Reviews PRs.')).toBeTruthy();
+  });
+
+  it('surfaces a browse error inside the dialog instead of freezing', async () => {
+    vi.mocked(apiClient.listSkills).mockResolvedValue([]);
+    vi.mocked(apiClient.listSkillMarketplaces).mockResolvedValue([marketplace]);
+    vi.mocked(apiClient.browseSkillMarketplace).mockRejectedValue(
+      new ApiError(422, JSON.stringify({ error: 'Timed out while reading the marketplace source. Please try again in a moment.' })),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse marketplaces' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'GitHub Awesome Copilot' }));
+
+    await waitFor(() => expect(screen.getByText(/Timed out while reading the marketplace source/)).toBeTruthy());
+    // The loading indicator must be gone once the error is shown.
+    expect(screen.queryByLabelText('Loading')).toBeNull();
   });
 });

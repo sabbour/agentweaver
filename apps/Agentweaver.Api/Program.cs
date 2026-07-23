@@ -368,6 +368,7 @@ builder.Services.AddSingleton<ProjectService>();
     }
 }
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IGitHubSkillTreeClient, Agentweaver.Api.Skills.GitHubSkillTreeClient>();
 builder.Services.Configure<Agentweaver.Api.Skills.SkillMarketplaceOptions>(builder.Configuration.GetSection("SkillMarketplaces"));
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillMarketplaceRegistry>();
