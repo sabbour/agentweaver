@@ -11,6 +11,7 @@ import {
   validateReleasePreparation,
   validateReleasePreparationFiles,
   validateSyncBranch,
+  getUnexpectedIgnoredFiles,
 } from "../shared.mjs";
 
 test("version mirrors require VERSION, package.json, and lockfile to match", () => {
@@ -116,4 +117,36 @@ test("dev sync validates branch and prepared release metadata", () => {
   assert.doesNotThrow(() => validateReleasePreparationFiles("abc123", files));
   assert.throws(() => validateReleasePreparationFiles("abc123", files.filter((file) => file !== "VERSION")), /missing VERSION/);
   assert.throws(() => validateReleasePreparationFiles("abc123", files.slice(0, 4)), /does not consume changesets/);
+});
+
+test("getUnexpectedIgnoredFiles filters allowed ignored patterns", () => {
+  const stdout = [
+    "!! node_modules/",
+    "!! apps/web/node_modules/",
+    "!! dist/",
+    "!! apps/web/dist/",
+    "!! obj/",
+    "!! bin/",
+    "!! packages/Agentweaver.SandboxExec/bin/Debug/",
+    "!! packages/Agentweaver.SandboxExec/bin/Release/",
+    "!! TestResults/",
+    "!! .squad/",
+    "!! .vite/",
+    "!! .idea/",
+    "!! .vscode/",
+    "!! .vs/",
+    "!! .env",
+    "!! .env.local",
+    "!! npm-debug.log",
+    "!! scripts/azure/params.test.json",
+    "!! scripts/azure/steps/.rendered/",
+    "!! scripts/azure/tests/.scratch-123",
+    "!! .security/",
+    "!! test.user",
+    "!! test.tsbuildinfo",
+    "!! malicious.js",
+    "!! src/malicious.js"
+  ].join("\n");
+  const unexpected = getUnexpectedIgnoredFiles(stdout);
+  assert.deepEqual(unexpected, ["malicious.js", "src/malicious.js"]);
 });

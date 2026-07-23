@@ -64,7 +64,55 @@ export async function isWorkingTreeClean({ cwd, capture }) {
     cwd,
     allowFailure: true,
   });
-  return unstaged.code === 0 && staged.code === 0 && status.code === 0 && status.stdout.length === 0;
+  
+  if (unstaged.code !== 0 || staged.code !== 0 || status.code !== 0 || status.stdout.length > 0) {
+    return false;
+  }
+
+  const ignored = await capture("git", ["status", "--porcelain", "--ignored=matching"], {
+    cwd,
+    allowFailure: true,
+  });
+
+  if (ignored.code !== 0) {
+    return false;
+  }
+
+  const unexpectedIgnored = getUnexpectedIgnoredFiles(ignored.stdout);
+  return unexpectedIgnored.length === 0;
+}
+
+function getUnexpectedIgnoredFiles(stdout) {
+  const allowedPatterns = [
+    /(^|\/)node_modules\//,
+    /(^|\/)dist\//,
+    /(^|\/)bin\//,
+    /(^|\/)obj\//,
+    /(^|\/)TestResults\//,
+    /(^|\/)\.vite\//,
+    /^tests\/e2e\/playwright-report\//,
+    /^tests\/e2e\/test-results\//,
+    /^\.squad\//,
+    /^\.idea\//,
+    /^\.vscode\//,
+    /^\.vs\//,
+    /^\.security\//,
+    /^\.worktrees\//,
+    /^\.env(\.local)?$/,
+    /^npm-debug\.log/,
+    /^scripts\/azure\/params\..*\.json$/,
+    /^scripts\/azure\/tests\/\.scratch-/,
+    /^scripts\/azure\/steps\/\.rendered\//,
+    /\.(user|suo|userprefs)$/,
+    /\.tsbuildinfo$/
+  ];
+
+  return stdout
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("!! "))
+    .map(line => line.slice(3))
+    .filter(file => !allowedPatterns.some(pattern => pattern.test(file)));
 }
 
 export async function validateMainSha({ cwd, capture }) {

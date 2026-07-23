@@ -124,3 +124,36 @@ export function validateSyncBranch(branch) {
     throw new Error("Run release:sync-dev on a short-lived branch from current dev.");
   }
 }
+
+export function getUnexpectedIgnoredFiles(stdout) {
+  const allowedPatterns = [
+    /(^|\/)node_modules\//,
+    /(^|\/)dist\//,
+    /(^|\/)bin\//,
+    /(^|\/)obj\//,
+    /(^|\/)TestResults\//,
+    /(^|\/)\.vite\//,
+    /^tests\/e2e\/playwright-report\//,
+    /^tests\/e2e\/test-results\//,
+    /^\.squad\//,
+    /^\.idea\//,
+    /^\.vscode\//,
+    /^\.vs\//,
+    /^\.security\//,
+    /^\.worktrees\//,
+    /^\.env(\.local)?$/,
+    /^npm-debug\.log/,
+    /^scripts\/azure\/params\..*\.json$/,
+    /^scripts\/azure\/tests\/\.scratch-/,
+    /^scripts\/azure\/steps\/\.rendered\//,
+    /\.(user|suo|userprefs)$/,
+    /\.tsbuildinfo$/
+  ];
+
+  return stdout
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("!! "))
+    .map(line => line.slice(3))
+    .filter(file => !allowedPatterns.some(pattern => pattern.test(file)));
+}

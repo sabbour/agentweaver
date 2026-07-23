@@ -7,6 +7,7 @@ import {
   extractChangelogSection,
   validateReleasePreparationFiles,
   validateSyncBranch,
+  getUnexpectedIgnoredFiles,
 } from "./shared.mjs";
 
 const root = process.cwd();
@@ -22,6 +23,12 @@ function git(...args) {
 
 if (git("status", "--porcelain", "--untracked-files=all")) {
   throw new Error("Working tree must be clean before syncing release metadata.");
+}
+
+const ignored = git("status", "--porcelain", "--ignored=matching");
+const unexpectedIgnored = getUnexpectedIgnoredFiles(ignored);
+if (unexpectedIgnored.length > 0) {
+  throw new Error(`Working tree contains unexpected ignored files: ${unexpectedIgnored.join(", ")}`);
 }
 
 const branch = git("branch", "--show-current");
