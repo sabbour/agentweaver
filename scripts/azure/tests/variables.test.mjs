@@ -146,6 +146,7 @@ test("resolveVariables: resolveLive=false skips az entirely (no Azure needed for
   });
   assert.equal(vars.TENANT_ID, "");
   assert.equal(vars.IDENTITY_CLIENT_ID, "");
+  assert.equal(vars.AGENTHOST_IDENTITY_CLIENT_ID, "");
   assert.equal(vars.APPINSIGHTS_WORKSPACE_ID, "");
 });
 
@@ -158,7 +159,7 @@ test("resolveVariables: resolveLive=true calls stubbed az helpers with the right
     },
     getIdentityClientId: async (rg, name) => {
       calls.push(["identity", rg, name]);
-      return "client-abc";
+      return name === "agentweaver-agenthost-identity" ? "agenthost-client-abc" : "client-abc";
     },
     getLogAnalyticsWorkspaceCustomerId: async (rg, name) => {
       calls.push(["workspace", rg, name]);
@@ -174,10 +175,12 @@ test("resolveVariables: resolveLive=true calls stubbed az helpers with the right
   });
   assert.equal(vars.TENANT_ID, "tenant-123");
   assert.equal(vars.IDENTITY_CLIENT_ID, "client-abc");
+  assert.equal(vars.AGENTHOST_IDENTITY_CLIENT_ID, "agenthost-client-abc");
   assert.equal(vars.APPINSIGHTS_WORKSPACE_ID, "workspace-xyz");
   assert.deepEqual(calls, [
     "tenant",
     ["identity", "my-rg", "agentweaver-api-identity"],
+    ["identity", "my-rg", "agentweaver-agenthost-identity"],
     ["workspace", "my-rg", "agentweaver-logs"],
   ]);
 });
@@ -198,6 +201,7 @@ test("resolveVariables: env-supplied live fields short-circuit az (lazy resoluti
     env: {
       TENANT_ID: "env-tenant",
       IDENTITY_CLIENT_ID: "env-client",
+      AGENTHOST_IDENTITY_CLIENT_ID: "env-agenthost-client",
       APPINSIGHTS_WORKSPACE_ID: "env-workspace",
     },
     repoRoot: FAKE_REPO_ROOT,
@@ -207,6 +211,7 @@ test("resolveVariables: env-supplied live fields short-circuit az (lazy resoluti
   });
   assert.equal(vars.TENANT_ID, "env-tenant");
   assert.equal(vars.IDENTITY_CLIENT_ID, "env-client");
+  assert.equal(vars.AGENTHOST_IDENTITY_CLIENT_ID, "env-agenthost-client");
   assert.equal(vars.APPINSIGHTS_WORKSPACE_ID, "env-workspace");
 });
 

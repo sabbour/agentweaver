@@ -63,7 +63,8 @@ from its exact matching section; do not run another changelog generator.
 
 ## Publishing and deploying
 
-From a clean checkout at the exact resulting `origin/main` SHA:
+From a clean checkout at the exact resulting `origin/main` SHA (including no
+untracked or unexpected git-ignored files):
 
 ```bash
 # Repository identity only: tag + GitHub Release, no Azure deployment

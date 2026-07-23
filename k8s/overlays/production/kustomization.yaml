@@ -76,6 +76,7 @@ configMapGenerator:
       - "HOST=agentweaver.example.com"
       - "PREVIEW_HOSTNAME=*.example.com"
       - "IDENTITY_CLIENT_ID=changeme"
+      - "AGENTHOST_IDENTITY_CLIENT_ID=changeme"
       - "KEYVAULT_NAME=changeme"
       - "TENANT_ID=changeme"
       - "OAUTH_ISSUER=https://agentweaver.example.com"
@@ -121,8 +122,27 @@ replacements:
           kind: SecretProviderClass
         fieldPaths:
           - spec.parameters.clientID
+      # The API and MCP ServiceAccounts share the Key-Vault-privileged API identity (both legitimately
+      # reach Key Vault). The AgentHost ServiceAccount is deliberately EXCLUDED here (issue #471) and
+      # wired to its own KV-less identity by the AGENTHOST_IDENTITY_CLIENT_ID replacement below.
       - select:
           kind: ServiceAccount
+        reject:
+          - kind: ServiceAccount
+            name: agentweaver-agent-host
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.AGENTHOST_IDENTITY_CLIENT_ID
+    targets:
+      # Dedicated least-privilege AgentHost identity (issue #471): NO Key Vault roles. The sandbox
+      # cannot exchange its workload-identity token for a vault token; the run owner's GitHub token is
+      # brokered per-run via the API /configure call instead.
+      - select:
+          kind: ServiceAccount
+          name: agentweaver-agent-host
         fieldPaths:
           - metadata.annotations.[azure.workload.identity/client-id]
   - source:

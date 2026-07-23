@@ -9,7 +9,7 @@ The deployment is built around five ideas:
 1. **One public HTTPS entry point** routes browser, API, OAuth, and MCP traffic by path.
 2. **Three long-running application workloads** run separately: API, frontend/static host, and MCP server.
 3. **State is explicit**: PostgreSQL Flexible Server holds all application state; the workspace volume is a shared multi-writer file share for worktrees and sandbox files.
-4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets; API app secrets use CSI, while AgentHost user tokens are fetched at runtime from Key Vault after `/configure`.
+4. **Identity replaces static cloud credentials**: pods use Azure Workload Identity to read Key Vault secrets; API app secrets use CSI, while AgentHost user tokens are resolved on the API side and brokered to the sandbox in `/configure` (the sandbox identity has no Key Vault access, issue #471).
 5. **Networking starts closed**: default deny policies are opened only for the paths each component actually needs.
 
 The deployment scripts default to `agentweaver-rg`, `agentweaver-aks`, `agentweaverregistry`, `westus2`, namespace `agentweaver`, Key Vault `agentweaver-kv`, and an image tag based on the short Git SHA unless `IMAGE_TAG` is supplied.
@@ -101,7 +101,7 @@ This split keeps MCP protocol concerns out of the frontend and avoids making the
 
 ### Sandbox workload
 
-Sandbox pods are not normal always-on services. The live pod-per-run path claims pre-warmed AgentHost pods (`agentweaver-agent-host`, `replicas: 2`), then configures the bound pod with `/configure` before the first A2A turn. AgentHost uses a dedicated workload-identity service account so it can fetch the configured user token from Key Vault.
+Sandbox pods are not normal always-on services. The live pod-per-run path claims pre-warmed AgentHost pods (`agentweaver-agent-host`, `replicas: 2`), then configures the bound pod with `/configure` before the first A2A turn. AgentHost runs as a dedicated, Key-Vault-less workload identity (issue #471); the run owner's token is brokered to it per-run by the API in `/configure` rather than fetched directly from Key Vault.
 
 The API has narrow RBAC for creating and interacting with these sandbox resources. That is intentional: the API needs to create sandbox claims/pods and exec into them, but it should not be a broad cluster administrator.
 
@@ -176,9 +176,9 @@ The secret path is deliberately indirect:
 
 The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
-The API reads GitHub OAuth client settings and the OAuth signing key from CSI-mounted files. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). The `agentweaver-api`, `agentweaver-worker`, and `agentweaver-agent-host` service accounts use the same managed identity (`agentweaver-api-identity`), each with its own federated credential (`agentweaver-api-fedcred`, `agentweaver-worker-fedcred`, and `agentweaver-agenthost-fedcred` respectively). The static `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
+The API reads GitHub OAuth client settings and the OAuth signing key from CSI-mounted files. The MCP server mounts no secrets — its auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough). The `agentweaver-api`, `agentweaver-worker` (and `agentweaver-mcp`) service accounts use the same Key-Vault-privileged managed identity (`agentweaver-api-identity`), each with its own federated credential (`agentweaver-api-fedcred` and `agentweaver-worker-fedcred` respectively). The `agentweaver-agent-host` service account is deliberately federated to a **separate, dedicated identity (`agentweaver-agenthost-identity`, federated credential `agentweaver-agenthost-fedcred`) with no Key Vault roles** (issue #471). The static `agentweaver-secrets` SecretProviderClass defines which Key Vault objects are mounted for the API.
 
-AgentHost user tokens are fetched at runtime, not mounted through per-run SecretProviderClasses. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never mirrored to the shared workspace PVC. `sandbox-warmpool-agenthost.yaml` keeps two AgentHost pods pre-warmed in standby; at run launch the API claims one, calls `/configure` with the run owner's secret name, and the pod uses workload identity to fetch exactly that secret. There are no per-run SPCs, cloned templates, or per-run warm pools to clean up.
+AgentHost user tokens are fetched at runtime, not mounted through per-run SecretProviderClasses. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never mirrored to the shared workspace PVC. `sandbox-warmpool-agenthost.yaml` keeps two AgentHost pods pre-warmed in standby; at run launch the API claims one and calls `/configure` with the run owner's token pre-resolved on the API side (`gitHubAccessToken`). The sandbox identity has no Key Vault roles (issue #471), so the pod never reads the vault directly. There are no per-run SPCs, cloned templates, or per-run warm pools to clean up.
 
 Rotation constraint: the CSI driver can refresh mounted API files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 

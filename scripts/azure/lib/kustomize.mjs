@@ -157,6 +157,7 @@ export function buildRuntimeConfigLiterals(vars) {
     HOST: host,
     PREVIEW_HOSTNAME: str(vars.PREVIEW_HOSTNAME),
     IDENTITY_CLIENT_ID: str(vars.IDENTITY_CLIENT_ID),
+    AGENTHOST_IDENTITY_CLIENT_ID: str(vars.AGENTHOST_IDENTITY_CLIENT_ID),
     KEYVAULT_NAME: str(vars.KEYVAULT_NAME),
     TENANT_ID: str(vars.TENANT_ID),
     OAUTH_ISSUER: host ? `https://${host}` : "",
