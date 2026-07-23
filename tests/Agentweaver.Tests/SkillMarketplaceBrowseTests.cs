@@ -191,13 +191,14 @@ public sealed class SkillMarketplaceBrowseTests
         text.Should().BeNull();
     }
 
-    // ── Browse lists candidates from SKILL.md manifests only (no resource downloads) ─────
+    // ── Browse builds an INDEX (name + short definition) without bulk-downloading resources ──
 
     [Fact]
-    public async Task BrowseMarketplaceAsync_downloads_only_skill_manifests_not_resources()
+    public async Task BrowseMarketplaceAsync_builds_index_from_skill_manifests_without_downloading_resources()
     {
-        // Regression guard for the awesome-copilot browse timeout: browse must NOT pull every resource
-        // blob under the subpath, only the SKILL.md manifests it needs to list candidate skills.
+        // Product contract: browse is a lightweight index — each candidate carries a name + short
+        // definition read from SKILL.md frontmatter, but the skill's OTHER resource files are NEVER
+        // downloaded at browse time (only at import). This is the awesome-copilot 30s regression guard.
         var blobs = new List<GitHubTreeBlob>
         {
             new("skills/pr-review/SKILL.md", 40),
@@ -207,8 +208,8 @@ public sealed class SkillMarketplaceBrowseTests
             new("skills/deploy/runbook.md", 100),
         };
         var tree = new RecordingTreeClient(blobs, path => path.EndsWith("/SKILL.md", StringComparison.Ordinal)
-            ? $"---\nname: {Path.GetFileName(Path.GetDirectoryName(path))}\ndescription: A curated skill.\n---\nDo the thing."
-            : "resource body");
+            ? $"---\nname: {Path.GetFileName(Path.GetDirectoryName(path))}\ndescription: A short definition for {Path.GetFileName(Path.GetDirectoryName(path))}.\n---\nDo the thing thoroughly and safely."
+            : throw new InvalidOperationException($"browse must not download resource blob {path}"));
         var svc = CreateService(tree);
 
         var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
@@ -217,8 +218,12 @@ public sealed class SkillMarketplaceBrowseTests
         outcome.Should().Be(SkillOutcome.Ok);
         error.Should().BeNull();
         candidates!.Select(c => c.Location).Should().BeEquivalentTo("skills/pr-review", "skills/deploy");
-        candidates.Should().OnlyContain(c => c.Valid);
-        // Only the two manifests were downloaded — never the reference/runbook/binary resources.
+        // Each candidate carries a short definition parsed from its SKILL.md frontmatter.
+        candidates.Should().Contain(c => c.Location == "skills/pr-review"
+            && c.Name == "pr-review"
+            && c.Description == "A short definition for pr-review.");
+        candidates.Should().OnlyContain(c => c.Description != null && c.Description.Length > 0);
+        // ONLY the two SKILL.md manifests were fetched — never the reference/runbook/binary resources.
         tree.RawRequests.Should().BeEquivalentTo("skills/pr-review/SKILL.md", "skills/deploy/SKILL.md");
     }
 
