@@ -446,8 +446,11 @@ public sealed class SkillCatalogService
         ProjectId projectId, string owner, string repo, string branch, string subpath,
         string? query, int page, int pageSize, CallerContext caller, CancellationToken ct)
     {
+        // Ownership is enforced by the endpoint via ProjectAuthorization (owner OR the trusted
+        // agentweaver-internal loopback identity). A second caller.Owns here would silently defeat that
+        // exemption, so we keep only a cheap project-existence guard as defense-in-depth.
         var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        if (project is null)
             return (SkillOutcome.NotFound, null, null);
         if (_treeClient is null)
             return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
@@ -530,8 +533,10 @@ public sealed class SkillCatalogService
         ProjectId projectId, string owner, string repo, string branch,
         string? query, int page, int pageSize, CallerContext caller, CancellationToken ct, string? parseStrategy = null)
     {
+        // Ownership is enforced by the endpoint via ProjectAuthorization (owner OR the trusted
+        // agentweaver-internal loopback identity); keep only a project-existence guard here.
         var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        if (project is null)
             return (SkillOutcome.NotFound, null, null);
         if (_treeClient is null || _catalogIndexer is null)
             return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
@@ -639,8 +644,10 @@ public sealed class SkillCatalogService
         ProjectId projectId, string owner, string repo, string branch, string subpath,
         IReadOnlyList<string>? locations, CallerContext caller, string marketplaceName, CancellationToken ct)
     {
+        // Ownership is enforced by the endpoint via ProjectAuthorization (owner OR the trusted
+        // agentweaver-internal loopback identity); keep only a project-existence guard here.
         var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        if (project is null)
             return new SkillAcquisitionResult { Outcome = SkillOutcome.NotFound };
         if (_treeClient is null)
             return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = MarketplaceUnavailableMessage };

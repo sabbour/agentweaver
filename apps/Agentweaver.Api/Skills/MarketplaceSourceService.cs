@@ -33,8 +33,14 @@ public sealed record AddSourceResult(AddSourceOutcome Outcome, string? Error = n
 /// Merges the administrator-curated config marketplace registry with project-scoped, user-added URL
 /// sources, and resolves a marketplace NAME (used in the browse/import routes) to a
 /// <see cref="ResolvedMarketplace"/>. Config definitions win on a name clash (they are trusted and
-/// cannot be shadowed by a project source). Enforces project ownership on every project-scoped read or
-/// mutation via the same <c>caller.Owns(project.Owner)</c> pattern the skill endpoints use.
+/// cannot be shadowed by a project source).
+///
+/// AUTHORIZATION: project ownership is enforced by the CALLER (the endpoint) via
+/// <see cref="ProjectAuthorization"/> before any of these methods run, exactly like the other
+/// project-scoped endpoints (memory/decisions/casting). These methods therefore assume the project has
+/// already been resolved and authorized — they never re-check ownership, so the
+/// <c>agentweaver-internal</c> loopback identity exemption that <see cref="ProjectAuthorization"/>
+/// grants is not silently defeated by a second, exemption-unaware <c>caller.Owns</c> check here.
 /// </summary>
 public sealed class MarketplaceSourceService
 {
@@ -48,32 +54,28 @@ public sealed class MarketplaceSourceService
 
     private readonly SkillMarketplaceRegistry _registry;
     private readonly IProjectMarketplaceSourceStore _sources;
-    private readonly IProjectStore _projects;
     private readonly IGitHubSkillTreeClient? _treeClient;
     private readonly ILogger<MarketplaceSourceService> _logger;
 
     public MarketplaceSourceService(
         SkillMarketplaceRegistry registry,
         IProjectMarketplaceSourceStore sources,
-        IProjectStore projects,
         ILogger<MarketplaceSourceService> logger,
         IGitHubSkillTreeClient? treeClient = null)
     {
         _registry = registry;
         _sources = sources;
-        _projects = projects;
         _treeClient = treeClient;
         _logger = logger;
     }
 
-    /// <summary>Config definitions + this project's URL sources, or null when the project is not owned.</summary>
-    public async Task<IReadOnlyList<ResolvedMarketplace>?> ListForProjectAsync(
-        ProjectId projectId, CallerContext caller, CancellationToken ct)
+    /// <summary>
+    /// Config definitions + this project's URL sources. The caller MUST have already resolved and
+    /// authorized <paramref name="projectId"/> via <see cref="ProjectAuthorization"/>.
+    /// </summary>
+    public async Task<IReadOnlyList<ResolvedMarketplace>> ListForProjectAsync(
+        ProjectId projectId, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
-            return null;
-
         var merged = new List<ResolvedMarketplace>();
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var def in _registry.ListEnabled())
@@ -92,17 +94,12 @@ public sealed class MarketplaceSourceService
 
     /// <summary>
     /// Resolves a marketplace name to its source, preferring a config definition over a project source
-    /// of the same name. Returns null when the project is not owned or no source matches. The
-    /// <c>projectOwned</c> out flag distinguishes "not owned/not found project" (→404) from "no such
-    /// marketplace" (→404) at the endpoint if needed.
+    /// of the same name. Returns null when no source matches. The caller MUST have already resolved and
+    /// authorized <paramref name="projectId"/> via <see cref="ProjectAuthorization"/>.
     /// </summary>
     public async Task<ResolvedMarketplace?> ResolveAsync(
-        ProjectId projectId, string name, CallerContext caller, CancellationToken ct)
+        ProjectId projectId, string name, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
-            return null;
-
         var def = _registry.FindEnabled(name);
         if (def is not null)
             return ToResolved(def);
@@ -114,16 +111,14 @@ public sealed class MarketplaceSourceService
     /// <summary>
     /// Adds a project-scoped marketplace source from a repo URL/slug. Rejects clashes with a config
     /// definition name, duplicate project names, malformed URLs, and — best-effort — non-public repos
-    /// (an anonymous tree read must succeed). Step-1 only supports PUBLIC GitHub repos.
+    /// (an anonymous tree read must succeed). Step-1 only supports PUBLIC GitHub repos. The caller MUST
+    /// have already resolved and authorized <paramref name="projectId"/> via
+    /// <see cref="ProjectAuthorization"/>.
     /// </summary>
     public async Task<AddSourceResult> AddSourceAsync(
         ProjectId projectId, string repositoryUrl, string? name, string? branch, string? subpath,
-        string? parseStrategy, CallerContext caller, CancellationToken ct)
+        string? parseStrategy, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
-            return new AddSourceResult(AddSourceOutcome.NotFound);
-
         if (!TryParseRepositoryUrl(repositoryUrl, out var owner, out var repo, out var urlBranch, out var urlSubpath))
             return new AddSourceResult(AddSourceOutcome.Invalid, "Provide a GitHub repo as owner/repo or a https://github.com/owner/repo URL.");
 
@@ -183,13 +178,12 @@ public sealed class MarketplaceSourceService
         return new AddSourceResult(AddSourceOutcome.Ok, Source: ToResolved(source));
     }
 
-    /// <summary>Removes a project source by name. Returns NotFound when the project isn't owned or no row matched.</summary>
-    public async Task<AddSourceOutcome> RemoveSourceAsync(ProjectId projectId, string name, CallerContext caller, CancellationToken ct)
+    /// <summary>
+    /// Removes a project source by name. Returns NotFound when no row matched. The caller MUST have
+    /// already resolved and authorized <paramref name="projectId"/> via <see cref="ProjectAuthorization"/>.
+    /// </summary>
+    public async Task<AddSourceOutcome> RemoveSourceAsync(ProjectId projectId, string name, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
-            return AddSourceOutcome.NotFound;
-
         var removed = await _sources.DeleteByNameAsync(projectId, name, ct).ConfigureAwait(false);
         return removed ? AddSourceOutcome.Ok : AddSourceOutcome.NotFound;
     }

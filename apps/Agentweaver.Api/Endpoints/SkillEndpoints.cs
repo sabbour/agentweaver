@@ -7,6 +7,7 @@ using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -197,12 +198,11 @@ public static class SkillEndpoints
 
         // GET /api/projects/{id}/skill-marketplaces — config definitions + this project's URL sources.
         app.MapGet("/api/projects/{id}/skill-marketplaces", async (
-            HttpContext http, string id, MarketplaceSourceService sources, CancellationToken ct) =>
+            HttpContext http, string id, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var list = await sources.ListForProjectAsync(projectId, caller, ct);
-            if (list is null) return Results.NotFound();
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var list = await sources.ListForProjectAsync(project!.Id, ct);
             return Results.Ok(list.Select(m => new
             {
                 name = m.Name,
@@ -217,14 +217,14 @@ public static class SkillEndpoints
 
         // POST /api/projects/{id}/skill-marketplaces/sources — add a marketplace source by repo URL.
         app.MapPost("/api/projects/{id}/skill-marketplaces/sources", async (
-            HttpContext http, string id, AddMarketplaceSourceRequest body, MarketplaceSourceService sources, CancellationToken ct) =>
+            HttpContext http, string id, AddMarketplaceSourceRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
             if (body is null || string.IsNullOrWhiteSpace(body.Repository))
                 return Results.BadRequest(new { error = "A GitHub repository URL or owner/repo is required." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
             var result = await sources.AddSourceAsync(
-                projectId, body.Repository, body.Name, body.Branch, body.Subpath, body.ParseStrategy, caller, ct);
+                project!.Id, body.Repository, body.Name, body.Branch, body.Subpath, body.ParseStrategy, ct);
             return result.Outcome switch
             {
                 AddSourceOutcome.Ok => Results.Created(
@@ -249,20 +249,22 @@ public static class SkillEndpoints
 
         // DELETE /api/projects/{id}/skill-marketplaces/sources/{name} — remove a project source.
         app.MapDelete("/api/projects/{id}/skill-marketplaces/sources/{name}", async (
-            HttpContext http, string id, string name, MarketplaceSourceService sources, CancellationToken ct) =>
+            HttpContext http, string id, string name, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var outcome = await sources.RemoveSourceAsync(projectId, name, caller, ct);
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var outcome = await sources.RemoveSourceAsync(project!.Id, name, ct);
             return outcome == AddSourceOutcome.Ok ? Results.NoContent() : Results.NotFound();
         }).WithName("RemoveProjectSkillMarketplaceSource").WithTags("Skills");
 
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/browse", async (
-            HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
+            HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var projectId = project!.Id;
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var source = await sources.ResolveAsync(projectId, marketplace, caller, ct);
+            var source = await sources.ResolveAsync(projectId, marketplace, ct);
             if (source is null) return Results.NotFound();
             var page = body?.Page ?? 1;
             var pageSize = body?.PageSize ?? SkillCatalogService.DefaultMarketplacePageSize;
@@ -285,11 +287,13 @@ public static class SkillEndpoints
         }).WithName("BrowseSkillMarketplace").WithTags("Skills");
 
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/import", async (
-            HttpContext http, string id, string marketplace, MarketplaceImportRequest body, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
+            HttpContext http, string id, string marketplace, MarketplaceImportRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var projectId = project!.Id;
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var source = await sources.ResolveAsync(projectId, marketplace, caller, ct);
+            var source = await sources.ResolveAsync(projectId, marketplace, ct);
             if (source is null) return Results.NotFound();
 
             // For an auto-detected source the selected candidate location IS the import subpath: fetch
