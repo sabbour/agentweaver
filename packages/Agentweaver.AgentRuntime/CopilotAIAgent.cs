@@ -461,7 +461,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             _apiBaseUrl,
             _apiKey,
             _toolProviders,
-            includeControlledRunCommand: _controlledBuildTestShell);
+            // SECURITY (native shell bypass): shell must ALWAYS be routed through the sandboxed
+            // run_command tool (ISandboxExecutor-backed), for every run purpose — not only
+            // AssemblyBuildTest. Register it whenever the registry exposes it (real isolation +
+            // policy shell enabled); native shell is denied below so this is the only shell path.
+            includeControlledRunCommand: true);
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
         // list_decisions/get_memory/list_inbox/submit_decision are only registered when
         // Agentweaver API tools were built (projectId + agentName both supplied). Only tell the
@@ -479,7 +483,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 EmitToolErrorOnce,
                 Emit,
                 _setupCt,
-                denyNativeShell: _controlledBuildTestShell),
+                // SECURITY (native shell bypass): deny the SDK's native shell for EVERY run, not
+                // just AssemblyBuildTest. The native shell executes in-process and bypasses the
+                // per-command ISandboxExecutor/bubblewrap filesystem confinement (the permission
+                // handler validates only the working directory, never the command text). All shell
+                // must instead go through the sandboxed run_command tool registered above.
+                denyNativeShell: true),
             WorkingDirectory = _workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
@@ -1472,7 +1481,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         Action<string, string> emitToolErrorOnce,
         Action<string, object> emit,
         CancellationToken runCt,
-        bool denyNativeShell = false)
+        bool denyNativeShell = true)
     {
         return (request, invocation) =>
         {
@@ -1482,7 +1491,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 var (_, shellArgs) = MapToToolCall(request);
                 shellArgs["directory"] = workingDirectory;
                 const string denyReason =
-                    "Native Copilot shell is disabled for AssemblyBuildTest; use the controlled run_command tool.";
+                    "Native Copilot shell is disabled; use the sandboxed run_command tool (routed through the sandbox executor).";
                 emitToolCallOnce(shellCallId, "run_command", shellArgs);
                 emitToolErrorOnce(shellCallId, denyReason);
                 EmitRunDegradedOnce("run_command", denyReason);
@@ -1897,8 +1906,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
         if (includeControlledRunCommand)
         {
-            var commandFn = all.First(f => string.Equals(f.Name, "run_command", StringComparison.Ordinal));
-            tools.Add(commandFn);
+            // run_command is present in the registry only when the executor provides real isolation
+            // (or direct mode) AND policy shell is enabled (see SandboxToolRegistry.Build). When shell
+            // is disabled or the executor offers no isolation, it is intentionally absent — combined
+            // with the native-shell denial in BuildPermissionHandler, that leaves NO shell path, which
+            // is the correct fail-closed behavior for a shell-disabled run.
+            var commandFn = all.FirstOrDefault(f => string.Equals(f.Name, "run_command", StringComparison.Ordinal));
+            if (commandFn is not null)
+                tools.Add(commandFn);
         }
 
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))

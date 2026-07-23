@@ -60,7 +60,50 @@ GitHub Release. It never bumps, writes, builds, or deploys.
 export async function isWorkingTreeClean({ cwd, capture }) {
   const unstaged = await capture("git", ["diff", "--quiet"], { cwd, allowFailure: true });
   const staged = await capture("git", ["diff", "--cached", "--quiet"], { cwd, allowFailure: true });
-  return unstaged.code === 0 && staged.code === 0;
+  const status = await capture("git", ["status", "--porcelain", "--untracked-files=all"], {
+    cwd,
+    allowFailure: true,
+  });
+  
+  if (unstaged.code !== 0 || staged.code !== 0 || status.code !== 0 || status.stdout.length > 0) {
+    return false;
+  }
+
+  const ignored = await capture("git", ["status", "--porcelain", "--ignored=matching"], {
+    cwd,
+    allowFailure: true,
+  });
+
+  if (ignored.code !== 0) {
+    return false;
+  }
+
+  const unexpectedIgnored = getUnexpectedIgnoredFiles(ignored.stdout);
+  return unexpectedIgnored.length === 0;
+}
+
+function getUnexpectedIgnoredFiles(stdout) {
+  const allowedPatterns = [
+    /^\.squad\//,
+    /^\.idea\//,
+    /^\.vscode\//,
+    /^\.vs\//,
+    /^\.security\//,
+    /^\.worktrees\//,
+    /^\.env(\.local)?$/,
+    /^npm-debug\.log/,
+    /^scripts\/azure\/params\..*\.json$/,
+    /^scripts\/azure\/tests\/\.scratch-/,
+    /^scripts\/azure\/steps\/\.rendered\//,
+    /\.(user|suo|userprefs)$/
+  ];
+
+  return stdout
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("!! "))
+    .map(line => line.slice(3))
+    .filter(file => !allowedPatterns.some(pattern => pattern.test(file)));
 }
 
 export async function validateMainSha({ cwd, capture }) {

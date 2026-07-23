@@ -127,7 +127,7 @@ An MCP client connects to Agentweaver either locally or over HTTP:
 
 | Client mode | What the user points at | What authenticates the call |
 |---|---|---|
-| Local STDIO | A command that starts the Agentweaver MCP app with `--stdio` | The process forwards to the configured Agentweaver API; when no per-request bearer exists, it can use the configured `AGENTWEAVER_API_KEY`. |
+| Local STDIO | A command that starts the Agentweaver MCP app with `--stdio` | The process forwards the configured per-user token `AGENTWEAVER_TOKEN` (your own bearer, e.g. `gh auth token`) to the Agentweaver API, so calls are attributed to the real user and project ownership is enforced. `AGENTWEAVER_API_KEY` is an internal-only fallback that bypasses ownership checks and must not be used by human/stdio clients (#474); the server will refuse to start if only the shared key is provided, unless explicitly opted in via `AGENTWEAVER_ALLOW_SHARED_KEY`. |
 | Hosted HTTP | The Agentweaver MCP URL ending in `/mcp` | Each request sends `Authorization: Bearer <token>` and the MCP server validates it before invoking tools. |
 
 For a hosted MCP client, the user experience is normally discovery-driven. The user adds the Agentweaver MCP server URL to the client. The client tries to call `/mcp`. If it has no bearer token, the server responds with `401` and a `WWW-Authenticate` challenge that points to OAuth Protected Resource metadata. The client fetches that metadata, learns the MCP resource and authorization server issuer, fetches Authorization Server metadata, then runs a PKCE authorization-code flow.

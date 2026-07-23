@@ -14,6 +14,7 @@ import {
   retagImage,
   acrDigestForTag,
   waitForAcrTagDigest,
+  stampProvenance,
   run as runBuild,
 } from "../steps/20-build-push-images.mjs";
 import {
@@ -227,6 +228,55 @@ test("acrDigestForTag: parses the first non-empty tsv line as the digest", async
   const exec = fakeExec({ captureImpl: async () => ({ stdout: "\nsha256:" + "b".repeat(64) + "\n", stderr: "", code: 0 }) });
   const digest = await acrDigestForTag("agentweaver-api", "v1.2.3", CFG, { exec });
   assert.equal(digest, "sha256:" + "b".repeat(64));
+});
+
+test("stampProvenance: imports the source digest into prov-<sha> and then locks it read-only", async () => {
+  const git = { revParseCommit: async () => "c".repeat(40) };
+  const sourceDigest = "sha256:" + "d".repeat(64);
+  const exec = fakeExec({
+    captureImpl: async (cmd, args) => {
+      if (args.includes("show-manifests")) {
+        // First lookup (source tag) resolves; second lookup (prov tag,
+        // pre-import) does not exist yet; third lookup (prov tag,
+        // post-import) resolves to the same digest as the source.
+        const showCalls = exec.calls.capture.filter((c) => c.args.includes("show-manifests")).length;
+        if (showCalls <= 1) return { stdout: sourceDigest, stderr: "", code: 0 };
+        if (showCalls === 2) return { stdout: "", stderr: "", code: 0 };
+        return { stdout: sourceDigest, stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await stampProvenance("agentweaver-api", "v1.2.3", "targetcommit", CFG, {
+    exec,
+    git,
+    sleep: async () => {},
+  });
+
+  assert.equal(result.tag, `prov-${"c".repeat(40)}`);
+  const importCall = exec.calls.capture.find((c) => c.args.includes("import"));
+  assert.ok(importCall, "expected an `az acr import` invocation to stamp the provenance tag");
+  const lockCall = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
+  assert.ok(lockCall, "expected an `az acr repository update` invocation to lock the provenance tag");
+  assert.ok(lockCall.args.includes("--write-enabled"), "lock call must set --write-enabled");
+  assert.ok(lockCall.args.includes("false"), "lock call must set --write-enabled false");
+  assert.ok(lockCall.args.includes(`agentweaver-api:prov-${"c".repeat(40)}`), "lock call must target the stamped provenance tag");
+});
+
+test("stampProvenance: is a no-op when the provenance tag already points at the expected digest", async () => {
+  const git = { revParseCommit: async () => "e".repeat(40) };
+  const digest = "sha256:" + "f".repeat(64);
+  const exec = fakeExec({
+    captureImpl: async () => ({ stdout: digest, stderr: "", code: 0 }),
+  });
+
+  await stampProvenance("agentweaver-api", "v1.2.3", "targetcommit", CFG, { exec, git, sleep: async () => {} });
+
+  const importCall = exec.calls.capture.find((c) => c.args.includes("import"));
+  assert.equal(importCall, undefined, "must not re-import an already-stamped, matching provenance tag");
+  const lockCall = exec.calls.capture.find((c) => c.args.includes("update") && c.args.includes("repository"));
+  assert.equal(lockCall, undefined, "must not attempt to re-lock a tag that was never (re-)imported this run");
 });
 
 test("retagImage: skips when source and target tags are identical", async () => {

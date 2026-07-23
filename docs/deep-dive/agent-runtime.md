@@ -267,12 +267,15 @@ The canonical catalog covers a small set of capabilities:
 
 The live Copilot path intentionally does **not** register the entire sandbox catalog as custom functions. Instead:
 
-- provider-native file/shell operations are allowed to exist, but every operation is mediated by the permission handler;
+- provider-native **file** operations (`view`/read, write, `str_replace_editor`, `grep`, `glob`) are allowed to exist, but every operation is mediated by the permission handler, which enforces working-directory containment;
+- provider-native **shell** is *not* allowed. The SDK's native shell executes in-process and never routes through `ISandboxExecutor`/bubblewrap — the permission handler can only see the working directory, not the command text or per-command filesystem confinement. The handler therefore **rejects every native shell request for every run** (not just Assembly Build/Test), and shell is exposed *solely* through the sandboxed `run_command` custom function, which runs the command through the selected sandbox/direct executor and `ShellCommandValidator`;
 - selected custom functions such as intent/outcome/question are registered because they represent Agentweaver-specific semantics;
 - Agentweaver API tools are registered when the run has project and agent identity;
 - raw lifecycle events for some semantic tools are suppressed and replaced with higher-level events such as `agent.intent` or `run.outcome`.
 
-This design avoids duplicate/conflicting file tools while keeping Agentweaver governance in front of native provider operations.
+`run_command` is conditional: it is registered only when the executor provides real isolation (or direct mode) *and* shell policy is enabled. When shell is disabled there is no shell path at all — native shell is denied and `run_command` is absent — which is the intended fail-closed behavior.
+
+This design avoids duplicate/conflicting file tools while keeping Agentweaver governance in front of native provider operations and ensuring all shell execution passes through the sandbox executor.
 
 ### Foundry tool exposure
 

@@ -174,6 +174,19 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
     throw new Error(`source image ${image}:${tag} never resolved to a digest in ACR; refusing to stamp unverifiable provenance`);
   }
 
+  // Idempotency: if this exact commit's provenance tag already points at
+  // this exact digest (e.g. a re-run of the same commit's build, or the
+  // "retag, unchanged since last build" path re-stamping provenance for an
+  // image that was never rebuilt), there is nothing to do. This matters
+  // because the tag is locked read-only below on first stamp -- without
+  // this early-out, a legitimate re-run would hit `az acr import --force`
+  // against an already-locked tag and fail.
+  const existingProvDigest = await acrDigestForTag(image, provTag, cfg, { exec });
+  if (existingProvDigest === sourceDigest) {
+    log.skip(`${image}:${provTag} already stamped and locked at the expected digest`);
+    return { image, tag: provTag, commit: resolvedCommit };
+  }
+
   await exec.capture("az", [
     "acr",
     "import",
@@ -198,6 +211,24 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
     throw new Error(
       `provenance tag ${image}:${provTag} resolved to ${stampedDigest}, expected ${sourceDigest}; refusing to ship mismatched provenance`,
     );
+  }
+
+  // Lock the provenance tag as read-only immediately after it's verified to
+  // resolve to the expected digest. Without this, 'prov-<sha>' is just a
+  // mutable ACR tag: anyone with registry write access (or a compromised
+  // credential) could re-point it at a different, unreviewed digest later,
+  // and 25-verify-image-provenance.mjs's tag-based check would have no way
+  // to detect that. Locking makes the tag immutable going forward -- a
+  // later `az acr import --force` against the *same* tag now fails loudly
+  // instead of silently overwriting it, which is the desired behavior: a
+  // given commit's provenance tag should only ever point at one digest.
+  const lockResult = await exec.capture(
+    "az",
+    ["acr", "repository", "update", "--name", cfg.ACR_NAME, "--image", `${image}:${provTag}`, "--write-enabled", "false"],
+    { allowFailure: true },
+  );
+  if (lockResult.code !== 0) {
+    log.warn(`  could not lock provenance tag ${image}:${provTag} as read-only: ${lockResult.stderr}`);
   }
 
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${provTag} (commit ${resolvedCommit})`);

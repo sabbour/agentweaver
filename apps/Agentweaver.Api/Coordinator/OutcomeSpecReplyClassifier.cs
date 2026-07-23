@@ -208,6 +208,8 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
                     Content = ClassifierCharter,
                 },
                 Tools = [],
+                AvailableTools = [],
+                OnPermissionRequest = CopilotWorkflowSelectionModel.RejectAllToolPermissionHandler,
                 Model = _modelId,
                 EnableConfigDiscovery = false,
                 Streaming = true,
