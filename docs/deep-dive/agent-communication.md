@@ -21,47 +21,12 @@ how the *team* coordinates. The third is how a *single* agent turn is *executed*
 Keeping them distinct is the most important idea in this document: **A2A is
 execution transport, not a way for two agents to talk.**
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    subgraph TEAM["Team-level coordination"]
-        direction LR
-        A["Agent A turn"]
-        B["Agent B turn"]
-        L[("Shared brain<br/>decisions ledger + AgentMemory")]
-        C["Coordinator"]
-        A -- "inbox proposal" --> L
-        B -- "inbox proposal" --> L
-        L -- "compiled into prompt" --> A
-        L -- "compiled into prompt" --> B
-        C -- "dispatch / handoff" --> A
-        C -- "dispatch / handoff" --> B
-        A -- "result up" --> C
-        B -- "result up" --> C
-    end
-    subgraph EXEC["Execution transport"]
-        direction LR
-        W["Worker<br/>orchestration graph"]
-        P["Sandbox pod<br/>AgentHost"]
-        W -- "one agent turn over A2A\nAuthorization: Bearer {per-run token}" --> P
-        P -- "turn output stream" --> W
-    end
-    TEAM -. "a single agent turn is remoted" .-> EXEC
+![Purpose and mental model: Agent A turn, Agent B turn, Shared brain, Coordinator, Worker, Sandbox pod](../diagrams/agent-communication-fig1.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class A runtime;
-    class B runtime;
-    class L data;
-    class C core;
-    class W svc;
-    class P runtime;
-```
+<!-- Rendered from ../diagrams/src/agent-communication-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## The three channels
 
@@ -130,32 +95,12 @@ and scope proposals are left for coordinator or human review. Rejected entries
 are retained, not deleted, so the record explains not just what the team accepted
 but what it declined.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    A["Agent run<br/>observation"] --> I["DecisionInboxEntry<br/>durable proposal · pending"]
-    I --> S{{"Scribe / review"}}
-    S -->|"merge"| L[("Decisions ledger<br/>+ AgentMemory")]
-    S -->|"reject"| R["Rejected entry<br/>audit retained"]
-    L --> X["MemoryContextCompiler"]
-    X --> N["Future agent prompts"]
-    N --> A
+![Curating: the Scribe merges, conflict-free: Agent run, DecisionInboxEntry, Scribe / review, Decisions ledger, Rejected entry, MemoryContextCompiler, Future agent prompts](../diagrams/agent-communication-fig2.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class A runtime;
-    class I data;
-    class S core;
-    class L data;
-    class R data;
-    class X svc;
-    class N svc;
-```
+<!-- Rendered from ../diagrams/src/agent-communication-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Because merges **add facts and change status** rather than rewriting history,
 independent agents can contribute concurrently without clobbering each other.
@@ -196,33 +141,12 @@ full decomposition logic is in the
 [Orchestration deep dive](./orchestration.md) and
 [Coordinator Internals](./coordinator-internals.md).
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    G["Goal"] --> O["OutcomeSpec<br/>intent contract"]
-    O -->|"confirm"| WP["WorkPlan<br/>subtask DAG"]
-    WP --> S1["Subtask 1<br/>child run"]
-    WP --> S2["Subtask 2<br/>child run"]
-    S1 --> S3["Subtask 3<br/>depends on 1"]
-    S1 -- "result up" --> ASM["Coordinator<br/>assembly + review"]
-    S2 -- "result up" --> ASM
-    S3 -- "result up" --> ASM
+![Decompose: goal → OutcomeSpec → WorkPlan DAG: Goal, OutcomeSpec, WorkPlan, Subtask 1, Subtask 2, Subtask 3, Coordinator](../diagrams/agent-communication-fig3.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class G client;
-    class O svc;
-    class WP core;
-    class S1 runtime;
-    class S2 runtime;
-    class S3 runtime;
-    class ASM core;
-```
+<!-- Rendered from ../diagrams/src/agent-communication-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Dispatch: children run independently, in parallel where safe
 
@@ -277,36 +201,12 @@ this way. The orchestration graph never crosses the boundary; A2A carries one
 turn's chat/output stream and nothing more. A2A is the sole worker→AgentHost wire
 transport for that seam.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    subgraph Worker["Worker"]
-        WF["Orchestration graph<br/>gates · resume · assembly"]
-        RP["RemoteAgentProxy"]
-    end
-    subgraph Pod["Sandbox pod"]
-        AH["AgentHost"]
-        AG["Leaf agent turn<br/>+ tools / shell / files"]
-    end
-    WF --> RP
-    RP -- "one agent turn over A2A" --> AH
-    AH --> AG
-    AG -- "turn output stream" --> AH
-    AH -- "A2A response" --> RP
-    RP --> WF
+![Channel C — Direct transport (A2A): Orchestration graph, RemoteAgentProxy, AgentHost, Leaf agent turn](../diagrams/agent-communication-fig4.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-    class WF core;
-    class RP core;
-    class AH core;
-    class AG runtime;
-```
+<!-- Rendered from ../diagrams/src/agent-communication-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Why this is **not** Channel A or B:
 

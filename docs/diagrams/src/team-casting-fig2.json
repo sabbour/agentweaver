@@ -1,0 +1,112 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Analysis casting",
+  "alt": "Analysis casting: Repository workspace, Bounded signal scan, Language/framework/test/docs/CI/size summary, Prompt with catalog role menu, Model returns JSON role IDs, Resolve IDs against catalog, Allocate names + compile charters, Fail proposal generation",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Repository workspace",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Bounded signal scan",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Language/framework/test/docs/CI/size summary",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Prompt with catalog role menu",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Model returns JSON role IDs",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Resolve IDs against catalog",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Allocate names + compile charters",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Fail proposal generation",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "F"
+    },
+    {
+      "from": "F",
+      "to": "G",
+      "label": "valid roles"
+    },
+    {
+      "from": "F",
+      "to": "H",
+      "label": "no valid roles"
+    }
+  ]
+}

@@ -476,11 +476,14 @@ function lifecycleProps(event: RunStreamEvent, runOutcome?: { achieved: boolean;
       };
     case 'coordinator.work_plan': {
       const subtasks = Array.isArray(p['subtasks']) ? (p['subtasks'] as unknown[]).length : 0;
+      const warnings = Array.isArray(p['warnings']) ? p['warnings'].map(String) : [];
       return {
-        icon: <TaskListSquareLtrRegular aria-hidden="true" />,
+        icon: warnings.length > 0
+          ? <WarningFilled aria-hidden="true" />
+          : <TaskListSquareLtrRegular aria-hidden="true" />,
         label: 'work plan',
-        summary: `Decomposed into ${subtasks} subtask${subtasks === 1 ? '' : 's'}`,
-        badgeColor: 'subtle',
+        summary: warnings[0] ?? `Decomposed into ${subtasks} subtask${subtasks === 1 ? '' : 's'}`,
+        badgeColor: warnings.length > 0 ? 'warning' : 'subtle',
       };
     }
     case 'subtask.dispatched':
@@ -751,9 +754,12 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
   // Runs when isResolved or resolvedScopeProp change — covers the case where the SSE event
   // arrives after the card is already mounted with isResolved=false.
   useEffect(() => {
-    if (isResolved && resolvedScope === null) {
-      setResolvedScope(resolvedScopeProp ?? 'expired');
-    }
+    const syncResolvedScope = async () => {
+      if (isResolved && resolvedScope === null) {
+        setResolvedScope(resolvedScopeProp ?? 'expired');
+      }
+    };
+    void syncResolvedScope();
   // resolvedScope is intentionally omitted: we only want to fire once when isResolved flips.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isResolved, resolvedScopeProp]);

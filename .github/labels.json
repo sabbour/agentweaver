@@ -50,6 +50,7 @@
     { "name": "feedback", "color": "00E5FF", "description": "User feedback — high signal, needs attention" },
     { "name": "status:testing", "color": "FFD33D", "description": "Validation is in progress" },
     { "name": "good first issue", "color": "7057FF", "description": "Good for newcomers" },
-    { "name": "help wanted", "color": "008672", "description": "Extra attention is needed" }
+    { "name": "help wanted", "color": "008672", "description": "Extra attention is needed" },
+    { "name": "changeset:not-required", "color": "D4E5F7", "description": "This PR intentionally has no user-facing release note; rationale required in the PR body" }
   ]
 }

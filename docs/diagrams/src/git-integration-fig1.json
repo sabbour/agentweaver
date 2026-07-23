@@ -1,0 +1,193 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Per-run worktree model",
+  "alt": "Per-run worktree model: Project record, Base workspace / repository, Run A, Run B, originating branch tip, agentweaver/run-A, agentweaver/run-B, worktrees/run-A, worktrees/run-B, Agent A reads/writes here, Agent B reads/writes here, ReviewA, …",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Project",
+      "label": "Project record",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Base",
+      "label": "Base workspace / repository",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "RunA",
+      "label": "Run A",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "RunB",
+      "label": "Run B",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Main",
+      "label": "originating branch tip",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "BranchA",
+      "label": "agentweaver/run-A",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "BranchB",
+      "label": "agentweaver/run-B",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "WorktreeA",
+      "label": "worktrees/run-A",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "WorktreeB",
+      "label": "worktrees/run-B",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "AgentA",
+      "label": "Agent A reads/writes here",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "AgentB",
+      "label": "Agent B reads/writes here",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "ReviewA",
+      "label": "ReviewA",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "MergeA",
+      "label": "Merge to originating branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "ReviewB",
+      "label": "ReviewB",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "MergeB",
+      "label": "Merge to originating branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Project",
+      "to": "Base"
+    },
+    {
+      "from": "Project",
+      "to": "RunA"
+    },
+    {
+      "from": "Project",
+      "to": "RunB"
+    },
+    {
+      "from": "Base",
+      "to": "Main"
+    },
+    {
+      "from": "Main",
+      "to": "BranchA"
+    },
+    {
+      "from": "Main",
+      "to": "BranchB"
+    },
+    {
+      "from": "BranchA",
+      "to": "WorktreeA"
+    },
+    {
+      "from": "BranchB",
+      "to": "WorktreeB"
+    },
+    {
+      "from": "WorktreeA",
+      "to": "AgentA"
+    },
+    {
+      "from": "WorktreeB",
+      "to": "AgentB"
+    },
+    {
+      "from": "ReviewA",
+      "to": "MergeA"
+    },
+    {
+      "from": "ReviewB",
+      "to": "MergeB"
+    }
+  ]
+}

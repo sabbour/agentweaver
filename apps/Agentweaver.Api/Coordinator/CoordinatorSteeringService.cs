@@ -1548,10 +1548,13 @@ public sealed class CoordinatorSteeringService
         if (runIsTerminalRecoverable)
             await runStore.UpdateStatusAsync(runId, RunStatus.InProgress, endedAt: null, ct).ConfigureAwait(false);
 
-        // Re-open the coordinator stream (assembly's block had completed it) so the resumed dispatch /
-        // assembly loops emit onto a live entry, then announce the recovery.
-        _streamStore.Remove(coordinatorRunId);
-        var entry = _streamStore.Create(coordinatorRunId, run.SubmittingUser);
+        // Re-open the coordinator stream IN PLACE (assembly's block had completed it) so the resumed
+        // dispatch/assembly loops emit onto a live entry again. Reopening (issue #388) clears the
+        // completed/awaiting-review flags WITHOUT discarding the history already recorded, so the
+        // recovery event is APPENDED after the coordinator's prior messages instead of replacing them
+        // (removing + recreating the entry would have started a blank history).
+        var entry = _streamStore.Reopen(coordinatorRunId)
+            ?? _streamStore.Create(coordinatorRunId, run.SubmittingUser);
         entry.RecordNext(EventTypes.CoordinatorRecovered, new
         {
             reason = reArmAssemblyOnly ? "steering_resume_assembly" : "steering_resume",

@@ -1,0 +1,48 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "AKS block diagram",
+  "alt": "AKS block diagram: Client and GitHub reach the AKS Cluster's core services (Frontend, API, Worker, MCP), which use the Kata VM Pool AgentHost warm pool, shared storage (Workspace PVC, CSI SecretProvider), PostgreSQL, Key Vault, and ACR",
+  "direction": "TB",
+  "groups": [
+    { "id": "aks", "label": "AKS Cluster", "tier": 1 },
+    { "id": "core", "label": "Core services", "tier": 2, "parent": "aks" },
+    { "id": "kata", "label": "Kata VM Pool", "tier": 2, "parent": "aks" },
+    { "id": "storage", "label": "Shared storage", "tier": 2, "parent": "aks" }
+  ],
+  "nodes": [
+    { "id": "client", "label": "Client", "subLabel": "Browser / API caller", "icon": "globe", "badge": { "text": "Client", "tone": "lavender" } },
+    { "id": "github", "label": "GitHub", "subLabel": "OAuth · REST API", "icon": "branch", "badge": { "text": "External", "tone": "lavender" } },
+    { "id": "fe", "label": "Frontend", "subLabel": "×2", "icon": "window", "badge": { "text": "Service", "tone": "teal" }, "group": "core" },
+    { "id": "api", "label": "API", "subLabel": "×2", "icon": "server", "badge": { "text": "Compute", "tone": "green" }, "group": "core" },
+    { "id": "worker", "label": "Worker", "subLabel": "×1 + HPA", "icon": "server", "badge": { "text": "Compute", "tone": "green" }, "group": "core" },
+    { "id": "mcp", "label": "MCP", "subLabel": "×1", "icon": "window", "badge": { "text": "Service", "tone": "teal" }, "group": "core" },
+    { "id": "ah", "label": "AgentHost", "subLabel": "Warm Pool ×2", "icon": "bot", "badge": { "text": "Sandbox", "tone": "marigold" }, "group": "kata" },
+    { "id": "pvc", "label": "Workspace PVC", "subLabel": "Shared volume", "icon": "database", "badge": { "text": "Storage", "tone": "neutral" }, "group": "storage" },
+    { "id": "csi", "label": "CSI SecretProvider", "subLabel": "Secrets", "icon": "key", "badge": { "text": "Storage", "tone": "neutral" }, "group": "storage" },
+    { "id": "pg", "label": "PostgreSQL", "subLabel": "Azure Database", "icon": "database", "badge": { "text": "Data", "tone": "teal" } },
+    { "id": "kv", "label": "Key Vault", "subLabel": "Azure", "icon": "key", "badge": { "text": "Data", "tone": "teal" } },
+    { "id": "acr", "label": "ACR", "subLabel": "Azure Container Registry", "icon": "box", "badge": { "text": "Data", "tone": "teal" } }
+  ],
+  "edges": [
+    { "from": "client", "to": "fe" },
+    { "from": "client", "to": "api" },
+    { "from": "client", "to": "mcp" },
+    { "from": "api", "to": "ah" },
+    { "from": "worker", "to": "ah" },
+    { "from": "api", "to": "pvc", "undirected": true },
+    { "from": "worker", "to": "pvc", "undirected": true },
+    { "from": "ah", "to": "pvc", "undirected": true },
+    { "from": "csi", "to": "kv", "dashed": true },
+    { "from": "api", "to": "pg" },
+    { "from": "worker", "to": "pg" },
+    { "from": "api", "to": "kv" },
+    { "from": "ah", "to": "kv" },
+    { "from": "api", "to": "github" },
+    { "from": "ah", "to": "github" },
+    { "from": "acr", "to": "fe", "dashed": true, "label": "image pull" },
+    { "from": "acr", "to": "api", "dashed": true, "label": "image pull" },
+    { "from": "acr", "to": "worker", "dashed": true, "label": "image pull" },
+    { "from": "acr", "to": "mcp", "dashed": true, "label": "image pull" },
+    { "from": "acr", "to": "ah", "dashed": true, "label": "image pull" }
+  ]
+}

@@ -25,7 +25,7 @@ import {
   WrenchRegular,
 } from '@fluentui/react-icons';
 import { SafeMarkdown } from './SafeMarkdown';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Body, EmptyState, Label } from './ui';
 import type {
@@ -376,7 +376,15 @@ const INLINE_TRUNCATE_CHARS = 800;
 /** Collapsible text block used for the Arguments/Result/Error sections of an expanded
  *  tool row (#item-3). Long content stays collapsed to a short preview until "Show more"
  *  is clicked, so huge tool payloads don't dominate the transcript. */
-function TruncatedTextBlock({ text, testId }: { text: string; testId?: string }) {
+function TruncatedTextBlock({
+  text,
+  testId,
+  toggleTestId,
+}: {
+  text: string;
+  testId?: string;
+  toggleTestId?: string;
+}) {
   const styles = useStyles();
   const [showAll, setShowAll] = useState(false);
   const isLong = text.length > INLINE_TRUNCATE_CHARS;
@@ -389,7 +397,7 @@ function TruncatedTextBlock({ text, testId }: { text: string; testId?: string })
           appearance="transparent"
           size="small"
           onClick={() => setShowAll((v) => !v)}
-          data-testid={testId ? `${testId}-toggle` : undefined}
+          data-testid={toggleTestId ?? (testId ? `${testId}-toggle` : undefined)}
         >
           {showAll ? 'Show less' : 'Show more'}
         </Button>
@@ -398,16 +406,59 @@ function TruncatedTextBlock({ text, testId }: { text: string; testId?: string })
   );
 }
 
+function parseArgumentObject(argumentsJson: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(argumentsJson);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatArgumentValue(value: unknown): string {
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+}
+
 /** Arguments section shared by both branches of ToolDiffCard below — the raw call
  *  arguments should be visible whether the row expands into a diff, a plain output card,
  *  or (deriveEditDiff/tool.resultContent both empty) neither (#item-3). */
 function ToolArgumentsSection({ tool }: { tool: RunTimelineTool }) {
   const styles = useStyles();
   if (!tool.argumentsJson) return null;
+  const argumentsObject = parseArgumentObject(tool.argumentsJson);
+  if (!argumentsObject) {
+    return (
+      <div>
+        <div className={styles.diffHeader}><span>Arguments</span></div>
+        <TruncatedTextBlock text={tool.argumentsJson} testId="timeline-tool-arguments" />
+      </div>
+    );
+  }
+  const entries = Object.entries(argumentsObject);
+  const firstLongValueIndex = entries.findIndex(([, value]) =>
+    formatArgumentValue(value).length > INLINE_TRUNCATE_CHARS,
+  );
   return (
     <div>
       <div className={styles.diffHeader}><span>Arguments</span></div>
-      <TruncatedTextBlock text={tool.argumentsJson} testId="timeline-tool-arguments" />
+      <div data-testid="timeline-tool-arguments">
+        {entries.map(([key, value], index) => (
+          <div key={key}>
+            <div className={styles.diffHeader}><span>{key}</span></div>
+            <TruncatedTextBlock
+              text={formatArgumentValue(value)}
+              testId={`timeline-tool-argument-${key}`}
+              toggleTestId={
+                index === firstLongValueIndex
+                  ? 'timeline-tool-arguments-toggle'
+                  : undefined
+              }
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -701,12 +752,16 @@ export function RunTimeline({
   // open items ourselves and auto-open any step id we haven't seen before, while still letting a
   // user manually collapse a step (we only ever ADD ids here, never remove one the user closed).
   const [openItems, setOpenItems] = useState<string[]>(() => steps.map((s) => s.id));
-  const knownStepIds = useRef(new Set(steps.map((s) => s.id)));
-  const newIds = steps.map((s) => s.id).filter((id) => !knownStepIds.current.has(id));
-  if (newIds.length > 0) {
-    newIds.forEach((id) => knownStepIds.current.add(id));
-    setOpenItems((prev) => [...prev, ...newIds]);
-  }
+  useEffect(() => {
+    const syncOpenItems = async () => {
+      setOpenItems((prev) => {
+        const known = new Set(prev);
+        const newIds = steps.map((s) => s.id).filter((id) => !known.has(id));
+        return newIds.length > 0 ? [...prev, ...newIds] : prev;
+      });
+    };
+    void syncOpenItems();
+  }, [steps]);
 
   // Mirrors the old `defaultExpanded` behavior: the "Messages · N steps" toggle starts open
   // and the user can collapse the whole activities list independently of individual steps.

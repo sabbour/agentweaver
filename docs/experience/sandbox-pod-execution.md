@@ -18,16 +18,12 @@ What changes is *where the work physically runs*: each run's agent now executes 
 Kata-isolated pod instead of inside the shared API process. The product surfaces that fact in exactly one
 honest, low-key way — a **pod name** on the agent box — and otherwise stays out of the way.
 
-```mermaid
-flowchart LR
-    User[User watching a run] --> Box[Agent box in topology]
-    Box --> Pill[Pod pill<br/>'agent-pod-worker-7']
-    Box --> Stream[Live tokens / status<br/>unchanged]
-    Operator[Operator] --> Runtime[/api/system/runtime/]
-    Operator --> Graph[/api/runs/id/graph/]
-    Runtime --> Mental[Mental model:<br/>which pod is this run in?]
-    Graph --> Mental
-```
+![Mental model: User watching a run, Agent box in topology, Pod pill, Live tokens / status, Operator, api/system/runtime, api/runs/id/graph, Mental model:](../diagrams/experience-sandbox-pod-execution-fig1.png)
+
+<!-- Rendered from ../diagrams/src/experience-sandbox-pod-execution-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A well-behaved run should make the user barely notice the sandbox. The pod pill is the one visible
 signal; everything else is the same experience they already know.

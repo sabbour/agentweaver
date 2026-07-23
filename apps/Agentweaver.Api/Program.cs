@@ -178,6 +178,10 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IOutcomeSpecReplyClass
     Agentweaver.Api.Coordinator.CopilotOutcomeSpecReplyClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClassifier,
     Agentweaver.Api.Coordinator.CopilotStoryIndependenceClassifier>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IAssemblyGateCodeClassifier,
+    Agentweaver.Api.Coordinator.CopilotAssemblyGateCodeClassifier>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IPreviewClassifier,
+    Agentweaver.Api.Coordinator.CopilotPreviewClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
@@ -230,6 +234,7 @@ builder.Services.AddHttpClient("github-authz")
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
+builder.Services.AddSingleton<Agentweaver.Domain.IGitHubRepositoryClient, Agentweaver.Api.Github.GitHubRepositoryClient>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
@@ -363,7 +368,9 @@ builder.Services.AddSingleton<ProjectService>();
     }
 }
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
+builder.Services.Configure<Agentweaver.Api.Skills.SkillMarketplaceOptions>(builder.Configuration.GetSection("SkillMarketplaces"));
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillMarketplaceRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
@@ -382,9 +389,6 @@ builder.Services.AddSingleton<Agentweaver.Api.Blueprints.CatalogConformanceSnaps
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
 // GitHub webhook receiver (issue #53 follow-up): the real external event source wired to the event
-// trigger mechanism above. See Webhooks/GitHubWebhookOptions.cs — secret is config-only, never hardcoded.
-builder.Services.Configure<Agentweaver.Api.Webhooks.GitHubWebhookOptions>(
-    builder.Configuration.GetSection(Agentweaver.Api.Webhooks.GitHubWebhookOptions.SectionName));
 builder.Services.AddHostedService<Agentweaver.Api.Workflows.WorkflowScheduleTriggerService>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();

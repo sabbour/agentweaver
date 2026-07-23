@@ -12,6 +12,8 @@ namespace Agentweaver.Tests;
 
 public sealed class ToolApprovalGateTests
 {
+    private static readonly TimeSpan ExpirationTimeout = TimeSpan.FromMilliseconds(250);
+
     private static InMemoryToolApprovalGate CreateGate(Func<string, string?>? ownerForRun = null) =>
         new(new DelegateOwnerResolver(ownerForRun ?? (_ => "test-owner")));
 
@@ -319,9 +321,9 @@ public sealed class ToolApprovalGateTests
     public async Task GrantAsync_AfterTimeout_ReturnsFalse()
     {
         var gate = CreateGate();
-        // Use a tiny timeout so the gate expires before we try to grant.
+        // Keep the timeout short enough to exercise expiry without depending on sub-50ms scheduling.
         var result = await gate.WaitForApprovalAsync(
-            "run-r2", "req-r2", "web_fetch", null, TimeSpan.FromMilliseconds(30), CancellationToken.None);
+            "run-r2", "req-r2", "web_fetch", null, ExpirationTimeout, CancellationToken.None);
 
         result.Should().BeFalse("timed out");
 
@@ -338,6 +340,19 @@ public sealed class ToolApprovalGateTests
         (await task).Should().BeFalse();
 
         gate.Deny("run-r3", "req-r3").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DuplicateRequest_DeniesOriginalWithoutRemovingReplacement()
+    {
+        var gate = CreateGate();
+        var original = Register(gate, "run-r3b", "req-r3b");
+        var replacement = Register(gate, "run-r3b", "req-r3b");
+
+        (await original).Should().BeFalse("a duplicate request replaces and denies the original waiter");
+        (await gate.GrantAsync("run-r3b", "req-r3b", ApprovalScope.Once)).Should().BeTrue();
+        (await replacement).Should().BeTrue();
+        gate.GetRequestState("run-r3b", "req-r3b").Should().Be(ToolApprovalRequestState.Approved);
     }
 
     [Fact]
@@ -382,7 +397,7 @@ public sealed class ToolApprovalGateTests
         gate.GetRequestState("run-s1", "req-s1").Should().Be(ToolApprovalRequestState.Approved);
 
         await gate.WaitForApprovalAsync(
-            "run-s2", "req-s2", "web_fetch", null, TimeSpan.FromMilliseconds(30), CancellationToken.None);
+            "run-s2", "req-s2", "web_fetch", null, ExpirationTimeout, CancellationToken.None);
         gate.GetRequestState("run-s2", "req-s2").Should().Be(ToolApprovalRequestState.Expired);
 
         gate.GetRequestState("run-s3", "req-never").Should().Be(ToolApprovalRequestState.Unknown);
@@ -436,6 +451,7 @@ public sealed class ToolApprovalGateTests
 /// </summary>
 public sealed class DurableToolApprovalGateEventTests : IDisposable
 {
+    private static readonly TimeSpan ExpirationTimeout = TimeSpan.FromMilliseconds(250);
     private readonly SqliteConnection _keepAlive;
     private readonly string _connectionString;
     private readonly List<ServiceProvider> _providers = [];
@@ -458,7 +474,7 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         var gate = new DurableToolApprovalGate(NewState(), streams);
 
         var result = await gate.WaitForApprovalAsync(
-            "run-e1", "req-e1", "web_fetch", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+            "run-e1", "req-e1", "web_fetch", null, ExpirationTimeout, CancellationToken.None);
 
         result.Should().BeFalse();
 
@@ -540,7 +556,7 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         var gate = new DurableToolApprovalGate(NewState(), streams);
 
         await gate.WaitForApprovalAsync(
-            "run-e4", "req-e4", "web_fetch", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+            "run-e4", "req-e4", "web_fetch", null, ExpirationTimeout, CancellationToken.None);
 
         // Late grant after timeout — must return false.
         (await gate.GrantAsync("run-e4", "req-e4", ApprovalScope.Once)).Should().BeFalse();
@@ -580,7 +596,7 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         gate.GetRequestState("run-e5", "req-e5").Should().Be(ToolApprovalRequestState.Denied);
 
         await gate.WaitForApprovalAsync(
-            "run-e5", "req-expired", "web_fetch", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+            "run-e5", "req-expired", "web_fetch", null, ExpirationTimeout, CancellationToken.None);
         gate.GetRequestState("run-e5", "req-expired").Should().Be(ToolApprovalRequestState.Expired);
     }
 
@@ -675,7 +691,7 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         var gate = new DurableToolApprovalGate(NewState(), streams);
 
         await gate.WaitForApprovalAsync(
-            "run-arm2", "req-arm2", "coordinator_start", null, TimeSpan.FromMilliseconds(40), CancellationToken.None);
+            "run-arm2", "req-arm2", "coordinator_start", null, ExpirationTimeout, CancellationToken.None);
 
         gate.HasArmedApproval("run-arm2").Should().BeFalse("an expired request must not count as armed");
     }

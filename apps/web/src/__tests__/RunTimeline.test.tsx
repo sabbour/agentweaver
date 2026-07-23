@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { AzureFluentProvider } from '../copilot-fluent-system';
@@ -39,6 +39,82 @@ describe('RunTimeline default expansion', () => {
     expect(screen.getByText('Build the prototype with Vite + React')).toBeTruthy();
     expect(screen.getByText('Review the result')).toBeTruthy();
     expect(screen.queryByText('Now the storage module')).toBeNull();
+  });
+
+  describe('RunTimeline tool arguments', () => {
+    function openSingleTool() {
+      fireEvent.click(screen.getByTestId('timeline-tool-group'));
+      fireEvent.click(screen.getByTestId('timeline-tool-row'));
+    }
+
+    it('renders object arguments as labeled values and truncates only long values', () => {
+      const fileText = `${'const greeting = "hello";\n'.repeat(50)}END OF FILE`;
+      const model = buildRunTimeline([
+        evt(1, 'agent.intent', { intent: 'Create the file' }),
+        evt(2, 'tool.call', {
+          callId: 'c1',
+          toolName: 'create_file',
+          arguments: { path: 'src/greeting.ts', file_text: fileText },
+        }),
+        evt(3, 'agent.turn.end', {}),
+      ]);
+
+      render(
+        <Wrapper>
+          <RunTimeline embedded steps={model.steps} running={false} />
+        </Wrapper>,
+      );
+
+      openSingleTool();
+
+      const argumentsBlock = screen.getByTestId('timeline-tool-arguments');
+      expect(within(argumentsBlock).getByText('path')).toBeTruthy();
+      expect(within(argumentsBlock).getByText('src/greeting.ts')).toBeTruthy();
+      expect(within(argumentsBlock).getByText('file_text')).toBeTruthy();
+      expect(argumentsBlock.textContent).not.toContain('END OF FILE');
+
+      fireEvent.click(screen.getByTestId('timeline-tool-arguments-toggle'));
+
+      expect(argumentsBlock.textContent).toContain('END OF FILE');
+    });
+
+    it.each(['not valid JSON', '["not", "an", "object"]'])(
+      'falls back to raw text when arguments are not an object (%s)',
+      (argumentsJson) => {
+        const tool = {
+          callId: 'c1',
+          toolName: 'tool',
+          category: 'other' as const,
+          title: 'Tool',
+          status: 'complete' as const,
+          argumentsJson,
+          expandable: true,
+        };
+        const steps = [{
+          id: 'intent-1',
+          intent: 'Run tool',
+          status: 'complete' as const,
+          active: false,
+          synthetic: false,
+          tools: [tool],
+          messages: [],
+          children: [{ kind: 'tool' as const, tool }],
+          sequence: 1,
+        }];
+
+        render(
+          <Wrapper>
+            <RunTimeline flat steps={steps} running={false} />
+          </Wrapper>,
+        );
+
+        openSingleTool();
+
+        const argumentsBlock = screen.getByTestId('timeline-tool-arguments');
+        expect(argumentsBlock.tagName).toBe('PRE');
+        expect(argumentsBlock.textContent).toBe(argumentsJson);
+      },
+    );
   });
 
   it('expands every activity step by default while keeping tool groups collapsed', () => {

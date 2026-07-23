@@ -36,7 +36,7 @@ Each platform tracks issue lifecycle differently. Squad normalizes these into a 
 | Open, branch exists | `state: open`, linked branch exists | `inProgress` |
 | Open, PR opened | `state: open`, PR exists, `reviewDecision: null` | `needsReview` |
 | Open, PR approved | `state: open`, PR `reviewDecision: APPROVED` | `readyToMerge` |
-| Open, approved PR behind main | branch is not up to date | `needsUpdate` |
+| Open, approved PR behind dev | branch is not up to date | `needsUpdate` |
 | Open, updated branch checks running | required checks pending after sync | `ciRunning` |
 | Open, changes requested | `state: open`, PR `reviewDecision: CHANGES_REQUESTED` | `changesRequested` |
 | Open, CI failure | `state: open`, PR `statusCheckRollup: FAILURE` | `ciFailure` |
@@ -122,30 +122,29 @@ az boards work-item show --id {id} --output json
 **Trigger:** Agent accepts issue assignment and begins work.
 
 **Actions:**
-1. Fetch current `origin/main`; this trunk-based repository does not use `dev`.
-   A maintenance or promotion branch is permitted only when the
-   [Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology--room-for-growth)
-   applies.
+1. Fetch current `origin/dev`; this repository uses `dev` as its protected integration branch.
+   `main` remains stable/published-only; release branches are managed under
+   [RELEASING.md](../../RELEASING.md).
 2. Create the `squad/{issue-number}-{slug}` branch using the workspace rule in
    [`CONTRIBUTING.md`](../../CONTRIBUTING.md#ai-agent-contributions):
    locally run agents use a dedicated `.worktrees/{branch-slug}` worktree; hosted agents
    use the platform-provided isolated environment; humans may use either a worktree or a
-   normal branch in the main checkout.
+   normal branch in the primary checkout.
 3. Transition issue to `inProgress` state
 
 **Branch creation commands:**
 
 **Locally run Squad agent (required):**
 ```bash
-git fetch origin main
-git worktree add ".worktrees/{branch-slug}" -b squad/{issue-number}-{slug} origin/main
+git fetch origin dev
+git worktree add ".worktrees/{branch-slug}" -b squad/{issue-number}-{slug} origin/dev
 cd ".worktrees/{branch-slug}"
 ```
 
 **Human contributor (optional worktree):**
 ```bash
-git fetch origin main
-git checkout -b squad/{issue-number}-{slug} origin/main
+git fetch origin dev
+git checkout -b squad/{issue-number}-{slug} origin/dev
 ```
 
 Hosted agents do not run local worktree commands; their host creates an isolated branch and
@@ -195,7 +194,7 @@ git push -u origin squad/{issue-number}-{slug}
 gh pr create --title "{title}" \
   --body "Closes #{issue-number}\n\n{description}" \
   --head squad/{issue-number}-{slug} \
-  --base main
+  --base dev
 ```
 
 **Azure DevOps:**
@@ -203,7 +202,7 @@ gh pr create --title "{title}" \
 az repos pr create --title "{title}" \
   --description "Closes #{work-item-id}\n\n{description}" \
   --source-branch squad/{work-item-id}-{slug} \
-  --target-branch main
+  --target-branch dev
 ```
 
 **PR description template:**
@@ -265,8 +264,19 @@ gh pr ready {pr-number}
 
 **Trigger:** PR is approved and CI passes.
 
-**GitHub:** first ensure the branch is current with `main`. If protection says
-it is behind, fetch `origin/main`, update the feature branch, push, and wait
+**Always verify live state before merging — never assume from a diff review alone:**
+```bash
+gh pr view {pr-number} --json mergeable,mergeStateStatus,statusCheckRollup \
+  --jq '{mergeable, mergeState: .mergeStateStatus, checks: [.statusCheckRollup[] | {name, status, conclusion}]}'
+```
+Confirm `mergeable` is `MERGEABLE` (no merge conflicts) and every required check
+(`.NET tests`, `Node toolchain tests`, `Web tests`, `Docs build`) shows
+`conclusion: SUCCESS`. If a required check failed, rerun it once
+(`gh run rerun {run-id} --failed`) to rule out a known CPU-contention flake before
+concluding the PR's own changes caused a real failure.
+
+**GitHub:** first ensure the branch is current with `dev`. If protection says
+it is behind, fetch `origin/dev`, update the feature branch, push, and wait
 for every required check to rerun.
 
 ```bash
@@ -276,14 +286,14 @@ gh pr merge {pr-number} --squash --delete-branch
 If another PR merges first, GitHub marks this PR out of date:
 
 1. Move it to `needsUpdate`.
-2. Fetch current `origin/main` and update the feature branch.
+2. Fetch current `origin/dev` and update the feature branch.
 3. Resolve conflicts; never bypass a blocking check.
 4. Run relevant tests, push, and wait for required CI again.
 5. Squash-merge only when the branch is current and green.
 
 This strict fallback causes update/retest churn under concurrent PRs, but
 GitHub Merge Queue is unavailable while Agentweaver is personal-account-owned.
-The [Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology--room-for-growth)
+The [Branch Topology Activation Plan](../../CONTRIBUTING.md#branch-topology)
 defines the measurable conditions for changing this model.
 
 **Azure DevOps** (when the connected repository is ADO rather than Agentweaver GitHub):
@@ -301,7 +311,7 @@ az repos pr update --id {pr-id} --status completed --delete-source-branch true
 
 **Standard workflow cleanup:**
 ```bash
-git checkout main
+git checkout dev
 git pull
 git branch -d squad/{issue-number}-{slug}
 ```
@@ -343,7 +353,7 @@ When spawning an agent to work on an issue, include this context block:
 2. Push branch
 3. Open PR using:
    ```
-   gh pr create --title "{title}" --body "Closes #{number}\n\n{description}" --head squad/{issue-number}-{slug} --base main
+   gh pr create --title "{title}" --body "Closes #{number}\n\n{description}" --head squad/{issue-number}-{slug} --base dev
    ```
 4. Report PR URL to coordinator
 ```
@@ -372,7 +382,7 @@ See `.squad/templates/ralph-reference.md` for Ralph's full lifecycle.
 If the project has no human reviewers configured:
 1. PR opens
 2. CI runs
-3. If `main` moved, Ralph updates the branch and waits for CI again
+3. If `dev` moved, Ralph updates the branch and waits for CI again
 4. Ralph squash-merges the current green PR
 5. Issue closes
 
@@ -382,7 +392,7 @@ If the project requires human approval:
 1. PR opens
 2. Human reviewer is notified (GitHub/ADO notifications)
 3. Reviewer approves or requests changes
-4. If approved + current with `main` + CI passes, Ralph squash-merges
+4. If approved + current with `dev` + CI passes, Ralph squash-merges
 5. If changes requested, agent addresses feedback
 
 ### Squad Member Review
@@ -399,7 +409,7 @@ If the issue was assigned to a squad member and they authored the PR:
 ### Pattern 1: Quick Fix (Single Agent, No Review)
 ```
 Issue created → Assigned to agent → Branch created → Code fixed → 
-PR opened → Updated to latest main → CI passes → Squash-merged → Issue closed
+PR opened → Updated to latest dev → CI passes → Squash-merged → Issue closed
 ```
 
 ### Pattern 2: Feature Development (Human Review)

@@ -4,11 +4,13 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import {
   ARTIFACT_HOLD_MS,
   ScenarioTheater,
+} from '../components/LandingWorkflowDemo';
+import {
   initialRunState,
   nextScenarioId,
   runReducer,
   type RunState,
-} from '../components/LandingWorkflowDemo';
+} from '../components/LandingWorkflowDemo.state';
 import { SCENARIOS } from '../components/landing/scenarios';
 
 /**

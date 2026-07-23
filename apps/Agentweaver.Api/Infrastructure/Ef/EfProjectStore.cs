@@ -60,6 +60,16 @@ public sealed class EfProjectStore : IProjectStore
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
+    public async Task UpdateWebhookSecretAsync(ProjectId id, string? webhookSecret, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        var pid = id.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.Projects.Where(p => p.ProjectId == pid)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.WebhookSecret, webhookSecret)
+                .SetProperty(p => p.UpdatedAt, updatedAt), ct);
+    }
+
     public async Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default)
     {
         var pid = id.ToString();
@@ -135,6 +145,17 @@ public sealed class EfProjectStore : IProjectStore
         await db.Projects.Where(p => p.ProjectId == pid)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(p => p.SandboxProfile, sandboxProfile)
+                .SetProperty(p => p.UpdatedAt, updatedAt), ct);
+    }
+
+    public async Task UpdateOriginAsync(ProjectId id, ProjectOrigin origin, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        var pid = id.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.Projects.Where(p => p.ProjectId == pid)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.OriginKind, origin.ToApiString())
+                .SetProperty(p => p.SourceRepository, origin.SourceRepository)
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
@@ -231,6 +252,7 @@ public sealed class EfProjectStore : IProjectStore
         OutcomeSpecGenerationModel = p.OutcomeSpecGenerationModel,
         AllowedWorkflowIds = p.AllowedWorkflowIds is { Count: > 0 } ? JsonSerializer.Serialize(p.AllowedWorkflowIds) : null,
         TeamRevision = p.TeamRevision,
+        WebhookSecret = p.WebhookSecret,
     };
 
     private Project FromRecord(ProjectRecord r)
@@ -277,6 +299,7 @@ public sealed class EfProjectStore : IProjectStore
             OutcomeSpecGenerationModel = r.OutcomeSpecGenerationModel,
             AllowedWorkflowIds = allowedIds is { Count: > 0 } ? allowedIds : null,
             TeamRevision = r.TeamRevision,
+            WebhookSecret = r.WebhookSecret,
         };
     }
 

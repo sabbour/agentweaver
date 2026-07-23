@@ -1,24 +1,24 @@
-// variables.mjs -- Faithful Node port of scripts/aks/00-variables.sh (cross-
-// checked against 00-variables.ps1). Read both before changing this file;
-// they must stay in lockstep with this port's behavior.
+// variables.mjs -- Shared Azure configuration resolution.
 //
-// Behavior replicated:
+// Infrastructure defaults remain aligned with the legacy variable scripts,
+// except image identity is deliberately command-driven:
 //   - Every input has an env-var override with a hardcoded default (see
 //     DEFAULTS below), exactly matching `${VAR:-default}` in the bash script.
 //   - TENANT_ID, IDENTITY_CLIENT_ID, APPINSIGHTS_WORKSPACE_ID are resolved
 //     LIVE from `az` only if not already supplied via env, and failures are
 //     swallowed to '' (the bash script's `... || true` tolerance) rather than
 //     aborting resolution.
-//   - IMAGE_TAG: prefer IMAGE_TAG env var; else VERSION file (repo root) as
-//     `v<semver>`; else git short SHA; `latest`/`latest-release` are always
-//     rejected. AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG when not set.
+//   - IMAGE_TAG: prefer IMAGE_TAG env var; else current git short SHA.
+//     Release commands must explicitly provide their published semver tag;
+//     generic variable resolution never invents release identity from VERSION.
+//     `latest`/`latest-release` are always rejected. AGENTHOST_IMAGE_TAG
+//     defaults to IMAGE_TAG when not set.
 //
 // Live `az` resolution is LAZY and OPTIONAL: pass `{ resolveLive: false }` to
 // skip it entirely (fields resolve to ''), and/or inject stub
 // az/git implementations via `{ az: {...}, git: {...} }` -- this is what lets
 // scripts/azure/tests/* run without any real Azure CLI or git present.
 
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { capture } from "./lib/exec.mjs";
@@ -75,36 +75,21 @@ async function defaultGitShortSha(repoRoot) {
   }
 }
 
-function readVersionFile(repoRoot, readFile) {
-  try {
-    const raw = readFile(path.join(repoRoot, "VERSION"), "utf8");
-    const trimmed = raw.replace(/\s+/g, "");
-    return trimmed ? `v${trimmed}` : "";
-  } catch {
-    return "";
-  }
-}
-
 /**
- * Derives IMAGE_TAG per 00-variables.sh: env override, else VERSION file,
- * else git short SHA. Throws InvalidImageTagError if nothing resolves or the
- * resolved value fails validation.
+ * Derives IMAGE_TAG from an explicit env override or the current git short
+ * SHA. Release workflows provide their semver tag explicitly.
  */
 export async function deriveImageTag({
   env = process.env,
   repoRoot = DEFAULT_REPO_ROOT,
-  readFile = fs.readFileSync,
   gitShortSha = defaultGitShortSha,
 } = {}) {
   let tag = env.IMAGE_TAG;
   if (!tag) {
-    tag = readVersionFile(repoRoot, readFile);
-  }
-  if (!tag) {
     tag = await gitShortSha(repoRoot);
   }
   if (!tag) {
-    throw new InvalidImageTagError("IMAGE_TAG is not set and no VERSION file or git context found.");
+    throw new InvalidImageTagError("IMAGE_TAG is not set and the current git SHA could not be resolved.");
   }
   validateImageTag(tag, "IMAGE_TAG");
   return tag;
@@ -124,8 +109,6 @@ export async function deriveImageTag({
  *   module (or a stub with the same function names) for testing.
  * @param {(repoRoot: string) => Promise<string>} [options.gitShortSha]
  *   Injectable git short-SHA resolver for testing.
- * @param {typeof fs.readFileSync} [options.readFile] Injectable VERSION file
- *   reader for testing.
  * @returns {Promise<Record<string, string>>}
  */
 export async function resolveVariables(options = {}) {
@@ -135,7 +118,6 @@ export async function resolveVariables(options = {}) {
     resolveLive = true,
     az = azDefault,
     gitShortSha = defaultGitShortSha,
-    readFile = fs.readFileSync,
   } = options;
 
   const pick = (name) => env[name] || DEFAULTS[name];
@@ -170,7 +152,7 @@ export async function resolveVariables(options = {}) {
     );
   }
 
-  const IMAGE_TAG = await deriveImageTag({ env, repoRoot, readFile, gitShortSha });
+  const IMAGE_TAG = await deriveImageTag({ env, repoRoot, gitShortSha });
 
   let AGENTHOST_IMAGE_TAG = env.AGENTHOST_IMAGE_TAG || IMAGE_TAG;
   if (env.AGENTHOST_IMAGE_TAG) {

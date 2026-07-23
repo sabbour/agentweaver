@@ -144,6 +144,7 @@ export function topologyReducer(
       const workPlan: CoordinatorWorkPlan = {
         workPlanId: String(p['workPlanId'] ?? ''),
         status: String(p['status'] ?? ''),
+        warnings: Array.isArray(p['warnings']) ? p['warnings'].map(String) : [],
         subtasks: Array.isArray(p['subtasks']) ? (p['subtasks'] as CoordinatorWorkPlan['subtasks']) : [],
       };
       return { ...state, workPlan };

@@ -19,7 +19,6 @@ vi.mock('../api/apiClient', () => ({
     getOutcomeSpec: vi.fn(),
     confirmOutcomeSpec: vi.fn(),
     reviseOutcomeSpec: vi.fn(),
-    decomposeSpec: vi.fn(),
   },
 }));
 
@@ -319,34 +318,5 @@ describe('OutcomePlanPanel terminal REST status precedence', () => {
 
     await waitFor(() => expect(screen.getByText('Declined')).toBeTruthy());
     expect(screen.getByText(/Outcome plan declined/i)).toBeTruthy();
-  });
-});
-
-describe('OutcomePlanPanel Break into tasks visibility', () => {
-  it('shows "Break into tasks" for a confirmed spec during pre-dispatch authoring', async () => {
-    vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue(confirmedSpec);
-
-    render(
-      <Wrapper>
-        <OutcomePlanPanel runId="run-1" projectId="proj-1" events={[]} streamStatus="streaming" />
-      </Wrapper>,
-    );
-
-    expect(await screen.findByRole('button', { name: /break into tasks/i })).toBeTruthy();
-  });
-
-  it('hides "Break into tasks" once the run has been decomposed / dispatched', async () => {
-    vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue(confirmedSpec);
-
-    render(
-      <Wrapper>
-        <OutcomePlanPanel runId="run-1" projectId="proj-1" events={[]} streamStatus="streaming" dispatched />
-      </Wrapper>,
-    );
-
-    await waitFor(() => expect(screen.getByText(/Outcome plan confirmed/i)).toBeTruthy());
-    expect(screen.queryByRole('button', { name: /break into tasks/i })).toBeNull();
-    // The read-only plan content stays available.
-    expect(screen.getByText('Ship the feature')).toBeTruthy();
   });
 });

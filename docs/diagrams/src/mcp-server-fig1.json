@@ -1,0 +1,101 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "6. Kubernetes routing: expose `/mcp`, but do not hide discovery",
+  "alt": "6. Kubernetes routing: expose `/mcp`, but do not hide discovery: MCP client, Gateway / HTTPRoute, Rewrite to /healthz, agentweaver-mcp Service, Agentweaver.Mcp pod, agentweaver-api Service",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Client",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Gateway",
+      "label": "Gateway / HTTPRoute",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "HealthRewrite",
+      "label": "Rewrite to /healthz",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "McpSvc",
+      "label": "agentweaver-mcp Service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "McpPod",
+      "label": "Agentweaver.Mcp pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "ApiSvc",
+      "label": "agentweaver-api Service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Client",
+      "to": "Gateway"
+    },
+    {
+      "from": "Gateway",
+      "to": "HealthRewrite",
+      "label": "Exact /mcp/health"
+    },
+    {
+      "from": "HealthRewrite",
+      "to": "McpSvc"
+    },
+    {
+      "from": "Gateway",
+      "to": "McpSvc",
+      "label": "Exact /.well-known/oauth-protected-resource"
+    },
+    {
+      "from": "Gateway",
+      "to": "McpSvc",
+      "label": "Exact /.well-known/oauth-protected-resource/mcp"
+    },
+    {
+      "from": "Gateway",
+      "to": "McpSvc",
+      "label": "PathPrefix /mcp"
+    },
+    {
+      "from": "McpSvc",
+      "to": "McpPod"
+    },
+    {
+      "from": "McpPod",
+      "to": "ApiSvc",
+      "label": "API calls + JWKS fetch"
+    }
+  ]
+}

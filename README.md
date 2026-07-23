@@ -12,120 +12,90 @@ Agentweaver runs AI agents inside sandboxed git worktrees, mirrors run events in
 
 ## Prerequisites
 
-| Tool | Needed for | Windows (winget) | macOS (Homebrew) | Linux (Debian/Ubuntu) |
-| --- | --- | --- | --- | --- |
-| [git](https://git-scm.com/) | cloning the repo; the default image tag is the short git SHA | `winget install --id Git.Git -e` | `brew install git` | `sudo apt-get update && sudo apt-get install -y git` |
-| [Node.js 20+](https://nodejs.org/) (LTS) | running every script in this repo, including the Azure toolchain (`scripts/azure/`) | `winget install OpenJS.NodeJS.LTS` | `brew install node@20` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt-get install -y nodejs` |
-| `npm` (bundled with Node) or `pnpm` | installing dependencies and running package scripts | *(bundled with Node.js)* | *(bundled with Node.js)* | *(bundled with Node.js)* |
-| [.NET SDK 10](https://dot.net/download) | building/running the API and MCP server locally | `winget install Microsoft.DotNet.SDK.10` | `brew install --cask dotnet-sdk` | `curl -sSL https://dot.net/v1/dotnet-install.sh \| bash /dev/stdin --channel 10.0` |
-| **WSL2 + `bubblewrap`** | **Windows local dev only** — `npm run dev` runs the API's sandbox executor inside WSL2 for real isolation ([why](https://sabbour.me/agentweaver/guide/getting-started#why-wsl2-on-windows)); macOS/Linux sandbox natively | `wsl --install` (elevated PowerShell, then reboot), then `sudo apt-get install -y bubblewrap` inside the distro | *Not required* | *Not required* |
-| [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in via `az login` | everything under `npm run azure:*` | `winget install Microsoft.AzureCLI` | `brew install azure-cli` | `curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash` |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | applying manifests and verifying the cluster during `azure:deploy`/`azure:upgrade`/`azure:verify` | `winget install Kubernetes.kubectl` | `brew install kubectl` | `sudo snap install kubectl --classic` |
-| [`gh` CLI](https://cli.github.com/), authenticated via `gh auth status` | `npm run azure:release` only (changelog generation + creating the GitHub Release) | `winget install GitHub.cli` | `brew install gh` | `sudo apt-get update && sudo apt-get install -y gh` (or see [cli.github.com](https://cli.github.com/) if `gh` isn't in your distro's repos) |
+For local development, install Git, Node.js, and the .NET 10 SDK; Windows also
+needs WSL2 + `bubblewrap`. Azure work additionally needs the Azure CLI and
+`kubectl`; publishing a release needs the `gh` CLI. `npm run setup` checks the
+local-development tools after you clone the repository.
 
-`node scripts/azure/cli.mjs dev --setup` (aliased as `npm run setup`) checks
-git/.NET/Node itself and prints the matching install command above for your
-platform if one is missing. On Windows it also prints an **advisory** warning
-when WSL2 is not detected (non-fatal). It does not check the Azure CLI, `kubectl`, or
-`gh`, since local dev doesn't need them.
+For platform-specific install commands, the Windows isolation requirement, and
+OAuth setup, follow the authoritative [Getting started guide](docs/guide/getting-started.md).
 
-Docker is **not** required locally — image builds run remotely via `az acr build`
-(see `scripts/azure/steps/20-build-push-images.mjs`), not a local Docker daemon.
+## Getting Started with an AI Agent
 
-### Installing prerequisites
+You do not need to memorize a command catalog to get started. Open your preferred
+coding agent—GitHub Copilot CLI or an Agentweaver Squad agent—and describe the
+outcome you want. These prompts are ready to paste and give the agent a clear
+starting point:
 
-<details>
-<summary><strong>Windows</strong></summary>
+### Understand the project
+Get a plain-language tour of the product and the important parts of the repository.
 
-Install `winget` first if it isn't already available (it ships with Windows 11
-and recent Windows 10 updates):
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-Repair-WinGetPackageManager -AllUsers
+```text
+Explain what Agentweaver does and how this repository is structured. Point me to the best places to start reading.
 ```
 
-Then install git, Node.js, and the .NET SDK:
+### Run it locally
+Ask the agent to prepare your machine and start the local development loop.
 
-```powershell
-winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
-winget install --id OpenJS.NodeJS.22 --exact --accept-source-agreements --accept-package-agreements
-winget install --id Microsoft.DotNet.SDK.10 --accept-source-agreements --accept-package-agreements
+```text
+Set up my local development environment and run Agentweaver. Tell me about any prerequisites I need to install first.
 ```
 
-Deploying to Azure? Also install the Azure CLI:
+### Provision Azure infrastructure
+Create a fresh Azure environment; the agent should use `azure:provision-infra` for the first-time infrastructure setup.
 
-```powershell
-winget install Microsoft.AzureCLI --accept-source-agreements --accept-package-agreements
+```text
+Provision a fresh Azure environment for Agentweaver.
 ```
 
-`npm` ships bundled with Node.js — no separate install needed. Refresh `PATH`
-in your **current** shell so the newly installed tools are found without
-reopening the terminal:
+### Deploy local work to Azure
+Ship the current checkout to an existing dev/test environment with `azure:deploy-from-local`—no PR is needed for this validation step.
 
-```powershell
-$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-            [Environment]::GetEnvironmentVariable('Path', 'User')
+```text
+Deploy my current local changes to the Azure dev/test environment.
 ```
 
-</details>
+### Deploy a specific commit to Azure
+Ask for a reviewable deployment of a named Git ref using `azure:deploy-from-commit -- <sha-or-ref>`.
 
-<details>
-<summary><strong>macOS</strong></summary>
-
-Install [Homebrew](https://brew.sh/) first if it isn't already available:
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```text
+Deploy commit abc1234 to the Azure dev/test environment so I can review it.
 ```
 
-Then install git, Node.js, and the .NET SDK:
+### Create a release
+Have the agent guide a real release through `release:publish`, or use `azure:release` for the full cut-and-deploy workflow when appropriate.
 
-```bash
-brew install git
-brew install node@20
-brew install --cask dotnet-sdk
+```text
+Cut a new release of Agentweaver.
 ```
 
-Deploying to Azure? Also install the Azure CLI:
+### Deploy an existing release
+Deploy a version that has already been published using `azure:deploy-from-release -- vX.Y.Z`.
 
-```bash
-brew install azure-cli
+```text
+Deploy release v1.4.0 to the staging environment.
 ```
 
-`npm` ships bundled with Node.js — no separate install needed.
+### Investigate a bug or issue
+Start with evidence and root cause before deciding how to change the code.
 
-</details>
-
-<details>
-<summary><strong>Linux (Debian/Ubuntu)</strong></summary>
-
-```bash
-# git
-sudo apt-get update && sudo apt-get install -y git
-
-# Node.js 20.x + npm (via NodeSource -- distro repos are usually outdated)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# .NET SDK 10 (via the official install script -- apt package availability
-# varies by distro/version)
-curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0
-export PATH="$HOME/.dotnet:$PATH"
+```text
+Investigate issue #42 and figure out the root cause before proposing a fix.
 ```
 
-Deploying to Azure? Also install the Azure CLI:
+### Fix a bug or issue
+Ask the agent to trace, implement, and validate a focused fix.
 
-```bash
-curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```text
+Fix the bug described in issue #42.
 ```
 
-</details>
+### Create a new feature
+Describe the outcome in your own words; the agent can help turn it into an implementation plan.
 
-`npm run setup` re-checks the local-dev tools itself after you install them,
-and prints the matching command again if anything is still missing or out of
-date. Full step-by-step guide: [sabbour.me/agentweaver/guide/getting-started](https://sabbour.me/agentweaver/guide/getting-started).
+```text
+Add a new feature: <describe what you want>
+```
 
 ## Features
 
@@ -174,19 +144,19 @@ Local and Azure testing do not require a staging branch:
 ```text
 feature worktree
   ├─ npm run dev ───────────────────────> local test (no GitHub interaction)
-  ├─ azure:deploy / azure:upgrade ─────> Azure dev/test environment (any branch)
-  └─ PR CI ─> update to latest main ─> CI rerun ─> squash-merge to protected main
-                                                        └─ release PR ─> tag/release/deploy
+  ├─ azure:provision-infra / azure:deploy-from-local ─────> Azure dev/test environment
+  ├─ azure:deploy-from-commit <ref> ──────────────────────> exact committed ref, without checkout switching
+  └─ PR CI ─> update to latest dev ─> CI rerun ─> squash-merge to protected dev
+                                                        └─ green SHA ─> release/vX.Y.Z soak ─> promotion to main
+                                                                                                      └─ publish vX.Y.Z ─> deploy from release
 ```
 
 `npm run dev` uses whatever is checked out locally. Azure dev/test commands
 can deploy an unmerged feature branch to a real cluster for integration
 testing. The cluster is the staging/integration **environment**; protected
-`main` plus required up-to-date PR checks is the git integration path. GitHub
-Merge Queue is unavailable while the repo is owned by the personal `sabbour`
-account. The [Branch Topology Activation Plan](CONTRIBUTING.md#branch-topology--room-for-growth)
-defines the measurable conditions for enabling it or adding another branch tier.
-See the [full explanation](https://sabbour.me/agentweaver/guide/getting-started#how-local-and-azure-testing-fit-the-branch-flow).
+`dev` plus required up-to-date PR checks is the git integration path. See
+[Branch Topology](CONTRIBUTING.md#branch-topology) for how branches map to
+environments.
 
 ## Deploy to Azure
 
@@ -198,27 +168,25 @@ From a cloned checkout:
 
 ```bash
 # First/full provisioning of a personal or shared dev/test environment:
-npm run azure:deploy
+npm run azure:provision-infra
 ```
 
-This is **environment validation, not a release**. Use `azure:deploy` to
+This is **environment validation, not a release**. Use `azure:provision-infra` to
 provision or idempotently reconcile the full environment; after it exists,
-use `npm run azure:upgrade` to ship the current clean `HEAD` — even from an
+use `npm run azure:deploy-from-local` to ship the current clean `HEAD` — even from an
 unmerged feature branch/worktree — during normal development, and
 `npm run azure:verify` to rerun live checks. Only the release workflow changes
-`VERSION`, creates a `vX.Y.Z` tag, and publishes a GitHub Release. Its current
-script still needs the documented protected-release-PR split before
-protected-main enforcement. See the
-[deploy/upgrade/release decision table](RELEASING.md#deploying-to-azure-is-not-the-same-as-cutting-a-release).
+`VERSION`, creates a `vX.Y.Z` tag, and publishes a GitHub Release. See the
+[release and deployment command model](RELEASING.md#command-model).
 
-With no arguments, `azure:deploy` launches an interactive installer that prompts
+With no arguments, `azure:provision-infra` launches an interactive installer that prompts
 for: the Azure subscription (defaulting to your current `az` default), a
 resource group (pick an existing one or create a new one), a location, the
 AKS cluster / ACR / Key Vault names (prefilled with sensible defaults,
 editable), and a GitHub OAuth client ID + secret (the secret is entered with
 no echo). It then provisions the cluster, identity, monitoring, the MCP OAuth
 signing key, PostgreSQL, builds and pushes images, verifies image provenance,
-and deploys and verifies the release. At the end it prints an **outputs
+and performs an initial SHA-identified deployment. At the end it prints an **outputs
 summary** (resource group, cluster, ACR, namespace, image tags, gateway
 host/IP, **GitHub OAuth callback URL**, verification pass/fail counts) — it
 never prints the OAuth client secret or any other credential.
@@ -244,7 +212,7 @@ non-interactive run — no TTY, or any flags passed — never blocks on a prompt
 and fails fast naming any missing required field):
 
 ```bash
-npm run azure:deploy -- \
+npm run azure:provision-infra -- \
   --resource-group agentweaver-rg \
   --cluster-name agentweaver-aks \
   --acr-name agentweaverregistry \
@@ -273,7 +241,7 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
 ```
 
 ```bash
-npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
+npm run azure:provision-infra -- --params-file scripts/azure/params.my-env.json
 ```
 
 > Never commit a params file containing a real `GITHUB_CLIENT_SECRET` — prefer
@@ -281,24 +249,36 @@ npm run azure:deploy -- --params-file scripts/azure/params.my-env.json
 > prompt; the params file field exists only for unattended CI use against
 > disposable/test environments.
 
-**Upgrading an existing deployment:**
+**Deploying current local work to an existing environment:**
 
 ```bash
-npm run azure:upgrade
+npm run azure:deploy-from-local
 ```
 
-`azure:upgrade` is for updating an *existing* deployment to newer code,
-distinct from `azure:deploy` (initial/full setup). It mints a new immutable
-image tag from `HEAD` (the short git SHA; it refuses to run against a dirty
-working tree), builds and pushes the images, verifies image provenance,
-redeploys, and cycles the AgentHost warm-pool sandboxes (reapplies the
-SandboxTemplate/SandboxWarmPool and waits for the pool to become ready —
-never by deleting pods).
+`azure:deploy-from-local` deploys current local work without assigning release
+identity. It is distinct from `azure:provision-infra` (initial/full setup) and
+from `azure:deploy-from-release` (an existing published semver release). It
+mints an immutable short-SHA tag from `HEAD`, builds and pushes images,
+redeploys, performs post-deploy provenance verification, and waits for the
+AgentHost warm pool.
+
+To deploy a teammate's branch, PR ref, or older commit without switching your
+own checkout:
+
+```bash
+npm run azure:deploy-from-commit -- origin/feature-branch
+```
+
+The command resolves the ref to an exact commit, creates a temporary detached
+worktree, and runs the same short-SHA deployment pipeline. It never includes
+uncommitted local state.
 
 **Related commands** (see the [operations guide](docs/guide/operations.md) and
 [AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
 
-- `npm run azure:release` — current semver publication command; it still commits/tags/pushes directly and must be split into protected release-PR preparation plus exact-SHA publication before protected-main enforcement (see `RELEASING.md`).
+- `npm run release:publish` — create the tag and GitHub Release only.
+- `npm run azure:deploy-from-release -- vX.Y.Z` — deploy an existing published release.
+- `npm run azure:release` — publish and perform the first deployment as one resumable orchestration.
 - `npm run azure:verify` — runs the post-deploy health verification checks on their own.
 
 ### Local development
@@ -308,7 +288,7 @@ never by deleting pods).
 npm run dev
 
 # Same orchestration, but open the browser when ready
-npm run azure:dev
+npm run dev:open
 
 # Frontend only (builds, then starts Vite)
 npm run dev:web
@@ -352,51 +332,58 @@ From the repository root, run these with `npm run <script>` (or `pnpm run <scrip
 | Script | Purpose |
 | --- | --- |
 | `setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages. No Azure calls. |
-| `azure:deploy` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
-| `azure:upgrade` | Build a new immutable image tag, redeploy, and cycle the AgentHost warm pool. |
-| `azure:release` | Current semver bump/tag/GitHub release + deploy command; queue-compatible preparation/publication split is pending. |
+| `azure:provision-infra` | Interactive/non-interactive installer — provisions everything and deploys (replaces the old `install.sh`/`.ps1`). |
+| `azure:deploy-from-local` | Deploy current local HEAD using a short-SHA image identifier; no release identity. |
+| `azure:deploy-from-commit` | Deploy an arbitrary exact committed ref through a temporary detached worktree. |
+| `azure:deploy-from-release` | Deploy an existing published `vX.Y.Z` release to the configured environment. |
+| `release:publish` | Create an annotated tag and GitHub Release from a prepared exact-main checkout; no deploy. |
+| `azure:release` | Publish and deploy a prepared release by composing the two commands above. |
 | `azure:verify` | Post-deploy health verification checks. |
-| `azure:dev` | Start the local API + Web UI dev environment. |
+| `dev` / `start` | Start the full local API + Web UI dev environment (WSL2 + bubblewrap sandbox on Windows). No Azure calls; browser does not auto-open. |
+| `dev:open` | Same as `dev`, but opens the browser automatically once ready. Also makes no Azure calls. |
 | `dev:web` | Build the web frontend, then start Vite. |
 | `dev:api` | Build the API in Release mode, then run it without rebuilding. |
 
 > **Never use `:latest`.** The default image tag is the short git SHA (`git rev-parse --short HEAD`). Always pin to a specific SHA for reproducible deployments — image tags are immutable per build.
 
+## Skills
+
+Project skills in [`.copilot/skills/`](.copilot/skills/) capture Agentweaver's
+project-specific operating practices:
+
+- **agentweaver-azure-fluent-system-sync** — Refresh the Azure Fluent System library from Azure UI Kit / Fluent 2 via Figma MCP and validate checked-in React, CSS, docs, and showcase artifacts.
+- **agentweaver-docs-feature** — Full authoring playbook for documenting new or existing features across all documentation facets.
+- **agentweaver-docs-sync** — Keep Agentweaver docs in sync with code changes, including source grounding, regeneration, and builds.
+- **agentweaver-git-workflow** — Agentweaver Git workflow for protected dev integration, worktrees, and PRs.
+- **agentweaver-github-issue** — File a well-structured GitHub issue and dispatch the right Squad member for triage, RCA, or specification work.
+- **agentweaver-issue-status** — Print a live pipeline status board for GitHub issues, deployments, and documentation disposition.
+- **agentweaver-playwright-cli** — Automate browser interactions, test web pages, and work with Playwright tests.
+
+GitHub Copilot CLI discovers its official skill paths in
+[`.github/skills/`](.github/skills/); these thin entry points expose the
+project's maintained harness workflows:
+
+- **agentweaver-api-harness** — Run Agentweaver's REST API harness for backend validation, repro reruns, or plain-English scenario exploration.
+- **agentweaver-harness** — Run Agentweaver's complete cross-surface persona harness for validation, regression, or exploratory passes.
+- **agentweaver-harness-scenarios** — List built-in harness scenarios and persona catalogs, or generate reviewed surface adapters.
+- **agentweaver-mcp-harness** — Run Agentweaver's MCP protocol harness for tool-surface validation, repro reruns, or scenario exploration.
+- **agentweaver-ui-harness** — Run Agentweaver's deployed-UI harness for browser evidence, repros, or scenario exploration.
+
 ## AKS architecture
 
 ### Block diagram
 
-```mermaid
-block-beta
-  columns 3
+![AKS block diagram: Client and GitHub reach the AKS Cluster's core services (Frontend, API, Worker, MCP), which use the Kata VM Pool AgentHost warm pool, shared storage (Workspace PVC, CSI SecretProvider), PostgreSQL, Key Vault, and ACR](docs/diagrams/aks-block-diagram.png)
 
-  Client(["🌐 Client"])
-  space
-  GitHub(["GitHub"])
-
-  block:aks["AKS Cluster"]:3
-    columns 3
-    block:core["Core Services"]:2
-      columns 2
-      fe["Frontend ×2"]
-      api["API ×2"]
-      worker["Worker ×1+HPA"]
-      mcp["MCP ×1"]
-    end
-    block:kata["Kata VM Pool"]:1
-      ah["AgentHost\nWarm Pool ×2"]
-    end
-    block:storage["Shared Storage"]:3
-      columns 2
-      pvc[("Workspace PVC")]
-      csi["CSI SecretProvider"]
-    end
-  end
-
-  pg[("PostgreSQL")]
-  kv["Key Vault"]
-  acr["ACR"]
-```
+<!--
+  Pre-rendered as a static PNG from docs/diagrams/src/aks-block-diagram.json
+  by docs/diagram-renderer (a Fluent-styled React Flow app) + Playwright, so
+  it matches the same card/icon/badge look used live in the product UI
+  instead of generic Mermaid/mermaid-cli output. To edit the diagram: change
+  the graph-spec JSON, then run `npm run docs:render-diagrams` and commit the
+  regenerated PNG + .hash.txt. CI fails if the spec's content hash drifts from
+  the committed .hash.txt (see scripts/docs/capture-diagrams.mjs).
+-->
 
 > Full component breakdown, networking, security model, and warm-pool lifecycle: [AKS Architecture →](docs/guide/architecture-aks.md)
 
@@ -408,3 +395,8 @@ block-beta
 - [AKS architecture](docs/guide/architecture-aks.md)
 - [Contributing](CONTRIBUTING.md)
 - [Releasing](RELEASING.md)
+
+## Skills
+
+- [Agentweaver changelog](.copilot/skills/agentweaver-changelog/SKILL.md) —
+  Changesets, release publication, release notes, and release deployment identity.

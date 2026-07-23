@@ -1,0 +1,95 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Role Slots, Catalog Roles, and Bespoke Charters",
+  "alt": "Role Slots, Catalog Roles, and Bespoke Charters: Workflow node, role/kind, agent, charter, Catalog role charter, Runtime executor context",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Node",
+      "label": "Workflow node",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Lane",
+      "label": "role/kind",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "render lane + node purpose"
+    },
+    {
+      "id": "AgentField",
+      "label": "agent",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "specific reviewer/agent hint"
+    },
+    {
+      "id": "Charter",
+      "label": "charter",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "bespoke inline persona"
+    },
+    {
+      "id": "Catalog",
+      "label": "Catalog role charter",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Runtime",
+      "label": "Runtime executor context",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Node",
+      "to": "Lane"
+    },
+    {
+      "from": "Node",
+      "to": "AgentField"
+    },
+    {
+      "from": "Node",
+      "to": "Charter"
+    },
+    {
+      "from": "AgentField",
+      "to": "Catalog"
+    },
+    {
+      "from": "Catalog",
+      "to": "Runtime"
+    },
+    {
+      "from": "Charter",
+      "to": "Runtime"
+    },
+    {
+      "from": "Lane",
+      "to": "Runtime"
+    }
+  ]
+}

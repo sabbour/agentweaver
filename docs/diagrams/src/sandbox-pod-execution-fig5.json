@@ -1,0 +1,95 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Provisioning heartbeat and the coordinator stall exemption",
+  "alt": "Provisioning heartbeat and the coordinator stall exemption: CoordinatorDispatchService, KubernetesSandboxExecutor, claim Bound /, emit sandbox.provisioning_pending, coordinator resets stall, child run executes",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Dispatch",
+      "label": "CoordinatorDispatchService",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "dispatch subtask"
+    },
+    {
+      "id": "Submit",
+      "label": "KubernetesSandboxExecutor",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "submit SandboxClaim"
+    },
+    {
+      "id": "Wait",
+      "label": "claim Bound /",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "pod Ready?"
+    },
+    {
+      "id": "HB",
+      "label": "emit sandbox.provisioning_pending",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      },
+      "subLabel": "heartbeat (~20s)"
+    },
+    {
+      "id": "Exempt",
+      "label": "coordinator resets stall",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "timer while pending"
+    },
+    {
+      "id": "Run",
+      "label": "child run executes",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Dispatch",
+      "to": "Submit"
+    },
+    {
+      "from": "Submit",
+      "to": "Wait"
+    },
+    {
+      "from": "Wait",
+      "to": "HB",
+      "label": "not yet (pod Pending)"
+    },
+    {
+      "from": "HB",
+      "to": "Exempt"
+    },
+    {
+      "from": "Exempt",
+      "to": "Wait"
+    },
+    {
+      "from": "Wait",
+      "to": "Run",
+      "label": "yes → pod bound"
+    }
+  ]
+}

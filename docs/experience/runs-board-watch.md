@@ -16,21 +16,12 @@ Agentweaver separates **work intake** from **run execution**.
 
 The product shape is intentionally simple: capture work, rank it, let the coordinator claim Ready work, watch live execution, review the result, then archive what no longer needs attention.
 
-```mermaid
-flowchart LR
-    Submit[Submit run or capture task] --> Board[Project board]
-    Board --> Backlog[Backlog]
-    Backlog -->|move or Send all to Ready| Ready[Ready]
-    Ready -->|heartbeat claims work| Active[Active run]
-    Active --> Watch[Live Watch timeline]
-    Watch --> Review[Human Review]
-    Review -->|approve| Done[Done]
-    Review -->|request changes| Active
-    Active -->|failure| Problems[Problems]
-    Problems -->|Retry| Active
-    Problems -->|Archive| Archived[Archived]
-    Done -->|Archive| Archived
-```
+![The mental model: Submit run or capture task, Project board, Backlog, Ready, Active run, Live Watch timeline, Human Review, Done, Problems, Archived](../diagrams/experience-runs-board-watch-fig1.png)
+
+<!-- Rendered from ../diagrams/src/experience-runs-board-watch-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Submitting work
 

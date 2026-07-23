@@ -1,0 +1,160 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "End-to-end flow",
+  "alt": "End-to-end flow: User selects or pastes repo, Create project from GitHub, BlueprintEndpoints, GitHubRepoBlueprintSuggestionService, GitHub user token, GitHub REST API, Signals, Catalog mapper, BlueprintService.GetPredefined, SuggestBlueprintResponse, Switch to Templates tab",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "User",
+      "label": "User selects or pastes repo",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "Create project from GitHub",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "Suggested tab"
+    },
+    {
+      "id": "Endpoint",
+      "label": "BlueprintEndpoints",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Service",
+      "label": "GitHubRepoBlueprintSuggestionService",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Token",
+      "label": "GitHub user token",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "GitHub",
+      "label": "GitHub REST API",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "metadata + languages + contents"
+    },
+    {
+      "id": "Signals",
+      "label": "Signals",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "description, topics, languages, root files, issues"
+    },
+    {
+      "id": "Mapper",
+      "label": "Catalog mapper",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "PickBlueprint"
+    },
+    {
+      "id": "Catalog",
+      "label": "BlueprintService.GetPredefined",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Response",
+      "label": "SuggestBlueprintResponse",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Templates",
+      "label": "Switch to Templates tab",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "User",
+      "to": "UI"
+    },
+    {
+      "from": "UI",
+      "to": "Endpoint",
+      "label": "POST /api/blueprints/suggest"
+    },
+    {
+      "from": "Endpoint",
+      "to": "Service"
+    },
+    {
+      "from": "Service",
+      "to": "Token",
+      "label": "resolve user scope"
+    },
+    {
+      "from": "Service",
+      "to": "GitHub"
+    },
+    {
+      "from": "Service",
+      "to": "Signals"
+    },
+    {
+      "from": "Signals",
+      "to": "Mapper"
+    },
+    {
+      "from": "Mapper",
+      "to": "Catalog"
+    },
+    {
+      "from": "Catalog",
+      "to": "Response"
+    },
+    {
+      "from": "Response",
+      "to": "UI"
+    },
+    {
+      "from": "UI",
+      "to": "Templates",
+      "label": "fallback true or error"
+    }
+  ]
+}

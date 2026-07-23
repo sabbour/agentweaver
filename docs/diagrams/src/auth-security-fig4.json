@@ -1,0 +1,97 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "MCP bearer JWTs: issuance, validation, and forwarding",
+  "alt": "MCP bearer JWTs: issuance, validation, and forwarding: Agentweaver API signs JWT with RSA private key, Publishes public key as JWKS, MCP client presents JWT, MCP validates signature, iss, aud, exp, alg, Forward same bearer token to API, API validates JWT and checks jti denylist, Org middleware trusts matching org claim",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "AS",
+      "label": "Agentweaver API signs JWT with RSA private key",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "JWKS",
+      "label": "Publishes public key as JWKS",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Client",
+      "label": "MCP client presents JWT",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "MCP validates signature, iss, aud, exp, alg",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Forward",
+      "label": "Forward same bearer token to API",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "API",
+      "label": "API validates JWT and checks jti denylist",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Authz",
+      "label": "Org middleware trusts matching org claim",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "AS",
+      "to": "JWKS"
+    },
+    {
+      "from": "Client",
+      "to": "MCP"
+    },
+    {
+      "from": "JWKS",
+      "to": "MCP"
+    },
+    {
+      "from": "MCP",
+      "to": "Forward"
+    },
+    {
+      "from": "Forward",
+      "to": "API"
+    },
+    {
+      "from": "API",
+      "to": "Authz"
+    }
+  ]
+}

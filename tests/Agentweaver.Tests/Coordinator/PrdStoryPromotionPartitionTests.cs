@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -5,6 +6,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -49,6 +51,61 @@ public sealed class PrdStoryPromotionPartitionTests
 
         result.PromotedIndices.Should().BeEmpty();
         result.InlineIndices.Should().Equal(0, 1);
+        result.Warnings.Should().ContainSingle()
+            .Which.Should().Contain("kept inline: frontend, backend");
+    }
+
+    [Fact]
+    public async Task PartitionStoriesAsync_ClassifiesIndependentComponentsInParallel_NearOldTimeoutBound()
+    {
+        var classifier = new TestStoryIndependenceClassifier(async (_, ct) =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(8.2), ct);
+            return new StoryIndependenceClassificationResult(true, "Separately shippable deliverable.");
+        });
+        var executor = CreateExecutor(classifier);
+        var input = new CoordinatorDraftInput("run-1", "proj-1", "Ship two products", "alice", "repo", null);
+        var spec = CreateSpec("run-1", "proj-1", "Ship two products", "Product A and Product B");
+        var drafts = new[]
+        {
+            new CoordinatorOrchestratorExecutor.SubtaskDraft("product-a", "Ship product A", "Build product A", "dev", "medium", "execution", "worktree", []),
+            new CoordinatorOrchestratorExecutor.SubtaskDraft("product-b", "Ship product B", "Build product B", "dev", "medium", "execution", "worktree", []),
+        };
+
+        var stopwatch = Stopwatch.StartNew();
+        var result = await executor.PartitionStoriesAsync(input, spec, drafts, CancellationToken.None);
+        stopwatch.Stop();
+
+        result.PromotedIndices.Should().Equal(0, 1);
+        classifier.MaxConcurrentCalls.Should().Be(2);
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(12));
+    }
+
+    [Fact]
+    public async Task PartitionStoriesAsync_PreservesComponentMapping_WhenParallelResultsCompleteOutOfOrder()
+    {
+        var classifier = new TestStoryIndependenceClassifier(async (context, ct) =>
+        {
+            var isProductA = context.ComponentStories.Single().StoryKey == "product-a";
+            await Task.Delay(isProductA ? 150 : 20, ct);
+            return new StoryIndependenceClassificationResult(
+                isProductA,
+                isProductA ? "Product A is separately shippable." : "Product B remains coupled.");
+        });
+        var executor = CreateExecutor(classifier);
+        var input = new CoordinatorDraftInput("run-1", "proj-1", "Ship products", "alice", "repo", null);
+        var spec = CreateSpec("run-1", "proj-1", "Ship products", "Product A and Product B");
+        var drafts = new[]
+        {
+            new CoordinatorOrchestratorExecutor.SubtaskDraft("product-a", "Ship product A", "Build product A", "dev", "medium", "execution", "worktree", []),
+            new CoordinatorOrchestratorExecutor.SubtaskDraft("product-b", "Ship product B", "Build product B", "dev", "medium", "execution", "worktree", []),
+        };
+
+        var result = await executor.PartitionStoriesAsync(input, spec, drafts, CancellationToken.None);
+
+        result.PromotedIndices.Should().Equal(0);
+        result.InlineIndices.Should().Equal(1);
+        result.PromotionReasons[0].Should().Be("LLM judged this dependency component to be an independent deliverable.");
     }
 
     [Fact]
@@ -100,6 +157,7 @@ public sealed class PrdStoryPromotionPartitionTests
             services.GetRequiredService<IServiceScopeFactory>(),
             NullLoggerFactory.Instance,
             classifier,
+            new FakeAssemblyGateCodeClassifier(),
             "gpt-5-mini",
             "http://localhost",
             null);
@@ -119,18 +177,55 @@ public sealed class PrdStoryPromotionPartitionTests
         UpdatedAt = DateTimeOffset.UtcNow,
     };
 
-    private sealed class TestStoryIndependenceClassifier(
-        Func<StoryIndependenceClassificationContext, StoryIndependenceClassificationResult?> impl)
-        : IStoryIndependenceClassifier
+    private sealed class TestStoryIndependenceClassifier : IStoryIndependenceClassifier
     {
-        public int CallCount { get; private set; }
+        private readonly Func<StoryIndependenceClassificationContext, CancellationToken, Task<StoryIndependenceClassificationResult?>> _impl;
+        private int _callCount;
+        private int _concurrentCalls;
+        private int _maxConcurrentCalls;
 
-        public Task<StoryIndependenceClassificationResult?> ClassifyAsync(
+        public TestStoryIndependenceClassifier(
+            Func<StoryIndependenceClassificationContext, StoryIndependenceClassificationResult?> impl)
+            : this((context, _) => Task.FromResult(impl(context)))
+        {
+        }
+
+        public TestStoryIndependenceClassifier(
+            Func<StoryIndependenceClassificationContext, CancellationToken, Task<StoryIndependenceClassificationResult?>> impl)
+        {
+            _impl = impl;
+        }
+
+        public int CallCount => _callCount;
+        public int MaxConcurrentCalls => _maxConcurrentCalls;
+
+        public async Task<StoryIndependenceClassificationResult?> ClassifyAsync(
             StoryIndependenceClassificationContext context,
             CancellationToken ct)
         {
-            CallCount++;
-            return Task.FromResult(impl(context));
+            Interlocked.Increment(ref _callCount);
+            var concurrent = Interlocked.Increment(ref _concurrentCalls);
+            UpdateMaximum(ref _maxConcurrentCalls, concurrent);
+            try
+            {
+                return await _impl(context, ct);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _concurrentCalls);
+            }
+        }
+
+        private static void UpdateMaximum(ref int target, int candidate)
+        {
+            var current = Volatile.Read(ref target);
+            while (candidate > current)
+            {
+                var observed = Interlocked.CompareExchange(ref target, candidate, current);
+                if (observed == current)
+                    return;
+                current = observed;
+            }
         }
     }
 

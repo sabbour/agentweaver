@@ -142,6 +142,151 @@ public sealed class AssemblyGateCanonicalStageTests
         workflowDerived.GraphNodeId.Should().Be(defaultHumanGate.GraphNodeId);
     }
 
+    // ── #387: gate applicability from the actual task ────────────────────────────────────────────
+    // A non-code-producing work plan (all subtasks are planning-phase deliverables) has nothing to
+    // build or test, so the platform build_test gate must be dropped rather than scheduled — otherwise
+    // it finds no code, requests changes, and loops forever.
+
+    [Fact]
+    public void ResolveAssemblyGates_NonCodeProducingPlan_DropsBuildTestGate()
+    {
+        var workflow = BuildSoftwareWorkflow();
+
+        var codeGates = CoordinatorAssemblyService.ResolveAssemblyGates(workflow, producesCode: true);
+        var nonCodeGates = CoordinatorAssemblyService.ResolveAssemblyGates(workflow, producesCode: false);
+
+        codeGates.Select(g => g.GateKind).Should().Contain("build-test");
+        nonCodeGates.Select(g => g.GateKind).Should().NotContain("build-test");
+        // Other authored gates (RAI, human-review) are preserved for non-code plans.
+        nonCodeGates.Select(g => g.GateKind).Should().Contain(new[] { "rai", "human-review" });
+    }
+
+    [Fact]
+    public void ProducesCode_AllPlanningSubtasks_IsFalse()
+    {
+        CoordinatorAssemblyGateResolver.ProducesCode(new[] { "planning", "planning" }).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("execution")]
+    [InlineData("validation")]
+    [InlineData("none")]
+    [InlineData(null)]
+    public void ProducesCode_AnyNonPlanningSubtask_IsTrue(string? phase)
+    {
+        CoordinatorAssemblyGateResolver.ProducesCode(new[] { "planning", phase }).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ProducesCode_NoSubtasks_IsTrueByDefault()
+    {
+        // Pre-decomposition / unknown: keep the gate (conservative — only drop when confident).
+        CoordinatorAssemblyGateResolver.ProducesCode(Array.Empty<string?>()).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProducesCode_AllPlanningSubtasks_SkipsClassifier()
+    {
+        var classifier = new StubCodeClassifier(_ => true);
+        var subtasks = new[]
+        {
+            Subtask("Research the problem", "planning"),
+            Subtask("Draft the design", "planning"),
+        };
+
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            subtasks, classifier, ClassificationContext(), CancellationToken.None);
+
+        producesCode.Should().BeFalse();
+        classifier.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ProducesCode_ExecutionDocumentationSubtask_UsesClassifierAndIsFalse()
+    {
+        var classifier = new StubCodeClassifier(_ => false);
+        var subtask = Subtask(
+            "Improve the operator guide",
+            "execution",
+            """["guides/operator-guide.custom"]""");
+
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            [subtask], classifier, ClassificationContext(), CancellationToken.None);
+
+        producesCode.Should().BeFalse();
+        classifier.LastContext.Should().NotBeNull();
+        classifier.LastContext!.DeclaredOutputPaths.Should().Equal("guides/operator-guide.custom");
+    }
+
+    [Fact]
+    public async Task ProducesCode_ExecutionCodeSubtask_UsesClassifierAndIsTrue()
+    {
+        var classifier = new StubCodeClassifier(_ => true);
+        var subtask = Subtask("Implement the API", "execution");
+
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            [subtask], classifier, ClassificationContext(), CancellationToken.None);
+
+        producesCode.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProducesCode_ClassifierFailureOrTimeout_DefaultsToTrue(bool timeout)
+    {
+        var classifier = new StubCodeClassifier(_ =>
+        {
+            if (timeout)
+                throw new OperationCanceledException("model timeout");
+            throw new InvalidOperationException("model failure");
+        });
+
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            [Subtask("Ambiguous delivery", "execution")],
+            classifier,
+            ClassificationContext(),
+            CancellationToken.None);
+
+        producesCode.Should().BeTrue();
+    }
+
+    private static WorkflowDefinition BuildSoftwareWorkflow() => new()
+    {
+        Id = "software-flow",
+        Name = "Software Flow",
+        Start = "implement",
+        Nodes =
+        [
+            new() { Id = "implement", Type = WorkflowNodeType.Prompt, Label = "Implement" },
+            new()
+            {
+                Id = "rai-check",
+                Type = WorkflowNodeType.Check,
+                Label = "RAI Check",
+                GateKind = "rai",
+                Branches = ["review"],
+            },
+            new() { Id = "build-test", Type = WorkflowNodeType.BuildTest, Label = "Build & Test" },
+            new()
+            {
+                Id = "human-review",
+                Type = WorkflowNodeType.Check,
+                Label = "Human Review",
+                GateKind = "human-review",
+                Branches = ["approved"],
+            },
+            new() { Id = "done", Type = WorkflowNodeType.Terminal, Label = "Done" },
+        ],
+        Edges =
+        [
+            new() { From = "implement", To = "rai-check" },
+            new() { From = "rai-check", To = "build-test", When = "review" },
+            new() { From = "build-test", To = "human-review", When = "approved" },
+            new() { From = "human-review", To = "done", When = "approved" },
+        ],
+    };
+
     private static WorkflowDefinition LoadCatalogWorkflow(string workflowId)
     {
         var reader = new CatalogReader();
@@ -155,5 +300,31 @@ public sealed class AssemblyGateCanonicalStageTests
         }
 
         throw new InvalidOperationException($"Catalog workflow '{workflowId}' was not found.");
+    }
+
+    private static CoordinatorAssemblyGateResolver.SubtaskGateMetadata Subtask(
+        string title,
+        string phase,
+        string declaredOutputPathsJson = "[]") =>
+        new(title, "Test scope", phase, declaredOutputPathsJson);
+
+    private static AssemblyGateCodeClassificationContext ClassificationContext() =>
+        new("run-423", "project-423", "sabbour", "", "", []);
+
+    private sealed class StubCodeClassifier(
+        Func<AssemblyGateCodeClassificationContext, bool?> classify)
+        : IAssemblyGateCodeClassifier
+    {
+        public int CallCount { get; private set; }
+        public AssemblyGateCodeClassificationContext? LastContext { get; private set; }
+
+        public Task<bool?> ClassifyAsync(
+            AssemblyGateCodeClassificationContext context,
+            CancellationToken ct)
+        {
+            CallCount++;
+            LastContext = context;
+            return Task.FromResult(classify(context));
+        }
     }
 }

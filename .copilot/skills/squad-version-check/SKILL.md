@@ -1,3 +1,8 @@
+---
+name: squad-version-check
+description: Squad CLI internals for version stamping and upgrade mechanics.
+---
+
 # SKILL: Squad CLI Internals — Version Stamping & Upgrade Mechanics
 
 **Confidence:** medium

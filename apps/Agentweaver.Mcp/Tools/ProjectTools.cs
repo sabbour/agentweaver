@@ -40,7 +40,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
         [Description("Local working directory path")] string working_directory,
-        [Description("Inline blueprint object to apply at creation (optional JSON object; exclusive with blueprint_id)")] JsonElement? blueprint,
+        [Description("Inline blueprint object to apply at creation, as a JSON-encoded string (optional; exclusive with blueprint_id)")] string? blueprint = null,
         [Description("Project origin: 'blank' (default) or 'github'")] string? origin = null,
         [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id = null,
         [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml = null,
@@ -55,7 +55,17 @@ public sealed class ProjectTools(AgentweaverApiClient api)
             };
             if (origin is not null) bodyNode["origin"] = origin;
             if (blueprint_id is not null) bodyNode["blueprint_id"] = blueprint_id;
-            if (blueprint.HasValue) bodyNode["blueprint"] = JsonNode.Parse(blueprint.Value.GetRawText());
+            if (!string.IsNullOrWhiteSpace(blueprint))
+            {
+                try
+                {
+                    bodyNode["blueprint"] = JsonNode.Parse(blueprint);
+                }
+                catch (JsonException ex)
+                {
+                    throw new McpApiException(0, $"blueprint is not valid JSON: {ex.Message}");
+                }
+            }
             if (!string.IsNullOrWhiteSpace(generated_workflow_yaml)) bodyNode["generated_workflow_yaml"] = generated_workflow_yaml;
 
             var result = await api.PostAsync<JsonElement>("/api/projects", bodyNode, ct);

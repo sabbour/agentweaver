@@ -6,25 +6,12 @@ For event payloads and routes, see the [reference](../reference/unified-steering
 
 ## Mental model
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Source[Feedback source<br/>review / RAI / test / agent]
-    Signal[SteeringSignal<br/>source + severity + scope]
-    Received[coordinator.steering_received]
-    Decider[CoordinatorSteeringDecider]
-    Decision[coordinator.steering_decision]
-    A[In-place steer<br/>same child session]
-    B[Dispatch fresh<br/>explicit reset]
-    C[Proceed / terminal]
-    D[Advisory no-op]
+![Mental model: Feedback source, SteeringSignal, coordinator.steering_received, CoordinatorSteeringDecider, coordinator.steering_decision, In-place steer, Dispatch fresh, Proceed / terminal, Advisory no-op](../diagrams/unified-steering-fig1.png)
 
-    Source --> Signal --> Received --> Decider --> Decision
-    Decision --> A
-    Decision --> B
-    Decision --> C
-    Decision --> D
-```
+<!-- Rendered from ../diagrams/src/unified-steering-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The key invariant is visibility before effect. `CoordinatorSteeringService.SubmitSteeringAsync` persists and queues the signal, emits `coordinator.steering_received`, and does not execute recovery or reset any subtask (`apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs:484`). `CoordinatorSteeringDecider.DecideAsync` then records the action and emits `coordinator.steering_decision` before in-place steering or fresh dispatch runs (`apps/Agentweaver.Api/Coordinator/CoordinatorSteeringDecider.cs:105`, `:201`).
 

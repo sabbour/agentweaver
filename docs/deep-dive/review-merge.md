@@ -12,24 +12,12 @@ The design separates three concerns that are easy to accidentally blur:
 
 That separation is the reason the system can support standalone runs, coordinator child runs, automated reviewers, human approval, request-changes loops, and collective assembly without every path inventing its own safety model.
 
-```mermaid
-flowchart TD
-    Work[Agent-produced work]
-    Policy[Project review policy]
-    Compose[Effective workflow]
-    Auto[Automated review gates<br/>RAI / rubberduck]
-    Human[Human review gate]
-    Decision{Decision}
-    Revise[Return to producer]
-    Merge[Merge gate]
-    Terminal[Terminal outcome]
+![Purpose & Mental Model: Agent-produced work, Project review policy, Effective workflow, Automated review gates, Human review gate, Decision, Return to producer, Merge gate, Terminal outcome](../diagrams/review-merge-fig1.png)
 
-    Policy --> Compose
-    Work --> Compose --> Auto --> Human --> Decision
-    Decision -- approve --> Merge --> Terminal
-    Decision -- request changes --> Revise --> Work
-    Decision -- decline --> Terminal
-```
+<!-- Rendered from ../diagrams/src/review-merge-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A useful rebuilding rule is: **review approves intent to proceed; merge proves the repository can actually accept the result.** Approval and merge are related, but they are not the same operation.
 
@@ -68,17 +56,12 @@ The policy composer performs a graph transform:
 
 If the workflow has no merge node, there is no irreversible merge action to gate, so the policy composition returns the workflow unchanged. That is a deliberate distinction: review policies gate merge; they are not a universal wrapper around every workflow shape.
 
-```mermaid
-flowchart LR
-    Agent[Producer]
-    Existing[Existing pre-merge gates]
-    Injected[Injected policy gates]
-    Merge[Merge]
+![Review Policy as a Safety Overlay: Producer, Existing pre-merge gates, Injected policy gates, Merge, Terminal](../diagrams/review-merge-fig2.png)
 
-    Agent --> Existing --> Injected --> Merge
-    Injected -- revise / request-changes --> Agent
-    Injected -- safety-failed / declined --> Terminal[Terminal]
-```
+<!-- Rendered from ../diagrams/src/review-merge-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Human and Automated Reviewers
 
@@ -174,27 +157,12 @@ First, the **agent-producer is locked out of merge**. The agent can produce a tr
 
 Second, the **pending review request is at-most-once**. Once a reviewer decision is consumed, competing or replayed decisions lose. The run status CAS is the durable backstop: if one request has already moved the run out of `awaiting_review`, later approve/request-changes/decline attempts conflict instead of racing.
 
-```mermaid
-flowchart TD
-    Producer[Original producer<br/>agent turn]
-    Output[Proposed tree + diff]
-    Gate[Human review gate]
-    Reviewer[Reviewer]
-    Consumed[(Pending request consumed)]
-    Revise[Revision path]
-    Merge[Merge path]
-    Decline[Declined terminal]
-    Replay[Replay / competing decision]
-    Conflict[409 conflict / no pending gate]
+![Reviewer Rejection and Lockout: Original producer, Proposed tree + diff, Human review gate, Reviewer, Pending request consumed, Revision path, Merge path, Declined terminal, Replay / competing decision, 409 conflict / no pending gate](../diagrams/review-merge-fig3.png)
 
-    Producer --> Output --> Gate
-    Gate --> Reviewer
-    Reviewer -- request changes --> Consumed --> Revise --> Producer
-    Reviewer -- approve --> Consumed --> Merge
-    Reviewer -- decline --> Consumed --> Decline
-    Replay --> Conflict
-    Producer -. no merge authority .-> Gate
-```
+<!-- Rendered from ../diagrams/src/review-merge-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Review authorization is owner-scoped: the run's submitting user, or equivalent authenticated identity, owns the review request. There is no separate rule that prevents a human requester from approving their own run as a distinct "original author." A strict "author cannot approve own work" rule between two human users would require an explicit persisted author/reviewer assignment model in addition to owner-scoped authorization.
 
@@ -260,27 +228,12 @@ For a standalone run, the merge coordinator:
 
 For coordinator assembly, the merge target is the integration branch. A successful assembly merge terminalizes the coordinator run as completed with an assembly-complete reason rather than as a normal standalone `merged` run. That difference matters: the parent run represents an orchestration outcome, not a single worker's branch.
 
-```mermaid
-flowchart TD
-    Approved[Approved reviewed tree]
-    Lock{Repository lock?<br/>Postgres advisory or local semaphore}
-    Cas{CAS to merging?}
-    GitMerge[Git merge]
-    Success[Merged]
-    Conflict[Merge failed<br/>conflict preserved]
-    Blocked[Blocked<br/>return to review]
-    Error[Internal error<br/>explicit failure/retry state]
+![How Merge Actually Happens: Approved reviewed tree, Repository lock?, CAS to merging?, Git merge, Merged, Merge failed, Blocked, Internal error](../diagrams/review-merge-fig4.png)
 
-    Approved --> Lock
-    Lock -- no --> Blocked
-    Lock -- yes --> Cas
-    Cas -- no --> Blocked
-    Cas -- yes --> GitMerge
-    GitMerge -- success --> Success
-    GitMerge -- conflict --> Conflict
-    GitMerge -- blocked --> Blocked
-    GitMerge -- error --> Error
-```
+<!-- Rendered from ../diagrams/src/review-merge-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Failure Modes and How to Reason About Them
 

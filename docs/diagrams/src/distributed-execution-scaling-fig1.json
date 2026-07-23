@@ -1,0 +1,135 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Isolation: the security boundary",
+  "alt": "Isolation: the security boundary: HTTP + SSE, Orchestration graph, Model SDK session + tool exec, SQLite — single writer, HTTP + SSE, Orchestration graph, Sandbox pod, Postgres — multi-writer",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "Before",
+      "label": "Single API pod — replicas:1, fixed memory",
+      "tier": 1
+    },
+    {
+      "id": "After",
+      "label": "Thin orchestrator + sandbox pods",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "H1",
+      "label": "HTTP + SSE",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "Before"
+    },
+    {
+      "id": "G1",
+      "label": "Orchestration graph",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "Before"
+    },
+    {
+      "id": "S1",
+      "label": "Model SDK session + tool exec",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "HEAVY, in-process",
+      "group": "Before"
+    },
+    {
+      "id": "D1",
+      "label": "SQLite — single writer",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "Before"
+    },
+    {
+      "id": "H2",
+      "label": "HTTP + SSE",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "After"
+    },
+    {
+      "id": "G2",
+      "label": "Orchestration graph",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "After"
+    },
+    {
+      "id": "P2",
+      "label": "Sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "SDK session + tool exec",
+      "group": "After"
+    },
+    {
+      "id": "D2",
+      "label": "Postgres — multi-writer",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "After"
+    }
+  ],
+  "edges": [
+    {
+      "from": "H1",
+      "to": "G1"
+    },
+    {
+      "from": "G1",
+      "to": "S1"
+    },
+    {
+      "from": "G1",
+      "to": "D1"
+    },
+    {
+      "from": "H2",
+      "to": "G2"
+    },
+    {
+      "from": "G2",
+      "to": "P2",
+      "label": "bridge",
+      "dashed": true
+    },
+    {
+      "from": "G2",
+      "to": "D2"
+    },
+    {
+      "from": "H1",
+      "to": "H2",
+      "label": "evict heavy state"
+    }
+  ]
+}

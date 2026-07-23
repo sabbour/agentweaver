@@ -10,23 +10,12 @@ The browser console is a singleton operator facade for the web app. The browser 
 
 ## Flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    User([Operator]) --> Panel[BrowserConsole]
-    Panel -->|route + text + conversation_id| Api[/POST /api/console/turn/]
-    Api --> Service[ConsoleTurnService]
-    Service --> Store[(ConsoleConversationStore\nlast 24 messages)]
-    Service --> Heuristics{Request kind}
-    Heuristics -->|read-only status| Facade[CopilotConsoleFacadeAgent]
-    Heuristics -->|bound run message| Steering[CoordinatorSteeringService]
-    Heuristics -->|start, review, merge, stop| Gate[gate_required response]
-    Facade --> Tools[Read-only API tools]
-    Tools --> Service
-    Steering --> Service
-    Gate --> Service
-    Service --> Panel
-```
+![Flow: Operator, BrowserConsole, POST /api/console/turn, ConsoleTurnService, ConsoleConversationStore, Request kind, CopilotConsoleFacadeAgent, CoordinatorSteeringService, gate_required response, Read-only API tools](../diagrams/browser-console-fig1.png)
+
+<!-- Rendered from ../diagrams/src/browser-console-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Shell and context
 

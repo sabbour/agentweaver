@@ -1,0 +1,140 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Pod-local execution workspaces",
+  "alt": "Pod-local execution workspaces: Authoritative repository + worktree, PodLocalWorkspaceManager, Ephemeral checkout, Workspace mode, Build / test / preview, Implementation turn, Cancellable nested-repo scan, Flatten nested repos, Platform alternate index",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Shared",
+      "label": "Authoritative repository + worktree",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "/workspace/... on Azure Files"
+    },
+    {
+      "id": "Prepare",
+      "label": "PodLocalWorkspaceManager",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "git init + shallow fetch + verify"
+    },
+    {
+      "id": "Scratch",
+      "label": "Ephemeral checkout",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "/local-workspace/{run-hash}/{tree-hash}",
+      "meta": "disk-backed emptyDir"
+    },
+    {
+      "id": "Mode",
+      "label": "Workspace mode",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Build",
+      "label": "Build / test / preview",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "no publication"
+    },
+    {
+      "id": "Turn",
+      "label": "Implementation turn",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "edits local files"
+    },
+    {
+      "id": "Scan",
+      "label": "Cancellable nested-repo scan",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "prune generated/cache paths"
+    },
+    {
+      "id": "Flatten",
+      "label": "Flatten nested repos",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "stage content, not gitlinks"
+    },
+    {
+      "id": "Commit",
+      "label": "Platform alternate index",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "write-tree + commit-tree"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Shared",
+      "to": "Prepare",
+      "label": "source ref + commit + tree"
+    },
+    {
+      "from": "Prepare",
+      "to": "Scratch"
+    },
+    {
+      "from": "Scratch",
+      "to": "Mode"
+    },
+    {
+      "from": "Mode",
+      "to": "Build",
+      "label": "LocalReadOnly"
+    },
+    {
+      "from": "Mode",
+      "to": "Turn",
+      "label": "LocalWritable"
+    },
+    {
+      "from": "Turn",
+      "to": "Scan"
+    },
+    {
+      "from": "Scan",
+      "to": "Flatten"
+    },
+    {
+      "from": "Flatten",
+      "to": "Commit"
+    },
+    {
+      "from": "Commit",
+      "to": "Shared",
+      "label": "git push --no-force origin {commit}:{ref}"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 ﻿import { apiClient } from '../api/apiClient';
+import { resolvePublicApiOrigin } from '../config';
 import { ApiError } from '../api/client';
+import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
   Badge,
   Button,
@@ -14,7 +16,7 @@ import {
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { Delete24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
+import { Branch24Regular, Delete24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { Project, SandboxPolicy, UpdateProjectProviderSettingsRequest } from '../api/types';
@@ -32,7 +34,7 @@ import {
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
-type SectionId = 'general' | 'sandbox' | 'danger';
+type SectionId = 'general' | 'repository' | 'webhooks' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
@@ -64,6 +66,18 @@ const SECTIONS: SectionDef[] = [
     icon: <Settings24Regular />,
   },
   {
+    id: 'repository',
+    label: 'Repository',
+    description: 'Connect or create the GitHub repository for this project.',
+    icon: <Branch24Regular />,
+  },
+  {
+    id: 'webhooks',
+    label: 'Webhooks',
+    description: 'Configure GitHub event delivery for this project.',
+    icon: <Settings24Regular />,
+  },
+  {
     id: 'sandbox',
     label: 'Sandbox policy',
     description: 'Control how agent commands execute and what they may reach.',
@@ -79,7 +93,7 @@ const SECTIONS: SectionDef[] = [
 ];
 
 function isSectionId(value: string | null): value is SectionId {
-  return value === 'general' || value === 'sandbox' || value === 'danger';
+  return value === 'general' || value === 'repository' || value === 'webhooks' || value === 'sandbox' || value === 'danger';
 }
 
 const useStyles = makeStyles({
@@ -228,6 +242,8 @@ export function ProjectSettingsPage() {
     setSearchParams(next, { replace: true });
   };
 
+  const [connectRepoOpen, setConnectRepoOpen] = useState(false);
+
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -261,6 +277,12 @@ export function ProjectSettingsPage() {
   const [sandboxSaveError, setSandboxSaveError] = useState<string | null>(null);
   const [sandboxSaveSuccess, setSandboxSaveSuccess] = useState(false);
   const sandboxLoading = project !== null && !sandboxFetched;
+
+  // A webhook secret is deliberately only retained in this component after its rotation response.
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [rotatingWebhookSecret, setRotatingWebhookSecret] = useState(false);
+  const [webhookError, setWebhookError] = useState<string | null>(null);
+  const [copiedWebhookValue, setCopiedWebhookValue] = useState<'url' | 'secret' | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -427,9 +449,36 @@ export function ProjectSettingsPage() {
     }
   };
 
+  const webhookUrl = `${resolvePublicApiOrigin()}/api/projects/${encodeURIComponent(projectId ?? '')}/webhooks/github`;
+
+  const copyWebhookValue = async (value: string, kind: 'url' | 'secret') => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedWebhookValue(kind);
+    } catch {
+      setWebhookError('Could not copy to the clipboard. Copy the value manually.');
+    }
+  };
+
+  const handleRotateWebhookSecret = async () => {
+    if (!projectId) return;
+    setRotatingWebhookSecret(true);
+    setWebhookError(null);
+    setCopiedWebhookValue(null);
+    try {
+      const result = await apiClient.rotateProjectWebhookSecret(projectId);
+      setWebhookSecret(result.secret);
+    } catch (err) {
+      setWebhookError(formatError(err));
+    } finally {
+      setRotatingWebhookSecret(false);
+    }
+  };
+
   if (!projectId) return null;
 
-  const activeDef = SECTIONS.find((s) => s.id === activeSection) ?? SECTIONS[0];
+  const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
+  const activeDef = visibleSections.find((s) => s.id === activeSection) ?? visibleSections[0];
 
   return (
     <PageContainer>
@@ -458,7 +507,7 @@ export function ProjectSettingsPage() {
       {project && (
         <div className={styles.layout}>
           <nav className={styles.rail} aria-label="Settings sections">
-            {SECTIONS.map((section) => (
+            {visibleSections.map((section) => (
               <button
                 key={section.id}
                 className={mergeClasses(
@@ -613,6 +662,86 @@ export function ProjectSettingsPage() {
                   )}
                   {generationSuccess && (
                     <MessageBar intent="success"><MessageBarBody>Generation model settings saved.</MessageBarBody></MessageBar>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'repository' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>Connect a GitHub repository</TitleText>
+                  <Body as="p" tone="muted">
+                    This project was started without a connected GitHub repository, so runs can't
+                    open pull requests. Create a new repository (or connect one you own) to enable
+                    publishing.
+                  </Body>
+                  <div className={styles.formActions}>
+                    <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>
+                      Connect or create repository
+                    </Button>
+                  </div>
+                </div>
+                <ConnectGitHubRepositoryDialog
+                  projectId={projectId}
+                  projectName={project.name}
+                  open={connectRepoOpen}
+                  onOpenChange={setConnectRepoOpen}
+                  onConnected={(sourceRepository) => {
+                    setProject((prev) => prev ? { ...prev, origin: 'github', source_repository: sourceRepository } : prev);
+                    selectSection('general');
+                  }}
+                />
+              </div>
+            )}
+
+            {activeSection === 'webhooks' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>GitHub webhook</TitleText>
+                  <Body as="p" tone="muted">
+                    In GitHub, open your repository’s Settings, then Webhooks, and add this payload URL.
+                    Set the content type to <strong>application/json</strong>.
+                  </Body>
+                  <Field label="Payload URL">
+                    <Input value={webhookUrl} readOnly />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button appearance="secondary" onClick={() => void copyWebhookValue(webhookUrl, 'url')}>
+                      {copiedWebhookValue === 'url' ? 'Copied URL' : 'Copy URL'}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className={styles.subBlock}>
+                  <TitleText>Webhook secret</TitleText>
+                  <Body as="p" tone="muted">
+                    Generate a unique secret for GitHub to sign deliveries. Rotating it immediately
+                    invalidates the previous secret.
+                  </Body>
+                  <div className={styles.formActions}>
+                    <Button appearance="primary" disabled={rotatingWebhookSecret} onClick={() => void handleRotateWebhookSecret()}>
+                      {rotatingWebhookSecret ? 'Generating' : webhookSecret ? 'Rotate secret' : 'Generate secret'}
+                    </Button>
+                    {rotatingWebhookSecret && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {webhookSecret && (
+                    <>
+                      <MessageBar intent="warning">
+                        <MessageBarBody>Copy this secret now. You won’t be able to see it again.</MessageBarBody>
+                      </MessageBar>
+                      <Field label="Secret">
+                        <Input value={webhookSecret} readOnly type="text" />
+                      </Field>
+                      <div className={styles.formActions}>
+                        <Button appearance="secondary" onClick={() => void copyWebhookValue(webhookSecret, 'secret')}>
+                          {copiedWebhookValue === 'secret' ? 'Copied secret' : 'Copy secret'}
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                  {webhookError && (
+                    <MessageBar intent="error"><MessageBarBody>{webhookError}</MessageBarBody></MessageBar>
                   )}
                 </div>
               </div>

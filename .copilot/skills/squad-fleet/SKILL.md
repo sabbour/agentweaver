@@ -23,7 +23,7 @@ separate checkouts.
 ## Step 1 — Show the current board
 
 Before doing anything, print a status snapshot so Ahmed can see where things stand.
-Run the issue-status skill (`.copilot/skills/issue-status/SKILL.md`) or call:
+Run the issue-status skill (`.copilot/skills/agentweaver-issue-status/SKILL.md`) or call:
 
 ```bash
 gh issue list --state open --label "go:yes" \
@@ -179,8 +179,8 @@ queue it for retry or manual review.
 ## Step 8 — Docs pass
 
 After all PRs in a batch merge, check each closed issue's **Docs disposition**:
-- `docs-feature` needed → spawn Scribe with `.copilot/skills/docs-feature/SKILL.md`
-- `docs-sync` needed → spawn Scribe with `.copilot/skills/docs-sync/SKILL.md`
+- `docs-feature` needed → spawn Scribe with `.copilot/skills/agentweaver-docs-feature/SKILL.md`
+- `docs-sync` needed → spawn Scribe with `.copilot/skills/agentweaver-docs-sync/SKILL.md`
 - "No docs needed" / internal change → skip
 
 ## Step 9 — Print the updated board
@@ -225,4 +225,4 @@ The fleet skill feeds directly into the issue-status board:
 - After fleet: merged PRs update `Deployed` (once AKS deploy runs)
 - Docs pass updates the `Docs` column
 
-See `.copilot/skills/issue-status/SKILL.md` for the full board format.
+See `.copilot/skills/agentweaver-issue-status/SKILL.md` for the full board format.

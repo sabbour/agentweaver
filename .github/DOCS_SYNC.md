@@ -48,11 +48,11 @@ When you add or change a feature:
 
 1. **Make the code change.**
 2. **Regenerate** if you touched MCP tools or other generated surfaces: `node scripts/gen-docs.mjs` and commit the result.
-3. **Update curated docs** for the feature (guide + reference page). Use the `docs-sync` skill for the playbook on *which* pages to touch and how to ground them in code.
+3. **Update curated docs** for the feature (guide + reference page). Use the `agentweaver-docs-sync` skill for the playbook on *which* pages to touch and how to ground them in code.
 4. **Build:** `cd docs && npm run build` — confirm green.
 5. **Open the PR.** CI confirms generated docs are in sync and reminds you if code changed without docs.
 
-For agents/coordinator: invoke the **`docs-sync`** skill (`.copilot/skills/docs-sync/SKILL.md`) — it captures this whole playbook so doc updates are a repeatable skill, not a one-off prompt. To author a feature's docs across *all* facets (deep-dive, reference, user guide, screenshots, landing card, nav, cross-links, diagrams), use the companion **`docs-feature`** skill (`.copilot/skills/docs-feature/SKILL.md`).
+For agents/coordinator: invoke the **`agentweaver-docs-sync`** skill (`.copilot/skills/agentweaver-docs-sync/SKILL.md`) — it captures this whole playbook so doc updates are a repeatable skill, not a one-off prompt. To author a feature's docs across *all* facets (deep-dive, reference, user guide, screenshots, landing card, nav, cross-links, diagrams), use the companion **`agentweaver-docs-feature`** skill (`.copilot/skills/agentweaver-docs-feature/SKILL.md`).
 
 ---
 

@@ -1,0 +1,175 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Problem solved",
+  "alt": "Problem solved: Create ASP.NET builder, Load config, logging, environment, Fail fast on unsafe production auth/OAuth settings, Register JSON, CORS, rate limiting, Register stores, services, providers, hosted workers, Build WebApplication, Ensure operational SQLite schema, Migrate EF memory database, Recover interrupted workflows and coordinator state, Warn or fail health for workspace mount problems, Install middleware, Map endpoint modules, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Create ASP.NET builder",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Load config, logging, environment",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Fail fast on unsafe production auth/OAuth settings",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Register JSON, CORS, rate limiting",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Register stores, services, providers, hosted workers",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Build WebApplication",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Ensure operational SQLite schema",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Migrate EF memory database",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "I",
+      "label": "Recover interrupted workflows and coordinator state",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "J",
+      "label": "Warn or fail health for workspace mount problems",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "K",
+      "label": "Install middleware",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "L",
+      "label": "Map endpoint modules",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "M",
+      "label": "Run Kestrel",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "F"
+    },
+    {
+      "from": "F",
+      "to": "G"
+    },
+    {
+      "from": "G",
+      "to": "H"
+    },
+    {
+      "from": "H",
+      "to": "I"
+    },
+    {
+      "from": "I",
+      "to": "J"
+    },
+    {
+      "from": "J",
+      "to": "K"
+    },
+    {
+      "from": "K",
+      "to": "L"
+    },
+    {
+      "from": "L",
+      "to": "M"
+    }
+  ]
+}

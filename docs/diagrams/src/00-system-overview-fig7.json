@@ -1,0 +1,278 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "AKS Runtime Topology",
+  "alt": "AKS Runtime Topology: Users and MCP clients, Gateway API, /api /auth OAuth routes, /mcp and MCP metadata, / frontend, API service, MCP service, Frontend service, API pod, MCP pod, Frontend pods, Data PVC, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Internet",
+      "label": "Users and MCP clients",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Gateway",
+      "label": "Gateway API",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "HTTPS"
+    },
+    {
+      "id": "ApiRoute",
+      "label": "/api /auth OAuth routes",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "McpRoute",
+      "label": "/mcp and MCP metadata",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "FrontRoute",
+      "label": "/ frontend",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ApiSvc",
+      "label": "API service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "McpSvc",
+      "label": "MCP service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "FrontSvc",
+      "label": "Frontend service",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ApiPod",
+      "label": "API pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "single writer"
+    },
+    {
+      "id": "McpPod",
+      "label": "MCP pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "FrontPods",
+      "label": "Frontend pods",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "DataPVC",
+      "label": "Data PVC",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "run + memory stores"
+    },
+    {
+      "id": "WorkspacePVC",
+      "label": "Workspace PVC",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "repos + worktrees"
+    },
+    {
+      "id": "Secrets",
+      "label": "Key Vault via CSI",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "McpSecrets",
+      "label": "Key Vault via CSI",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Claim",
+      "label": "Per-run SandboxClaim",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "WarmPool",
+      "label": "Warm sandbox pool",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "SandboxPod",
+      "label": "Kata VM sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "External",
+      "label": "GitHub / Copilot / Foundry / OAuth",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Telemetry",
+      "label": "OTLP collector",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Internet",
+      "to": "Gateway"
+    },
+    {
+      "from": "Gateway",
+      "to": "ApiRoute"
+    },
+    {
+      "from": "Gateway",
+      "to": "McpRoute"
+    },
+    {
+      "from": "Gateway",
+      "to": "FrontRoute"
+    },
+    {
+      "from": "ApiRoute",
+      "to": "ApiSvc"
+    },
+    {
+      "from": "McpRoute",
+      "to": "McpSvc"
+    },
+    {
+      "from": "FrontRoute",
+      "to": "FrontSvc"
+    },
+    {
+      "from": "ApiSvc",
+      "to": "ApiPod"
+    },
+    {
+      "from": "McpSvc",
+      "to": "McpPod"
+    },
+    {
+      "from": "FrontSvc",
+      "to": "FrontPods"
+    },
+    {
+      "from": "ApiPod",
+      "to": "DataPVC"
+    },
+    {
+      "from": "ApiPod",
+      "to": "WorkspacePVC"
+    },
+    {
+      "from": "ApiPod",
+      "to": "Secrets"
+    },
+    {
+      "from": "McpPod",
+      "to": "McpSecrets"
+    },
+    {
+      "from": "ApiPod",
+      "to": "Claim"
+    },
+    {
+      "from": "Claim",
+      "to": "WarmPool"
+    },
+    {
+      "from": "WarmPool",
+      "to": "SandboxPod"
+    },
+    {
+      "from": "SandboxPod",
+      "to": "WorkspacePVC"
+    },
+    {
+      "from": "ApiPod",
+      "to": "External"
+    },
+    {
+      "from": "ApiPod",
+      "to": "Telemetry"
+    },
+    {
+      "from": "McpPod",
+      "to": "ApiSvc"
+    }
+  ]
+}

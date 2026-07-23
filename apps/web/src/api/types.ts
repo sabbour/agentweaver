@@ -195,6 +195,10 @@ export interface Project {
   allowed_workflow_ids?: string[] | null;
 }
 
+export interface WebhookSecretRotationResponse {
+  secret: string;
+}
+
 export interface Blueprint {
   id: string;
   name: string;
@@ -470,6 +474,25 @@ export interface GitHubAccount {
   type: 'user' | 'org';
 }
 
+/** One candidate owner for creating a new repository for a project (GET
+ * /api/projects/{id}/github/repository-owners). */
+export interface RepositoryOwner {
+  login: string;
+  type: 'user' | 'org';
+}
+
+export interface CreateProjectRepositoryRequest {
+  owner: string;
+  name?: string;
+  private?: boolean;
+}
+
+export interface ConnectedRepository {
+  source_repository: string;
+  html_url: string;
+}
+
+
 // --- Casting / Team types ---
 
 export interface TeamTemplateDto {
@@ -659,6 +682,7 @@ export interface WorkPlanSubtask {
 export interface CoordinatorWorkPlan {
   workPlanId: string;
   status: string;
+  warnings?: string[];
   subtasks: WorkPlanSubtask[];
 }
 
@@ -1197,6 +1221,16 @@ export interface WorkflowSummaryDto {
   error: string | null;
   is_built_in: boolean;
   is_default: boolean;
+  trigger?: WorkflowTriggerDto | null;
+}
+
+export interface WorkflowTriggerDto {
+  type: 'schedule' | 'event';
+  interval?: 'daily' | 'weekly' | 'monthly' | null;
+  day_of_week?: string | null;
+  day_of_month?: number | null;
+  time_of_day?: string | null;
+  event_name?: string | null;
 }
 
 // Response body for GET/POST the project's workflows list.
@@ -1501,7 +1535,7 @@ export interface PortForwardSessionDto {
 }
 
 // ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
-export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync';
+export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync' | 'marketplace';
 export type SkillStatus = 'active' | 'missing' | 'malformed';
 
 export function isSkillProvenance(value: unknown): value is SkillProvenance {
@@ -1509,7 +1543,8 @@ export function isSkillProvenance(value: unknown): value is SkillProvenance {
     || value === 'repo-import'
     || value === 'file-upload'
     || value === 'manual'
-    || value === 'connected-repo-sync';
+    || value === 'connected-repo-sync'
+    || value === 'marketplace';
 }
 
 // GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
@@ -1520,6 +1555,7 @@ export interface SkillDto {
   provenance: SkillProvenance;
   source_repository?: string | null;
   source_location?: string | null;
+  marketplace_name?: string | null;
   status: SkillStatus;
   content_hash: string;
   resource_count: number;
@@ -1543,6 +1579,7 @@ export interface SkillDetailDto {
   provenance: SkillProvenance;
   source_repository?: string | null;
   source_location?: string | null;
+  marketplace_name?: string | null;
   status: SkillStatus;
   content_hash: string;
   created_at: string;
@@ -1562,6 +1599,9 @@ export interface SkillCandidateDto {
 export interface SkillImportPreviewResponse {
   candidates: SkillCandidateDto[];
 }
+
+export interface SkillMarketplaceDto { name: string; repository: string; subpath?: string | null; layout_note?: string | null; }
+export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; }
 
 export interface CreateSkillRequest {
   name: string;

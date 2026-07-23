@@ -10,6 +10,7 @@ import {
   DialogSurface,
   DialogTitle,
   Field,
+  Input,
   makeStyles,
   Menu,
   MenuDivider,
@@ -22,6 +23,7 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  Select,
   Textarea,
   tokens,
 } from '@fluentui/react-components';
@@ -32,6 +34,7 @@ import {
   ChevronRightRegular,
   EditRegular,
   FlowRegular,
+  PlayRegular,
   NetworkCheckRegular,
   SparkleRegular,
 } from '@fluentui/react-icons';
@@ -40,6 +43,7 @@ import { Link, useParams } from 'react-router-dom';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { BLANK_TEMPLATE, WorkflowEditor } from '../components/WorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
+import { setHeaderField, setScheduleTrigger } from '../utils/workflowYaml';
 import {
   EmptyState,
   Label,
@@ -136,6 +140,14 @@ export function WorkflowsPage() {
     visual?: boolean;
   } | null>(null);
   const [editLoading, setEditLoading] = useState(false);
+  const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
+  const [duplicatingWorkflowId, setDuplicatingWorkflowId] = useState<string | null>(null);
+  const [scheduleWorkflow, setScheduleWorkflow] = useState<WorkflowSummaryDto | null>(null);
+  const [scheduleInterval, setScheduleInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [scheduleTime, setScheduleTime] = useState('09:00');
+  const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState('monday');
+  const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState('1');
+  const [savingSchedule, setSavingSchedule] = useState(false);
 
   // Graph expansion: one graph open at a time (null = all collapsed).
   const [expandedGraphId, setExpandedGraphId] = useState<string | null>(null);
@@ -160,24 +172,25 @@ export function WorkflowsPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      apiClient.listWorkflows(projectId),
-      apiClient.getProject(projectId).catch(() => null as Project | null),
-    ])
-      .then(([list, proj]) => {
+    const loadWorkflows = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [list, proj] = await Promise.all([
+          apiClient.listWorkflows(projectId),
+          apiClient.getProject(projectId).catch(() => null as Project | null),
+        ]);
         if (!cancelled) {
           setData(list);
           setProject(proj);
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!cancelled) setError(formatError(err));
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+    void loadWorkflows();
     return () => {
       cancelled = true;
     };
@@ -237,8 +250,77 @@ export function WorkflowsPage() {
   }, [projectId]);
 
   const handleNewWorkflow = useCallback(() => {
-    setEditorState({ workflowId: 'my-workflow', initialYaml: BLANK_TEMPLATE });
+    setEditorState({ workflowId: 'my-workflow', initialYaml: BLANK_TEMPLATE, visual: true });
   }, []);
+
+  const handleRunNow = useCallback(async (wf: WorkflowSummaryDto) => {
+    if (!projectId || !wf.id) return;
+    setRunningWorkflowId(wf.id);
+    setError(null);
+    try {
+      await apiClient.runWorkflowNow(projectId, wf.id);
+      setSyncMessage(`Queued a run for "${wf.name ?? wf.id}".`);
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setRunningWorkflowId(null);
+    }
+  }, [projectId]);
+
+  const handleOpenSchedule = useCallback((wf: WorkflowSummaryDto) => {
+    const trigger = wf.trigger;
+    setScheduleWorkflow(wf);
+    setScheduleInterval(trigger?.type === 'schedule' && trigger.interval ? trigger.interval : 'daily');
+    setScheduleTime(trigger?.type === 'schedule' && trigger.time_of_day ? trigger.time_of_day : '09:00');
+    setScheduleDayOfWeek(trigger?.type === 'schedule' && trigger.day_of_week ? trigger.day_of_week : 'monday');
+    setScheduleDayOfMonth(String(trigger?.type === 'schedule' && trigger.day_of_month ? trigger.day_of_month : 1));
+  }, []);
+
+  const handleSaveSchedule = useCallback(async (remove = false) => {
+    if (!projectId || !scheduleWorkflow?.id) return;
+    setSavingSchedule(true);
+    setError(null);
+    try {
+      const yaml = await apiClient.getWorkflowYaml(projectId, scheduleWorkflow.id);
+      const dayOfMonth = Number(scheduleDayOfMonth);
+      const updatedYaml = setScheduleTrigger(yaml, remove ? null : {
+        interval: scheduleInterval,
+        timeOfDay: scheduleTime,
+        dayOfWeek: scheduleDayOfWeek,
+        dayOfMonth,
+      });
+      await apiClient.saveWorkflowYaml(projectId, scheduleWorkflow.id, updatedYaml);
+      setData(await apiClient.listWorkflows(projectId));
+      setScheduleWorkflow(null);
+      setSyncMessage(remove ? 'Schedule trigger removed.' : 'Schedule trigger saved.');
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setSavingSchedule(false);
+    }
+  }, [projectId, scheduleWorkflow, scheduleInterval, scheduleTime, scheduleDayOfWeek, scheduleDayOfMonth]);
+
+  const handleDuplicateBuiltIn = useCallback(async (wf: WorkflowSummaryDto) => {
+    if (!projectId || !wf.id) return;
+    setDuplicatingWorkflowId(wf.id);
+    setError(null);
+    try {
+      const yaml = await apiClient.getWorkflowYaml(projectId, wf.id);
+      const existingIds = new Set((data?.workflows ?? []).map((workflow) => workflow.id));
+      const baseId = `${wf.id}-copy`;
+      let copyId = baseId;
+      for (let suffix = 2; existingIds.has(copyId); suffix += 1) copyId = `${baseId}-${suffix}`;
+      const copiedYaml = setHeaderField(setHeaderField(yaml, 'id', copyId), 'name', `Copy of ${wf.name ?? wf.id}`);
+      await apiClient.saveWorkflowYaml(projectId, copyId, copiedYaml);
+      setData(await apiClient.listWorkflows(projectId));
+      setEditorState({ workflowId: copyId, initialYaml: copiedYaml, visual: true });
+      setSyncMessage(`Created "${copyId}" from the built-in workflow.`);
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setDuplicatingWorkflowId(null);
+    }
+  }, [projectId, data]);
 
   const handleOpenGenerate = useCallback(() => {
     setGenerateDescription('');
@@ -323,6 +405,12 @@ export function WorkflowsPage() {
               {wf.id && <Label as="span" className={styles.mono}>{wf.id}</Label>}
               {section === 'active' && <Badge appearance="filled" color="brand">Active</Badge>}
               {wf.is_built_in && <Badge appearance="outline">Built-in</Badge>}
+              {wf.trigger?.type === 'schedule' && (
+                <Badge appearance="tint" color="informative">
+                  {`${wf.trigger.interval ?? 'scheduled'}${wf.trigger.time_of_day ? ` · ${wf.trigger.time_of_day} UTC` : ''}`}
+                </Badge>
+              )}
+              {!wf.is_built_in && !wf.trigger && <Badge appearance="outline">Manual only</Badge>}
               {section !== 'active' && (
                 <Badge appearance="tint" color={wf.valid ? 'success' : 'danger'}>
                   {wf.valid ? 'Valid' : 'Invalid'}
@@ -345,6 +433,28 @@ export function WorkflowsPage() {
                   <NetworkCheckRegular aria-hidden="true" /> View graph
                 </Button>
               )}
+              {wf.id && wf.valid && (
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  icon={runningWorkflowId === wf.id ? <Spinner size="extra-tiny" aria-hidden="true" /> : <PlayRegular />}
+                  disabled={runningWorkflowId !== null}
+                  onClick={() => { void handleRunNow(wf); }}
+                >
+                  Run now
+                </Button>
+              )}
+              {wf.id && wf.is_built_in && (
+                <Button
+                  appearance="primary"
+                  size="small"
+                  icon={duplicatingWorkflowId === wf.id ? <Spinner size="extra-tiny" aria-hidden="true" /> : <FlowRegular />}
+                  disabled={duplicatingWorkflowId !== null}
+                  onClick={() => { void handleDuplicateBuiltIn(wf); }}
+                >
+                  Duplicate to project
+                </Button>
+              )}
               {wf.id && !wf.is_built_in && (
                 <Button
                   appearance="subtle"
@@ -358,13 +468,18 @@ export function WorkflowsPage() {
               )}
               {wf.id && !wf.is_built_in && (
                 <Button
-                  appearance="subtle"
+                  appearance="primary"
                   size="small"
                   icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <FlowRegular />}
                   disabled={editLoading}
                   onClick={() => { void handleEdit(wf, true); }}
                 >
                   Edit visually
+                </Button>
+              )}
+              {wf.id && !wf.is_built_in && (
+                <Button appearance="subtle" size="small" onClick={() => handleOpenSchedule(wf)}>
+                  {wf.trigger?.type === 'schedule' ? 'Edit schedule' : 'Add schedule'}
                 </Button>
               )}
             </>
@@ -504,12 +619,54 @@ export function WorkflowsPage() {
     </Dialog>
   );
 
+  const scheduleDialog = (
+    <Dialog open={scheduleWorkflow !== null} onOpenChange={(_, d) => { if (!savingSchedule && !d.open) setScheduleWorkflow(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Schedule workflow</DialogTitle>
+          <DialogContent>
+            <Field label="Cadence">
+              <Select value={scheduleInterval} onChange={(_, d) => setScheduleInterval(d.value as typeof scheduleInterval)} disabled={savingSchedule}>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </Select>
+            </Field>
+            {scheduleInterval === 'weekly' && (
+              <Field label="Day of week" style={{ marginTop: tokens.spacingVerticalS }}>
+                <Select value={scheduleDayOfWeek} onChange={(_, d) => setScheduleDayOfWeek(d.value)} disabled={savingSchedule}>
+                  {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => <option key={day} value={day}>{day}</option>)}
+                </Select>
+              </Field>
+            )}
+            {scheduleInterval === 'monthly' && (
+              <Field label="Day of month (1–28)" style={{ marginTop: tokens.spacingVerticalS }}>
+                <Input type="number" min="1" max="28" value={scheduleDayOfMonth} onChange={(_, d) => setScheduleDayOfMonth(d.value)} disabled={savingSchedule} />
+              </Field>
+            )}
+            <Field label="UTC time" hint="Schedules are evaluated in UTC." style={{ marginTop: tokens.spacingVerticalS }}>
+              <Input type="time" value={scheduleTime} onChange={(_, d) => setScheduleTime(d.value)} disabled={savingSchedule} />
+            </Field>
+          </DialogContent>
+          <DialogActions>
+            {scheduleWorkflow?.trigger?.type === 'schedule' && <Button appearance="subtle" disabled={savingSchedule} onClick={() => { void handleSaveSchedule(true); }}>Remove schedule</Button>}
+            <Button appearance="subtle" disabled={savingSchedule} onClick={() => setScheduleWorkflow(null)}>Cancel</Button>
+            <Button appearance="primary" disabled={savingSchedule || !/^\d{2}:\d{2}$/.test(scheduleTime) || (scheduleInterval === 'monthly' && (Number(scheduleDayOfMonth) < 1 || Number(scheduleDayOfMonth) > 28))} onClick={() => { void handleSaveSchedule(); }}>
+              {savingSchedule ? 'Saving…' : 'Save schedule'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+
   // Editor takes over the whole page when open.
   if (editorState) {
     return (
       <PageContainer>
         {header}
         {generateDialog}
+        {scheduleDialog}
         {editorState.visual ? (
           <VisualWorkflowEditor
             projectId={projectId}
@@ -535,6 +692,7 @@ export function WorkflowsPage() {
     <PageContainer>
       {header}
       {generateDialog}
+      {scheduleDialog}
 
       {syncMessage && (
         <MessageBar intent="success">

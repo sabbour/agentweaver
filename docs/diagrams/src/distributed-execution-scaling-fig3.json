@@ -1,0 +1,167 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The web/worker deployment split",
+  "alt": "The web/worker deployment split: Clients, Web pod A, Web pod B, Worker pod A, Worker pod B, Warm AgentHost + CopilotAIAgent, Warm AgentHost + CopilotAIAgent, Azure PostgreSQL",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "WebTier",
+      "label": "Web tier — stateless, scales on request load",
+      "tier": 1
+    },
+    {
+      "id": "WorkerTier",
+      "label": "Worker tier — owns runs, scales on backlog depth",
+      "tier": 1
+    },
+    {
+      "id": "Pods",
+      "label": "Sandbox pods — one per run",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Client",
+      "label": "Clients",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "browser · API"
+    },
+    {
+      "id": "WebA",
+      "label": "Web pod A",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "REST · auth · SSE relay",
+      "group": "WebTier"
+    },
+    {
+      "id": "WebB",
+      "label": "Web pod B",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "REST · auth · SSE relay",
+      "group": "WebTier"
+    },
+    {
+      "id": "W1",
+      "label": "Worker pod A",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "orchestration graph",
+      "group": "WorkerTier"
+    },
+    {
+      "id": "W2",
+      "label": "Worker pod B",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "orchestration graph",
+      "group": "WorkerTier"
+    },
+    {
+      "id": "Pod1",
+      "label": "Warm AgentHost + CopilotAIAgent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "configured at launch",
+      "group": "Pods"
+    },
+    {
+      "id": "Pod2",
+      "label": "Warm AgentHost + CopilotAIAgent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "configured at launch",
+      "group": "Pods"
+    },
+    {
+      "id": "DB",
+      "label": "Azure PostgreSQL",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "runs · run-event log · leases"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Client",
+      "to": "WebA",
+      "label": "HTTP + SSE"
+    },
+    {
+      "from": "Client",
+      "to": "WebB",
+      "label": "HTTP + SSE"
+    },
+    {
+      "from": "WebA",
+      "to": "DB",
+      "label": "enqueue · read events"
+    },
+    {
+      "from": "WebB",
+      "to": "DB",
+      "label": "enqueue · read events"
+    },
+    {
+      "from": "W1",
+      "to": "DB",
+      "label": "claim+reserve · checkpoint · event writes"
+    },
+    {
+      "from": "W2",
+      "to": "DB",
+      "label": "claim+reserve · checkpoint · event writes"
+    },
+    {
+      "from": "W1",
+      "to": "Pod1",
+      "label": "agent bridge — A2A Bearer {per-run token}",
+      "dashed": true
+    },
+    {
+      "from": "W2",
+      "to": "Pod2",
+      "label": "agent bridge — A2A Bearer {per-run token}",
+      "dashed": true
+    },
+    {
+      "from": "DB",
+      "to": "WebA",
+      "label": "events tailed by cursor",
+      "dashed": true
+    },
+    {
+      "from": "DB",
+      "to": "WebB",
+      "label": "events tailed by cursor",
+      "dashed": true
+    }
+  ]
+}

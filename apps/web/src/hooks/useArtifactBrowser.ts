@@ -162,10 +162,6 @@ export function useArtifactBrowser(
   // Fetch file list whenever filter or runId changes.
   // Loading/error state is reset in event handlers to avoid synchronous setState in effect body.
   useEffect(() => {
-    if (!runId) {
-      setFilesLoading(false);
-      return;
-    }
     let active = true;
     // eslint-disable-next-line prefer-const
     let intervalId: ReturnType<typeof setInterval> | undefined;
@@ -195,7 +191,14 @@ export function useArtifactBrowser(
         });
     };
 
-    doFetch();
+    const startFilesFetch = async () => {
+      if (!runId) {
+        setFilesLoading(false);
+        return;
+      }
+      doFetch();
+    };
+    void startFilesFetch();
 
     if (!isLive) {
       return () => {
@@ -214,14 +217,6 @@ export function useArtifactBrowser(
   // is live (#280) — previously this was a one-time fetch on tab-open, so newly created
   // files never showed up until the tab was closed and reopened.
   useEffect(() => {
-    if (activeTab !== 'files') return;
-    if (!runId) {
-      setWorkspaceFiles([]);
-      setWorkspaceLoading(false);
-      setWorkspaceError(null);
-      return;
-    }
-
     let active = true;
     let workspaceIntervalId: ReturnType<typeof setInterval> | undefined;
 
@@ -242,9 +237,19 @@ export function useArtifactBrowser(
         });
     };
 
-    doFetch();
+    const startWorkspaceFetch = async () => {
+      if (activeTab !== 'files') return;
+      if (!runId) {
+        setWorkspaceFiles([]);
+        setWorkspaceLoading(false);
+        setWorkspaceError(null);
+        return;
+      }
+      doFetch();
+    };
+    void startWorkspaceFetch();
 
-    if (!isLive) {
+    if (activeTab !== 'files' || !isLive) {
       return () => {
         active = false;
       };

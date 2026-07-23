@@ -71,3 +71,15 @@ tests/e2e/test-results/
 
 # Local-only security assessment findings (not to be committed/published)
 .security/
+
+# Azure toolchain params files (may contain resource names/secrets); the
+# tracked template is scripts/azure/params.example.json
+scripts/azure/params.*.json
+!scripts/azure/params.example.json
+
+# Azure deploy toolchain: kustomize build scratch directories (written at
+# deploy time by lib/kustomize.mjs's writeOverlay(), and by its tests) --
+# never meant to be committed, only cleaned up on a best-effort basis.
+scripts/azure/steps/.rendered/
+scripts/azure/tests/.scratch-*/
+

@@ -81,6 +81,7 @@ public sealed class CoordinatorOrchestratorExecutor
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CoordinatorOrchestratorExecutor> _logger;
     private readonly IStoryIndependenceClassifier _storyIndependenceClassifier;
+    private readonly IAssemblyGateCodeClassifier _assemblyGateCodeClassifier;
     private readonly string _defaultCopilotModel;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
@@ -92,6 +93,7 @@ public sealed class CoordinatorOrchestratorExecutor
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
         IStoryIndependenceClassifier storyIndependenceClassifier,
+        IAssemblyGateCodeClassifier assemblyGateCodeClassifier,
         string defaultCopilotModel,
         string? apiBaseUrl,
         string? apiKey)
@@ -102,6 +104,7 @@ public sealed class CoordinatorOrchestratorExecutor
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorOrchestratorExecutor>();
         _storyIndependenceClassifier = storyIndependenceClassifier ?? throw new ArgumentNullException(nameof(storyIndependenceClassifier));
+        _assemblyGateCodeClassifier = assemblyGateCodeClassifier ?? throw new ArgumentNullException(nameof(assemblyGateCodeClassifier));
         _defaultCopilotModel = string.IsNullOrWhiteSpace(defaultCopilotModel) ? CoordinatorModelDefaults.DefaultCopilotModel : defaultCopilotModel;
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
@@ -147,12 +150,12 @@ public sealed class CoordinatorOrchestratorExecutor
 
         // Feature 015 US5: pick the best-fit functional workflow for THIS task from the project's
         // available set and surface it (with rationale + override hint). Single-workflow projects skip
-        // selection silently. Selection never blocks orchestration — it always resolves to a workflow,
-        // and the resolved workflow now DRIVES the rest of the pipeline (decomposition + persistence)
-        // rather than being advisory.
-        var selectedWorkflow = await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
+        // selection silently. The resolved workflow DRIVES decomposition, then is validated against
+        // the actual decomposition before persistence so an incompatible automatic topology cannot
+        // silently bypass a required platform gate.
+        var workflowSelection = await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
 
-        var drafts = await DecomposeWithModelAsync(input, spec, selectedWorkflow, ct).ConfigureAwait(false)
+        var drafts = await DecomposeWithModelAsync(input, spec, workflowSelection.Definition, ct).ConfigureAwait(false)
                      ?? DecomposeDeterministic(spec);
         drafts = drafts.Select(NormalizePlanningDraft).ToList();
         var originalDraftCount = drafts.Count;
@@ -171,6 +174,10 @@ public sealed class CoordinatorOrchestratorExecutor
 
         var (drafts2, cycleNote) = BreakCycles(drafts);
         drafts = drafts2;
+
+        var workflowCompatibilityWarnings = new List<string>();
+        workflowSelection = await ValidateWorkflowAfterDecompositionAsync(
+            scope, input, spec, workflowSelection, drafts, workflowCompatibilityWarnings, ct).ConfigureAwait(false);
 
         var partition = await PartitionStoriesAsync(input, spec, drafts, ct).ConfigureAwait(false);
         var promotionService = scope.ServiceProvider.GetRequiredService<IBacklogPromotionService>();
@@ -228,13 +235,19 @@ public sealed class CoordinatorOrchestratorExecutor
             spec,
             assigned,
             cycleNote,
-            selectedWorkflow?.Id,
+            workflowSelection.Definition?.Id,
             inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned,
             ct)
             .ConfigureAwait(false);
 
         var workPlanStatus = inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned;
-        EmitWorkPlanEvent(input.RunId, workPlanId, selectedWorkflow?.Id, workPlanStatus, persisted);
+        EmitWorkPlanEvent(
+            input.RunId,
+            workPlanId,
+            workflowSelection.Definition?.Id,
+            workPlanStatus,
+            persisted,
+            partition.Warnings.Concat(workflowCompatibilityWarnings).ToList());
         return new CoordinatorOrchestrationResult(workPlanId, inlineDrafts.Count, promotedTaskIds);
     }
 
@@ -254,7 +267,7 @@ public sealed class CoordinatorOrchestratorExecutor
     /// project DEFAULT workflow as an explicit fallback (or null only when the project/default cannot
     /// be resolved at all), so the caller always knows which workflow it is planning against.
     /// </summary>
-    private async Task<WorkflowDefinition?> SelectWorkflowAsync(
+    private async Task<WorkflowSelection> SelectWorkflowAsync(
         IServiceScope scope, CoordinatorDraftInput input, OutcomeSpec spec, CancellationToken ct)
     {
         WorkflowDefinition? defaultDef = null;
@@ -266,9 +279,9 @@ public sealed class CoordinatorOrchestratorExecutor
             var selector = scope.ServiceProvider.GetRequiredService<IWorkflowSelector>();
             var backlogStore = scope.ServiceProvider.GetRequiredService<IBacklogTaskStore>();
 
-            if (!Guid.TryParse(input.ProjectId, out var projectGuid)) return null;
+            if (!Guid.TryParse(input.ProjectId, out var projectGuid)) return WorkflowSelection.Empty;
             var project = await projectStore.GetAsync(new ProjectId(projectGuid), ct).ConfigureAwait(false);
-            if (project is null) return null;
+            if (project is null) return WorkflowSelection.Empty;
 
             // Resolve the default first so it is both the selector's deterministic fallback AND the
             // explicit fallback this method returns if anything below throws or no workflow is eligible.
@@ -299,7 +312,11 @@ public sealed class CoordinatorOrchestratorExecutor
                     EmitWorkflowSelectedEvent(input.RunId, overrideResult.Definition, reason,
                         wasAutoSelected: false, availableResults.Select(r => r.Definition!).ToList());
                     await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
-                    return overrideResult.Definition;
+                    return new WorkflowSelection(
+                        overrideResult.Definition, IsExplicit: true,
+                        availableResults.Select(r => r.Definition!).ToList(),
+                        availableResults.Where(r => !r.IsBuiltIn).Select(r => r.Definition!.Id)
+                            .ToHashSet(StringComparer.Ordinal));
                 }
 
                 _logger.LogWarning(
@@ -322,7 +339,11 @@ public sealed class CoordinatorOrchestratorExecutor
                         reason, wasAutoSelected: false,
                         availableResults.Select(r => r.Definition!).ToList());
                     await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
-                    return overridden;
+                    return new WorkflowSelection(
+                        overridden, IsExplicit: true,
+                        availableResults.Select(r => r.Definition!).ToList(),
+                        availableResults.Where(r => !r.IsBuiltIn).Select(r => r.Definition!.Id)
+                            .ToHashSet(StringComparer.Ordinal));
                 }
             }
 
@@ -344,7 +365,10 @@ public sealed class CoordinatorOrchestratorExecutor
                     var reason = $"Selected '{only.Name}' as the only workflow available for this project.";
                     await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
                 }
-                return only;
+                return new WorkflowSelection(
+                    only, IsExplicit: false, available,
+                    availableResults.Where(r => !r.IsBuiltIn).Select(r => r.Definition!.Id)
+                        .ToHashSet(StringComparer.Ordinal));
             }
 
             var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
@@ -361,7 +385,7 @@ public sealed class CoordinatorOrchestratorExecutor
             var result = await selector.SelectAsync(context, ct).ConfigureAwait(false);
             EmitWorkflowSelectedEvent(input.RunId, result.Selected, result.Rationale, result.WasAutoSelected, available);
             await PersistSelectionReasonAsync(runStore, input.RunId, result.Rationale, ct).ConfigureAwait(false);
-            return result.Selected;
+            return new WorkflowSelection(result.Selected, IsExplicit: false, available, customWorkflowIds);
         }
         catch (Exception ex)
         {
@@ -375,9 +399,78 @@ public sealed class CoordinatorOrchestratorExecutor
                 var reason = $"Fell back to the project default workflow '{defaultDef.Name}' after workflow selection failed.";
                 await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
             }
-            return defaultDef;
+            return new WorkflowSelection(defaultDef, IsExplicit: false, [], new HashSet<string>(StringComparer.Ordinal));
         }
     }
+
+    private async Task<WorkflowSelection> ValidateWorkflowAfterDecompositionAsync(
+        IServiceScope scope,
+        CoordinatorDraftInput input,
+        OutcomeSpec spec,
+        WorkflowSelection selection,
+        IReadOnlyList<SubtaskDraft> drafts,
+        ICollection<string> warnings,
+        CancellationToken ct)
+    {
+        if (selection.Definition is null || HasBuildTestStage(selection.Definition))
+            return selection;
+
+        var subtasks = drafts.Select(d => new CoordinatorAssemblyGateResolver.SubtaskGateMetadata(
+            d.Title, d.Scope, d.Phase, JsonSerializer.Serialize(d.DeclaredOutputPaths ?? []))).ToList();
+        var producesCode = await CoordinatorAssemblyGateResolver.ProducesCodeAsync(
+            subtasks,
+            _assemblyGateCodeClassifier,
+            new AssemblyGateCodeClassificationContext(
+                input.RunId, input.ProjectId, input.SubmittingUser, "", "", []),
+            ct).ConfigureAwait(false);
+        if (!producesCode)
+            return selection;
+
+        if (selection.IsExplicit)
+        {
+            var warning =
+                $"The explicitly selected workflow '{selection.Definition.Name}' has no Build & Test stage, " +
+                "but the confirmed outcome decomposed into code-producing work. The override was honored; " +
+                "this plan will proceed without the platform Build & Test gate.";
+            warnings.Add(warning);
+            _logger.LogWarning(
+                "Coordinator workflow compatibility warning for run {RunId}: explicit workflow '{WorkflowId}' has no Build & Test stage for code-producing work.",
+                input.RunId, selection.Definition.Id);
+            return selection;
+        }
+
+        var compatible = selection.Available
+            .Where(HasBuildTestStage)
+            .OrderByDescending(w => string.Equals(w.Id, selection.Definition.Id, StringComparison.Ordinal))
+            .ThenBy(w => w.Id, StringComparer.Ordinal)
+            .ToList();
+        if (compatible.Count == 0)
+            throw new InvalidOperationException(
+                $"Code-producing decomposition for run '{input.RunId}' has no available workflow with a Build & Test stage.");
+
+        var selector = scope.ServiceProvider.GetRequiredService<IWorkflowSelector>();
+        var roles = ResolveRoster(input.RepositoryPath).Select(r => r.RoleTitle).ToList();
+        var result = await selector.SelectAsync(
+            new WorkflowSelectionContext(
+                input.ProjectId,
+                spec.Goal,
+                roles,
+                compatible,
+                selection.CustomWorkflowIds,
+                input.SubmittingUser),
+            ct).ConfigureAwait(false);
+        var rationale =
+            $"Re-selected '{result.Selected.Name}' after decomposition identified code-producing work; " +
+            $"the earlier '{selection.Definition.Name}' topology has no Build & Test stage. {result.Rationale}";
+        EmitWorkflowSelectedEvent(
+            input.RunId, result.Selected, rationale, wasAutoSelected: true, selection.Available);
+        var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        await PersistSelectionReasonAsync(runStore, input.RunId, rationale, ct).ConfigureAwait(false);
+        return selection with { Definition = result.Selected };
+    }
+
+    internal static bool HasBuildTestStage(WorkflowDefinition workflow) =>
+        workflow.Nodes.Any(node => node.Type == WorkflowNodeType.BuildTest);
 
     /// <summary>
     /// Best-effort persistence of the coordinator's workflow-selection reasoning onto the run record
@@ -1446,9 +1539,9 @@ public sealed class CoordinatorOrchestratorExecutor
         CancellationToken ct)
     {
         if (drafts.Count == 0)
-            return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal));
+            return new PromotionPartitionResult([], [], new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal), []);
         if (!spec.AllowTaskPromotion)
-            return new PromotionPartitionResult([], Enumerable.Range(0, drafts.Count).ToList(), new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal));
+            return new PromotionPartitionResult([], Enumerable.Range(0, drafts.Count).ToList(), new Dictionary<int, string>(), new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(StringComparer.Ordinal), []);
 
         var adjacency = new List<HashSet<int>>(Enumerable.Range(0, drafts.Count).Select(_ => new HashSet<int>()));
         for (var i = 0; i < drafts.Count; i++)
@@ -1463,13 +1556,8 @@ public sealed class CoordinatorOrchestratorExecutor
             }
         }
 
-        var promoted = new List<int>();
-        var inline = new List<int>();
-        var reasons = new Dictionary<int, string>();
-        var promotedKeys = new HashSet<string>(StringComparer.Ordinal);
-        var auditRationales = new Dictionary<string, string>(StringComparer.Ordinal);
         var visited = new bool[drafts.Count];
-
+        var components = new List<IReadOnlyList<int>>();
         for (var start = 0; start < drafts.Count; start++)
         {
             if (visited[start])
@@ -1491,13 +1579,18 @@ public sealed class CoordinatorOrchestratorExecutor
                     queue.Enqueue(next);
                 }
             }
+            components.Add(component.OrderBy(i => i).ToList());
+        }
 
+        var decisions = await Task.WhenAll(components.Select(async component =>
+        {
             var runOverride = component.Where(i => string.Equals(drafts[i].PromotionOverride, "run", StringComparison.OrdinalIgnoreCase)).ToList();
             var inlineOverride = component.Where(i => string.Equals(drafts[i].PromotionOverride, "inline", StringComparison.OrdinalIgnoreCase)).ToList();
             if (runOverride.Count > 0 && inlineOverride.Count > 0)
                 throw new InvalidOperationException("conflicting_promotion_overrides");
 
             var promote = false;
+            var classificationDegraded = false;
             var rootIndex = component.OrderBy(i => i).First();
             string rootReason;
             string? rootAuditRationale = null;
@@ -1524,11 +1617,36 @@ public sealed class CoordinatorOrchestratorExecutor
                 }
                 else
                 {
+                    classificationDegraded = classification is null;
                     rootReason = classification is null
                         ? "Classifier unavailable; kept inline by fail-closed default."
                         : $"Kept inline: {classification.IndependenceRationale}";
                 }
             }
+
+            return new ComponentPromotionDecision(
+                component,
+                promote,
+                rootIndex,
+                rootReason,
+                rootAuditRationale,
+                classificationDegraded);
+        })).ConfigureAwait(false);
+
+        var promoted = new List<int>();
+        var inline = new List<int>();
+        var reasons = new Dictionary<int, string>();
+        var promotedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var auditRationales = new Dictionary<string, string>(StringComparer.Ordinal);
+        var degradedStoryKeys = new List<string>();
+
+        foreach (var decision in decisions)
+        {
+            var component = decision.Component;
+            var promote = decision.Promote;
+            var rootIndex = decision.RootIndex;
+            var rootReason = decision.RootReason;
+            var rootAuditRationale = decision.RootAuditRationale;
 
             foreach (var index in component.OrderBy(i => i))
             {
@@ -1548,6 +1666,9 @@ public sealed class CoordinatorOrchestratorExecutor
                 }
             }
 
+            if (decision.ClassificationDegraded)
+                degradedStoryKeys.Add(drafts[rootIndex].StoryKey);
+
             if (promote && !string.IsNullOrWhiteSpace(rootAuditRationale))
             {
                 _logger.LogInformation(
@@ -1558,7 +1679,15 @@ public sealed class CoordinatorOrchestratorExecutor
             }
         }
 
-        return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys, auditRationales);
+        var warnings = degradedStoryKeys.Count == 0
+            ? []
+            : new List<string>
+            {
+                $"Independent task promotion could not classify {degradedStoryKeys.Count} component(s); " +
+                $"kept inline: {string.Join(", ", degradedStoryKeys)}.",
+            };
+
+        return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys, auditRationales, warnings);
     }
 
     private static StoryIndependenceClassificationContext BuildStoryClassificationContext(
@@ -1755,7 +1884,13 @@ public sealed class CoordinatorOrchestratorExecutor
         return (workPlan.Id, persisted);
     }
 
-    private void EmitWorkPlanEvent(string runId, int workPlanId, string? workflowId, string status, List<PersistedSubtask> subtasks)
+    private void EmitWorkPlanEvent(
+        string runId,
+        int workPlanId,
+        string? workflowId,
+        string status,
+        List<PersistedSubtask> subtasks,
+        IReadOnlyList<string> warnings)
     {
         var entry = _streamStore.Get(runId);
         entry?.RecordNext(EventTypes.CoordinatorWorkPlan, new
@@ -1763,6 +1898,7 @@ public sealed class CoordinatorOrchestratorExecutor
             workPlanId,
             status,
             workflowId,
+            warnings,
             subtasks = subtasks.Select(s => new
             {
                 id = s.Id,
@@ -1849,6 +1985,16 @@ public sealed class CoordinatorOrchestratorExecutor
         IReadOnlyList<string>? DeclaredOutputPaths = null,
         string? PromotionOverride = null);
 
+    private sealed record WorkflowSelection(
+        WorkflowDefinition? Definition,
+        bool IsExplicit,
+        IReadOnlyList<WorkflowDefinition> Available,
+        IReadOnlySet<string> CustomWorkflowIds)
+    {
+        public static WorkflowSelection Empty { get; } =
+            new(null, false, [], new HashSet<string>(StringComparer.Ordinal));
+    }
+
     private sealed record AssignedSubtask(SubtaskDraft Draft, string AgentName, string SelectedModelId);
 
     private sealed record PersistedSubtask(
@@ -1873,7 +2019,16 @@ public sealed class CoordinatorOrchestratorExecutor
         IReadOnlyList<int> InlineIndices,
         IReadOnlyDictionary<int, string> PromotionReasons,
         IReadOnlySet<string> PromotedKeys,
-        IReadOnlyDictionary<string, string> ComponentAuditRationalesByStoryKey);
+        IReadOnlyDictionary<string, string> ComponentAuditRationalesByStoryKey,
+        IReadOnlyList<string> Warnings);
+
+    private sealed record ComponentPromotionDecision(
+        IReadOnlyList<int> Component,
+        bool Promote,
+        int RootIndex,
+        string RootReason,
+        string? RootAuditRationale,
+        bool ClassificationDegraded);
 
     internal sealed record PromotionOverrideParseResult(string? Override, string CleanTitle, bool IsValid);
 }

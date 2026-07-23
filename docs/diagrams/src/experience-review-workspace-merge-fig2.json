@@ -1,0 +1,97 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "`get_project_workspace_file`",
+  "alt": "`get_project_workspace_file`: Workspace page or MCP client, list_project_workspace_refs, Choose base branch or run worktree, list_project_workspace, Select file, get_project_workspace_file, Read-only source / preview",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Workspace",
+      "label": "Workspace page or MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Refs",
+      "label": "list_project_workspace_refs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "PickRef",
+      "label": "Choose base branch or run worktree",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Tree",
+      "label": "list_project_workspace",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "PickFile",
+      "label": "Select file",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Content",
+      "label": "get_project_workspace_file",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Viewer",
+      "label": "Read-only source / preview",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Workspace",
+      "to": "Refs"
+    },
+    {
+      "from": "Refs",
+      "to": "PickRef"
+    },
+    {
+      "from": "PickRef",
+      "to": "Tree"
+    },
+    {
+      "from": "Tree",
+      "to": "PickFile"
+    },
+    {
+      "from": "PickFile",
+      "to": "Content"
+    },
+    {
+      "from": "Content",
+      "to": "Viewer"
+    }
+  ]
+}

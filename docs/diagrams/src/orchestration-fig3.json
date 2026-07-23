@@ -1,0 +1,130 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Dispatch and Assembly",
+  "alt": "Dispatch and Assembly: Pending subtasks, Ready frontier, Launch child runs, Child safety gate, Assemble-ready child outputs, Rebuild integration branch, All subtasks settled?, Parent assembly, Parent review and merge",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Pending",
+      "label": "Pending subtasks",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Frontier",
+      "label": "Ready frontier",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "all dependencies complete"
+    },
+    {
+      "id": "Launch",
+      "label": "Launch child runs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Safety",
+      "label": "Child safety gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "AssembleReady",
+      "label": "Assemble-ready child outputs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Integration",
+      "label": "Rebuild integration branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "AllSettled",
+      "label": "All subtasks settled?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Assembly",
+      "label": "Parent assembly",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ParentReview",
+      "label": "Parent review and merge",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Pending",
+      "to": "Frontier"
+    },
+    {
+      "from": "Frontier",
+      "to": "Launch"
+    },
+    {
+      "from": "Launch",
+      "to": "Safety"
+    },
+    {
+      "from": "Safety",
+      "to": "AssembleReady"
+    },
+    {
+      "from": "AssembleReady",
+      "to": "Integration"
+    },
+    {
+      "from": "Integration",
+      "to": "AllSettled"
+    },
+    {
+      "from": "AllSettled",
+      "to": "Pending",
+      "label": "no / dependents branch from integration"
+    },
+    {
+      "from": "AllSettled",
+      "to": "Assembly",
+      "label": "yes"
+    },
+    {
+      "from": "Assembly",
+      "to": "ParentReview"
+    }
+  ]
+}

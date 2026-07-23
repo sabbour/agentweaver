@@ -13,26 +13,12 @@ This page explains how the data flows from model response to dashboard. For the 
 
 ## End-to-end flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    SDK["GitHub Copilot SDK\nAssistantUsageEvent"] -->|detected in StreamTurnOnceAsync| Agent["CopilotAIAgent\naccumulate per turn"]
-    Agent -->|AppendAsync agent.turn.usage| Stream["Run event stream\nIRunEventStream"]
-    Stream -->|durably persisted| DB[("token_usage_records\ntable")]
-    Stream -->|live SSE frame| SSE["SSE /api/runs/{id}/stream"]
-    SSE -->|run stream reducers| UI["Embedded run inspection\ncost chips"]
-    DB <-->|reads on demand| Endpoints["UsageEndpoints\n4 hierarchy levels"]
-    Endpoints --> RunUsage["/api/runs/{id}/usage\nTokenUsageSummaryDto"]
-    Endpoints --> WFUsage["/api/workflow-runs/{id}/usage\nTokenUsageSummaryDto"]
-    Endpoints --> ProjUsage["/api/projects/{id}/usage\nTokenUsageSummaryDto"]
-    Endpoints --> AppUsage["/api/usage\nAppUsageDto"]
-    Endpoints -.extended.- Dashboard["/api/projects/{id}/dashboard\ntoken_usage field"]
-    Endpoints -.extended.- Overview["/api/overview\ntoken_usage field"]
-    RunUsage --> UI["Dashboard\nOverview\nMCP tools"]
-    WFUsage --> UI
-    ProjUsage --> UI
-    AppUsage --> UI
-```
+![End-to-end flow: GitHub Copilot SDK, CopilotAIAgent, Run event stream, token_usage_records, SSE /api/runs/{id}/stream, Dashboard, UsageEndpoints, /api/runs/{id}/usage, /api/workflow-runs/{id}/usage, /api/projects/{id}/usage, /api/usage](../diagrams/token-usage-monitoring-fig1.png)
+
+<!-- Rendered from ../diagrams/src/token-usage-monitoring-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 1. **Model response arrives.** The GitHub Copilot SDK emits an `AssistantUsageEvent` inside
    `CopilotAIAgent.StreamTurnOnceAsync` / `ExecuteStreamingLoopAsync`

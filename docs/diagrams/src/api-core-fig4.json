@@ -1,0 +1,155 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Problem solved",
+  "alt": "Problem solved: Incoming request, Exception handler, CORS, Rate limiter middleware, Token auth gate, Org authorization gate, 401 Unauthorized, Endpoint handler, 403 Forbidden, Response",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Incoming request",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Exception handler",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "CORS",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Rate limiter middleware",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Token auth gate",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Org authorization gate",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "R401",
+      "label": "401 Unauthorized",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Endpoint handler",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "R403",
+      "label": "403 Forbidden",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "O",
+      "label": "Response",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "F",
+      "label": "public/non-API or explicit auth exception"
+    },
+    {
+      "from": "E",
+      "to": "F",
+      "label": "valid /api bearer token"
+    },
+    {
+      "from": "E",
+      "to": "R401",
+      "label": "missing or invalid bearer"
+    },
+    {
+      "from": "F",
+      "to": "H",
+      "label": "exempt prefix"
+    },
+    {
+      "from": "F",
+      "to": "H",
+      "label": "authorized caller in allowed org/team"
+    },
+    {
+      "from": "F",
+      "to": "R401",
+      "label": "caller missing"
+    },
+    {
+      "from": "F",
+      "to": "R403",
+      "label": "caller denied"
+    },
+    {
+      "from": "H",
+      "to": "O"
+    }
+  ]
+}

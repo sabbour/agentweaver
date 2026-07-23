@@ -954,7 +954,7 @@ public sealed class RunOrchestrator
     private static void EmitErrorMetric(Run run, string errorType) =>
         AgentWeaverMetrics.RunErrors.Add(1, BuildRunTags(run, ("error_type", errorType)));
 
-    private static KeyValuePair<string, object?>[] BuildRunTags(
+    internal static KeyValuePair<string, object?>[] BuildRunTags(
         Run run,
         params (string Key, object? Value)[] extraTags)
     {
@@ -962,9 +962,13 @@ public sealed class RunOrchestrator
         {
             new("agent_name", run.AgentName ?? "unknown"),
             new("run_type", string.IsNullOrEmpty(run.ParentRunId) ? "coordinator" : "child"),
+            new("run_id", run.Id.ToString()),
+            new("run.id", run.Id.ToString()),
         };
         if (run.ProjectId is { } projectId)
             tags.Add(new("project.id", projectId.ToString()));
+        if (!string.IsNullOrWhiteSpace(run.ParentRunId))
+            tags.Add(new("parent_run_id", run.ParentRunId));
         foreach (var (key, value) in extraTags)
             tags.Add(new(key, value));
         return tags.ToArray();

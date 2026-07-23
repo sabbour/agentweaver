@@ -32,12 +32,14 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Open a pull request as a workflow action](./workflows-automation/open-pull-request-action.md) — [#49](https://github.com/sabbour/agentweaver/issues/49)
 - [Trigger tasks for scheduled and event workflows](./workflows-automation/trigger-tasks-for-scheduled-and-event-workflows.md) — [#53](https://github.com/sabbour/agentweaver/issues/53)
 - [Edit workflows with the generation prompt](./workflows-automation/edit-workflows-with-generation-prompt.md) — [#59](https://github.com/sabbour/agentweaver/issues/59)
+- [Run, schedule, and visually author workflows](./workflows-automation/run-schedule-and-visually-author-workflows.md) — [#442](https://github.com/sabbour/agentweaver/issues/442)
 
 ## Orchestration & runs
 
 - [Run a single-agent task](./orchestration-runs/run-a-single-agent-task.md) — [#14](https://github.com/sabbour/agentweaver/issues/14)
 - [Coordinate a multi-agent goal](./orchestration-runs/coordinate-a-multi-agent-goal.md) — [#15](https://github.com/sabbour/agentweaver/issues/15)
 - [Steer and recover active orchestrations](./orchestration-runs/steer-and-recover-orchestrations.md) — [#16](https://github.com/sabbour/agentweaver/issues/16)
+- [Push a pull request as a coordinator execution step](./orchestration-runs/push-pr-as-execution-step.md) — [#394](https://github.com/sabbour/agentweaver/issues/394)
 
 ## Review & merge
 
@@ -54,6 +56,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 
 - [Assign skills to project agents](./agent-configuration/assign-skills-to-agents.md) — [#51](https://github.com/sabbour/agentweaver/issues/51)
 - [Import and sync skills into a project](./agent-configuration/import-and-sync-skills.md) — [#56](https://github.com/sabbour/agentweaver/issues/56)
+- [Browse and add skills from curated marketplaces](./agent-configuration/browse-and-add-skills-from-marketplaces.md) — [#397](https://github.com/sabbour/agentweaver/issues/397)
 
 ## Memory & decisions
 

@@ -1,0 +1,79 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-mcp
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: agentweaver-gateway
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-ingress
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow the API pod to reach the MCP server directly on 8080 for the operator assistant (#346).
+# AssistantRunService calls http://agentweaver-mcp:8080/mcp with the caller's GitHub bearer token;
+# allow-app-internal-egress already opens egress from agentweaver-api on :8080, but
+# allow-gateway-to-mcp only admits gateway pods — without this ingress rule the MCP pod drops
+# the API's east-west connections at the network layer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-mcp
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: agentweaver-api
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow AgentHost pods to reach the MCP server directly on 8080 for the operator assistant
+# (#346/#347 narrow AgentHost cutover). AgentHost:McpEndpoint (sandbox-template-agenthost.yaml)
+# points at http://agentweaver-mcp:8080/mcp, required unconditionally at pod startup; without
+# this ingress rule the MCP pod drops the AgentHost pod's east-west connection at the network
+# layer (agenthost-egress-allowlist explicitly excludes RFC1918 destinations, so an ingress-side
+# allow here is required in addition to the egress side).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agenthost-to-mcp
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  podSelector:
+    matchLabels:
+      app: agentweaver-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: agent-host
+      ports:
+        - protocol: TCP
+          port: 8080

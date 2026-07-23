@@ -319,7 +319,10 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     const confirmed = timelineModel.steps.some((step) => step.messages.some(
       (msg) => msg.role === 'user' && msg.text.trim() === pendingMessage.text.trim(),
     ));
-    if (confirmed) setPendingMessage(null);
+    const syncPendingMessage = async () => {
+      if (confirmed) setPendingMessage(null);
+    };
+    void syncPendingMessage();
   }, [pendingMessage, timelineModel]);
 
   // Auto-scroll to the latest message once a resumed run's history has loaded (#item-9) —
@@ -462,7 +465,13 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           onChange={(value) => { setInput(value); setError(null); }}
           onSubmit={(_, data) => { if (data.value.trim()) void handleSubmit(); }}
           isSending={busy}
-          disabled={busy}
+          // Do NOT disable the whole textarea while a send is in flight — React blurs
+          // disabled form elements, which stole focus from the composer after every send
+          // (#item-1) and made the whole page feel frozen even though the request was
+          // just an optimistic-UI background fetch (#item-2). Only the send affordance
+          // itself is gated via disableSend, so the user can keep typing (and even queue
+          // up their next message) while the previous one is still in flight; handleSubmit
+          // already guards against a duplicate dispatch via `busy`/`sendingRef`.
           disableSend={busy || !input.trim()}
         />
         <Text className={styles.composerStatus} aria-live="polite">

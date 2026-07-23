@@ -290,8 +290,11 @@ export function ClusterPage() {
 
   useEffect(() => {
     const signal = { cancelled: false };
-    setLoading(true);
-    void load(signal);
+    const runLoad = () => {
+      setLoading(true);
+      void load(signal);
+    };
+    runLoad();
     const iv = autoRefresh ? setInterval(() => { void load(signal); }, REFRESH_MS) : undefined;
     return () => {
       signal.cancelled = true;

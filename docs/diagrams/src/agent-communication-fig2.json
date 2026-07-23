@@ -1,0 +1,107 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Curating: the Scribe merges, conflict-free",
+  "alt": "Curating: the Scribe merges, conflict-free: Agent run, DecisionInboxEntry, Scribe / review, Decisions ledger, Rejected entry, MemoryContextCompiler, Future agent prompts",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Agent run",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "observation"
+    },
+    {
+      "id": "I",
+      "label": "DecisionInboxEntry",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "durable proposal · pending"
+    },
+    {
+      "id": "S",
+      "label": "Scribe / review",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "L",
+      "label": "Decisions ledger",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "+ AgentMemory"
+    },
+    {
+      "id": "R",
+      "label": "Rejected entry",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "audit retained"
+    },
+    {
+      "id": "X",
+      "label": "MemoryContextCompiler",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "N",
+      "label": "Future agent prompts",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "I"
+    },
+    {
+      "from": "I",
+      "to": "S"
+    },
+    {
+      "from": "S",
+      "to": "L",
+      "label": "merge"
+    },
+    {
+      "from": "S",
+      "to": "R",
+      "label": "reject"
+    },
+    {
+      "from": "L",
+      "to": "X"
+    },
+    {
+      "from": "X",
+      "to": "N"
+    },
+    {
+      "from": "N",
+      "to": "A"
+    }
+  ]
+}

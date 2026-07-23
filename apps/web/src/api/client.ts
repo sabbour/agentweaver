@@ -20,7 +20,9 @@ import type {
   ClusterDiagnosticsDto,
   CommitResponse,
   ConfirmProposalRequest,
+  ConnectedRepository,
   CoordinatorChildResponse,
+  CreateProjectRepositoryRequest,
   CreateProjectRequest,
   CreateProjectRunRequest,
   CreateProposalRequest,
@@ -43,6 +45,7 @@ import type {
   PagedResult,
   Project,
   RequestChangesResponse,
+  RepositoryOwner,
   ReroleRequest,
   RetriableReviewErrorBody,
   RetryRunResponse,
@@ -114,6 +117,7 @@ function isSkillDto(value: unknown): value is SkillDto {
     && isSkillProvenance(value.provenance)
     && isOptionalString(value.source_repository)
     && isOptionalString(value.source_location)
+    && isOptionalString(value.marketplace_name)
     && isSkillStatus(value.status)
     && typeof value.content_hash === 'string'
     && typeof value.resource_count === 'number'
@@ -135,6 +139,7 @@ function isSkillDetailDto(value: unknown): value is SkillDetailDto {
     && isSkillProvenance(value.provenance)
     && isOptionalString(value.source_repository)
     && isOptionalString(value.source_location)
+    && isOptionalString(value.marketplace_name)
     && isSkillStatus(value.status)
     && typeof value.content_hash === 'string'
     && typeof value.created_at === 'string'
@@ -393,6 +398,14 @@ export class AgentweaverApiClient {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
+  rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
+    return this.request<import('./types').WebhookSecretRotationResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/webhook-secret/rotate`,
+      {},
+    );
+  }
+
   deleteProject(projectId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}?confirm=true`);
   }
@@ -479,6 +492,15 @@ export class AgentweaverApiClient {
   listGitHubRepos(account?: string): Promise<GitHubRepo[]> {
     const path = account ? `/github/repos?account=${encodeURIComponent(account)}` : '/github/repos';
     return this.request<GitHubRepo[]>('GET', path);
+  }
+
+  // Post-creation GitHub connection for a currently-unconnected (blank-origin) project.
+  listProjectRepositoryOwners(projectId: string): Promise<RepositoryOwner[]> {
+    return this.request<RepositoryOwner[]>('GET', `/projects/${encodeURIComponent(projectId)}/github/repository-owners`);
+  }
+
+  createProjectRepository(projectId: string, req: CreateProjectRepositoryRequest): Promise<ConnectedRepository> {
+    return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository`, req);
   }
 
   // Catalog
@@ -651,6 +673,18 @@ export class AgentweaverApiClient {
 
   importSkills(projectId: string, repoUrl: string, locations?: string[]): Promise<import('./types').SkillAcquisitionResponse> {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import`, { repoUrl, locations });
+  }
+
+  listSkillMarketplaces(): Promise<import('./types').SkillMarketplaceDto[]> {
+    return this.request<import('./types').SkillMarketplaceDto[]>('GET', '/skill-marketplaces');
+  }
+
+  browseSkillMarketplace(projectId: string, marketplace: string, query?: string): Promise<import('./types').SkillMarketplaceBrowseResponse> {
+    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query });
+  }
+
+  importMarketplaceSkills(projectId: string, marketplace: string, locations: string[]): Promise<import('./types').SkillAcquisitionResponse> {
+    return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/import`, { locations });
   }
 
   // Multipart upload of skill file(s)/folder/archive. Bypasses request<T> to send FormData.
@@ -1077,6 +1111,14 @@ export class AgentweaverApiClient {
     );
   }
 
+  runWorkflowNow(projectId: string, workflowId: string): Promise<{ task_id: string }> {
+    return this.request<{ task_id: string }>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/run`,
+      {},
+    );
+  }
+
   // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
   // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
   // pass was needed. Throws ApiError 400 when generation fails after the correction pass.
@@ -1138,6 +1180,10 @@ export class AgentweaverApiClient {
   // #247 — global notification center: pending Human Review (+ future Tool Approval) requests.
   getNotifications(signal?: AbortSignal): Promise<import('./types').NotificationsResponseDto> {
     return this.request<import('./types').NotificationsResponseDto>('GET', '/notifications', undefined, signal);
+  }
+
+  dismissNotification(notificationId: string): Promise<void> {
+    return this.request<void>('POST', `/notifications/${encodeURIComponent(notificationId)}/dismiss`);
   }
 
   // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).

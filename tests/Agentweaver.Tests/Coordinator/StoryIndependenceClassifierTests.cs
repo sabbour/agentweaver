@@ -7,6 +7,12 @@ namespace Agentweaver.Tests.Coordinator;
 public sealed class StoryIndependenceClassifierTests
 {
     [Fact]
+    public void ClassificationTimeout_MatchesRuntimeDefaultWindow()
+    {
+        CopilotStoryIndependenceClassifier.ClassificationTimeout.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
     public void ParseResult_ReadsStructuredJson()
     {
         var result = CopilotStoryIndependenceClassifier.ParseResult(
@@ -75,5 +81,26 @@ public sealed class StoryIndependenceClassifierTests
         result.Should().BeNull();
         timedOut.Should().BeTrue();
         stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task RunWithRetryAsync_StalledModelTurn_RetriesOnceThenFailsClosed()
+    {
+        var attempts = 0;
+        async Task<string?> Stalled(CancellationToken token)
+        {
+            Interlocked.Increment(ref attempts);
+            await Task.Delay(Timeout.Infinite, token);
+            return null;
+        }
+
+        var result = await CopilotStoryIndependenceClassifier.RunWithRetryAsync(
+            Stalled,
+            TimeSpan.FromMilliseconds(100),
+            maxAttempts: 2,
+            CancellationToken.None);
+
+        result.Should().BeNull();
+        attempts.Should().Be(2);
     }
 }

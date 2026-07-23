@@ -14,56 +14,12 @@ Think of the design as a **shared ledger with a drop-box in front of it**:
 
 The key governance idea is separation: agents may propose, but only accepted decisions become authoritative boundaries. That keeps team knowledge cumulative while preserving a deliberate write boundary around project policy.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    subgraph Authors["Agents and Scribe"]
-      Run("Run worker")
-      CoordA("Coordinator")
-      Scribe("PostRunScribeService")
-    end
+![Purpose and mental model: Run worker, Coordinator, PostRunScribeService, MCP tools and API endpoints, DecisionInbox pending, Review and merge, Decisions ledger active, AgentMemory core, learning, pattern, update, SessionContext, MemoryContextCompiler, Squad and Agentweaver context files](../diagrams/memory-decisions-fig1.png)
 
-    Api("MCP tools and API endpoints")
-    Inbox[("DecisionInbox pending")]
-    Gate{{"Review and merge"}}
-    Decisions[("Decisions ledger active")]
-    Memory[("AgentMemory core, learning, pattern, update")]
-    Session[("SessionContext")]
-    Compiler("MemoryContextCompiler")
-    Files["Squad and Agentweaver context files"]
-
-    Run -->|"decision_inbox_submit"| Api
-    CoordA --> Api
-    Api --> Inbox
-    Api -->|"memory_record"| Memory
-    Api --> Session
-    Inbox --> Gate
-    Scribe -->|"auto-merge learning, pattern, update"| Gate
-    CoordA -->|"promote architectural, scope"| Gate
-    Gate -->|"merge"| Decisions
-    Gate -->|"reject"| Inbox
-    Decisions --> Compiler
-    Memory --> Compiler
-    Session --> Compiler
-    Compiler -->|"compiled boundaries and context"| Authors
-    Decisions --> Files
-    Inbox --> Files
-    Memory --> Files
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Run,CoordA,Scribe runtime;
-    class Api,Compiler svc;
-    class Gate core;
-    class Inbox,Decisions,Memory,Session data;
-    class Files ext;
-```
+<!-- Rendered from ../diagrams/src/memory-decisions-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Where this lives:
 
@@ -236,33 +192,12 @@ The current submission rule is:
 4. If a different agent submits the same slug, create a new entry with a de-collided slug: `original--agent-segment`.
 5. If that candidate already exists, append a counter: `original--agent-segment--2`, then `--3`, and so on.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    A[Submit inbox entry\nproject + requested slug + agent] --> B{Requested slug exists?}
-    B -->|no| C[Create pending entry\nslug = requested]
-    B -->|yes| D{Same agent?}
-    D -->|yes| E{Existing entry pending?}
-    E -->|yes| F[Update existing entry\nretry-safe idempotence]
-    E -->|no| G[Conflict\nmerged/rejected entries stay closed]
-    D -->|no| H[Build agent segment\nlowercase kebab-case]
-    H --> I[Try requested--agent]
-    I --> J{Candidate exists?}
-    J -->|no| K[Create new pending entry\nslug = candidate]
-    J -->|yes| L[Try requested--agent--N\nuntil free]
-    L --> K
+![Slug de-collision: Submit inbox entry, Requested slug exists?, Create pending entry, Same agent?, Existing entry pending?, Update existing entry, Conflict, Build agent segment, Try requested--agent, Candidate exists?, Create new pending entry, Try requested--agent--N](../diagrams/memory-decisions-fig2.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class A,B,D,E,G,H,I,J,L svc;
-    class C,F,K data;
-```
+<!-- Rendered from ../diagrams/src/memory-decisions-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This prevents a data-loss bug: if the key were only `(project, slug)` with blind upsert semantics, the second agent to propose "use-postgres" could overwrite the first agent's unrelated proposal. If the key were only `(project, agent, slug)`, both entries could survive in the database but export to the same `.squad/decisions/inbox/use-postgres.md` path and one file would win. De-collision preserves both proposals all the way through the file mirror.
 
@@ -283,29 +218,12 @@ Memory and decisions are intentionally different:
 
 The difference matters during context compilation. Accepted architectural and scope decisions are rendered first as boundaries. Agent memory follows. Session context comes last. This ordering lets the team preserve helpful knowledge without letting a local learning override a project boundary.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    A[Active architectural + scope decisions] --> B[Agent core_context memories]
-    B --> C[High-importance learnings and patterns]
-    C --> D[Cross-team tagged memories]
-    D --> E[Current open session]
-    E --> F[Compiled prompt context]
+![Memory versus decisions: Active architectural + scope decisions, Agent core_context memories, High-importance learnings and patterns, Cross-team tagged memories, Current open session, Compiled prompt context](../diagrams/memory-decisions-fig3.png)
 
-    A -.highest priority.-> F
-    E -.lowest priority.-> F
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class A,B,C,D,E data;
-    class F core;
-```
+<!-- Rendered from ../diagrams/src/memory-decisions-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Memory selection is bounded. Candidates are scored by importance, then recency, and selected until the item count or approximate token budget is reached. Core context is part of the candidate set, so rebuilds should avoid "dump every memory forever" behavior even when the database contains a long history.
 
@@ -313,27 +231,12 @@ Memory selection is bounded. Candidates are scored by importance, then recency, 
 
 Import/export is the bridge between structured database state and human-readable workspace state.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    A[memory.db\nDecisions, inbox, memories, sessions] -->|export| B[.squad/decisions.md]
-    A -->|export pending| C[.squad/decisions/inbox/*.md]
-    A -->|export histories| D[.squad/agents/*/history.md]
-    A -->|export session| E[.squad/identity/now.md]
-    A -->|export context| F[.agentweaver/context/boundaries.md\n.agentweaver/context/patterns.md]
-    C -->|import missing pending files| A
+![Import and export: memory.db, .squad/decisions.md, .squad/decisions/inbox/*.md, .squad/agents/*/history.md, .squad/identity/now.md, .agentweaver/context/boundaries.md](../diagrams/memory-decisions-fig4.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class A core;
-    class B,C,D,E,F ext;
-```
+<!-- Rendered from ../diagrams/src/memory-decisions-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Export
 

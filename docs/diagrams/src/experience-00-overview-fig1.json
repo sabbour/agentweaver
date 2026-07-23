@@ -1,0 +1,94 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The two surfaces",
+  "alt": "The two surfaces: Human user, Agentweaver web UI, MCP client, Agentweaver MCP server, Agentweaver backend API, Projects, runs, teams,",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Human",
+      "label": "Human user",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Web",
+      "label": "Agentweaver web UI",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Assistant",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "Claude / Copilot / agent host"
+    },
+    {
+      "id": "MCP",
+      "label": "Agentweaver MCP server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver backend API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Data",
+      "label": "Projects, runs, teams,",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "memory, workflows, backlog,",
+      "meta": "workspace, diagnostics"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Human",
+      "to": "Web"
+    },
+    {
+      "from": "Assistant",
+      "to": "MCP"
+    },
+    {
+      "from": "Web",
+      "to": "API",
+      "label": "REST commands and snapshots"
+    },
+    {
+      "from": "Web",
+      "to": "API",
+      "label": "SSE run streams"
+    },
+    {
+      "from": "MCP",
+      "to": "API",
+      "label": "tool calls forwarded as API requests"
+    },
+    {
+      "from": "API",
+      "to": "Data"
+    }
+  ]
+}

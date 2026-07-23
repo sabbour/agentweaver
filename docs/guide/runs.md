@@ -136,6 +136,8 @@ The event timeline lists every event the agent emitted:
 
 Events stream live over SSE and are persisted before fan-out. If you open the page after the run completes, all events load from the persisted log.
 
+When you expand a tool call, its arguments are shown as labeled fields. Long values, such as file contents, can be expanded individually without obscuring the other arguments.
+
 ### Question gate
 
 When an agent asks a question, the run **pauses** at a question gate until you answer. The question appears in the event timeline with an answer input. Type your answer and submit — the agent continues.
@@ -179,14 +181,12 @@ From the runs list you can also **Abandon** an in-flight run (discards pending c
 
 Each agent runs inside a **dedicated git worktree** branched from the project's working directory. Agents cannot reach outside their worktree unless the sandbox policy explicitly allows it. The originating branch is never modified during a run — only after you approve and the merge step completes.
 
-```mermaid
-flowchart LR
-    A[Project working directory] -->|branch per agent| B[Agent worktrees]
-    B -->|agents make changes| C[Changes in worktrees]
-    C -->|all agents done| D[Assembled combined diff]
-    D -->|you approve| E[Merge to branch]
-    D -->|you decline| F[Worktrees discarded]
-```
+![Sandboxed execution: Project working directory, Agent worktrees, Changes in worktrees, Assembled combined diff, Merge to branch, Worktrees discarded](../diagrams/guide-runs-fig1.png)
+
+<!-- Rendered from ../diagrams/src/guide-runs-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## See also
 

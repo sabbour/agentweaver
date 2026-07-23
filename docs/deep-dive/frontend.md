@@ -19,59 +19,12 @@ The most important rebuilding idea is **snapshot + stream**:
 
 This gives the UI a robust mental model: the backend is the source of truth; the frontend is a deterministic projection of backend facts.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    User(["Operator"])
+![Purpose and Mental Model: Operator, AuthGate, AppShell: TopBar, LeftNav, ProjectSwitcher, ProjectPage board, Embedded run inspection, CoordinatorRunPage, WorkspacePage, AgentweaverApiClient, useBoard poll, useRunStream, topologyReducer, sessionStorage token, …](../diagrams/frontend-fig1.png)
 
-    subgraph SPA["React + Vite SPA"]
-      Gate("AuthGate")
-      Shell("AppShell: TopBar, LeftNav, ProjectSwitcher")
-      subgraph Pages["Pages"]
-        Board("ProjectPage board")
-        Inspect("Embedded run inspection")
-        Coord("CoordinatorRunPage")
-        Work("WorkspacePage")
-      end
-    end
-
-    Api("AgentweaverApiClient")
-    UseBoard("useBoard poll")
-    Stream("useRunStream")
-    Reducer("topologyReducer")
-    Token[("sessionStorage token")]
-    Backend["Agentweaver API"]
-
-    User --> Gate
-    Gate --> Shell
-    Shell --> Pages
-    Gate --> Api
-    Board --> UseBoard
-    Work --> Api
-    Inspect --> Stream
-    Coord --> Stream
-    UseBoard --> Api
-    Api -->|"Bearer token"| Token
-    Api -->|"REST snapshots /runs /board"| Backend
-    Stream -->|"GET /runs/:id/stream"| Backend
-    Stream --> Reducer
-    Reducer --> Coord
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class User,Gate,Shell,Board,Inspect,Coord,Work client;
-    class UseBoard,Reducer svc;
-    class Api core;
-    class Stream evt;
-    class Token data;
-    class Backend ext;
-```
+<!-- Rendered from ../diagrams/src/frontend-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Where this lives:
 
@@ -142,42 +95,12 @@ Project-scoped routes start with `/projects/:projectId` and represent the work s
 
 All signed-in routes sit inside the persistent shell. The shell is intentionally above individual pages because navigation, project switching, top bar status, and the floating orchestration action should not disappear when the user opens a deep orchestration page.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    App[App root] --> Auth{Auth checked?}
-    Auth -->|no| Spinner[Loading screen]
-    Auth -->|signed out| SignIn[Sign-in page]
-    Auth -->|signed in| Shell[Persistent AppShell]
+![Routing and Information Architecture: App root, Auth checked?, Loading screen, Sign-in page, Persistent AppShell, Global routes, Project routes, / and /overview, /projects, /projects/:projectId, /board, /flow, …](../diagrams/frontend-fig2.png)
 
-    Shell --> Global[Global routes]
-    Shell --> Project[Project routes]
-
-    Global --> Overview["/ and /overview"]
-    Global --> Projects["/projects"]
-
-    Project --> Dashboard["/projects/:projectId"]
-    Project --> Board["/board"]
-    Project --> Flow["/flow"]
-    Project --> Orchestrations["/orchestrations"]
-    Project --> Workspace["/workspace"]
-    Project --> Squad["/team, /team/cast, /memories"]
-    Project --> Operations["/workflows, /settings"]
-    Project --> System["/diagnostics, /heartbeat"]
-    Project --> Runs["/orchestrations/:runId"]
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class App core;
-    class Auth,Global,Project svc;
-    class Spinner,SignIn,Shell,Overview,Projects,Dashboard,Board,Flow,Orchestrations,Workspace,Squad,Operations,System,Runs client;
-```
+<!-- Rendered from ../diagrams/src/frontend-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The shell derives the active project from the URL. When the user moves to a global page, it remembers the last active project in local storage so the project switcher and project-scoped navigation can still point somewhere useful. This is a UX convenience only; the route remains the source of truth for the currently displayed page.
 
@@ -236,33 +159,12 @@ This design separates build-time artifacts from deployment-time configuration:
 - Non-HTML assets can be cached aggressively because their built filenames are content-addressed by Vite.
 - HTML and fallback responses should not be treated as immutable because they bootstrap the current app version and runtime config.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Build[Vite build] --> Dist[Static SPA assets]
-    Docs[VitePress docs build] --> DocsDist[Static docs]
-    Publish[ASP.NET Core publish] --> Host[Agentweaver.Web]
-    Dist --> Host
-    DocsDist --> Host
-    Entrypoint[Container entrypoint] --> EnvConfig["/env-config.js"]
-    Browser[Browser] --> Host
-    Browser --> EnvConfig
-    Browser -->|API_URL, usually /api| API[Agentweaver API]
+![Runtime Configuration and Static Hosting: Vite build, Static SPA assets, VitePress docs build, Static docs, ASP.NET Core publish, Agentweaver.Web, Container entrypoint, /env-config.js, Browser, Agentweaver API](../diagrams/frontend-fig3.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Build,Docs,Publish,Entrypoint runtime;
-    class Dist,DocsDist,EnvConfig data;
-    class Host svc;
-    class Browser client;
-    class API ext;
-```
+<!-- Rendered from ../diagrams/src/frontend-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Rebuild principle: static hosting should be dumb and predictable. Let the API own API behavior; let the SPA own client behavior; let the host serve files and route unknown non-doc paths back to `index.html` for client-side routing.
 
@@ -426,31 +328,12 @@ Agentweaver solves this by layering data:
 3. **Deduplication** — avoid showing the same event twice, usually by sequence id.
 4. **Reducer fold** — derive display state from the merged event list.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Open[Open orchestration page] --> Params[Read project/run route params]
-    Params --> Metadata[Load project/team/run metadata]
-    Params --> Seeds[Load REST seeds\nrun events, graph, work plan, children]
-    Params --> Stream[Open SSE stream]
-    Seeds --> Merge[Merge seed events before live events]
-    Stream --> Merge
-    Merge --> Dedupe[Deduplicate by sequence/type]
-    Dedupe --> Fold[Fold through reducers]
-    Fold --> UI[Render timeline, graph, status, approvals]
+![Snapshot + Stream Synchronization: Open orchestration page, Read project/run route params, Load project/team/run metadata, Load REST seeds, Open SSE stream, Merge seed events before live events, Deduplicate by sequence/type, Fold through reducers, Render timeline, graph, status, approvals](../diagrams/frontend-fig4.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Open,UI client;
-    class Params,Metadata,Seeds,Merge,Dedupe,Fold svc;
-    class Stream evt;
-```
+<!-- Rendered from ../diagrams/src/frontend-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 For embedded single-agent/child runs, the surface resolves run metadata, optionally fetches persisted events for terminal or parked states, fetches a graph descriptor when needed, and then merges live stream events over the seed.
 
@@ -499,40 +382,12 @@ Conceptually:
 6. The coordinator stream re-projects the all-up lifecycle so the user can monitor and steer from one page.
 7. When children are ready, assembly/review/merge phases progress through coordinator events.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Goal[User goal] --> Coord[Coordinator run]
-    Coord --> Spec[Outcome spec]
-    Spec --> Plan[Work plan]
-    Plan --> Topology[Server-authored topology]
-    Topology --> ChildA[Child run A]
-    Topology --> ChildB[Child run B]
-    Topology --> ChildN[Child run N]
-    ChildA --> CoordStream[Coordinator event stream]
-    ChildB --> CoordStream
-    ChildN --> CoordStream
-    CoordStream --> UI[All-up coordinator page]
-    UI --> Steer[Steering / answers / approvals]
-    Steer --> Coord
-    Steer --> ChildA
-    Steer --> ChildB
-    Steer --> ChildN
+![Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals](../diagrams/frontend-fig5.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Goal,UI,Steer client;
-    class Coord core;
-    class Spec,Plan,Topology data;
-    class ChildA,ChildB,ChildN runtime;
-    class CoordStream evt;
-```
+<!-- Rendered from ../diagrams/src/frontend-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The topology reducer is intentionally thin. It applies server-authored snapshots and deltas, merges subtask status updates, and attaches steering state to existing nodes. It does not invent dependencies or compute topology from scratch. This protects the UI from accidentally disagreeing with backend scheduling rules.
 

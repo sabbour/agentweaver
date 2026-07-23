@@ -156,7 +156,7 @@ sequenceDiagram
 - `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
 - `apps/Agentweaver.Api/Endpoints/OAuthServerEndpoints.cs`
 - `docs/mcp-oauth.md`
-- `k8s/mcp-httproute.yaml`
+- `k8s/base/mcp-httproute.yaml`
 
 ## 4. Bearer tokens: what is accepted, why, and how identity survives
 
@@ -232,8 +232,8 @@ The fix is to pin issuer and audience to public values in Production on both ser
 - `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
 - `apps/Agentweaver.Api/Auth/OAuth`
 - `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
-- `k8s/mcp-deployment.yaml`
-- `k8s/api-deployment.yaml`
+- `k8s/base/mcp-deployment.yaml`
+- `k8s/base/api-deployment.yaml`
 
 ## 5. The MCP tool surface: a protocol adapter over Agentweaver capabilities
 
@@ -282,17 +282,12 @@ Beyond the static tool names and descriptions summarized here, the protocol-leve
 
 The Kubernetes design has one public host and routes selected paths to the MCP service.
 
-```mermaid
-flowchart LR
-    Client[MCP client] --> Gateway[Gateway / HTTPRoute]
-    Gateway -->|Exact /mcp/health| HealthRewrite[Rewrite to /healthz]
-    HealthRewrite --> McpSvc[agentweaver-mcp Service]
-    Gateway -->|Exact /.well-known/oauth-protected-resource| McpSvc
-    Gateway -->|Exact /.well-known/oauth-protected-resource/mcp| McpSvc
-    Gateway -->|PathPrefix /mcp| McpSvc
-    McpSvc --> McpPod[Agentweaver.Mcp pod]
-    McpPod -->|API calls + JWKS fetch| ApiSvc[agentweaver-api Service]
-```
+![6. Kubernetes routing: expose `/mcp`, but do not hide discovery: MCP client, Gateway / HTTPRoute, Rewrite to /healthz, agentweaver-mcp Service, Agentweaver.Mcp pod, agentweaver-api Service](../diagrams/mcp-server-fig1.png)
+
+<!-- Rendered from ../diagrams/src/mcp-server-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 There are three important routing shapes:
 
@@ -308,7 +303,7 @@ The deployment pins Resource Server identity configuration:
 
 This distinction is crucial: issuer and audience describe token identity and must be public/stable; JWKS URI is just where the pod fetches signing keys and may be internal.
 
-In AKS, run `npm run azure:deploy` before the first `npm run azure:upgrade`;
+In AKS, run `npm run azure:provision-infra` before the first `npm run azure:deploy-from-local`;
 the infrastructure workflow creates the Authorization Server's private signing-key secret
 `mcp-oauth-signing-key`. Do not use the installer `--skip-oauth-key` flag for
 production first-deploys unless that secret already exists; otherwise cluster diagnostics
@@ -316,10 +311,10 @@ report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
 **Where this lives**
 
-- `k8s/mcp-service.yaml`
-- `k8s/mcp-httproute.yaml`
-- `k8s/mcp-deployment.yaml`
-- `k8s/secret-provider-class.yaml`
+- `k8s/base/mcp-service.yaml`
+- `k8s/base/mcp-httproute.yaml`
+- `k8s/base/mcp-deployment.yaml`
+- `k8s/base/secret-provider-class.yaml`
 
 ## 7. Rebuild checklist
 

@@ -4,7 +4,7 @@
 //
 // Config is resolved ONCE, in full, and validated BEFORE any side effect
 // runs (no partial provisioning against half-resolved/invalid input). The
-// resolved object is what every later phase (steps/deploy/upgrade/etc.)
+// resolved object is what every later provisioning/deployment phase
 // consumes -- callers should not re-read process.env or re-parse flags
 // downstream of resolveConfig().
 

@@ -30,7 +30,7 @@ public sealed class SqliteProjectStore : IProjectStore
                                   default_workflow_id, active_review_policy_name, sandbox_profile,
                                   source_blueprint_id, source_blueprint_type,
                                   blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-                                  allowed_workflow_ids, team_revision)
+                                  allowed_workflow_ids, webhook_secret, team_revision)
             VALUES ($projectId, $name, $originKind, $sourceRepository,
                     $workingDirectory, $defaultBranch, $owner,
                     $defaultProvider, $defaultModelCopilot, $defaultModelFoundry,
@@ -39,7 +39,7 @@ public sealed class SqliteProjectStore : IProjectStore
                     $defaultWorkflowId, $activeReviewPolicyName, $sandboxProfile,
                     $sourceBlueprintId, $sourceBlueprintType,
                     $blueprintGenerationModel, $workflowGenerationModel, $outcomeSpecGenerationModel,
-                    $allowedWorkflowIds, $teamRevision);
+                    $allowedWorkflowIds, $webhookSecret, $teamRevision);
             """;
         command.Parameters.AddWithValue("$projectId", project.Id.ToString());
         command.Parameters.AddWithValue("$name", project.Name);
@@ -66,6 +66,7 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$workflowGenerationModel", (object?)project.WorkflowGenerationModel ?? DBNull.Value);
         command.Parameters.AddWithValue("$outcomeSpecGenerationModel", (object?)project.OutcomeSpecGenerationModel ?? DBNull.Value);
         command.Parameters.AddWithValue("$allowedWorkflowIds", (object?)SerializeWorkflowIds(project.AllowedWorkflowIds) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$webhookSecret", (object?)project.WebhookSecret ?? DBNull.Value);
         command.Parameters.AddWithValue("$teamRevision", project.TeamRevision);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -119,6 +120,17 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$defaultProvider", settings.DefaultProvider.ToApiString());
         command.Parameters.AddWithValue("$defaultModelCopilot", (object?)settings.GitHubCopilotModel ?? DBNull.Value);
         command.Parameters.AddWithValue("$defaultModelFoundry", (object?)settings.MicrosoftFoundryModel ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task UpdateWebhookSecretAsync(ProjectId id, string? webhookSecret, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE projects SET webhook_secret = $webhookSecret, updated_at = $updatedAt WHERE project_id = $projectId;";
+        command.Parameters.AddWithValue("$webhookSecret", (object?)webhookSecret ?? DBNull.Value);
         command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
         command.Parameters.AddWithValue("$projectId", id.ToString());
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -243,6 +255,25 @@ public sealed class SqliteProjectStore : IProjectStore
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task UpdateOriginAsync(ProjectId id, ProjectOrigin origin, DateTimeOffset updatedAt, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE projects
+               SET origin_kind = $originKind,
+                   source_repository = $sourceRepository,
+                   updated_at = $updatedAt
+             WHERE project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$originKind", origin.ToApiString());
+        command.Parameters.AddWithValue("$sourceRepository", (object?)origin.SourceRepository ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
@@ -333,7 +364,7 @@ public sealed class SqliteProjectStore : IProjectStore
     //           16=default_workflow_id 17=active_review_policy_name 18=sandbox_profile
     //           19=source_blueprint_id 20=source_blueprint_type
     //           21=blueprint_generation_model 22=workflow_generation_model
-    //           23=outcome_spec_generation_model 24=allowed_workflow_ids 25=team_revision
+    //           23=outcome_spec_generation_model 24=allowed_workflow_ids 25=webhook_secret 26=team_revision
     private const string SelectSql =
         """
         SELECT project_id, name, origin_kind, source_repository, working_directory,
@@ -343,7 +374,7 @@ public sealed class SqliteProjectStore : IProjectStore
                default_workflow_id, active_review_policy_name, sandbox_profile,
               source_blueprint_id, source_blueprint_type,
               blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-              allowed_workflow_ids, team_revision
+              allowed_workflow_ids, webhook_secret, team_revision
           FROM projects
         """;
 
@@ -383,7 +414,8 @@ public sealed class SqliteProjectStore : IProjectStore
             WorkflowGenerationModel = r.IsDBNull(22) ? null : r.GetString(22),
             OutcomeSpecGenerationModel = r.IsDBNull(23) ? null : r.GetString(23),
             AllowedWorkflowIds     = r.IsDBNull(24) ? null : DeserializeWorkflowIds(r.GetString(24), r.GetString(0)),
-            TeamRevision           = r.GetInt64(25),
+            WebhookSecret          = r.IsDBNull(25) ? null : r.GetString(25),
+            TeamRevision           = r.GetInt64(26),
         };
     }
 

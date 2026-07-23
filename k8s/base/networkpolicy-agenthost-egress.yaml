@@ -1,0 +1,107 @@
+# NetworkPolicy — Egress for AgentHost warm-pool pods.
+#
+# Agent-host pods carry app.kubernetes.io/component: agent-host in addition to
+# app: agentweaver-agent-host. The shared sandbox-egress-allowlist (networkpolicy-sandbox.yaml)
+# is NOT sufficient for the in-cluster API/MCP dependencies under the live kata/ACNS (Cilium)
+# enforcement path: live staging validation showed AgentHost -> agentweaver-mcp:8080 AND
+# AgentHost -> agentweaver-api:8080 still timed out until an EXPLICIT podSelector egress rule
+# existed for each. This is a Cilium behaviour, not a Kubernetes-semantics quirk: Cilium
+# resolves an in-cluster ClusterIP to the destination pod's *security identity*, and only an
+# identity-based (podSelector) egress rule authorizes it. A CIDR/ipBlock rule — even the
+# 0.0.0.0/0 allow in sandbox-egress-allowlist — matches the "world"/CIDR entity, NOT
+# cluster-managed pod identities, so it never permits east-west traffic to API/MCP. The
+# SandboxTemplate-owned agentweaver-agent-host-network-policy (selector
+# agents.x-k8s.io/sandbox-template-ref-hash=<hash>, applied once a warm pod is claimed)
+# additionally excepts 10.0.0.0/8 from its own 0.0.0.0/0 egress, so the ONLY thing that lets a
+# claimed sandbox pod reach the API/MCP ClusterIPs (both in 10.0.0.0/8) is the identity-based
+# allow below. Keep these narrow in-cluster allows here, then keep the public-HTTPS allowlist
+# for Copilot/GitHub traffic below.
+#
+# Selector note (#424): claimed/active sandbox pods carry BOTH the warm-pool label
+# (app.kubernetes.io/component: agent-host) AND agents.x-k8s.io/sandbox-template-ref-hash=<hash>
+# — the ref-hash label is *added* on claim, the component label persists — so selecting by the
+# component label matches claimed pods too (live-verified: this policy's MCP rule is enforced on
+# both warm and ref-hash-labelled pods). The identity-based allow is additive with, and
+# unaffected by, the operator policy's RFC1918 CIDR exceptions.
+#
+# The Copilot CLI SDK also calls copilot-proxy.githubusercontent.com (138.91.x.x — Azure CDN)
+# for SDK token validation during session.create. Without the public-HTTPS rule below, that call
+# is blocked → "fetch failed".
+#
+# Kata VM isolation is the primary security boundary; this policy is defense-in-depth.
+# Allowing all public HTTPS from agent-host pods is correct — the kata VM kernel, the
+# workspace filesystem isolation, and the governance sandbox handle the rest.
+#
+# This policy is ADDITIVE with sandbox-egress-allowlist (NetworkPolicy is additive).
+# Other pods without component: agent-host are
+# unaffected — their egress remains restricted to 140.82.112.0/20.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agenthost-egress-allowlist
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  # Target: agent-host warm-pool pods only.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: agent-host
+  policyTypes:
+    - Egress
+  egress:
+    # In-cluster MCP on 8080. AgentHost always boots with AgentHost__McpEndpoint set to the
+    # MCP Service DNS name, so east-west access to the MCP pod is a hard requirement.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: agentweaver-mcp
+      ports:
+        - protocol: TCP
+          port: 8080
+    # In-cluster API on 8080 (#424). Native agent tools (submit_decision, memory, inbox, …)
+    # call the API over east-west from inside the sandbox pod. Targeted by podSelector (pod
+    # security identity) rather than the API ClusterIP so the rule survives ClusterIP
+    # reassignment and is enforced by Cilium's identity model. The API ingress side is already
+    # opened by allow-agenthost-to-api (networkpolicy-agenthost.yaml).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: agentweaver-api
+      ports:
+        - protocol: TCP
+          port: 8080
+    # DNS: kube-dns for hostname resolution (needed for GitHub/Copilot API FQDNs).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # All public HTTPS. Excludes RFC-1918 and link-local to prevent in-cluster lateral
+    # movement. Copilot CLI calls: api.github.com (140.82.x.x), api.githubcopilot.com
+    # (140.82.x.x), copilot-proxy.githubusercontent.com (138.91.x.x — Azure CDN), and
+    # other GitHub/Microsoft endpoints that may change over time.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - fc00::/7
+              - fe80::/10
+      ports:
+        - protocol: TCP
+          port: 443

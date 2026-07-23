@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using System.Text.Json;
 
 namespace Agentweaver.Tests.Skills;
 
@@ -131,6 +132,28 @@ public sealed class SkillCatalogTests : IDisposable
         finally { try { Directory.Delete(root, recursive: true); } catch { } }
     }
 
+    [Fact]
+    public void BuiltInAwesomeCopilotMarketplace_TargetsRepositorySkillsDirectory()
+    {
+        var appSettings = Path.Combine(RepositoryRoot, "apps", "Agentweaver.Api", "appsettings.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(appSettings));
+        var definitions = document.RootElement
+            .GetProperty("SkillMarketplaces")
+            .GetProperty("Definitions")
+            .EnumerateArray();
+
+        var marketplace = definitions.Single(definition =>
+            definition.GetProperty("Name").GetString() == "GitHub Awesome Copilot");
+
+        marketplace.GetProperty("Repository").GetString().Should().Be("github/awesome-copilot");
+        marketplace.GetProperty("Subpath").GetString().Should().Be("skills");
+        SkillMarketplaceRegistry.ToImportUrl(new SkillMarketplaceDefinition
+        {
+            Repository = marketplace.GetProperty("Repository").GetString()!,
+            Subpath = marketplace.GetProperty("Subpath").GetString(),
+        }).Should().Be("https://github.com/github/awesome-copilot/tree/main/skills");
+    }
+
     [Theory]
     [InlineData("good-skill", null)]
     [InlineData("BadSkill", "slug")]
@@ -246,6 +269,20 @@ public sealed class SkillCatalogTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
+    }
+
+    private static string RepositoryRoot
+    {
+        get
+        {
+            for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "agentweaver.sln")))
+                    return directory.FullName;
+            }
+
+            throw new DirectoryNotFoundException("Could not locate the repository root.");
+        }
     }
 
     private static Project NewProject(ProjectId id, string workingDirectory) => new()

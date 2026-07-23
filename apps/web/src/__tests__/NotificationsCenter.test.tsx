@@ -21,6 +21,7 @@ import type { NotificationDto, NotificationsResponseDto } from '../api/types';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getNotifications: vi.fn(),
+    dismissNotification: vi.fn(),
   },
 }));
 
@@ -77,7 +78,9 @@ describe('NotificationBell + NotificationsProvider', () => {
   });
 
   it('shows the backlog count on initial load without spamming a toast', async () => {
-    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([makeNotification()]));
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([makeNotification()]))
+      .mockResolvedValueOnce(respond([]));
 
     renderBell();
 
@@ -135,6 +138,46 @@ describe('NotificationBell + NotificationsProvider', () => {
 
     // Popover should close after navigating.
     await waitFor(() => expect(screen.queryByText(makeNotification().title)).toBeNull());
+  });
+
+  it('dismisses one notification without navigating from its row', async () => {
+    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([makeNotification()]));
+    const user = userEvent.setup();
+
+    renderBell();
+
+    await waitFor(() => expect(screen.getByTestId('notification-bell-badge').textContent).toContain('1'));
+    await user.click(screen.getByTestId('notification-bell'));
+    await user.click(await screen.findByRole('button', {
+      name: `Dismiss notification: ${makeNotification().title}`,
+    }));
+    expect(apiClient.dismissNotification).toHaveBeenCalledWith(makeNotification().id);
+
+    expect(screen.queryByText(makeNotification().title)).toBeNull();
+    expect(await screen.findByText('Nothing needs your attention right now.')).toBeTruthy();
+  });
+
+  it('keeps a dismissed notification hidden after a subsequent poll', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([makeNotification()]))
+      .mockResolvedValueOnce(respond([]));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    renderBell(1000);
+    await waitFor(() => expect(screen.getByTestId('notification-bell-badge')).toBeTruthy());
+    await user.click(screen.getByTestId('notification-bell'));
+    await user.click(await screen.findByRole('button', {
+      name: `Dismiss notification: ${makeNotification().title}`,
+    }));
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(makeNotification().title)).toBeNull();
   });
 
   it('mute toggle persists to localStorage', async () => {
@@ -215,4 +258,3 @@ describe('NotificationBell + NotificationsProvider', () => {
     });
   });
 });
-

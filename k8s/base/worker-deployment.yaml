@@ -1,0 +1,299 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweaver-worker
+  namespace: agentweaver
+  labels:
+    app: agentweaver-worker
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  # Worker is Postgres-backed and stateless w.r.t. storage → safe RollingUpdate.
+  # Min 1 for availability; scale via worker-hpa.yaml.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: agentweaver-worker
+  template:
+    metadata:
+      labels:
+        app: agentweaver-worker
+        app.kubernetes.io/part-of: agentweaver
+        # Required by the Azure Workload Identity webhook to inject the OIDC token volume.
+        azure.workload.identity/use: "true"
+      annotations:
+        secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
+    spec:
+      # TODO(spec-018 §2.2): Split to a dedicated 'agentweaver-worker' ServiceAccount
+      # with its own federated credential and least-priv RBAC (sandbox Role only).
+      # Using agentweaver-api SA for now — it already has sandbox RBAC + workload identity.
+      serviceAccountName: agentweaver-api
+      # Allow enough time for in-flight runs to checkpoint + release leases before pod exit.
+      # Must exceed the lease TTL (coordinate with Tank's lease schema).
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        # Run EF migrations against Postgres before the worker starts processing runs.
+        # The worker always uses Postgres (App__Role=worker implies Database__Provider=Postgres).
+        # If Tank's Postgres migration set is not yet generated, this init container will fail;
+        # the pod will restart until the migration set is merged and the image is rebuilt.
+        - name: migrate-memory-db
+          image: agentweaverregistry.azurecr.io/agentweaver-api:latest
+          imagePullPolicy: Always
+          command:
+            - /app/efbundle
+            - --verbose
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: HOME
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+            - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
+              value: /tmp/.net
+            # Worker runs efbundle against Postgres, not SQLite.
+            - name: Database__Provider
+              value: "Postgres"
+            - name: ConnectionStrings__MemoryDb
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+            - name: ConnectionStrings__Postgres
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+            # OAuthConfigGuard fires in Production during efbundle host build.
+            - name: Auth__OAuth__Issuer
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_ISSUER
+            - name: Auth__OAuth__Audience
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_AUDIENCE
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: worker
+          image: agentweaverregistry.azurecr.io/agentweaver-api:latest
+          imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # Worker needs GitHub credentials for repo operations (clone, worktree, PR).
+              # OAuth signing key read here too; Auth:ApiKey needed for agent tool loopback calls.
+              export GitHub__ClientId="$(cat /mnt/secrets-store/github-client-id)"
+              export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
+              export Auth__GitHub__ClientId="${GitHub__ClientId}"
+              export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
+              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
+              export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
+              exec dotnet Agentweaver.Api.dll
+          ports:
+            - name: http-worker
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            # spec-018 P2: HOME on RWX workspace/.home — shared with API replicas.
+            # AppPaths.DataDirectory → /workspace/.home/.local/share/agentweaver.
+            - name: HOME
+              value: /workspace/.home
+            - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
+              value: /tmp/.net
+            # Role flag — selects worker code path (claim runs, run MAF, dispatch sandboxes).
+            # App__Role is the contract key per platform-deployment.md §2; Tank matches this.
+            - name: App__Role
+              value: worker
+            # Worker listens on 8081 (dedicated port, no external ingress via gateway).
+            - name: ASPNETCORE_URLS
+              value: http://+:8081
+            # Workspace shared with sandbox pods via RWX PVC.
+            - name: Workspace__Path
+              value: /workspace
+            - name: Workspace__Provider
+              value: persistent-volume
+            - name: Workspace__PersistentVolume__MountRoot
+              value: /workspace
+            # Worker calls API (web tier) for intra-cluster lookups — route via ClusterIP service.
+            - name: Agentweaver__ApiBaseUrl
+              value: http://agentweaver-api:8080
+            # Serialized to pod-per-run AgentHost turns; use the stable namespace-qualified service.
+            - name: Agentweaver__RemoteApiBaseUrl
+              value: http://agentweaver-api.agentweaver.svc.cluster.local:8080
+            # Sandbox dispatch (KubernetesSandboxExecutor path — kube-exec-stdio).
+            - name: Sandbox__Backend
+              value: kubernetes
+            # spec-018 P1.5 resolved: switch to pod-per-run so agent subtasks execute in dedicated
+            # AgentHost pods via warm pool + /configure, not in-process on the Worker pod.
+            - name: Sandbox__AgentExecutionMode
+              value: pod-per-run
+            # Keep implementation turns on AgentHost execution-scratch rather than the Azure Files worktree.
+            - name: Sandbox__PodLocalWorkspace__ImplementationEnabled
+              value: "true"
+            - name: Sandbox__Kubernetes__Namespace
+              value: agentweaver
+            # Mirror api-deployment.yaml: worker launches Phase-3 Build/Test AgentHost pods and must use the same plain-http healthz scheme.
+            - name: Sandbox__AgentHost__RequireMtls
+              value: "false"
+            # GitHub OAuth metadata (callback/frontend for any per-run GitHub auth flows).
+            - name: Auth__GitHub__AllowedOrg
+              value: microsoft
+            - name: Auth__GitHub__CallbackUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: GITHUB_CALLBACK_URL
+            - name: Auth__GitHub__FrontendUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: GITHUB_FRONTEND_URL
+            # OAuth AS metadata — worker may need to validate inbound tokens.
+            - name: Auth__OAuth__Issuer
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_ISSUER
+            - name: Auth__OAuth__Audience
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_AUDIENCE
+            # Postgres (worker always uses Postgres — it is the run-state owner).
+            # Flip Database__Provider to "sqlite" ONLY as an emergency rollback; doing so
+            # will break run leasing since the lease schema is Postgres-specific.
+            - name: Database__Provider
+              value: "Postgres"
+            - name: ConnectionStrings__MemoryDb
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+            - name: ConnectionStrings__Postgres
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-postgres
+                  key: connectionstring
+            # OTEL telemetry — Azure Monitor via Application Insights.
+            - name: OTEL_SERVICE_NAME
+              value: agentweaver-worker
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=agentweaver,deployment.environment=production
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: appinsights-connection-string
+                  optional: true
+            - name: APPLICATIONINSIGHTS_WORKSPACE_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: APPINSIGHTS_WORKSPACE_ID
+            - name: TMPDIR
+              value: /tmp
+            # A2A mTLS client cert (spec-018 H1) — the worker connects to each sandbox agent pod
+            # client certificate; ca.crt is the trust anchor for the AgentHost server cert.
+            # Transport: direct HTTPS/mTLS to the sandbox pod's A2A listener on port 8088
+            # (NOT kube-exec-stdio — that option was rejected; A2A over TCP 8088 is the transport).
+            # Egress to port 8088 is opened in networkpolicy-worker.yaml (allow-worker-agenthost-egress).
+            # Ingress to sandbox pods is opened in networkpolicy-agenthost.yaml (from agentweaver-worker).
+            - name: Sandbox__A2A__ClientCertPath
+              value: /mnt/a2a-client-tls/tls.crt
+            - name: Sandbox__A2A__ClientKeyPath
+              value: /mnt/a2a-client-tls/tls.key
+            - name: Sandbox__A2A__CACertPath
+              value: /mnt/a2a-client-tls/ca.crt
+            - name: Sandbox__A2A__Port
+              value: "8088"
+          volumeMounts:
+            # No /data PVC — worker does not use SQLite.
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /app/logs
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+            - name: a2a-client-tls
+              mountPath: /mnt/a2a-client-tls
+              readOnly: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Give in-flight run loops time to checkpoint before the pod is removed from
+                # service endpoints.  30s buffer; terminationGracePeriodSeconds (120s) covers
+                # the full lease-drain window after SIGTERM.
+                command: ["/bin/sh", "-c", "sleep 30"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        # No data PVC — worker is SQLite-free by design.
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: agentweaver-workspace
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentweaver-secrets
+        - name: a2a-client-tls
+          secret:
+            secretName: agentweaver-a2a-client-tls
+            defaultMode: 0400

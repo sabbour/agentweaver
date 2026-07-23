@@ -130,6 +130,9 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN blueprint_generation_model TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN workflow_generation_model TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN outcome_spec_generation_model TEXT;", ct);
+        // The secret itself lives in ISecretStore (Key Vault in production); this nullable value is
+        // its per-project lookup key. Existing projects have no configured webhook until rotated.
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN webhook_secret TEXT;", ct);
 
         // Off-board archiving for runs/backlog tasks. NULL means active/non-archived, preserving all
         // existing rows. Archived Ready tasks are excluded from heartbeat pickup and board queries.
@@ -204,6 +207,7 @@ public sealed class SqliteDb
                 provenance        TEXT NOT NULL,
                 source_repository TEXT,
                 source_location   TEXT,
+                marketplace_name  TEXT,
                 content_hash      TEXT NOT NULL,
                 status            TEXT NOT NULL DEFAULT 'active',
                 created_at        TEXT NOT NULL,
@@ -225,6 +229,7 @@ public sealed class SqliteDb
                     REFERENCES skills (project_id, skill_id) ON DELETE CASCADE
             );
             """, ct);
+        await TryAlterAsync(connection, "ALTER TABLE skills ADD COLUMN marketplace_name TEXT;", ct);
         await EnsureSkillOwnershipConstraintsAsync(connection, ct).ConfigureAwait(false);
         await TryAlterAsync(connection,
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_project_name ON skills (project_id, name COLLATE NOCASE);", ct);
@@ -336,6 +341,7 @@ public sealed class SqliteDb
                 provenance        TEXT NOT NULL,
                 source_repository TEXT,
                 source_location   TEXT,
+                marketplace_name  TEXT,
                 content_hash      TEXT NOT NULL,
                 status            TEXT NOT NULL DEFAULT 'active',
                 created_at        TEXT NOT NULL,
@@ -581,6 +587,7 @@ public sealed class SqliteDb
             state                   TEXT NOT NULL DEFAULT 'active',
             created_at              TEXT NOT NULL,
             updated_at              TEXT NOT NULL,
+            webhook_secret          TEXT,
             team_revision           INTEGER NOT NULL DEFAULT 0
         );
 

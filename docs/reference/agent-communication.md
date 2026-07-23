@@ -20,20 +20,12 @@ The three channels are:
 > surface is `RemoteAgentProxy → Authorization: Bearer {per-run token} →
 > AgentHost message:stream`; each AgentHost pod accepts only its own run's token.
 
-```mermaid
-flowchart TB
-    subgraph Ch1[Channel 1 — Shared state]
-        T1[inbox_submit / inbox_list\ninbox_merge / inbox_reject]
-        T2[decision_create / decision_list\ndecision_update]
-        T3[memory_add / memory_list\nmemory_get / memory_search]
-    end
-    subgraph Ch2[Channel 2 — Coordinator handoff]
-        T4[coordinator_start\ncoordinator_work_plan_get\ncoordinator_children_get\ncoordinator_steer]
-    end
-    subgraph Ch3[Channel 3 — A2A transport]
-        T5[worker ↔ sandbox pod\nmessage:stream + per-run bearer\nsee A2A reference]
-    end
-```
+![Agent Communication — Reference: inbox_submit / inbox_list, decision_create / decision_list, memory_add / memory_list, coordinator_start, worker ↔ sandbox pod](../diagrams/reference-agent-communication-fig1.png)
+
+<!-- Rendered from ../diagrams/src/reference-agent-communication-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ---
 

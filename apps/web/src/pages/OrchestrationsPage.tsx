@@ -23,7 +23,7 @@ import { PageHeader } from '../components/PageHeader';
 import { isCoordinatorRun } from '../utils/runKind';
 import { ErrorState, MetricRow } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
 import { isTerminalRunStatus } from '../utils/runStatus';
@@ -302,42 +302,46 @@ export function OrchestrationsPage() {
         ? err.message
         : String(err);
 
-  const load = (showSpinner: boolean) => {
-    if (!projectId) return Promise.resolve();
+  const load = useCallback(async (showSpinner: boolean) => {
+    if (!projectId) return;
     if (showSpinner) setLoading(true);
-    return Promise.all([
-      collectPagedItems((options) => apiClient.getProjectRuns(projectId, {
-        agentName: 'Coordinator',
-        page: options.page,
-        pageSize: options.pageSize,
-        signal: options.signal,
-      })),
-      apiClient.getProjectRuns(projectId, {
-        agentName: 'Coordinator',
-        terminalOnly: true,
-        page: recentPage,
-        pageSize: recentPageSize,
-      }),
-      apiClient.getProject(projectId).catch(() => null as Project | null),
-    ])
-      .then(([allCoordinatorRuns, recentRunPage, proj]) => {
-        const coordinatorRuns = allCoordinatorRuns.filter(isCoordinatorRun);
-        setRuns(coordinatorRuns);
-        setActiveRuns(coordinatorRuns.filter((run) => !isRunTerminal(run.status)));
-        setRecentRuns(recentRunPage.items.filter(isCoordinatorRun));
-        setRecentTotalCount(recentRunPage.total_count);
-        setProject(proj);
-        setError(null);
-      })
-      .catch((err) => setError(formatError(err)))
-      .finally(() => setLoading(false));
-  };
+    try {
+      const [allCoordinatorRuns, recentRunPage, proj] = await Promise.all([
+        collectPagedItems((options) => apiClient.getProjectRuns(projectId, {
+          agentName: 'Coordinator',
+          page: options.page,
+          pageSize: options.pageSize,
+          signal: options.signal,
+        })),
+        apiClient.getProjectRuns(projectId, {
+          agentName: 'Coordinator',
+          terminalOnly: true,
+          page: recentPage,
+          pageSize: recentPageSize,
+        }),
+        apiClient.getProject(projectId).catch(() => null as Project | null),
+      ]);
+      const coordinatorRuns = allCoordinatorRuns.filter(isCoordinatorRun);
+      setRuns(coordinatorRuns);
+      setActiveRuns(coordinatorRuns.filter((run) => !isRunTerminal(run.status)));
+      setRecentRuns(recentRunPage.items.filter(isCoordinatorRun));
+      setRecentTotalCount(recentRunPage.total_count);
+      setProject(proj);
+      setError(null);
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, recentPage, recentPageSize]);
 
   useEffect(() => {
     if (!projectId) return;
-    void load(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, recentPage, recentPageSize]);
+    const loadRuns = async () => {
+      await load(true);
+    };
+    void loadRuns();
+  }, [projectId, load]);
 
   const runIdOf = (run: WorkflowRunDto) => run.workflow_run_id ?? run.execution_id;
   const statusCounts = runs.reduce<Record<string, number>>((acc, run) => {

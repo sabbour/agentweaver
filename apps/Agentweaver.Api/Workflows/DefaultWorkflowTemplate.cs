@@ -13,8 +13,8 @@ namespace Agentweaver.Api.Workflows;
 /// default through <see cref="BuiltInWorkflows"/>, so no migration is required for existing projects.
 ///
 /// The YAML is a behavior-preserving conversion of <c>RunWorkflowFactory.BuildWorkflow</c>: the
-/// canonical stage stream (agent, rai, review, merge, scribe) and the same logical nodes, order, and
-/// decisions. No emojis appear in any shipped surface (Principle VIII).
+/// canonical stage stream (agent, rai, review, merge, pull-request publication, scribe) and the same
+/// logical nodes, order, and decisions. No emojis appear in any shipped surface (Principle VIII).
 /// </summary>
 public static class DefaultWorkflowTemplate
 {
@@ -33,13 +33,14 @@ public static class DefaultWorkflowTemplate
         # It reproduces today's hardcoded run pipeline as a declarative definition: an agent turn
         # produces a change, RAI reviews it (pass through / request a revision up to the iteration cap /
         # fail safe on a content-safety RED), a human-review gate approves / requests changes /
-        # declines, an approved change merges, and the scribe records the outcome. The canonical stage
-        # stream (agent, rai, review, merge, scribe) and the same logical nodes, order, and decisions
-        # are preserved. Plumbing/adapter executors are hidden and not modeled here.
+        # declines, an approved change merges, the merged branch is published/reused as a pull request,
+        # and the scribe records the outcome. The canonical stage stream (agent, rai, review, merge,
+        # pull-request publication, scribe) and the same logical nodes, order, and decisions are
+        # preserved. Plumbing/adapter executors are hidden and not modeled here.
 
         id: default
         name: Generic Workflow
-        description: Behavior-preserving conversion of the built-in run pipeline (agent, rai, review, merge, scribe).
+        description: Behavior-preserving conversion of the built-in run pipeline (agent, rai, review, merge, pull-request publication, scribe).
 
         start: agent
 
@@ -79,6 +80,16 @@ public static class DefaultWorkflowTemplate
             label: Merge
             role: merge
             kind: action
+
+          - id: push-pr
+            type: open_pull_request
+            label: Push PR
+            role: action
+            kind: live
+            title: "Agentweaver: {outcome_summary}"
+            body: "Automated changes produced by Agentweaver run `{run_id}` on branch `{worktree_branch}`.\n\n{outcome_summary}"
+            base: main
+            head: "{worktree_branch}"
 
           - id: scribe
             type: scribe
@@ -135,14 +146,16 @@ public static class DefaultWorkflowTemplate
             when: declined
 
           # Merge outcomes.
-          - from: merge        # merged (succeeded or failed terminally): record via the scribe.
-            to: scribe
+          - from: merge        # merged (succeeded or failed terminally): publish/reuse the pull request.
+            to: push-pr
             when: merged
           - from: merge        # blocked: re-enter the review gate via HITL so the run stays alive.
             to: review
             when: blocked
 
-          # Scribe records the outcome and the run terminates.
+          # Publish/reuse the PR, then record the outcome and terminate.
+          - from: push-pr
+            to: scribe
           - from: scribe
             to: done
         """;

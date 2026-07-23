@@ -48,7 +48,7 @@ import {
   PageHeader,
 } from '../components/ui';
 import { collectFilesFromDataTransfer, supportsEntryApi } from '../utils/skillDrop';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type {
   BlueprintSkillDefaultsPreviewResponse,
@@ -57,6 +57,7 @@ import type {
   SkillCandidateDto,
   SkillDetailDto,
   SkillDto,
+  SkillMarketplaceDto,
   TeamMemberDto,
 } from '../api/types';
 import type { DroppedSkillFile } from '../utils/skillDrop';
@@ -242,6 +243,11 @@ export function SkillsPage() {
   const [detailOpen, setDetailOpen] = useState(false);
 
   const [importOpen, setImportOpen] = useState(false);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [marketplaces, setMarketplaces] = useState<SkillMarketplaceDto[]>([]);
+  const [selectedMarketplace, setSelectedMarketplace] = useState<string | null>(null);
+  const [marketplaceCandidates, setMarketplaceCandidates] = useState<SkillCandidateDto[] | null>(null);
+  const [marketplaceQuery, setMarketplaceQuery] = useState('');
   const [sourceUrl, setSourceUrl] = useState('');
   const [candidates, setCandidates] = useState<SkillCandidateDto[] | null>(null);
   const [selectedLocations, setSelectedLocations] = useState<Set<string>>(new Set());
@@ -267,11 +273,10 @@ export function SkillsPage() {
   const defaultsApplyPreviews = useRef(new Map<string, BlueprintSkillDefaultsPreviewResponse>());
   const defaultsTransportSequence = useRef(0);
   const defaultsBusyProject = useRef<string | null>(null);
+  const lastDefaultsProjectId = useRef(projectId);
   const defaultsTriggerRef = useRef<HTMLButtonElement>(null);
   const defaultsCloseButtonRef = useRef<HTMLButtonElement>(null);
   const restoreDefaultsFocus = useRef(false);
-
-  currentProjectId.current = projectId;
 
   const mdFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -281,17 +286,30 @@ export function SkillsPage() {
     setReloadKey((k) => k + 1);
   }, []);
 
+  useLayoutEffect(() => {
+    currentProjectId.current = projectId;
+  }, [projectId]);
+
   useEffect(() => {
     if (!projectId) return;
-    setLoading(true);
-    setLoadError(null);
-    Promise.all([
-      apiClient.listSkills(projectId),
-      apiClient.getTeam(projectId).then((t) => t.members).catch(() => [] as TeamMemberDto[]),
-    ])
-      .then(([s, m]) => { setSkills(s); setMembers(m); })
-      .catch((err: unknown) => { setSkills([]); setLoadError(formatApiError(err)); })
-      .finally(() => setLoading(false));
+    const loadSkills = async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const [s, m] = await Promise.all([
+          apiClient.listSkills(projectId),
+          apiClient.getTeam(projectId).then((t) => t.members).catch(() => [] as TeamMemberDto[]),
+        ]);
+        setSkills(s);
+        setMembers(m);
+      } catch (err: unknown) {
+        setSkills([]);
+        setLoadError(formatApiError(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadSkills();
   }, [projectId, reloadKey]);
 
   const runAcquisition = async (label: string, action: () => Promise<SkillAcquisitionResponse>) => {
@@ -345,7 +363,11 @@ export function SkillsPage() {
     }
   }, [busy, defaultsOpen]);
 
-  useEffect(() => {
+  // This layout effect reconciles the modal with route-driven project changes before paint so
+  // navigating between projects cannot flash stale defaults UI or lose an in-flight apply restore.
+  useLayoutEffect(() => {
+    if (lastDefaultsProjectId.current === projectId) return;
+    lastDefaultsProjectId.current = projectId;
     closeDefaults(false);
     setNotice(null);
     if (projectId && defaultsApplyTransports.current.has(projectId)) {
@@ -362,18 +384,19 @@ export function SkillsPage() {
   useEffect(() => {
     if (!projectId) return;
     let current = true;
-    setDefaultsProject(null);
-    setDefaultsProjectResolved(false);
-    void apiClient.getProject(projectId)
-      .then((project) => {
+    const loadDefaultsProject = async () => {
+      setDefaultsProject(null);
+      setDefaultsProjectResolved(false);
+      try {
+        const project = await apiClient.getProject(projectId);
         if (current) setDefaultsProject(project);
-      })
-      .catch(() => {
+      } catch {
         // A preview refreshes metadata before it calls the defaults endpoint.
-      })
-      .finally(() => {
+      } finally {
         if (current) setDefaultsProjectResolved(true);
-      });
+      }
+    };
+    void loadDefaultsProject();
     return () => { current = false; };
   }, [projectId]);
 
@@ -523,6 +546,35 @@ export function SkillsPage() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const browseMarketplace = async (marketplace: string, query = '') => {
+    if (!projectId) return;
+    setBusy('marketplace-browse');
+    setMutationError(null);
+    try {
+      const result = await apiClient.browseSkillMarketplace(projectId, marketplace, query || undefined);
+      setSelectedMarketplace(result.marketplace);
+      setMarketplaceCandidates(result.candidates);
+      setSelectedLocations(new Set());
+    } catch (err) { setMutationError(formatApiError(err)); } finally { setBusy(null); }
+  };
+
+  const openMarketplace = async () => {
+    setMarketplaceOpen(true);
+    setMarketplaceCandidates(null);
+    try { setMarketplaces(await apiClient.listSkillMarketplaces()); } catch (err) { setMutationError(formatApiError(err)); }
+  };
+
+  const importMarketplace = async () => {
+    if (!projectId || !selectedMarketplace || selectedLocations.size === 0) return;
+    setBusy('marketplace-import');
+    try {
+      const result = await apiClient.importMarketplaceSkills(projectId, selectedMarketplace, Array.from(selectedLocations));
+      setNotice({ projectId, message: `Marketplace import: ${summarizeAcquisition(result)}` });
+      setMarketplaceOpen(false);
+      reload();
+    } catch (err) { setMutationError(formatApiError(err)); } finally { setBusy(null); }
   };
 
   const onImport = async () => {
@@ -710,6 +762,9 @@ export function SkillsPage() {
         </Button>
         <Button icon={<ArrowUpload24Regular />} disabled={isBusy} onClick={() => setImportOpen(true)}>
           Import skill
+        </Button>
+        <Button icon={<PuzzlePiece20Regular />} disabled={isBusy} onClick={() => void openMarketplace()}>
+          Browse marketplaces
         </Button>
         <Button icon={<ArrowSync24Regular />} disabled={isBusy} onClick={onSync}>
           {busy === 'Sync' ? 'Syncing…' : 'Sync connected repo'}
@@ -999,6 +1054,15 @@ export function SkillsPage() {
       </Dialog>
 
       {/* Import dialog */}
+      <Dialog open={marketplaceOpen} onOpenChange={(_, d) => setMarketplaceOpen(d.open)}>
+        <DialogSurface><DialogBody><DialogTitle>Browse curated marketplaces</DialogTitle><DialogContent className={styles.formGrid}>
+          <Text>Browse administrator-curated sources and import selected skills into this catalog.</Text>
+          <div className={styles.actions}>{marketplaces.map((marketplace) => <Button key={marketplace.name} appearance={selectedMarketplace === marketplace.name ? 'primary' : 'secondary'} disabled={isBusy} onClick={() => void browseMarketplace(marketplace.name, marketplaceQuery)}>{marketplace.name}</Button>)}</div>
+          {selectedMarketplace && <Field label="Search this marketplace"><Input value={marketplaceQuery} onChange={(_, data) => setMarketplaceQuery(data.value)} onKeyDown={(event) => { if (event.key === 'Enter') void browseMarketplace(selectedMarketplace, marketplaceQuery); }} /></Field>}
+          {marketplaceCandidates?.map((candidate) => <div key={candidate.location} className={styles.candidate}><Checkbox label={candidate.name ?? candidate.location} checked={selectedLocations.has(candidate.location)} disabled={!candidate.valid || isBusy} onChange={(_, data) => setSelectedLocations((previous) => { const next = new Set(previous); if (data.checked) next.add(candidate.location); else next.delete(candidate.location); return next; })} />{candidate.description && <Text className={styles.itemMeta}>{candidate.description}</Text>}</div>)}
+        </DialogContent><DialogActions><Button appearance="secondary" disabled={isBusy || !selectedMarketplace} onClick={() => selectedMarketplace && void browseMarketplace(selectedMarketplace, marketplaceQuery)}>Search</Button><Button appearance="primary" disabled={isBusy || selectedLocations.size === 0} onClick={() => void importMarketplace()}>{busy === 'marketplace-import' ? 'Importing...' : 'Import selected'}</Button></DialogActions></DialogBody></DialogSurface>
+      </Dialog>
+
       <Dialog open={importOpen} onOpenChange={(_, d) => { setImportOpen(d.open); if (!d.open) { setCandidates(null); setSourceUrl(''); } }}>
         <DialogSurface>
           <DialogBody>

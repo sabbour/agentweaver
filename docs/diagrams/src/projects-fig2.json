@@ -1,0 +1,161 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Relationship between projects, runs, workspaces, teams, and sandboxes",
+  "alt": "Relationship between projects, runs, workspaces, teams, and sandboxes: Project record, Provider, model, workflow, review, sandbox defaults, Base workspace / Git checkout, Project-scoped runs, Coordinator orchestrations, .squad agents, charters, decisions, .agentweaver review policies, Per-run Git worktrees, Selected agent/team member, Sandbox execution, Workspace file/ref browser",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Project",
+      "label": "Project record",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Defaults",
+      "label": "Provider, model, workflow, review, sandbox defaults",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "BaseWorkspace",
+      "label": "Base workspace / Git checkout",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Runs",
+      "label": "Project-scoped runs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Orchestrations",
+      "label": "Coordinator orchestrations",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "SquadFiles",
+      "label": ".squad agents, charters, decisions",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ReviewPolicies",
+      "label": ".agentweaver review policies",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Worktrees",
+      "label": "Per-run Git worktrees",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Agents",
+      "label": "Selected agent/team member",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Sandbox",
+      "label": "Sandbox execution",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "WorkspaceBrowser",
+      "label": "Workspace file/ref browser",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Project",
+      "to": "Defaults"
+    },
+    {
+      "from": "Project",
+      "to": "BaseWorkspace"
+    },
+    {
+      "from": "Project",
+      "to": "Runs"
+    },
+    {
+      "from": "Project",
+      "to": "Orchestrations"
+    },
+    {
+      "from": "BaseWorkspace",
+      "to": "SquadFiles"
+    },
+    {
+      "from": "BaseWorkspace",
+      "to": "ReviewPolicies"
+    },
+    {
+      "from": "BaseWorkspace",
+      "to": "Worktrees"
+    },
+    {
+      "from": "Runs",
+      "to": "Worktrees"
+    },
+    {
+      "from": "Runs",
+      "to": "Agents"
+    },
+    {
+      "from": "Agents",
+      "to": "SquadFiles"
+    },
+    {
+      "from": "Orchestrations",
+      "to": "BaseWorkspace"
+    },
+    {
+      "from": "Worktrees",
+      "to": "Sandbox"
+    },
+    {
+      "from": "BaseWorkspace",
+      "to": "WorkspaceBrowser"
+    }
+  ]
+}

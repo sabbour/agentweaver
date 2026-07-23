@@ -1,0 +1,220 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Single-Agent Run Lifecycle",
+  "alt": "Single-Agent Run Lifecycle: Submit task + project + branch + options, Validate request and canonicalize repository, Create isolated worktree and run branch, Build prompt context, Agent turn uses governed tools, Commit worktree changes and compute diff, Responsible AI review, RAI result, Human review gate, Reviewer decision, Merge under repository lock, Scribe updates memory/session/export, …",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Submit",
+      "label": "Submit task + project + branch + options",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Validate",
+      "label": "Validate request and canonicalize repository",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Worktree",
+      "label": "Create isolated worktree and run branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Context",
+      "label": "Build prompt context",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "agent charter + memory + task"
+    },
+    {
+      "id": "Agent",
+      "label": "Agent turn uses governed tools",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Commit",
+      "label": "Commit worktree changes and compute diff",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "RAI",
+      "label": "Responsible AI review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Safety",
+      "label": "RAI result",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "Human review gate",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Decision",
+      "label": "Reviewer decision",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge under repository lock",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Scribe",
+      "label": "Scribe updates memory/session/export",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Done",
+      "label": "Terminal run",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Revise",
+      "label": "Revise in same run",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Submit",
+      "to": "Validate"
+    },
+    {
+      "from": "Validate",
+      "to": "Worktree"
+    },
+    {
+      "from": "Worktree",
+      "to": "Context"
+    },
+    {
+      "from": "Context",
+      "to": "Agent"
+    },
+    {
+      "from": "Agent",
+      "to": "Commit"
+    },
+    {
+      "from": "Commit",
+      "to": "RAI"
+    },
+    {
+      "from": "RAI",
+      "to": "Safety"
+    },
+    {
+      "from": "Safety",
+      "to": "Review",
+      "label": "green/yellow"
+    },
+    {
+      "from": "Safety",
+      "to": "Revise",
+      "label": "revise"
+    },
+    {
+      "from": "Revise",
+      "to": "Agent"
+    },
+    {
+      "from": "Safety",
+      "to": "Done",
+      "label": "red"
+    },
+    {
+      "from": "Safety",
+      "to": "Scribe",
+      "label": "no changes"
+    },
+    {
+      "from": "Scribe",
+      "to": "Done"
+    },
+    {
+      "from": "Review",
+      "to": "Decision"
+    },
+    {
+      "from": "Decision",
+      "to": "Merge",
+      "label": "approve"
+    },
+    {
+      "from": "Merge",
+      "to": "Scribe"
+    },
+    {
+      "from": "Scribe",
+      "to": "Done"
+    },
+    {
+      "from": "Decision",
+      "to": "Revise",
+      "label": "request changes"
+    },
+    {
+      "from": "Decision",
+      "to": "Done",
+      "label": "decline"
+    }
+  ]
+}

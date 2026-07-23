@@ -107,6 +107,36 @@ public sealed class McpToolInvocationErrorSurfacingTests
         text.Should().Contain("steerable state");
     }
 
+    [Fact]
+    public async Task ProjectCreate_OptionalBlueprintOmitted_Succeeds()
+    {
+        // Regression guard for #418: blueprint is documented as optional ("Inline blueprint object
+        // to apply at creation ... exclusive with blueprint_id"), but the C# parameter previously had
+        // no default value. Microsoft.Extensions.AI's reflection-based argument binding treats any
+        // parameter without a C# default as required, so a client omitting blueprint (the normal,
+        // documented case) got its argument binding rejected before ProjectCreateAsync ever ran -
+        // collapsed by the MCP SDK to the opaque "An error occurred invoking 'project_create'."
+        // wrapper (the same class of bug as #347), never reaching the real API call below.
+        var tool = BuildTool<ProjectTools>(
+            nameof(ProjectTools.ProjectCreateAsync),
+            (request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = JsonContent.Create(new { project_id = "proj-9", name = "demo" })
+            }));
+
+        var result = await InvokeAsync(tool, "project_create", new()
+        {
+            ["name"] = JsonDoc("demo"),
+            ["working_directory"] = JsonDoc("/tmp/demo"),
+            // blueprint intentionally omitted - documented as optional.
+        });
+
+        result.IsError.Should().NotBeTrue();
+        var text = TextOf(result);
+        text.Should().NotBe("An error occurred invoking 'project_create'.");
+        text.Should().Contain("proj-9");
+    }
+
     // ---- helpers ----
 
     private static JsonElement JsonDoc(string value) =>

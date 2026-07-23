@@ -46,6 +46,33 @@ public sealed class KubernetesRemoteApiManifestTests
     }
 
     [Fact]
+    public void AgentHostEgress_ExplicitlyAllowsMcpOnTcp8080()
+    {
+        var document = DocumentNamed(
+            ReadManifest("networkpolicy-agenthost-egress.yaml"),
+            "agenthost-egress-allowlist");
+
+        document.Should().Contain("app.kubernetes.io/component: agent-host");
+        document.Should().Contain("app: agentweaver-mcp");
+        document.Should().Contain("port: 8080");
+    }
+
+    [Fact]
+    public void AgentHostEgress_ExplicitlyAllowsApiOnTcp8080()
+    {
+        var document = DocumentNamed(
+            ReadManifest("networkpolicy-agenthost-egress.yaml"),
+            "agenthost-egress-allowlist");
+
+        // #424: identity-based (podSelector) egress to the API pod is the only thing that
+        // authorizes east-west traffic to the API ClusterIP under Cilium — a CIDR/ipBlock
+        // allow (even 0.0.0.0/0) does not match in-cluster pod identities.
+        document.Should().MatchRegex(
+            @"(?s)- to:\s+- podSelector:\s+matchLabels:\s+app: agentweaver-api\s+" +
+            @"ports:\s+- protocol: TCP\s+port: 8080");
+    }
+
+    [Fact]
     public void ExistingAgentHostPolicies_SelectRenamedAgentHostLabel()
     {
         var files = new[]
@@ -79,7 +106,7 @@ public sealed class KubernetesRemoteApiManifestTests
                 $@"(?m)^\s+name: {Regex.Escape(name)}\s*$"));
 
     private static string ReadManifest(string fileName) =>
-        File.ReadAllText(Path.Combine(RepositoryRoot(), "k8s", fileName));
+        File.ReadAllText(Path.Combine(RepositoryRoot(), "k8s", "base", fileName));
 
     private static string RepositoryRoot()
     {

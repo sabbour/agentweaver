@@ -43,8 +43,9 @@
 
 **Scope sources merged:** `Squad-Coordinator-full-node-port-of-deploy-toolchain-drop-c3-c4-upgr.md`, `Link-phase-1-node-engine-foundation-for-the-azure-deplo.md`, `Tank-phase-2-30-deploy-mjs-ported-the-full-apply-path-n.md`, `Morpheus-phase-3-p3-node-port-build-provenance-parity-image.md`, `Link-phase-4-upgrade-mjs-warm-pool-cycle-remaining-prov.md`, `Link-phase-5-installer-cli-release-dev-verify-npm-wiring.md`, `Smith-phase-6-smith-s-half-deleted-all-legacy-aks-instal.md`, `Link-phase-7-staging-e2e-verification-critical-sequencing-bug-found.md`, `Link-phase-7-reverify-bug2-fix-confirmed-two-minor-findings.md`, `Link-phase-7-final-single-command-upgrade-success.md`, `Squad-Coordinator-no-remote-curl-bash-one-liner-replacement-git-clon.md`, `Trinity-p6-docs-half-done-readme-docs-guide-updated-for-ne.md`, `tank-v0971-merge-resolutions.md`.
 
-- The Azure/AKS deploy toolchain is now the Node-based `azure:*` flow (`deploy`, `upgrade`, `release`, `verify`, `dev`); legacy `.sh`/`.ps1` deploy/install/release/start-dev scripts were intentionally removed once parity was proven.
-- `azure:upgrade` must mint a new immutable tag from HEAD, refuse dirty trees by default, deploy **before** provenance verification, and treat warm-pool success as reapply-and-wait plus image verification.
+- The Azure/AKS toolchain is the Node-based `azure:*` flow for infrastructure provisioning, local deployment, published-release deployment, release orchestration, verification, and local development; legacy `.sh`/`.ps1` deploy/install/release/start-dev scripts were intentionally removed once parity was proven.
+- `azure:deploy-from-local` must mint a new immutable tag from HEAD, refuse dirty trees by default, deploy **before** provenance verification, and treat warm-pool success as reapply-and-wait plus image verification.
+- `azure:deploy-from-commit` resolves any committed ref and runs that same SHA deployment pipeline from a temporary detached worktree, without switching or using dirty state from the caller's checkout.
 - Build/provenance share one declarative image spec; watched-path and build-arg bugs fixed during the migration stay part of the contract.
 - `git clone` is the only install/bootstrap entry point; there is no replacement remote `curl|bash` or `curl|iex` installer.
 - The v0.9.71 integration kept the Node toolchain as canonical, preserved the current Assistant resume/send protections, wired `RemoteApiBaseUrl` through `RemoteAgentProxy`, and removed obsolete `Assistant__McpEndpoint` Kubernetes config.
@@ -76,9 +77,9 @@
 **Scope sources merged:** `link-release-process-design.md`, `link-release-process-docs-and-tag-predicate.md`, `link-release-adrs.md`.
 
 - While Agentweaver remains `0.x`, patch bumps are for backwards-compatible bug fixes only; minor bumps carry both new features and breaking changes; major is reserved until the project intentionally declares `1.0.0` stability.
-- `azure:deploy` and `azure:upgrade` are environment iteration commands, not release cuts. Only `azure:release` creates the official version/tag/release path.
-- `CHANGELOG.md` (generated from conventional-commit subjects) and GitHub Release notes (generated from merged PR titles) are intentionally separate artifacts; the authoritative release boundary remains the annotated `vX.Y.Z` tag. The shared real-release tag predicate is `^v\d+\.\d+\.\d+$`.
-- `azure:release --resume vX.Y.Z` is the supported recovery path after the version-bump commit, annotated tag, and GitHub Release already exist. The normal bump path remains non-idempotent, and a later follow-up should split prepare-vs-publish so protected-main release PRs can carry the `VERSION` bump before tagging.
+- `azure:provision-infra` and `azure:deploy-from-local` are SHA-identified environment operations, not release cuts. `release:publish` creates repository release identity, `azure:deploy-from-release` deploys an existing published tag, and `azure:release` composes both for the first shipment.
+- Changesets generates `CHANGELOG.md` during `release:prepare`; GitHub Release notes are copied from the exact matching section. The authoritative release boundary remains the annotated `vX.Y.Z` tag, using `^v\d+\.\d+\.\d+$`.
+- `azure:release --resume vX.Y.Z` is the supported recovery path after publication. Preparation, publication, and deployment are separate reusable stages.
 - Durable cross-cutting architecture decisions now belong in numbered ADRs under `docs/architecture/decisions/`; routine operational/team decisions remain in `.squad/decisions.md`.
 - `.github/labels.json` is the canonical future label taxonomy. `workstream:*` is deprecated in favor of the smaller `area:*` vocabulary without rewriting historical issue labels.
 - Docs/process corrections from the same review set are durable: missing `bubblewrap` inside WSL means fallback to fully unsandboxed passthrough (not a weaker `unshare` path), CONTRIBUTING now documents explicit new-feature and bug-fix issue/spec workflows, and agent worktree guidance must reflect the real `.worktrees/{branch-slug}` layout.
@@ -90,7 +91,7 @@
 **Scope source merged:** `link-devtest-clarity.md`.
 
 - Local `npm run dev` is branch-agnostic and never interacts with GitHub protection. The normal flow is: feature worktree/branch → local verification → optional Azure verification → PR → protected-branch admission on `main`.
-- `azure:deploy` is first/full idempotent provisioning, `azure:upgrade` is normal current-HEAD iteration on an existing environment, and `azure:verify` is read-only live verification. `--allow-dirty` is for personal/throwaway use only, not shared validation.
+- `azure:provision-infra` is first/full idempotent provisioning, `azure:deploy-from-local` is normal current-HEAD iteration on an existing environment, and `azure:verify` is read-only live verification. `--allow-dirty` is for personal/throwaway use only, not shared validation.
 - The local-dev API readiness failure was a real SQLite migration-ordering bug, not slow startup: existing databases missing `backlog_tasks.parent_prd_run_id` crashed because schema setup tried to create `idx_backlog_tasks_parent_promotion_key` before the idempotent `ALTER TABLE` migrations ran. The index must only be created in the post-column migration sequence; Vite must not start unless API health succeeds.
 - There is no supported long-lived local integration/staging branch. The audited local-only refs (`main-staging`, `integration`, `integration-v0.9.71`, `release-staging`, `release/v0.9.71-foundation-integration`, `main-tip`, `localmain/main`, `merge-docs-landing-main`) are safe to delete once any attached worktree is removed.
 
@@ -149,3 +150,14 @@
   - **Trigger B — protected maintenance branch:** when the project makes its **first commitment to patch an older minor after an incompatible newer minor lands on `main`**. Create and protect `release/X.Y`; patch from it and forward-port applicable fixes to `main`.
   - **Trigger C — full `dev → release → main` promotion tier:** when **two consecutive releases** each require **at least 3 business days** of RC soak while **at least two independent next-version changes** must keep integrating in parallel, **or** the project formally commits to a durably-diverging externally consumed `next` channel.
 - These measurable conditions explicitly prevent the earlier short-sighted reasoning that a topology is unnecessary merely because the repository does not need it today. Full rationale, boundaries, and the migration playbook remain in `decisions/inbox/niobe-branching-growth-review.md`.
+
+
+---
+
+## 2026-07-20T15-05-18-07-00 — Trigger C promotion topology deliberately activated
+
+**Source:** Ahmed (@sabbour) explicit directive in the 2026-07-20 migration conversation.
+
+- Trigger C was activated deliberately as a strategic room-to-grow choice, not because its prior automatic soak/next-channel metrics threshold was measured as met.
+- `dev` is now the default protected integration branch; normal PRs target it. `release/vX.Y.Z` is an ephemeral soak branch cut from green `dev`, and `main` is stable/published-only, receiving only soaked release promotions or audited emergency hotfixes.
+- The migration updates CI, ruleset documentation, contributor/release guidance, and agent workflow instructions. GitHub ruleset activation for `dev` remains an explicit manual owner action.

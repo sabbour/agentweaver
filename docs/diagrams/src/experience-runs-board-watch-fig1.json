@@ -1,0 +1,156 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The mental model",
+  "alt": "The mental model: Submit run or capture task, Project board, Backlog, Ready, Active run, Live Watch timeline, Human Review, Done, Problems, Archived",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Submit",
+      "label": "Submit run or capture task",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Board",
+      "label": "Project board",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Backlog",
+      "label": "Backlog",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Ready",
+      "label": "Ready",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Active",
+      "label": "Active run",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Watch",
+      "label": "Live Watch timeline",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "Human Review",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Done",
+      "label": "Done",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Problems",
+      "label": "Problems",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Archived",
+      "label": "Archived",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Submit",
+      "to": "Board"
+    },
+    {
+      "from": "Board",
+      "to": "Backlog"
+    },
+    {
+      "from": "Backlog",
+      "to": "Ready",
+      "label": "move or Send all to Ready"
+    },
+    {
+      "from": "Ready",
+      "to": "Active",
+      "label": "heartbeat claims work"
+    },
+    {
+      "from": "Active",
+      "to": "Watch"
+    },
+    {
+      "from": "Watch",
+      "to": "Review"
+    },
+    {
+      "from": "Review",
+      "to": "Done",
+      "label": "approve"
+    },
+    {
+      "from": "Review",
+      "to": "Active",
+      "label": "request changes"
+    },
+    {
+      "from": "Active",
+      "to": "Problems",
+      "label": "failure"
+    },
+    {
+      "from": "Problems",
+      "to": "Active",
+      "label": "Retry"
+    },
+    {
+      "from": "Problems",
+      "to": "Archived",
+      "label": "Archive"
+    },
+    {
+      "from": "Done",
+      "to": "Archived",
+      "label": "Archive"
+    }
+  ]
+}

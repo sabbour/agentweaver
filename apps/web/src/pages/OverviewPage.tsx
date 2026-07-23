@@ -228,7 +228,11 @@ function Sparkline({ points }: { points: number[] }) {
 }
 function Donut({ rows }: { rows: ModelUsageBreakdownDto[] }) {
   const styles = useStyles(); const total = rows.reduce((sum, row) => sum + row.invocationCount, 0); if (total <= 0) return null;
-  let start = 0; const segments = rows.slice(0, 5).map((row, index) => { const pct = (row.invocationCount / total) * 100; const segment = `${modelColors[index % modelColors.length]} ${start}% ${start + pct}%`; start += pct; return segment; });
+  const segments = rows.slice(0, 5).reduce<{ start: number; segments: string[] }>((acc, row, index) => {
+    const pct = (row.invocationCount / total) * 100;
+    acc.segments.push(`${modelColors[index % modelColors.length]} ${acc.start}% ${acc.start + pct}%`);
+    return { start: acc.start + pct, segments: acc.segments };
+  }, { start: 0, segments: [] }).segments;
   return <div style={{ background: `conic-gradient(${segments.join(', ')})` }} className={styles.donut} aria-label="Model usage distribution" />;
 }
 function UsageTiles({ metrics, previousMetrics, range, recentProjectId }: { metrics: ProjectMetricsDto[]; previousMetrics: ProjectMetricsDto[]; range: TimeRange; recentProjectId?: string }) {
@@ -316,16 +320,23 @@ export function OverviewPage() {
     inFlightRef.current?.abort();
     const controller = new AbortController();
     inFlightRef.current = controller;
+    setLoading(true);
     void load(controller.signal);
   }, [load]);
 
   useEffect(() => {
     mountedRef.current = true;
-    setLoading(true);
-    runLoad();
-    const iv = setInterval(runLoad, REFRESH_MS);
+    const runLoadLoop = async () => {
+      inFlightRef.current?.abort();
+      const controller = new AbortController();
+      inFlightRef.current = controller;
+      setLoading(true);
+      await load(controller.signal);
+    };
+    void runLoadLoop();
+    const iv = setInterval(() => { void runLoadLoop(); }, REFRESH_MS);
     return () => { mountedRef.current = false; inFlightRef.current?.abort(); clearInterval(iv); };
-  }, [runLoad]);
+  }, [load]);
 
   const attention = useMemo<AttentionItem[]>(() => {
     const items: AttentionItem[] = [];

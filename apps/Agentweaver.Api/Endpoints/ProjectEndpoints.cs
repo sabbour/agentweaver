@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
 using Agentweaver.AgentRuntime;
@@ -129,6 +130,121 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     return updated ? Results.NoContent() : Results.NotFound();
 });
+
+// POST /api/projects/{id}/webhook-secret/rotate — generate and reveal a GitHub webhook secret once.
+app.MapPost("/api/projects/{id}/webhook-secret/rotate", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    ISecretStore secretStore,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+    var secretKey = project.WebhookSecret ?? $"github-webhook:{projectId}";
+    await secretStore.SetSecretAsync(secretKey, secret, ct: ct);
+    await projectStore.UpdateWebhookSecretAsync(projectId, secretKey, DateTimeOffset.UtcNow, ct);
+
+    return Results.Ok(new WebhookSecretRotationResponse(secret));
+})
+    .WithName("RotateProjectWebhookSecret")
+    .WithTags("Projects");
+
+// GET /api/projects/{id}/github/repository-owners — accounts a new repo could be created under
+app.MapGet("/api/projects/{id}/github/repository-owners", async (
+    HttpContext httpContext,
+    string id,
+    ProjectService projectService,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var view = await projectService.GetViewAsync(projectId, ct);
+    if (view is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    IReadOnlyList<GitHubRepositoryOwner> owners;
+    try
+    {
+        owners = await projectService.ListRepositoryOwnersAsync(caller.User, ct);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    return Results.Ok(owners.Select(o => new RepositoryOwnerResponse(o.Login, o.IsUser ? "user" : "org")));
+})
+    .WithName("ListProjectRepositoryOwners")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??=
+            "Lists the GitHub accounts (the caller's own login, plus orgs) a new repository could be created under.";
+        return Task.CompletedTask;
+    });
+
+// POST /api/projects/{id}/github/repository — create+connect a new GitHub repository
+app.MapPost("/api/projects/{id}/github/repository", async (
+    HttpContext httpContext,
+    string id,
+    CreateProjectRepositoryRequest request,
+    ProjectService projectService,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    if (string.IsNullOrWhiteSpace(request.Owner))
+        return Results.BadRequest(new { error = "owner is required." });
+
+    var view = await projectService.GetViewAsync(projectId, ct);
+    if (view is null) return Results.NotFound();
+    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    if (view.Project.Origin.Kind != ProjectOriginKind.Blank)
+        return Results.Conflict(new
+        {
+            error = $"Project already has a connected repository ('{view.Project.Origin.SourceRepository}'). " +
+                     "This endpoint only connects a currently-unconnected project."
+        });
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    try
+    {
+        var connected = await projectService.CreateAndConnectRepositoryAsync(
+            projectId, request.Owner, request.Name, request.Private ?? true, caller.User, ct);
+        var sourceRepository = connected.Origin.SourceRepository!;
+        return Results.Ok(new ConnectedRepositoryResponse(sourceRepository, $"https://github.com/{sourceRepository}"));
+    }
+    catch (InvalidOperationException ex)
+    {
+        logger.LogWarning(ex, "Failed to create/connect a GitHub repository for project {ProjectId}", id);
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (KeyNotFoundException)
+    {
+        return Results.NotFound();
+    }
+})
+    .WithName("CreateProjectRepository")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??=
+            "Creates a new GitHub repository and connects it to a currently-unconnected (blank-origin) project, " +
+            "pushing the project's existing local git history to it.";
+        return Task.CompletedTask;
+    });
 
 // DELETE /api/projects/{id}?confirm=true — record-only delete
 app.MapDelete("/api/projects/{id}", async (

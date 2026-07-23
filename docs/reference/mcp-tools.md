@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **91 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **97 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -38,6 +38,7 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 | `backlog_edit_task` | Edit the title and/or description of a backlog task. |
 | `backlog_get_board` | Get the full Kanban board for a project: Backlog, Ready, Problems, Human Review, Active, and Done. |
 | `backlog_get_settings` | Get the per-project backlog pickup settings (max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools). |
+| `backlog_get_task` | Get one enriched backlog task, including blocking dependency status. |
 | `backlog_get_workflow_stages` | Get the ordered canonical run-bucket definitions for a project (Problems, Human Review, Active, Done). |
 | `backlog_move_to_backlog` | Move a task from Ready back to Backlog, optionally at a specific position. |
 | `backlog_move_to_ready` | Move a task from Backlog to Ready, optionally at a specific position. |
@@ -151,12 +152,17 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 | `skill_assign` | Assign a catalog skill to an agent. At prompt-assembly time only assigned skills appear for that agent (progressive disclosure). |
 | `skill_assignments_list` | List all skill→agent assignments in a project. |
 | `skill_create` | Create or update a manual standards-compatible SKILL.md catalog skill. The name must be a lowercase kebab-case command slug. |
+| `skill_defaults_apply` | Apply a matching skill_defaults_preview atomically. A stale digest is rejected; preview again before retrying. |
+| `skill_defaults_preview` | Preview explicit bundled role-skill defaults for a confirmed project team. Returns a digest required by skill_defaults_apply; makes no changes. |
 | `skill_delete` | Delete a catalog skill and all of its agent assignments. |
 | `skill_generate` | Generate an unsaved SKILL.md draft server-side from a natural language description. Review the draft, then call skill_create to persist it. |
 | `skill_get` | Get a single catalog skill including SKILL.md instructions and bundled resources. |
 | `skill_import` | Import selected skills from owner/repo, https://github.com repo/tree/blob URLs, or raw https://raw.githubusercontent.com SKILL.md URLs. Idempotent by content hash. Locations are REQUIRED when a source contains multiple skills; omitting locations works only when the source has a single skill. |
 | `skill_import_preview` | Preview candidate skills from owner/repo, https://github.com repo/tree/blob URLs, or raw https://raw.githubusercontent.com SKILL.md URLs, without importing. |
 | `skill_list` | List catalog skills for a project with their agent assignments and status. |
+| `skill_marketplace_browse` | Browse or search a curated marketplace without changing the project catalog. |
+| `skill_marketplace_import` | Import selected candidates from a curated marketplace through the normal repository-import pipeline. |
+| `skill_marketplaces_list` | List enabled administrator-curated skill marketplaces. |
 | `skill_sync` | Discover and sync skills already present in the project's connected repository (.github/skills, .copilot/skills, .claude/skills, .agents/skills). Idempotent; marks vanished skills as missing. |
 | `skill_unassign` | Remove a skill assignment from an agent. |
 

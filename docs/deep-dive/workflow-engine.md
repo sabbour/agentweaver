@@ -14,56 +14,12 @@ Conceptually, a workflow engine has five jobs:
 4. **Select** the best process fit when several workflows are available.
 5. **Bind** the selected definition to real runtime executors, failing closed if any node or edge cannot run safely.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    Orch(["RunOrchestrator launches run"])
-    Def(["WorkflowDefinition policy graph"])
-    Factory(["RunWorkflowFactory builds MAF Workflow"])
+![Purpose & Mental Model: RunOrchestrator launches run, WorkflowDefinition policy graph, RunWorkflowFactory builds MAF Workflow, AgentTurnExecutor, RaiTurnExecutor, RequestPort review-gate, MergeExecutor, ScribeTurnExecutor, Executor lifecycle events, RunWatchLoopService, SSE stream: workflow.step, FileSystemJsonCheckpointStore, …](../diagrams/workflow-engine-fig1.png)
 
-    subgraph MAF["MAF Workflow graph"]
-        Agent(["AgentTurnExecutor"])
-        Rai(["RaiTurnExecutor"])
-        Gate{{"RequestPort review-gate"}}
-        Merge(["MergeExecutor"])
-        Scribe(["ScribeTurnExecutor"])
-    end
-
-    Events(["Executor lifecycle events"])
-    Watch(["RunWatchLoopService"])
-    SSE(["SSE stream: workflow.step"])
-    Ckpt[("FileSystemJsonCheckpointStore")]
-    Pending[("PendingRequestStore")]
-    Restart(["WorkflowRestartService"])
-
-    Orch --> Def --> Factory --> MAF
-    Agent --> Rai --> Gate
-    Gate -- approved --> Merge --> Scribe
-    MAF -- "Invoked / Completed / Failed / RequestInfo / WorkflowOutput" --> Events
-    Events --> Watch --> SSE
-    MAF -. checkpoints .-> Ckpt
-    Watch -- pending review --> Pending
-    Gate -. suspend .-> Pending
-    Pending --> Restart
-    Ckpt --> Restart
-    Restart -- ResumeAsync --> MAF
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Orch client;
-    class Def svc;
-    class Factory core;
-    class Agent,Rai,Gate,Merge,Scribe runtime;
-    class Events,SSE evt;
-    class Watch,Restart svc;
-    class Ckpt,Pending data;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A useful rebuilding rule is: **workflows are declarative policy graphs; binding is the safety boundary that turns policy into execution.**
 
@@ -98,35 +54,12 @@ A workflow template is a declarative graph with:
 
 The key abstraction is that a workflow describes **what process should happen**, not the hidden plumbing required to execute it. A single logical edge such as `rai -> review when review` may expand into adapters, state storage, predicates, review ports, and graph outputs when bound to the runtime.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Template[Workflow YAML]
-    Start[Start node]
-    Nodes[Typed nodes]
-    Edges[Verdict edges]
-    Metadata[Labels, lanes, agent hints]
-    Binder[Binder expands to runtime graph]
+![What a Workflow Template Is: Workflow YAML, Start node, Typed nodes, Verdict edges, Labels, lanes, agent hints, Binder expands to runtime graph](../diagrams/workflow-engine-fig2.png)
 
-    Template --> Start
-    Template --> Nodes
-    Template --> Edges
-    Template --> Metadata
-    Start --> Binder
-    Nodes --> Binder
-    Edges --> Binder
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Template,Start,Nodes,Edges,Metadata svc;
-    class Binder core;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The loader validates the static shape first: required fields, valid node type, unique node ids, known edge endpoints, check branches with matching outgoing edges, and valid references from structured node fields.
 
@@ -188,32 +121,12 @@ Build & Test infrastructure failures are not authored `request-changes` verdicts
 
 The default workflow encodes the standard run pipeline. Its canonical source is the code-embedded `DefaultWorkflowTemplate` (id `default`), loaded once through the real loader as `BuiltInWorkflows.Default` (`BuiltInWorkflows.DefaultWorkflowId == "default"`). `DefaultWorkflowTemplate.TryMaterialize` can also write a copy to a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize it. The pipeline is `agent -> rai -> review -> merge -> scribe` (with terminal sinks for safety-failed, declined, and done).
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Agent[Agent work] --> Rai[RAI gate]
-    Rai -- revise --> Agent
-    Rai -- safety-failed --> SafetyFailed[Terminal: safety failed]
-    Rai -- no-changes --> Scribe[Scribe]
-    Rai -- review --> Human[Human review]
-    Human -- request-changes --> Agent
-    Human -- declined --> Declined[Terminal: declined]
-    Human -- approved --> Merge[Merge]
-    Merge -- blocked --> Human
-    Merge -- merged --> Scribe
-    Scribe --> Done[Done]
+![The Default Workflow: Agent work, RAI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/workflow-engine-fig3.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Agent,Rai,Human,Merge,Scribe runtime;
-    class SafetyFailed,Declined,Done svc;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This default encodes the minimum complete run lifecycle: produce work, apply Responsible AI safety review, pause for human review when changes exist, merge if approved, and record the outcome. The loops are part of the policy, not exceptional control flow.
 
@@ -226,36 +139,12 @@ Workflow nodes carry two different kinds of "role" information:
 
 Do not collapse these into one concept. A node with `role: review` is in a review lane; it is not automatically a catalog role named `review`. A peer-review node names a concrete reviewer with `agent: qa-engineer` when it needs that agent. A generated or project-authored node carries an inline `charter` when no catalog role fits.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Node[Workflow node]
-    Lane[role/kind<br/>render lane + node purpose]
-    AgentField[agent<br/>specific reviewer/agent hint]
-    Charter[charter<br/>bespoke inline persona]
-    Catalog[Catalog role charter]
-    Runtime[Runtime executor context]
+![Role Slots, Catalog Roles, and Bespoke Charters: Workflow node, role/kind, agent, charter, Catalog role charter, Runtime executor context](../diagrams/workflow-engine-fig4.png)
 
-    Node --> Lane
-    Node --> AgentField
-    Node --> Charter
-    AgentField --> Catalog
-    Catalog --> Runtime
-    Charter --> Runtime
-    Lane --> Runtime
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Node,Lane,AgentField,Charter svc;
-    class Catalog data;
-    class Runtime runtime;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The runtime uses explicit node fields and run context to build the agent prompt. Catalog roles are preferred because their charters are already known to the casting system. Bespoke charters are a controlled escape hatch for generated workflows whose process needs a role outside the catalog.
 
@@ -273,34 +162,12 @@ For a project, `WorkflowRegistry.Build` assembles a `ProjectWorkflowSet` from:
 
 The result is cached per project in `WorkflowRegistry.GetOrLoad`. Each cache entry is keyed by a signature of the project's top-level workflow YAML files plus the project's allowed workflow id set, so a replica refreshes its local cache when shared project files or blueprint restrictions change. `WorkflowRegistry.Sync` still provides the explicit user-facing refresh path and rebuilds from disk; validation errors are cached as registry results for replica coherence. Invalid workflows remain visible in `ProjectWorkflowSet.Results` with their errors, but `ProjectWorkflowSet.Available` excludes them.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    BuiltIn[Built-in default]
-    Catalog[Catalog workflow library]
-    ProjectFiles[Project .agentweaver/workflows]
-    Load[Parse YAML]
-    Validate[Structural validation]
-    BindDryRun[Bindability validation]
-    Allowed[Blueprint allowed set filter]
-    Cache[(Project workflow cache)]
+![Source Precedence: Built-in default, Catalog workflow library, Project .agentweaver/workflows, Parse YAML, Structural validation, Bindability validation, Blueprint allowed set filter, Project workflow cache](../diagrams/workflow-engine-fig5.png)
 
-    BuiltIn --> Load
-    Catalog --> Load
-    ProjectFiles --> Load
-    Load --> Validate --> BindDryRun --> Allowed --> Cache
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class BuiltIn,Load,Validate,BindDryRun,Allowed svc;
-    class Catalog,ProjectFiles,Cache data;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The built-in default is always available. Catalog workflows are available without project-local files. A blueprint may restrict the allowed workflow ids for a project via `Project.AllowedWorkflowIds`; `WorkflowRegistry.FilterByAllowedSet` keeps only allowed ids **plus** the built-in `default`, which is always retained so a project never has zero workflows. An empty/absent allowed set means all workflows are returned (backward compatible).
 
@@ -328,68 +195,23 @@ This layered design lets the UI show useful authoring errors while preserving ru
 
 The invocation context is derived from run origin by `CoordinatorOrchestratorExecutor.ResolveInvocationKindAsync`. A `RunOrigin.BacklogPickup` run is treated as `WorkflowInvocationKind.Heartbeat`; other origins (and lookup failures) are treated as `WorkflowInvocationKind.Manual`.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    RunOrigin[Run origin]
-    ManualStart[Manual / interactive / other]
-    BacklogPickup[BacklogPickup]
-    ManualKind[Invocation: Manual]
-    HeartbeatKind[Invocation: Heartbeat]
-    Candidates[All valid available workflows]
-    Automation[Future automation rules<br/>when event/schedule fires -> invoke workflow]
+![Invocation Context: Run origin, Manual / interactive / other, BacklogPickup, Invocation: Manual, Invocation: Heartbeat, All valid available workflows, Future automation rules](../diagrams/workflow-engine-fig6.png)
 
-    RunOrigin --> ManualStart --> ManualKind --> Candidates
-    RunOrigin --> BacklogPickup --> HeartbeatKind --> Candidates
-    Automation -. invokes a workflow run .-> Candidates
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class RunOrigin,ManualStart,BacklogPickup client;
-    class ManualKind,HeartbeatKind,Candidates,Automation svc;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig6.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The important design property is that invocation kind does not filter workflow validity. The selector sees the project's valid available workflows regardless of whether the run started manually or from heartbeat pickup.
 
 All valid workflows in the project's available set are candidates. A backlog task can carry a `WorkflowOverrideId`. The override is honored only if the workflow exists, is valid, and can bind safely. Otherwise the system logs the mismatch and continues with normal selection or safe fallback behavior.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Available[Available valid workflows]
-    Kind[Invocation kind]
-    Candidates[Available candidates]
-    Override{Valid override?}
-    UseOverride[Use override]
-    None{Any candidates?}
-    Select[Select among candidates]
-    Fallback[Fallback / fail-safe resolution]
+![Invocation Context: Available valid workflows, Invocation kind, Available candidates, Valid override?, Use override, Any candidates?, Select among candidates, Fallback / fail-safe resolution](../diagrams/workflow-engine-fig7.png)
 
-    Available --> Candidates
-    Kind --> Candidates
-    Candidates --> Override
-    Override -- yes --> UseOverride
-    Override -- no --> None
-    None -- yes --> Select
-    None -- no --> Fallback
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Available,Kind,Candidates,Override,UseOverride,None,Fallback svc;
-    class Select core;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig7.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Rebuild guidance: treat invocation kind as observability and policy context, not as a candidate gate. If a selected id cannot resolve, validate, or bind, do not "helpfully" run it anyway.
 
@@ -449,41 +271,12 @@ Blueprint generation can also invoke workflow generation when no library workflo
 
 Workflow selection chooses a process for a task. It runs inside `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` and is intentionally conservative: deterministic rules narrow the space first (registry ordering, availability, overrides), and `WorkflowSelector.SelectAsync` only chooses among 2+ available definitions.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Registry[Registry available set]
-    DefaultFirst[Order default first]
-    Candidates[Use available workflow set]
-    OverrideCheck[Apply valid backlog/user override]
-    Count{Available count}
-    Single[Use the only workflow<br/>no model call]
-    Prompt[Build selector prompt<br/>goal + roles + candidates]
-    Model[Model returns JSON id + rationale]
-    Parse{Known id?}
-    Selected[Selected workflow]
-    Default[Default fallback]
+![Selection Logic: Registry available set, Order default first, Use available workflow set, Apply valid backlog/user override, Available count, Use the only workflow, Build selector prompt, Model returns JSON id + rationale, Known id?, Selected workflow, Default fallback](../diagrams/workflow-engine-fig8.png)
 
-    Registry --> DefaultFirst --> Candidates --> OverrideCheck --> Count
-    OverrideCheck -- override wins --> Selected
-    Count -- 0 --> Default
-    Count -- 1 --> Single --> Selected
-    Count -- many --> Prompt --> Model --> Parse
-    Parse -- yes --> Selected
-    Parse -- no --> Default
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Registry,DefaultFirst,Candidates,OverrideCheck,Count,Single,Prompt,Parse,Default svc;
-    class Model ext;
-    class Selected core;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig8.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The selector prompt asks for process fit:
 
@@ -522,36 +315,12 @@ The binder:
 5. preserves hidden plumbing such as adapters and stored merge data;
 6. fails closed when a node or transition has no mapping.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    Def[WorkflowDefinition]
-    Classifier[Node classifier<br/>type + gate_kind]
-    Factory[Executor registry]
-    EdgeMap[Transition expansion<br/>from kind, to kind, when]
-    Plumbing[Adapters, storers, ports, predicates]
-    Outputs[Terminal output binding]
-    Graph[Executable MAF workflow graph]
-    Error[WorkflowBindException]
+![Binding Declarative Nodes to Runtime Execution: WorkflowDefinition, Node classifier, Executor registry, Transition expansion, Adapters, storers, ports, predicates, Terminal output binding, Executable MAF workflow graph, WorkflowBindException](../diagrams/workflow-engine-fig9.png)
 
-    Def --> Classifier --> Factory
-    Def --> EdgeMap
-    Factory --> Plumbing
-    EdgeMap --> Plumbing --> Outputs --> Graph
-    Classifier -- unsupported --> Error
-    EdgeMap -- no transition mapping --> Error
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Def,Classifier,Factory,EdgeMap,Plumbing,Outputs,Error svc;
-    class Graph core;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig9.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The binder resolves by node type, not by hardcoded ids. A workflow can rename `agent`, `rai`, `review`, `merge`, and `scribe` and still bind if the node types and gate kinds describe the same process. This is what lets library and generated workflows use meaningful node ids while preserving the same runtime semantics.
 
@@ -586,30 +355,12 @@ Anything outside supported transition families is not "best effort." It is a bin
 
 Workflow definitions describe the process graph. Review policies describe required gates. Before runtime binding, the system composes the active review policy onto the selected workflow.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Selected[Selected workflow]
-    ReviewPolicy[Active review policy]
-    Compose[Compose required gates]
-    Validate[Validate composed graph]
-    Bind[Bind to executors]
+![Review Policy Composition: Selected workflow, Active review policy, Compose required gates, Validate composed graph, Bind to executors](../diagrams/workflow-engine-fig10.png)
 
-    Selected --> Compose
-    ReviewPolicy --> Compose
-    Compose --> Validate --> Bind
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Selected,ReviewPolicy,Compose,Validate svc;
-    class Bind core;
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig10.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This lets teams require additional review gates without copying every workflow template. The same fail-closed rule applies: if a required review gate cannot be bound, the run should not start as if the gate were optional.
 

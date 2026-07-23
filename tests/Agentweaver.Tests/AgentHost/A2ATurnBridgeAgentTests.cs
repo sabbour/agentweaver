@@ -2,12 +2,17 @@ extern alias agenthost;
 using System.Text.Json;
 using System.Threading.Channels;
 using agenthost::Agentweaver.AgentHost;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -366,5 +371,120 @@ public sealed class A2ATurnBridgeAgentTests
         var content = new DataContent(new byte[] { 1, 2, 3 }, "application/octet-stream");
 
         AgentSetupParams.TryDecode(content).Should().BeNull();
+    }
+
+    /// <summary>
+    /// Builds a REAL <see cref="CopilotAIAgent"/> — the exact singleton production wraps in
+    /// <see cref="A2ATurnBridgeAgent"/> — WITHOUT ever calling <c>SetupAsync</c>, exactly mirroring
+    /// production for the <see cref="AgentHostPurpose.OperatorAssistant"/> purpose (see
+    /// <c>AgentHostStartupService.RunSetupAsync</c>, which deliberately skips <c>SetupAsync</c> for
+    /// this purpose since it never drives <c>CopilotAIAgent</c>).
+    /// </summary>
+    private static CopilotAIAgent BuildUnsetupCopilotAgent()
+    {
+        var config = new ConfigurationBuilder().Build();
+        var factory = new GitHubCopilotClientFactory(
+            config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        return new CopilotAIAgent(
+            factory,
+            new FixedInstallationScopeStub(),
+            SandboxExecutorFactory.CreatePassthrough(),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLogger<CopilotAIAgent>.Instance);
+    }
+
+    [Fact]
+    public async Task CreateSessionAsync_OperatorAssistantPurpose_DoesNotThrow_EvenThoughInnerCopilotAgentNeverSetup()
+    {
+        // Root-cause regression (live-testing evidence: 100% of Operator Assistant turns failed
+        // instantly with InvalidOperationException "SetupAsync must be called before
+        // CreateSessionAsync." thrown from CopilotAIAgent.CreateSessionCoreAsync).
+        //
+        // MapA2AHttpJson's IsolationKeyScopedAgentSessionStore calls AIAgent.CreateSessionAsync on
+        // EVERY new A2A message regardless of AgentHostPurpose. DelegatingAIAgent's default
+        // implementation forwards this unconditionally to InnerAgent (the singleton CopilotAIAgent).
+        // For AgentHostPurpose.OperatorAssistant, AgentHostStartupService.RunSetupAsync deliberately
+        // never calls CopilotAIAgent.SetupAsync (this purpose never drives CopilotAIAgent — turn
+        // execution is routed to IOperatorAssistantAgent instead), so CopilotAIAgent's inner SDK
+        // agent is never provisioned and the default delegated session creation throws — before the
+        // turn ever reaches RunCoreStreamingAsync/RunCoreAsync.
+        //
+        // This test wraps a REAL CopilotAIAgent (never SetupAsync'd, exactly like production for
+        // this purpose) in a REAL A2ATurnBridgeAgent with runtimeState.Purpose ==
+        // OperatorAssistant, and asserts CreateSessionAsync succeeds without throwing.
+        var innerCopilotAgent = BuildUnsetupCopilotAgent();
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.TryConfigure(new AgentHostRunConfiguration(
+            RunId: "run-operator-session-bypass",
+            UserId: "user-1",
+            TurnBearerToken: "turn-token",
+            KvUserSecretName: null,
+            GitHubAccessToken: "gh-oauth-token-abc",
+            PreviewRunnerCredential: null,
+            SharedWorkingDirectory: null,
+            Purpose: AgentHostPurpose.OperatorAssistant,
+            ProjectId: "proj-1",
+            AgentName: "Operator")).Should().BeTrue();
+
+        var bridge = new A2ATurnBridgeAgent(
+            innerCopilotAgent,
+            new FakeTurnRunner(),
+            workspaceManager: null,
+            runtimeState,
+            NullLogger<A2ATurnBridgeAgent>.Instance);
+
+        Func<Task> act = async () => await bridge.CreateSessionAsync(default);
+
+        await act.Should().NotThrowAsync(
+            "OperatorAssistant turns must never route session creation through CopilotAIAgent, " +
+            "which is never SetupAsync'd for this purpose (root cause of the live-testing failure)");
+    }
+
+    [Fact]
+    public async Task CreateSessionAsync_NonOperatorAssistantPurpose_StillDelegatesToInnerAgent()
+    {
+        // The bypass must be scoped strictly to OperatorAssistant — every other purpose (notably the
+        // sandboxed Coordinator path) must keep delegating session creation to the inner agent
+        // exactly as before, so a genuinely un-setup CopilotAIAgent still throws for those purposes.
+        var innerCopilotAgent = BuildUnsetupCopilotAgent();
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.TryConfigure(new AgentHostRunConfiguration(
+            RunId: "run-coordinator-1",
+            UserId: "user-1",
+            TurnBearerToken: "turn-token",
+            KvUserSecretName: null,
+            GitHubAccessToken: "gh-oauth-token-abc",
+            PreviewRunnerCredential: null,
+            SharedWorkingDirectory: null,
+            Purpose: AgentHostPurpose.Default,
+            ProjectId: "proj-1",
+            AgentName: "Coordinator")).Should().BeTrue();
+
+        var bridge = new A2ATurnBridgeAgent(
+            innerCopilotAgent,
+            new FakeTurnRunner(),
+            workspaceManager: null,
+            runtimeState,
+            NullLogger<A2ATurnBridgeAgent>.Instance);
+
+        Func<Task> act = async () => await bridge.CreateSessionAsync(default);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("SetupAsync must be called before CreateSessionAsync.");
+    }
+
+    [Fact]
+    public async Task CreateSessionAsync_NullRuntimeState_StillDelegatesToInnerAgent()
+    {
+        // Existing test-seam constructors that omit runtimeState (null) must keep delegating to the
+        // inner agent unchanged — a null runtimeState is treated as "not OperatorAssistant".
+        var bridge = new A2ATurnBridgeAgent(new NoOpInnerAgent(), new FakeTurnRunner(), NullLogger<A2ATurnBridgeAgent>.Instance);
+
+        Func<Task> act = async () => await bridge.CreateSessionAsync(default);
+
+        await act.Should().ThrowAsync<NotSupportedException>(
+            "with a null runtimeState the bridge must still delegate to NoOpInnerAgent's CreateSessionCoreAsync");
     }
 }

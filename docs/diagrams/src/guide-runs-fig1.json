@@ -1,0 +1,89 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Sandboxed execution",
+  "alt": "Sandboxed execution: Project working directory, Agent worktrees, Changes in worktrees, Assembled combined diff, Merge to branch, Worktrees discarded",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Project working directory",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Agent worktrees",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Changes in worktrees",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Assembled combined diff",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Merge to branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Worktrees discarded",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "label": "branch per agent"
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "label": "agents make changes"
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "label": "all agents done"
+    },
+    {
+      "from": "D",
+      "to": "E",
+      "label": "you approve"
+    },
+    {
+      "from": "D",
+      "to": "F",
+      "label": "you decline"
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "WorkPlan: The Execution Contract",
+  "alt": "WorkPlan: The Execution Contract: Confirmed OutcomeSpec, WorkPlan, Subtask A, Subtask B, Subtask C, Subtask D, Assembly",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Spec",
+      "label": "Confirmed OutcomeSpec",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Plan",
+      "label": "WorkPlan",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "A",
+      "label": "Subtask A",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "no dependencies"
+    },
+    {
+      "id": "B",
+      "label": "Subtask B",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "no dependencies"
+    },
+    {
+      "id": "C",
+      "label": "Subtask C",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "depends on A"
+    },
+    {
+      "id": "D",
+      "label": "Subtask D",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "depends on B"
+    },
+    {
+      "id": "E",
+      "label": "Assembly",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Spec",
+      "to": "Plan"
+    },
+    {
+      "from": "Plan",
+      "to": "A"
+    },
+    {
+      "from": "Plan",
+      "to": "B"
+    },
+    {
+      "from": "A",
+      "to": "C"
+    },
+    {
+      "from": "B",
+      "to": "D"
+    },
+    {
+      "from": "C",
+      "to": "E"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    }
+  ]
+}

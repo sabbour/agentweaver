@@ -29,14 +29,8 @@ import {
 import { useEffect, useState } from 'react';
 import type { Blueprint, SuggestBlueprintResponse } from '../api/types';
 import type { ReactElement } from 'react';
-export type BlueprintSelection =
-  | { kind: 'none' }
-  | { kind: 'predefined'; blueprint: Blueprint }
-  | { kind: 'generated'; blueprint: Blueprint; generatedWorkflowYaml?: string | null };
-
-export const NO_BLUEPRINT: BlueprintSelection = { kind: 'none' };
-
-export type BlueprintPanelTab = 'suggested' | 'templates' | 'generate';
+import { useBlueprintGeneration } from './BlueprintPicker.helpers';
+import type { BlueprintPanelTab, BlueprintSelection } from './BlueprintPicker.helpers';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
@@ -195,7 +189,7 @@ function RotatingStatus() {
   return <Text size={200} className={styles.workingStatus} aria-live="polite">{GENERATION_STEPS[index]}</Text>;
 }
 
-export function useBlueprintCatalog(active: boolean) {
+function useBlueprintCatalog(active: boolean) {
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,49 +197,27 @@ export function useBlueprintCatalog(active: boolean) {
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    apiClient.listBlueprints()
-      .then((list) => {
+    const loadBlueprints = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const list = await apiClient.listBlueprints();
         if (cancelled) return;
         setBlueprints(normalizeBlueprintList(list));
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadBlueprints();
     return () => { cancelled = true; };
   }, [active]);
 
   return { blueprints, loading, error };
-}
-
-export function useBlueprintGeneration(onChange: (selection: BlueprintSelection) => void, targetRepository?: string | null) {
-  const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [generated, setGenerated] = useState<{ blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null>(null);
-
-  const generate = async (description: string) => {
-    if (!description.trim()) return;
-    setGenerating(true);
-    setError(null);
-    try {
-      const res = targetRepository
-        ? await apiClient.generateBlueprint(description.trim(), targetRepository)
-        : await apiClient.generateBlueprint(description.trim());
-      const next = { blueprint: res.blueprint, generatedWorkflowYaml: res.generated_workflow_yaml };
-      setGenerated(next);
-      onChange({ kind: 'generated', blueprint: next.blueprint, generatedWorkflowYaml: next.generatedWorkflowYaml });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  return { generated, generating, error, generate, setGenerated };
 }
 
 export function BlueprintRosterChips({ roster, limit }: { roster: string[]; limit?: number }) {
@@ -519,13 +491,31 @@ export function SuggestedBlueprintPanel({
   const normalizedRepo = repository.trim();
 
   useEffect(() => {
-    if (!active || !normalizedRepo) { setSuggestion(null); return; }
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    apiClient.suggestBlueprint(normalizedRepo)
-      .then((res) => { if (!cancelled) { setSuggestion(res); setLoading(false); } })
-      .catch((err: unknown) => { if (!cancelled) { setError(err instanceof Error ? err.message : String(err)); setSuggestion(null); setLoading(false); } });
+    const loadSuggestion = async () => {
+      if (!active || !normalizedRepo) {
+        setSuggestion(null);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await apiClient.suggestBlueprint(normalizedRepo);
+        if (!cancelled) {
+          setSuggestion(res);
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setSuggestion(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadSuggestion();
     return () => { cancelled = true; };
   }, [active, normalizedRepo]);
 
@@ -644,11 +634,8 @@ export function BlueprintPanel({
 }) {
   const styles = useStyles();
   const catalog = useBlueprintCatalog(active);
-  const [selectedTab, setSelectedTab] = useState<BlueprintPanelTab>(tabs[0]);
-
-  useEffect(() => {
-    if (!tabs.includes(selectedTab)) setSelectedTab(tabs[0]);
-  }, [selectedTab, tabs]);
+  const [selectedTabState, setSelectedTab] = useState<BlueprintPanelTab>(tabs[0]);
+  const selectedTab = tabs.includes(selectedTabState) ? selectedTabState : tabs[0];
 
   const viewTemplates = () => setSelectedTab('templates');
   const viewGenerate = () => setSelectedTab('generate');
@@ -720,18 +707,4 @@ export function BlueprintPicker({ active, value, onChange, targetRepository }: {
       onGenerateDescriptionChange={setDescription}
     />
   );
-}
-
-export function applyBlueprintToRequest<T extends {
-  blueprint_id?: string;
-  blueprint?: Blueprint;
-  generated_workflow_yaml?: string | null;
-}>(req: T, selection: BlueprintSelection): T {
-  if (selection.kind === 'predefined') {
-    req.blueprint_id = selection.blueprint.id;
-  } else if (selection.kind === 'generated') {
-    req.blueprint = selection.blueprint;
-    req.generated_workflow_yaml = selection.generatedWorkflowYaml ?? null;
-  }
-  return req;
 }

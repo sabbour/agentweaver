@@ -36,7 +36,7 @@ npm run dev</code></pre>
           <h3>Deploy to Azure</h3>
           <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
-npm run azure:deploy</code></pre>
+npm run azure:provision-infra</code></pre>
         </div>
       </div>
       <p class="aw-hero-quickstart-note">
@@ -125,6 +125,63 @@ npm run azure:deploy</code></pre>
         />
         <figcaption><span>Check the proposed team before you save it.</span></figcaption>
       </figure>
+    </div>
+  </section>
+
+  <section class="aw-mcp-showcase" aria-labelledby="mcp-title">
+    <div class="aw-section-heading">
+      <h2 id="mcp-title">Drive it from any AI assistant.</h2>
+      <p>
+        Agentweaver ships an MCP server, so any MCP-capable client — GitHub Copilot
+        CLI, Claude, Cursor — can create projects, cast teams, and start coordinator
+        runs on your behalf. Prefer to stay in-app? The built-in Assistant calls the
+        exact same tools, over the same MCP surface.
+      </p>
+    </div>
+    <div class="aw-mcp-panels">
+      <div class="aw-mcp-panel">
+        <div class="aw-mcp-panel-header">
+          <span class="aw-mcp-dot aw-mcp-dot-red" aria-hidden="true"></span>
+          <span class="aw-mcp-dot aw-mcp-dot-yellow" aria-hidden="true"></span>
+          <span class="aw-mcp-dot aw-mcp-dot-green" aria-hidden="true"></span>
+          <span class="aw-mcp-panel-title">GitHub Copilot CLI</span>
+        </div>
+        <pre class="aw-mcp-panel-body"><code><span class="aw-mcp-prompt">$</span> copilot mcp add agentweaver --transport http \
+    --url https://&lt;your-host&gt;/mcp --header "Authorization: Bearer &lt;token&gt;"
+<span class="aw-mcp-out">✓ agentweaver added — 96 tools discovered</span>
+<span class="aw-mcp-prompt">&gt;</span> Create a "Task Tracker" project and start the coordinator on it
+<span class="aw-mcp-call">● project_create({ name: "Task Tracker" })</span>
+<span class="aw-mcp-ret">  → project_id: 4b1a9e…  state: active</span>
+<span class="aw-mcp-call">● coordinator_start({ project_id: "4b1a9e…", goal: "…" })</span>
+<span class="aw-mcp-ret">  → run_id: 9c2f31…  status: drafting</span>
+<span class="aw-mcp-out">Drafted an OutcomeSpec for your review — nothing runs until you confirm it.</span></code></pre>
+        <p class="aw-mcp-panel-caption">
+          Auto-discovered from the repo's <code>.mcp.json</code>, or registered against a
+          hosted deployment — see the <a href="./reference/mcp">MCP reference</a>.
+        </p>
+      </div>
+      <div class="aw-mcp-panel aw-mcp-panel-chat">
+        <div class="aw-mcp-panel-header">
+          <span class="aw-mcp-panel-title">Assistant · Sessions</span>
+        </div>
+        <div class="aw-mcp-chat-body">
+          <div class="aw-mcp-chat-msg aw-mcp-chat-user">
+            <span class="aw-mcp-chat-label">You</span>
+            What's blocking the Task Tracker run?
+          </div>
+          <div class="aw-mcp-chat-msg aw-mcp-chat-assistant">
+            <span class="aw-mcp-chat-label">Assistant</span>
+            <span class="aw-mcp-call">● run_status({ run_id: "9c2f31…" })</span>
+            <span class="aw-mcp-ret">  → status: awaiting_confirmation</span>
+            The plan's ready — it proposes Azure Container Apps for hosting. Want me
+            to walk through the OutcomeSpec, or should I ask you to confirm it now?
+          </div>
+        </div>
+        <p class="aw-mcp-panel-caption">
+          No setup — every project has an Assistant session. See the
+          <a href="./deep-dive/assistant-runtime">Assistant runtime deep dive</a>.
+        </p>
+      </div>
     </div>
   </section>
 

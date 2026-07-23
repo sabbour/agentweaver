@@ -29,18 +29,12 @@ Where this lives: `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.Age
 
 Think of every agent action as passing through three concentric boundaries:
 
-```mermaid
-flowchart LR
-    Model[Model proposes tool call] --> Governance[Governance boundary<br/>default deny + known-tool policy]
-    Governance --> Tool[Tool boundary<br/>path validation + structured errors]
-    Tool --> Executor[Execution boundary<br/>local sandbox or Kubernetes pod]
-    Executor --> Workspace[(Workspace root)]
-    Executor --> Network[Network egress policy]
+![The core mental model: Model proposes tool call, Governance boundary, Tool boundary, Execution boundary, Workspace root, Network egress policy, No side effect, No file escape, No host escape](../diagrams/sandbox-fig1.png)
 
-    Governance -. denies .-> Stop1[No side effect]
-    Tool -. rejects .-> Stop2[No file escape]
-    Executor -. isolates .-> Stop3[No host escape]
-```
+<!-- Rendered from ../diagrams/src/sandbox-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Each boundary has a different job:
 
@@ -142,29 +136,12 @@ Every executor returns the same shape: exit code, stdout, stderr, timeout flag, 
 
 Executor selection is environment-aware:
 
-```mermaid
-flowchart TD
-    Start[Need an ISandboxExecutor] --> Override{Sandbox:Backend set?}
-    Override -->|kubernetes| K8s[Kubernetes executor]
-    Override -->|local| Local[Local factory]
-    Override -->|not set| InCluster{KUBERNETES_SERVICE_HOST present?}
-    InCluster -->|yes| K8s
-    InCluster -->|no| Local
+![Backend selection logic: Need an ISandboxExecutor, Sandbox:Backend set?, Kubernetes executor, Local factory, KUBERNETES_SERVICE_HOST present?, Kubernetes client initializes?, Use SandboxClaim warm-pool pods, Throw: do not fall back, Windows?, processcontainer mxc, WSL2 bwrap/unshare, direct passthrough warning, …](../diagrams/sandbox-fig2.png)
 
-    K8s --> K8sOK{Kubernetes client initializes?}
-    K8sOK -->|yes| ClaimExec[Use SandboxClaim warm-pool pods]
-    K8sOK -->|no| FailClosed[Throw: do not fall back]
-
-    Local --> Windows{Windows?}
-    Windows -->|yes| Mxc[processcontainer mxc]
-    Mxc -->|unavailable| Wsl[WSL2 bwrap/unshare]
-    Wsl -->|unavailable| Direct[direct passthrough warning]
-
-    Windows -->|no| Linux{Linux?}
-    Linux -->|yes| Bwrap[linux-bwrap]
-    Bwrap -->|unavailable| Lxc[lxc-exec]
-    Lxc -->|unavailable| Direct
-```
+<!-- Rendered from ../diagrams/src/sandbox-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The key production invariant is **fail closed in cluster**. If the API is running inside Kubernetes and the Kubernetes executor cannot initialize, Agentweaver throws instead of silently using a weaker local executor. A fallback that is acceptable on a developer laptop would be a security downgrade in production.
 
@@ -231,9 +208,9 @@ The "Sandbox controller" above is the upstream [`kubernetes-sigs/agent-sandbox`]
 
 Agentweaver installs the controller and its three CRDs (API group `extensions.agents.x-k8s.io`) in `scripts/azure/steps/10-create-cluster.mjs` (install default `SANDBOX_CONTROLLER_VERSION=v0.4.6` — production clusters run **agent-sandbox v0.5.0**). The installed controller serves both `v1beta1` (the **storage** version) and the deprecated-but-served `v1alpha1`; `KubernetesSandboxExecutor` targets **`v1beta1`** ([`SandboxClaimConventions.cs:23`](#source)):
 
-- **`SandboxTemplate`** (`k8s/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) defines the live AgentHost pod shape: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, A2A listener port `8088`, and workload identity.
-- **`SandboxWarmPool`** keeps AgentHost pods pre-built from that template so claims bind without a cold pod start. The live pool is `agentweaver-agent-host` (`k8s/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env.
-- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (`agentweaver-agent-host` on the live path), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and static values. Per-run `RunId`, `UserId`, `TurnBearerToken`, `KvUserSecretName`, and `WorkingDirectory` (`Run.WorktreePath`) arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
+- **`SandboxTemplate`** (`k8s/base/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) defines the live AgentHost pod shape: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, A2A listener port `8088`, and workload identity.
+- **`SandboxWarmPool`** keeps AgentHost pods pre-built from that template so claims bind without a cold pod start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env.
+- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/reference/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (`agentweaver-agent-host` on the live path), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and static values. Per-run `RunId`, `UserId`, `TurnBearerToken`, `KvUserSecretName`, and `WorkingDirectory` (`Run.WorktreePath`) arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
 
 The executor's provisioning loop is the concrete contract with the controller:
 
@@ -254,7 +231,7 @@ Run-scoped commands may need preview/debug support. When a command belongs to an
 
 Ad-hoc commands have no reason to keep a sandbox alive after the command returns, so the claim is deleted immediately. Run-scoped commands may keep the claim until cleanup or TTL so preview remains available. That improves developer experience but consumes warm-pool/quota capacity for longer, so operators must size quotas and warm pools accordingly.
 
-Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs`, `apps/Agentweaver.Api/Sandbox/PortForwardService.cs`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`, `k8s/sandbox-claim-template.yaml`
+Where this lives: `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`, `apps/Agentweaver.Api/Sandbox/SandboxClaimConventions.cs`, `apps/Agentweaver.Api/Sandbox/PortForwardService.cs`, `apps/Agentweaver.Api/Endpoints/SandboxEndpoints.cs`, `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`, `k8s/base/sandbox-template-agenthost.yaml`, `k8s/base/sandbox-warmpool-agenthost.yaml`, `k8s/reference/sandbox-claim-template.yaml`
 
 ### AgentHost warm-pool configure contract
 
@@ -302,7 +279,7 @@ The image carries the AgentHost .NET/Copilot runtime. The security posture comes
 
 Important boundary: the shared workspace PVC is an execution workspace, not a secrecy boundary between every workload that can mount it. The sandbox limits process and network blast radius; it does not make shared storage private from other principals with access to the same volume.
 
-Where this lives: `apps/Agentweaver.AgentHost/Dockerfile`, `k8s/sandbox-template-agenthost.yaml`
+Where this lives: `apps/Agentweaver.AgentHost/Dockerfile`, `k8s/base/sandbox-template-agenthost.yaml`
 
 ## Network isolation and egress allowlisting
 
@@ -326,7 +303,7 @@ The service-CIDR warning is important. If sandbox egress accidentally includes t
 
 Local backends cannot all enforce the same network model. Where network allowlisting is unavailable or weaker, executors report warnings, and runners emit sandbox warning events. Treat those warnings as a deployment property, not as an agent-visible suggestion.
 
-Where this lives: `k8s/networkpolicy-sandbox.yaml`, `k8s/cilium-network-policy-sandbox.yaml`, `apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs`, `packages/Agentweaver.SandboxExec`
+Where this lives: `k8s/base/networkpolicy-sandbox.yaml`, `k8s/base/cilium-network-policy-sandbox.yaml`, `apps/Agentweaver.Api/Sandbox/SandboxExecutorRouter.cs`, `packages/Agentweaver.SandboxExec`
 
 ## Rebuild blueprint
 

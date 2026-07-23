@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -15,10 +17,12 @@ import {
   buildVerdictMetadata,
   parseTranscriptJsonl,
   runCapabilityCheck,
+  prepareJudgeEvidence,
   finalizeVerdict,
 } from '../run-persona.mjs';
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const execFile = promisify(execFileCallback);
 // Scratch outputs live under the harness's gitignored verdicts/ dir (never /tmp), and are
 // removed after each use.
 async function scratchDir() {
@@ -31,7 +35,8 @@ test('parseArgs maps the api-parity CLI shape', () => {
   const args = parseArgs([
     '--scenario', 'priya', '--target', 'http://localhost:5000/mcp', '--token', 't',
     '--project-id', 'proj-1', '--batch-id', 'b1', '--seed', 's1', '--out', 'v.json',
-    '--transcript', 'tr.jsonl', '--server-command', 'dotnet', '--server-args', '["run"]',
+    '--transcript', 'tr.jsonl', '--dump-evidence', 'evidence.json', '--prompt-out', 'prompt.txt',
+    '--server-command', 'dotnet', '--server-args', '["run"]',
     '--allow-prod', '--i-understand-prod',
   ]);
   assert.equal(args.scenario, 'priya');
@@ -42,6 +47,8 @@ test('parseArgs maps the api-parity CLI shape', () => {
   assert.equal(args.seed, 's1');
   assert.equal(args.out, 'v.json');
   assert.equal(args.transcript, 'tr.jsonl');
+  assert.equal(args.dumpEvidence, 'evidence.json');
+  assert.equal(args.promptOut, 'prompt.txt');
   assert.equal(args.serverCommand, 'dotnet');
   assert.equal(args.serverArgs, '["run"]');
   assert.equal(args.allowProd, true);
@@ -178,7 +185,10 @@ test('runCapabilityCheck fails closed without a client and runs the contract wit
       { name: 'run_status', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } }, outputSchema: { type: 'object', required: ['status'], properties: { status: { type: 'string' } } } },
       { name: 'run_show_artifacts', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } }, outputSchema: { type: 'object', required: ['artifacts'], properties: { artifacts: { type: 'array' } } } },
       { name: 'run_archive', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } } },
-      { name: 'github_status' }, { name: 'github_signin' }, { name: 'diagnostics_get' },
+      { name: 'github_status' }, { name: 'github_signin' },
+      { name: 'project_list' },
+      { name: 'project_create', inputSchema: { type: 'object', required: ['name', 'working_directory'], properties: { name: { type: 'string' }, working_directory: { type: 'string' } } } },
+      { name: 'diagnostics_get' },
       { name: 'coordinator_outcome_spec_confirm', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } } },
     ]),
   };
@@ -233,6 +243,48 @@ test('finalizeVerdict writes a schema-valid verdict from a transcript using an i
   const written = JSON.parse(await readFile(outPath, 'utf8'));
   assert.equal(written.scenarioId, 'priya');
   assert.equal(written.batchId, 'b1');
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('prepareJudgeEvidence adapts MCP evidence and builds the shared Judge prompt without judging', () => {
+  const metadata = {
+    batchId: 'b1', scenarioId: 'priya', inputSeed: 'priya', adapterVersion: 'priya.mcp@def',
+    personaCoreVersion: 'priya@abc', targetRevision: 'stdio', surface: 'mcp', runId: 'run-1',
+    timestamp: '2026-07-15T03:20:11.500Z', persona: 'Priya Nair',
+  };
+  const prepared = prepareJudgeEvidence({
+    transcriptText: '{"turn":1,"thought":"submit","request":{"tool":"run_submit","arguments":{"project_id":"p","task":"triage"}},"response":{"isError":false,"structuredContent":{"run_id":"r1","status":"completed"}}}',
+    persona: { name: 'Priya Nair', text: 'brief', adapter: { content: 'adapter' }, content: 'core' },
+    metadata,
+    capability: { available: true, report: { ok: true, results: [] } },
+  });
+
+  assert.equal(prepared.normalized.metadata.surface, 'mcp');
+  assert.equal(prepared.normalized.turns.length, 1);
+  assert.match(prepared.prompt, /# TASK: Judge one normalized harness run/);
+  assert.match(prepared.prompt, /"scenarioId": "priya"/);
+  assert.equal(prepared.p0.failedTurns.length, 0);
+});
+
+test('finalize export mode writes MCP-adapted evidence and a shared Judge prompt without a verdict', async () => {
+  const dir = await scratchDir();
+  const transcript = path.join(dir, 'transcript.jsonl');
+  const evidence = path.join(dir, 'evidence.json');
+  const prompt = path.join(dir, 'prompt.txt');
+  await writeFile(transcript, '{"turn":1,"request":{"tool":"run_submit","arguments":{"project_id":"p","task":"triage"}},"response":{"isError":false,"structuredContent":{"run_id":"r1","status":"completed"}}}\n');
+
+  const { stdout } = await execFile(process.execPath, [
+    path.join(TEST_DIR, '..', 'run-persona.mjs'),
+    '--scenario', 'priya', '--target', 'stdio', '--no-capability-check',
+    '--transcript', transcript, '--dump-evidence', evidence, '--prompt-out', prompt,
+  ]);
+
+  assert.match(stdout, /dispatch the Judge custom agent synchronously/i);
+  assert.match(stdout, /save-verdict\.mjs/);
+  const normalized = JSON.parse(await readFile(evidence, 'utf8'));
+  assert.equal(normalized.metadata.surface, 'mcp');
+  assert.equal(normalized.turns.length, 1);
+  assert.match(await readFile(prompt, 'utf8'), /# TASK: Judge one normalized harness run/);
   await rm(dir, { recursive: true, force: true });
 });
 

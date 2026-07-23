@@ -18,37 +18,12 @@ The deployment scripts default to `agentweaver-rg`, `agentweaver-aks`, `agentwea
 
 At a high level, Agentweaver is a private application stack behind a public Gateway:
 
-```mermaid
-flowchart TD
-  Client["User / MCP client<br/>HTTPS"] --> Gateway["Gateway API listener<br/>TLS termination"]
+![Rebuild mental model: User / MCP client, Gateway API listener, API and OAuth routes, MCP routes, Frontend catch-all route, API Service, MCP Service, Frontend Service, API pod, MCP pod, Frontend pods, RWX workspace PVC, …](../diagrams/infra-deployment-fig1.png)
 
-  Gateway --> ApiRoute["API and OAuth routes"]
-  Gateway --> McpRoute["MCP routes"]
-  Gateway --> FrontendRoute["Frontend catch-all route"]
-
-  ApiRoute --> ApiSvc["API Service"]
-  McpRoute --> McpSvc["MCP Service"]
-  FrontendRoute --> FrontendSvc["Frontend Service"]
-
-  ApiSvc --> ApiPod["API pod<br/>orchestration, auth, persistence"]
-  McpSvc --> McpPod["MCP pod<br/>resource server"]
-  FrontendSvc --> WebPods["Frontend pods<br/>SPA + docs static host"]
-
-  ApiPod --> WorkspacePVC["RWX workspace PVC<br/>worktrees + sandbox workspace"]
-  ApiPod --> Postgres["Azure Database<br/>for PostgreSQL<br/>Flexible Server"]
-  SandboxPool["Warm sandbox pool<br/>generic ×3"] --> WorkspacePVC
-  AgentHostPool["Warm AgentHost pool<br/>replicas:2 · standby"] --> WorkspacePVC
-
-  KeyVault["Azure Key Vault"] --> CSI["Secrets Store CSI"]
-  CSI --> ApiPod
-  CSI --> McpPod
-  KeyVault --> AgentHostPool
-
-  ACR["Azure Container Registry"] --> ApiPod
-  ACR --> McpPod
-  ACR --> WebPods
-  ACR --> SandboxPool
-```
+<!-- Rendered from ../diagrams/src/infra-deployment-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 If rebuilding this from scratch, create the platform first, then identity and secrets, then images, then Kubernetes primitives in dependency order. The application deployments are deliberately last because they depend on identity, persistent volumes, routes, and secrets being ready.
 
@@ -97,7 +72,7 @@ The sandbox controller adds higher-level objects such as sandbox templates and w
 
 The trade-off is platform maturity and availability: the deploy script only applies sandbox resources when the CRDs are installed. A rebuild can run the core web/API/MCP stack without the sandbox CRDs, but agent execution that depends on Kubernetes sandboxes will not behave the same.
 
-Where this lives: `scripts/azure/steps/10-create-cluster.mjs`, `scripts/azure/steps/15-setup-identity.mjs`, `k8s/gateway.yaml`, `k8s/secret-provider-class.yaml`, `k8s/sandbox-template-agenthost.yaml`, `k8s/sandbox-warmpool-agenthost.yaml`.
+Where this lives: `scripts/azure/steps/10-create-cluster.mjs`, `scripts/azure/steps/15-setup-identity.mjs`, `k8s/base/gateway.yaml`, `k8s/base/secret-provider-class.yaml`, `k8s/base/sandbox-template-agenthost.yaml`, `k8s/base/sandbox-warmpool-agenthost.yaml`.
 
 ## Workloads and their responsibilities
 
@@ -130,7 +105,7 @@ Sandbox pods are not normal always-on services. The live pod-per-run path claims
 
 The API has narrow RBAC for creating and interacting with these sandbox resources. That is intentional: the API needs to create sandbox claims/pods and exec into them, but it should not be a broad cluster administrator.
 
-Where this lives: `k8s/api-deployment.yaml`, `k8s/frontend-deployment.yaml`, `k8s/mcp-deployment.yaml`, `k8s/rbac-api.yaml`, `apps/web/Dockerfile`, `apps/Agentweaver.Web/Program.cs`.
+Where this lives: `k8s/base/api-deployment.yaml`, `k8s/base/frontend-deployment.yaml`, `k8s/base/mcp-deployment.yaml`, `k8s/base/rbac-api.yaml`, `apps/web/Dockerfile`, `apps/Agentweaver.Web/Program.cs`.
 
 ## Request routing logic
 
@@ -186,23 +161,18 @@ The MCP server is the OAuth resource server. It validates tokens but does not mi
 
 The frontend owns everything else. It serves static assets, the React SPA fallback, and the generated docs under `/docs`. Unknown non-doc application paths return the SPA shell so client-side routing can handle them. Unknown docs paths return 404 rather than the SPA shell, which keeps broken documentation links visible.
 
-Where this lives: `k8s/httproute-api.yaml`, `k8s/mcp-httproute.yaml`, `k8s/httproute-frontend.yaml`, `k8s/frontend-service.yaml`, `apps/Agentweaver.Web/Program.cs`.
+Where this lives: `k8s/base/httproute-api.yaml`, `k8s/base/mcp-httproute.yaml`, `k8s/base/httproute-frontend.yaml`, `k8s/base/frontend-service.yaml`, `apps/Agentweaver.Web/Program.cs`.
 
 ## Secrets and workload identity
 
 The secret path is deliberately indirect:
 
-```mermaid
-flowchart LR
-  KV["Azure Key Vault"] --> RBAC["Key Vault Secrets User<br/>managed identity"]
-  SA["Kubernetes ServiceAccount"] --> FED["OIDC federated credential"]
-  FED --> RBAC
-  RBAC --> CSI["Secrets Store CSI driver"]
-  CSI --> Files["Mounted secret files"]
-  CSI --> K8sSecret["Synced Kubernetes Secret"]
-  Files --> Startup["Startup shell exports env vars"]
-  Startup --> Process["API / MCP process"]
-```
+![Secrets and workload identity: Azure Key Vault, Key Vault Secrets User, Kubernetes ServiceAccount, OIDC federated credential, Secrets Store CSI driver, Mounted secret files, Synced Kubernetes Secret, Startup shell exports env vars, API / MCP process](../diagrams/infra-deployment-fig2.png)
+
+<!-- Rendered from ../diagrams/src/infra-deployment-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The rebuild rule is: applications should not know Azure credentials. They should know only that a secret file appears at a mounted path. Azure identity and Key Vault authorization happen below the application layer.
 
@@ -212,9 +182,9 @@ AgentHost user tokens are fetched at runtime, not mounted through per-run Secret
 
 Rotation constraint: the CSI driver can refresh mounted API files on a polling interval, but these containers export the file contents into environment variables during startup. Environment variables do not update when the file changes. Plan to restart pods after secret rotation unless the application is changed to re-read mounted files for the specific secret.
 
-OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `npm run azure:deploy` before the first `npm run azure:upgrade`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
+OAuth signing-key constraint: the signing key is intentionally provisioned as a one-time operator action rather than on every deploy. That prevents routine deploys from accidentally replacing the issuer's private key and invalidating active clients/tokens. It is still a **required first-deploy prerequisite**: run `npm run azure:provision-infra` before the first `npm run azure:deploy-from-local`. The installer's `--skip-oauth-key` flag is only safe when the Key Vault secret already exists; using it on a production first deploy causes diagnostics to report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 
-Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `scripts/azure/steps/16-provision-oauth-signing-key.mjs`, `k8s/serviceaccount-api.yaml`, `k8s/serviceaccount-agenthost.yaml`, `k8s/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
+Where this lives: `scripts/azure/steps/15-setup-identity.mjs`, `scripts/azure/steps/16-provision-oauth-signing-key.mjs`, `k8s/base/serviceaccount-api.yaml`, `k8s/base/serviceaccount-agenthost.yaml`, `k8s/base/secret-provider-class.yaml`, `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`.
 
 ## Storage and persistence
 
@@ -236,7 +206,7 @@ StorageClass constraint: mount options are immutable. Do not patch a cluster-man
 
 All production data lives in **Azure Database for PostgreSQL Flexible Server**, which provides automated daily backups and point-in-time restore (PITR). Configure retention and geo-redundancy via the Azure portal or `az postgres flexible-server` CLI. No CronJob is needed.
 
-Where this lives: `k8s/pvc-workspace.yaml`, `k8s/storageclass-workspace.yaml`, `apps/Agentweaver.Api/Program.cs`.
+Where this lives: `k8s/base/pvc-workspace.yaml`, `k8s/base/storageclass-workspace.yaml`, `apps/Agentweaver.Api/Program.cs`.
 
 ## Network policy model
 
@@ -271,24 +241,18 @@ Sandbox pods are even narrower. They get DNS, a limited GitHub IP allowance, and
 - Broad “allow HTTPS anywhere” rules are easier but weaken the sandbox boundary. If you add one for debugging, remove it rather than letting it become permanent.
 - Gateway pods are created by the app-routing implementation, so label/namespace assumptions must match the actual Gateway implementation.
 
-Where this lives: `k8s/networkpolicy-default-deny.yaml`, `k8s/networkpolicy-mcp.yaml`, `k8s/networkpolicy-sandbox.yaml`, `k8s/cilium-network-policy-sandbox.yaml`, `k8s/serviceentry-telemetry.yaml`.
+Where this lives: `k8s/base/networkpolicy-default-deny.yaml`, `k8s/base/networkpolicy-mcp.yaml`, `k8s/base/networkpolicy-sandbox.yaml`, `k8s/base/cilium-network-policy-sandbox.yaml`, `k8s/base/serviceentry-telemetry.yaml`.
 
 ## Build, retag, deploy, rollout logic
 
 The deployment pipeline is easiest to understand as a tag-convergence problem. A release should put every workload on a known image tag, then apply manifests that all refer to that same tag.
 
-```mermaid
-flowchart LR
-  Vars["Resolve release variables<br/>cluster, ACR, namespace, tag"] --> Images["Ensure images exist for tag"]
-  Images --> BuildChanged["Build changed images"]
-  Images --> RetagUnchanged["Retag/import unchanged images"]
-  BuildChanged --> Render["Render manifests with host, ACR, tag, identity"]
-  RetagUnchanged --> Render
-  Render --> Prereqs["Apply prerequisites<br/>identity, secrets, RBAC, PVCs, policies"]
-  Prereqs --> Routing["Apply services, gateway, routes"]
-  Routing --> Workloads["Apply deployments"]
-  Workloads --> Rollout["Wait for rollout and verify"]
-```
+![Build, retag, deploy, rollout logic: Resolve release variables, Ensure images exist for tag, Build changed images, Retag/import unchanged images, Render manifests with host, ACR, tag, identity, Apply prerequisites, Apply services, gateway, routes, Apply deployments, Wait for rollout and verify](../diagrams/infra-deployment-fig3.png)
+
+<!-- Rendered from ../diagrams/src/infra-deployment-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why use a single image tag per release?
 
@@ -339,7 +303,7 @@ To stand up an equivalent deployment:
 
 1. Create an AKS cluster with Cilium/ACNS, app routing Istio, Gateway API, managed default domain, Key Vault CSI, OIDC issuer, workload identity, and ACR attachment.
 2. Install sandbox CRDs/controller if Kubernetes-backed agent sandboxes are required.
-3. Run `npm run azure:deploy` to create Key Vault secrets, the user-assigned managed identity, and the required `mcp-oauth-signing-key` before first deploy.
+3. Run `npm run azure:provision-infra` to create Key Vault secrets, the user-assigned managed identity, and the required `mcp-oauth-signing-key` before first deploy.
 4. Federate the `agentweaver-api` service account subject to that managed identity.
 5. Build or retag all required images so API, frontend, MCP, sandbox, and AgentHost exist for one release tag.
 6. Render manifests with the environment-specific host, ACR, tag, identity, Key Vault, and tenant values.
@@ -355,7 +319,7 @@ To stand up an equivalent deployment:
 - **Pods fail to start after secret rotation:** CSI files updated, but process environment variables did not; restart pods or change the app to re-read files.
 - **Workspace writes fail with permission errors:** Azure Files mounted with root ownership or wrong mount options; use a uid/gid-aware StorageClass and recreate affected PVCs if needed.
 - **Docs changes are not visible:** docs are baked into the frontend image; rebuild and roll out frontend.
-- **Cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`:** the required OAuth signing-key provisioning step was skipped; run `npm run azure:deploy`, then `npm run azure:upgrade`.
+- **Cluster diagnostics report `key_vault: critical: secret 'mcp-oauth-signing-key' not found`:** the required OAuth signing-key provisioning step was skipped; run `npm run azure:provision-infra`, then `npm run azure:deploy-from-local`.
 - **AgentHost pod crashes with missing Copilot runtime:** rebuild the AgentHost image with the Dockerfile's `dotnet publish --runtime linux-x64 --self-contained false` so the `GitHub.Copilot.SDK` native binary is copied to `/app/runtimes/linux-x64/native/copilot`.
 - **API rollout hangs on volume attach:** RWO disk is still attached to the old pod/node; Recreate reduces this risk, but node/storage delays can still happen.
 - **Sandbox cannot reach package/model endpoints:** Cilium FQDN policy or DNS allowance is missing, stale, or not supported by the cluster dataplane.

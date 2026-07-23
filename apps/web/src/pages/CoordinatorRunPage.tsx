@@ -2855,7 +2855,7 @@ export function CoordinatorRunPage() {
             phase:         phaseField,
             projectId:     projectId ?? '',
             startedAt:     timing?.startedAt,
-            completedAt:   timing?.completedAt ?? (shouldTerminalizeLiveNodes && isLiveStatus(topoNode?.status) ? Date.now() : undefined),
+            completedAt:   timing?.completedAt,
             executionPodName: topoNode?.executionPodName ?? null,
             revisionGateLabel: revision?.gateLabel,
             revisionFeedback: revision?.feedback,
@@ -3013,7 +3013,23 @@ export function CoordinatorRunPage() {
       bboxLR:       layoutBBox(laidOutLR, nodeSizeHints),
       bboxTB:       layoutBBox(laidOutTB, nodeSizeHints),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, tidyNonce, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
+
+  const liveTerminalNow = useTickingNow(viewState.terminal);
+  const liveRfNodes = !viewState.terminal
+    ? rfNodes
+    : rfNodes.map((node) => {
+      if (node.type !== 'subtask') return node;
+      const data = node.data as SubtaskNodeData;
+      if (data.completedAt !== undefined || !isLiveStatus(data.topoStatus)) return node;
+      return {
+        ...node,
+        data: {
+          ...data,
+          completedAt: liveTerminalNow,
+        },
+      };
+    });
 
   const hasSubtaskNodes = useMemo(
     () => (planningDescriptor?.nodes ?? []).some((n) => n.node_type === 'subtask'),
@@ -3041,15 +3057,15 @@ export function CoordinatorRunPage() {
   }, [planningDescriptor]);
 
   const { displayNodes, displayEdges2 } = useMemo<{ displayNodes: Node[]; displayEdges2: Edge[] }>(() => {
-    if (!inSpecAuthoring) return { displayNodes: rfNodes, displayEdges2: displayEdges };
-    const filteredNodes = rfNodes.filter((n) => !assemblyNodeIds.has(n.id));
+    if (!inSpecAuthoring) return { displayNodes: liveRfNodes, displayEdges2: displayEdges };
+    const filteredNodes = liveRfNodes.filter((n) => !assemblyNodeIds.has(n.id));
     // Defensive fallback: never render an empty graph box. If filtering would drop every node
     // (e.g. a descriptor with assembly stages but no coordinator node), keep the full graph.
-    if (filteredNodes.length === 0) return { displayNodes: rfNodes, displayEdges2: displayEdges };
+    if (filteredNodes.length === 0) return { displayNodes: liveRfNodes, displayEdges2: displayEdges };
     const keptIds = new Set(filteredNodes.map((n) => n.id));
     const filteredEdges = displayEdges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target));
     return { displayNodes: filteredNodes, displayEdges2: filteredEdges };
-  }, [inSpecAuthoring, rfNodes, displayEdges, assemblyNodeIds]);
+  }, [inSpecAuthoring, liveRfNodes, displayEdges, assemblyNodeIds]);
 
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
   const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
@@ -3234,7 +3250,7 @@ export function CoordinatorRunPage() {
       sessionNodeIds: new Set(sessionMeta.keys()),
       defaultSessionNodeId: rootMeta.nodeId,
     };
-  }, [displayNodes, latestOutcomePlanEvent, orch.phase, outcomePlanClarifying, outcomePlanDraftingActive, pendingApprovalCounts, runId, specConfirmed, viewState.terminal, workPlanSeen]);
+  }, [displayNodes, latestOutcomePlanEvent, orch.phase, outcomePlanClarifying, outcomePlanDraftingActive, pendingApprovalCounts, planningDescriptor, runId, specConfirmed, viewState.terminal, workPlanSeen]);
 
   const flatSessionTree = useMemo(() => flattenRunTree(sessionTree), [sessionTree]);
   const taskRows = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
@@ -3299,8 +3315,11 @@ export function CoordinatorRunPage() {
   // default orientation from scratch (deterministic: same run + same container ⇒ same choice).
   useEffect(() => {
     if (!topologyPanelOpen) {
-      setOrientationUserChose(false);
-      setTopoContainerSize(null);
+      const resetOrientationChoice = async () => {
+        setOrientationUserChose(false);
+        setTopoContainerSize(null);
+      };
+      void resetOrientationChoice();
     }
   }, [topologyPanelOpen]);
 
@@ -3316,7 +3335,10 @@ export function CoordinatorRunPage() {
     const scaleTB = Math.min(size.w / bboxTB.w, size.h / bboxTB.h);
     // Tie-break toward LR (landscape default) when the two fits are effectively equal.
     const best: 'LR' | 'TB' = scaleTB > scaleLR * 1.001 ? 'TB' : 'LR';
-    setGraphOrientation((prev) => (prev === best ? prev : best));
+    const syncGraphOrientation = async () => {
+      setGraphOrientation((prev) => (prev === best ? prev : best));
+    };
+    void syncGraphOrientation();
   }, [orientationUserChose, topologyPanelOpen, topoContainerSize, bboxLR, bboxTB]);
 
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
@@ -3694,16 +3716,17 @@ export function CoordinatorRunPage() {
   // (artifactsLiveUpdateKey — the same key that drives CoordinatorArtifactsPanel) so the Changes/
   // Files chips stay live instead of only updating after a manual refresh.
   useEffect(() => {
-    if (isChildRun || !runId) {
-      setRunChangesSummary(null);
-      return;
-    }
-    // Clear stale chips from the previous run immediately so a new runId never briefly shows
-    // the prior run's counts while the new getAssemblyFiles is in flight.
-    setRunChangesSummary(null);
     let cancelled = false;
-    apiClient.getAssemblyFiles(runId)
-      .then((entries) => {
+    const loadRunChangesSummary = async () => {
+      if (isChildRun || !runId) {
+        setRunChangesSummary(null);
+        return;
+      }
+      // Clear stale chips from the previous run immediately so a new runId never briefly shows
+      // the prior run's counts while the new getAssemblyFiles is in flight.
+      setRunChangesSummary(null);
+      try {
+        const entries = await apiClient.getAssemblyFiles(runId);
         if (cancelled) return;
         if (!entries || entries.length === 0) {
           setRunChangesSummary(null);
@@ -3712,8 +3735,11 @@ export function CoordinatorRunPage() {
         const added = entries.reduce((sum, e) => sum + (e.added_lines ?? 0), 0);
         const removed = entries.reduce((sum, e) => sum + (e.removed_lines ?? 0), 0);
         setRunChangesSummary({ files: entries.length, added, removed });
-      })
-      .catch(() => { if (!cancelled) setRunChangesSummary(null); });
+      } catch {
+        if (!cancelled) setRunChangesSummary(null);
+      }
+    };
+    void loadRunChangesSummary();
     return () => { cancelled = true; };
   }, [isChildRun, runId, coordRunStatus, artifactsLiveUpdateKey]);
 
@@ -4409,7 +4435,6 @@ export function CoordinatorRunPage() {
                   onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
-                  outcomePlanDispatched={hasSubtaskNodes || viewState.terminal}
                   workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}
                   credits={{
                     totalNanoAiu: tokenBreakdown?.totalNanoAiu ?? null,
@@ -4450,14 +4475,12 @@ export function CoordinatorRunPage() {
         >
           <OutcomePlanPanel
             runId={runId}
-            projectId={projectId ?? undefined}
             events={events}
             streamStatus={streamStatus}
             runStatus={runLevelStatus}
             onCollapse={() => setPlanPanelOpen(false)}
             onReconnect={reconnectStream}
             onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
-            dispatched={hasSubtaskNodes || viewState.terminal}
           />
         </SlidePanel>
       )}

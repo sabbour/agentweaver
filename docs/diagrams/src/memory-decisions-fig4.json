@@ -1,0 +1,96 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Import and export",
+  "alt": "Import and export: memory.db, .squad/decisions.md, .squad/decisions/inbox/*.md, .squad/agents/*/history.md, .squad/identity/now.md, .agentweaver/context/boundaries.md",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "memory.db",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "Decisions, inbox, memories, sessions"
+    },
+    {
+      "id": "B",
+      "label": ".squad/decisions.md",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "C",
+      "label": ".squad/decisions/inbox/*.md",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "D",
+      "label": ".squad/agents/*/history.md",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "E",
+      "label": ".squad/identity/now.md",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "F",
+      "label": ".agentweaver/context/boundaries.md",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "subLabel": ".agentweaver/context/patterns.md"
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "label": "export"
+    },
+    {
+      "from": "A",
+      "to": "C",
+      "label": "export pending"
+    },
+    {
+      "from": "A",
+      "to": "D",
+      "label": "export histories"
+    },
+    {
+      "from": "A",
+      "to": "E",
+      "label": "export session"
+    },
+    {
+      "from": "A",
+      "to": "F",
+      "label": "export context"
+    },
+    {
+      "from": "C",
+      "to": "A",
+      "label": "import missing pending files"
+    }
+  ]
+}

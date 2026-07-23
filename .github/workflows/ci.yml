@@ -1,22 +1,31 @@
 name: CI
 
 # Runs the repository's real verification suites on every pull request and on
-# pushes to main. Each area runs in its own job so it gets a dedicated runner:
+# pushes to dev and main. Each area runs in its own job so it gets a dedicated runner:
 # the .NET and web test suites contain timing-sensitive tests (heartbeat /
 # deadline / render-timeout budgets) that flake only under CPU contention, so
 # keeping the suites off a single shared runner keeps the signal reliable.
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
 #   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
-#   - node --test scripts/azure/tests/*.test.mjs
+#   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 #   - npm --prefix apps/web run test
-#   - npm --prefix apps/web run lint   (advisory -- see the web-lint job)
+#   - npm --prefix apps/web run lint
 #   - npm run docs:build
+#
+# A `changes` job classifies the PR/push diff by path group first, and every
+# suite job below only runs `if:` its group actually changed (a change to this
+# workflow file itself always trips every group). A job whose `if:` is false is
+# reported to GitHub as "skipped", which required-status-checks rulesets treat
+# as passing, so this stays safe for branch protection while saving CI minutes
+# on diffs (e.g. docs-only PRs) that can't affect the skipped suites.
+# `Changeset advisory` always runs regardless of paths, since it must evaluate
+# every PR for whether a changeset was needed.
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
 
 permissions:
@@ -28,9 +37,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      dotnet: ${{ steps.filter.outputs.dotnet }}
+      web: ${{ steps.filter.outputs.web }}
+      node-toolchain: ${{ steps.filter.outputs.node-toolchain }}
+      docs: ${{ steps.filter.outputs.docs }}
+      diagrams: ${{ steps.filter.outputs.diagrams }}
+    steps:
+      - uses: actions/checkout@v4
+      # dorny/paths-filter classifies the PR/push diff into named groups below.
+      # Every group includes .github/workflows/** so a change to this pipeline
+      # itself always trips every downstream job, never leaving a suite skipped
+      # just because the workflow that runs it changed.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            dotnet:
+              - 'apps/**/*.cs'
+              - 'packages/**/*.cs'
+              - 'tests/**'
+              - '**/*.csproj'
+              - '**/*.sln'
+              - 'global.json'
+              - 'nuget.config'
+              - '.github/workflows/**'
+            web:
+              - 'apps/web/**'
+              - '.github/workflows/**'
+            node-toolchain:
+              - 'scripts/azure/**'
+              - 'scripts/changesets/**'
+              - '.github/workflows/**'
+            docs:
+              - 'docs/**'
+              - '.github/workflows/**'
+            diagrams:
+              - 'docs/diagrams/**'
+              - 'docs/diagram-renderer/**'
+              - 'README.md'
+              - 'docs/guide/architecture-aks.md'
+              - 'scripts/docs/**'
+              - '.github/workflows/**'
+
   dotnet-tests:
     name: .NET tests
+    needs: changes
+    if: needs.changes.outputs.dotnet == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +117,8 @@ jobs:
 
   node-toolchain-tests:
     name: Node toolchain tests
+    needs: changes
+    if: needs.changes.outputs.node-toolchain == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,15 +126,17 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
 
       # The scripts/azure toolchain uses only Node built-ins (no dependencies),
       # so there is nothing to install -- run the built-in test runner directly.
       - name: Run Node toolchain tests
-        run: node --test scripts/azure/tests/*.test.mjs
+        run: node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 
   web-tests:
     name: Web tests
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +144,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
@@ -93,21 +158,16 @@ jobs:
 
   web-lint:
     name: Web lint
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
-    # Advisory, not blocking: a lint failure marks THIS job red so the finding
-    # stays visible on the PR, but job-level continue-on-error keeps the overall
-    # run from failing (so lint does not block merge). The eslint-plugin-react-
-    # hooks v7 upgrade added strict React-Compiler-style rules that surface a
-    # pre-existing backlog in apps/web; flip continue-on-error to false to make
-    # lint a hard gate once that backlog is cleared.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
@@ -121,6 +181,8 @@ jobs:
 
   docs-build:
     name: Docs build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,7 +190,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
@@ -140,3 +202,52 @@ jobs:
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
         run: npm run docs:build
+
+  diagrams-in-sync:
+    name: Architecture diagrams are in sync
+    needs: changes
+    if: needs.changes.outputs.diagrams == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      # README.md's "Block diagram" and architecture-aks.md's "Component
+      # diagram"s are pre-rendered as static PNGs from Fluent-styled React
+      # Flow graph-specs (docs/diagrams/src/*.json) via docs/diagram-renderer
+      # + Playwright, so they match the same card/icon/badge look used live
+      # in the product UI instead of generic Mermaid/mermaid-cli output. This
+      # check only compares each spec's content hash against the committed
+      # <name>.hash.txt sidecar -- it deliberately does NOT re-render and
+      # diff pixels/SVG geometry, since that approach (used by an earlier
+      # mermaid-cli version of this pipeline) broke across OSes: rendering
+      # geometry depends on the host's installed font metrics, which differ
+      # between Windows and Linux even for byte-identical input. A hash
+      # check only fails when the spec's actual content (nodes/edges/labels)
+      # changed since the PNG was last built, and needs no browser here.
+      - name: Check rendered diagrams match source
+        run: npm run docs:check-diagrams
+
+  changeset-advisory:
+    name: Changeset advisory
+    if: github.event_name == 'pull_request' && (github.base_ref == 'dev' || startsWith(github.base_ref, 'release/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm run changeset:check -- --base origin/${{ github.base_ref }}

@@ -14,10 +14,12 @@ namespace Agentweaver.AgentRuntime.Workflow;
 /// <remarks>
 /// Pass-through by design: <see cref="HandleAsync"/> always returns the input
 /// <see cref="AgentTurnOutput"/> unchanged so downstream steps (e.g. Scribe) keep consuming the same
-/// produced diff/branch regardless of whether the PR itself was opened. Every known failure mode (no
-/// head branch / commits, unpushed branch, PR already exists, missing repo connection, insufficient
-/// token scope, transport error) is caught and reported via a <c>failed</c> <see cref="WorkflowStepEvents"/>
-/// entry instead of throwing, so a failed PR-open never crashes the run.
+/// produced diff/branch regardless of whether the PR itself was opened. Genuine failure modes (no head
+/// branch / commits, unpushed branch, insufficient token scope, transport error) are caught and reported
+/// via a <c>failed</c> <see cref="WorkflowStepEvents"/> entry instead of throwing, so a failed PR-open
+/// never crashes the run. A project with no connected GitHub repository is treated as an expected,
+/// non-error state (not every project is GitHub-connected) and reported via a <c>skipped</c> entry
+/// instead — see <see cref="Skip"/>.
 /// </remarks>
 public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>, IWorkflowNodeMeta
 {
@@ -112,8 +114,12 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
             var repository = project?.Origin.SourceRepository;
             if (string.IsNullOrWhiteSpace(repository) || !TryParseOwnerRepo(repository!, out var owner, out var repo))
             {
-                Fail(writer, input.RunId, "no-connected-repository",
-                    "The project has no connected GitHub repository (ProjectOrigin.SourceRepository); cannot open a pull request.");
+                // Not a failure: a project with no connected GitHub repository is a valid, common state
+                // (e.g. a Blank-origin project), not a broken run. Skip PR publication instead of failing
+                // the run, and point the user at where they can connect or create one.
+                Skip(writer, input.RunId, "no-connected-repository",
+                    "Skipped: the project has no connected GitHub repository. Connect an existing repository " +
+                    "or create a new one from Project Settings to enable pull request publication for future runs.");
                 return input;
             }
 
@@ -167,6 +173,17 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
         WorkflowStepEvents.Emit(writer, _logger, runId, LogicalNodeId, "failed", DisplayLabel, message: message);
         _logger.LogWarning(
             "Open Pull Request action could not open a PR for run {RunId}: {Reason} — {Message}", runId, reason, message);
+    }
+
+    /// <summary>
+    /// Emits a non-failing <c>skipped</c> step event for expected/benign non-execution paths (e.g. no
+    /// GitHub repository is connected yet), as opposed to <see cref="Fail"/> for genuine errors.
+    /// </summary>
+    private void Skip(ChannelWriter<RunEvent>? writer, string runId, string reason, string message)
+    {
+        WorkflowStepEvents.Emit(writer, _logger, runId, LogicalNodeId, "skipped", DisplayLabel, message: message);
+        _logger.LogInformation(
+            "Open Pull Request action skipped for run {RunId}: {Reason} — {Message}", runId, reason, message);
     }
 
     /// <summary>Substitutes the supported placeholders with values drawn from the produced turn output.</summary>

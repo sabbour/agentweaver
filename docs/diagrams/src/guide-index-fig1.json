@@ -1,0 +1,176 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Coordinator orchestration",
+  "alt": "Coordinator orchestration: Submit goal, Coordinator drafts OutcomeSpec, Selects workflow, You confirm?, WorkPlan: subtask DAG, Parallel child runs, RAI check per agent, Assembled result, Human review, Merge, Declined, Scribe memory pass",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Submit goal",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Coordinator drafts OutcomeSpec",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "W",
+      "label": "Selects workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "C",
+      "label": "You confirm?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "D",
+      "label": "WorkPlan: subtask DAG",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Parallel child runs",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "in isolated worktrees"
+    },
+    {
+      "id": "F",
+      "label": "RAI check per agent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Assembled result",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "H",
+      "label": "Human review",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "I",
+      "label": "Merge",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "J",
+      "label": "Declined",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "K",
+      "label": "Scribe memory pass",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "W"
+    },
+    {
+      "from": "W",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "label": "Yes"
+    },
+    {
+      "from": "C",
+      "to": "B",
+      "label": "Revise"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "F"
+    },
+    {
+      "from": "F",
+      "to": "G"
+    },
+    {
+      "from": "G",
+      "to": "H"
+    },
+    {
+      "from": "H",
+      "to": "I",
+      "label": "Approve"
+    },
+    {
+      "from": "H",
+      "to": "D",
+      "label": "Request changes"
+    },
+    {
+      "from": "H",
+      "to": "J",
+      "label": "Decline"
+    },
+    {
+      "from": "I",
+      "to": "K"
+    }
+  ]
+}

@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Verify generated docs are up to date
         run: |
@@ -65,7 +65,7 @@ jobs:
           echo "$changed"
 
           # Drift-prone source paths whose changes usually require doc updates.
-          code_re='^(apps/Agentweaver\.Api/Endpoints/|apps/Agentweaver\.Api/Workflows/|apps/Agentweaver\.Api/Blueprints/|apps/Agentweaver\.Mcp/Tools/|packages/Agentweaver\.Squad/Catalog/Resources/blueprints/)'
+          code_re='^(apps/Agentweaver\.Api/Endpoints/|apps/Agentweaver\.Api/Workflows/|apps/Agentweaver\.Api/Blueprints/|apps/Agentweaver\.Mcp/Tools/|packages/Agentweaver\.Squad/Catalog/Resources/(blueprints|workflows)/)'
 
           code_changed="$(echo "$changed" | grep -E "$code_re" || true)"
           docs_changed="$(echo "$changed" | grep -E '^docs/' | grep -v '^docs/node_modules/' || true)"
@@ -105,7 +105,7 @@ jobs:
               '</details>',
               '',
               '**How to update fast**',
-              '- Invoke the `docs-sync` skill (`.copilot/skills/docs-sync/SKILL.md`) for the playbook.',
+              '- Invoke the `agentweaver-docs-sync` skill (`.copilot/skills/agentweaver-docs-sync/SKILL.md`) for the playbook.',
               '- Regenerate auto-derived reference: `node scripts/gen-docs.mjs` then commit.',
               '- Build to verify: `cd docs && npm ci && npm run build`.',
               '',

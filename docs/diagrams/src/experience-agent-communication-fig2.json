@@ -1,0 +1,74 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The coordinator graph: handoffs you can see",
+  "alt": "The coordinator graph: handoffs you can see: Coordinator, Subtask: API, Subtask: UI, Subtask: tests",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "C",
+      "label": "Coordinator",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "S1",
+      "label": "Subtask: API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "S2",
+      "label": "Subtask: UI",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "S3",
+      "label": "Subtask: tests",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "depends on API"
+    }
+  ],
+  "edges": [
+    {
+      "from": "C",
+      "to": "S1"
+    },
+    {
+      "from": "C",
+      "to": "S2"
+    },
+    {
+      "from": "S1",
+      "to": "S3"
+    },
+    {
+      "from": "S1",
+      "to": "C",
+      "label": "result up"
+    },
+    {
+      "from": "S2",
+      "to": "C",
+      "label": "result up"
+    },
+    {
+      "from": "S3",
+      "to": "C",
+      "label": "result up"
+    }
+  ]
+}

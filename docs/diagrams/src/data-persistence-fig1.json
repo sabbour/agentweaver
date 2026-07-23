@@ -1,0 +1,235 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Architecture at a glance",
+  "alt": "Architecture at a glance: Agentweaver API (single writer), EF Core migrations + startup ALTERs, projects / workspaces, runs, backlog_tasks, run revisions, decisions + decision_inbox, agent_memory + session_context, outcome_spec → work_plan → subtask → dependency, steering_directives, mcp refresh tokens + jti + client registrations, RunEvents, …",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "cp",
+      "label": "Control plane — SqliteDb",
+      "tier": 1
+    },
+    {
+      "id": "mem",
+      "label": "Memory & orchestration — EF Core MemoryDbContext (Postgres / SQLite)",
+      "tier": 1
+    },
+    {
+      "id": "vol",
+      "label": "Workspace volume",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "API",
+      "label": "Agentweaver API (single writer)",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Migrations",
+      "label": "EF Core migrations + startup ALTERs",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Projects",
+      "label": "projects / workspaces",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "cp"
+    },
+    {
+      "id": "Runs",
+      "label": "runs",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "cp"
+    },
+    {
+      "id": "Backlog",
+      "label": "backlog_tasks",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "cp"
+    },
+    {
+      "id": "Revisions",
+      "label": "run revisions",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "cp"
+    },
+    {
+      "id": "Decisions",
+      "label": "decisions + decision_inbox",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "mem"
+    },
+    {
+      "id": "AgentMem",
+      "label": "agent_memory + session_context",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "mem"
+    },
+    {
+      "id": "Plans",
+      "label": "outcome_spec → work_plan → subtask → dependency",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "mem"
+    },
+    {
+      "id": "Steering",
+      "label": "steering_directives",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "mem"
+    },
+    {
+      "id": "OAuthState",
+      "label": "mcp refresh tokens + jti + client registrations",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "mem"
+    },
+    {
+      "id": "RunEvents",
+      "label": "RunEvents",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "mem"
+    },
+    {
+      "id": "Checkpoints",
+      "label": "workflow_checkpoints (MAF checkpoints, replica-safe)",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "mem"
+    },
+    {
+      "id": "Worktrees",
+      "label": "git worktrees / branches",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "vol"
+    },
+    {
+      "id": "FileCkpt",
+      "label": "JSON checkpoint files (SQLite/dev fallback)",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "vol"
+    }
+  ],
+  "edges": [
+    {
+      "from": "API",
+      "to": "Projects"
+    },
+    {
+      "from": "API",
+      "to": "Decisions"
+    },
+    {
+      "from": "API",
+      "to": "AgentMem"
+    },
+    {
+      "from": "API",
+      "to": "Plans"
+    },
+    {
+      "from": "API",
+      "to": "OAuthState"
+    },
+    {
+      "from": "API",
+      "to": "Worktrees"
+    },
+    {
+      "from": "Migrations",
+      "to": "RunEvents"
+    },
+    {
+      "from": "Migrations",
+      "to": "Decisions"
+    },
+    {
+      "from": "Projects",
+      "to": "Runs"
+    },
+    {
+      "from": "Projects",
+      "to": "Backlog"
+    },
+    {
+      "from": "Runs",
+      "to": "Revisions"
+    },
+    {
+      "from": "Runs",
+      "to": "RunEvents"
+    },
+    {
+      "from": "Runs",
+      "to": "Worktrees"
+    },
+    {
+      "from": "Runs",
+      "to": "Checkpoints"
+    },
+    {
+      "from": "Plans",
+      "to": "Steering"
+    }
+  ]
+}

@@ -50,69 +50,12 @@ Where this lives:
 
 Every request crosses a network-policy boundary into the gateway, then passes through two ordered middlewares: `GitHubTokenAuthMiddleware` resolves identity (Agentweaver JWT validated offline against the `jti` denylist, or a raw GitHub token validated via `GET /user` and cached), and `GitHubOrgAuthorizationMiddleware` enforces org/team membership before any protected route runs. Browser sign-in and the MCP OAuth flow both terminate at GitHub as the human identity provider.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TB
-    subgraph callers["Callers"]
-        Browser["Browser web UI"]
-        Mcp["MCP client"]
-        ApiCaller["Direct API caller"]
-    end
-    subgraph edge["Network edge"]
-        NetPol{{"default-deny + allowlist NetworkPolicies"}}
-        Gateway["Istio gateway / HTTPRoute"]
-    end
-    subgraph api["Agentweaver API"]
-        SignIn["AuthEndpoints GitHub sign-in"]
-        OAuthAS["OAuth 2.1 Authorization Server"]
-        TokenMw["GitHubTokenAuthMiddleware"]
-        OrgMw["GitHubOrgAuthorizationMiddleware"]
-        Routes["Protected /api routes"]
-    end
-    GateBearer{{"Bearer valid? JWT jti / GitHub /user"}}
-    GateOrg{{"Org + team membership"}}
-    subgraph ext["External identity"]
-        GitHub["GitHub OAuth + /user"]
-        KeyVault["Azure Key Vault"]
-    end
-    subgraph stores["Credential stores"]
-        TokenStore[("GitHub token store")]
-        OAuthStore[("MCP refresh tokens + jti denylist")]
-    end
+![Architecture at a glance: Browser web UI, MCP client, Direct API caller, default-deny + allowlist NetworkPolicies, Istio gateway / HTTPRoute, AuthEndpoints GitHub sign-in, OAuth 2.1 Authorization Server, GitHubTokenAuthMiddleware, GitHubOrgAuthorizationMiddleware, Protected /api routes, Bearer valid? JWT jti / GitHub /user, Org + team membership, …](../diagrams/auth-security-fig1.png)
 
-    Browser --> NetPol
-    Mcp --> NetPol
-    ApiCaller --> NetPol
-    NetPol --> Gateway --> TokenMw
-    Browser -.->|sign-in| SignIn
-    SignIn --> GitHub
-    SignIn --> TokenStore
-    Mcp -.->|OAuth 2.1| OAuthAS
-    OAuthAS --> GitHub
-    OAuthAS --> OAuthStore
-    TokenMw --> GateBearer
-    GateBearer -- raw token --> GitHub
-    GateBearer -- JWT --> OAuthStore
-    GateBearer --> OrgMw --> GateOrg
-    GateOrg -- raw token --> GitHub
-    GateOrg -- allow --> Routes
-    OAuthAS --> KeyVault
-    TokenStore --> KeyVault
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Browser,Mcp,ApiCaller client;
-    class Gateway,SignIn,OAuthAS,Routes,GateBearer,GateOrg svc;
-    class TokenMw,OrgMw core;
-    class NetPol,GitHub,KeyVault ext;
-    class TokenStore,OAuthStore data;
-```
+<!-- Rendered from ../diagrams/src/auth-security-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Web sign-in: GitHub OAuth on behalf of the user
 
@@ -188,32 +131,12 @@ After bootstrap, protected API calls use `Authorization: Bearer ...`. The API tr
 
 The API does not accept static automation keys. Hosted MCP forwards each caller's accepted bearer token to the API, so the end-to-end identity is always a raw GitHub token or an Agentweaver JWT that the backend can validate.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    A[Bearer token arrives on protected API route] --> B{Looks like valid Agentweaver JWT?}
-    B -- yes --> C{jti deny-listed?}
-    C -- yes --> X[401]
-    C -- no --> D[Caller = JWT subject + GitHub login + org]
-    B -- no --> E[Call GitHub /user]
-    E -- valid --> F[Caller = GitHub login]
-    E -- invalid --> X
-    D --> G[Org authorization middleware]
-    F --> G
+![API bearer authentication: accepting tokens safely: Bearer token arrives on protected API route, Looks like valid Agentweaver JWT?, jti deny-listed?, 401, Caller = JWT subject + GitHub login + org, Call GitHub /user, Caller = GitHub login, Org authorization middleware](../diagrams/auth-security-fig2.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class A client;
-    class B,C,X svc;
-    class D,F,G core;
-    class E ext;
-```
+<!-- Rendered from ../diagrams/src/auth-security-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why this shape
 
@@ -246,41 +169,12 @@ The authorization middleware runs after bearer authentication. It handles two ca
 - **Agentweaver OAuth JWT callers:** trust the signed `org` claim only if it equals the configured allowed org. This is safe because org membership was checked when the Authorization Server issued the token and is rechecked on refresh when possible.
 - **Raw GitHub token callers:** use the caller's GitHub token to ask GitHub whether the login is in the allowed org/team.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart TD
-    A[Non-exempt request] --> B{Caller context exists?}
-    B -- no --> U[401 unauthenticated]
-    B -- yes --> C{Agentweaver OAuth JWT?}
-    C -- yes --> D{JWT org claim matches allowed org?}
-    D -- yes --> ALLOW[Allow]
-    D -- no --> DENY[403]
+![GitHub org authorization and the SAML nuance: Non-exempt request, Caller context exists?, 401 unauthenticated, Agentweaver OAuth JWT?, JWT org claim matches allowed org?, Allow, 403, Use caller GitHub token + login, Authenticated private org membership check, Team restriction configured?, Unauthenticated public-membership check, 403 retry later; do not cache, …](../diagrams/auth-security-fig3.png)
 
-    C -- no --> E[Use caller GitHub token + login]
-    E --> P[Authenticated private org membership check]
-    P -- member --> T{Team restriction configured?}
-    P -- SAML blocked / not member / inconclusive --> PUB[Unauthenticated public-membership check]
-    PUB -- public member --> T
-    PUB -- private check inconclusive --> RETRY[403 retry later; do not cache]
-    PUB -- not public and private check definitive --> DENY
-    T -- no --> ALLOW
-    T -- yes --> TEAM[Authenticated team membership check]
-    TEAM -- member --> ALLOW
-    TEAM -- not member or SAML blocked --> DENY
-
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class A client;
-    class B,C,D,T,E,U,DENY,RETRY svc;
-    class ALLOW core;
-    class P,PUB,TEAM ext;
-```
+<!-- Rendered from ../diagrams/src/auth-security-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### The SAML-enforced org problem
 
@@ -317,7 +211,7 @@ Where this lives:
 - `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs`
 - `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs`
 - `apps/Agentweaver.Api/appsettings.json`
-- `k8s/api-deployment.yaml`
+- `k8s/base/api-deployment.yaml`
 
 ## Resource ownership authorization
 
@@ -473,28 +367,12 @@ A token represents:
 - **lifetime claims**: issued-at, not-before, expiry;
 - **JWT ID (`jti`)**: revocation handle.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    AS[Agentweaver API signs JWT with RSA private key] --> JWKS[Publishes public key as JWKS]
-    Client[MCP client presents JWT] --> MCP[MCP validates signature, iss, aud, exp, alg]
-    JWKS --> MCP
-    MCP --> Forward[Forward same bearer token to API]
-    Forward --> API[API validates JWT and checks jti denylist]
-    API --> Authz[Org middleware trusts matching org claim]
+![MCP bearer JWTs: issuance, validation, and forwarding: Agentweaver API signs JWT with RSA private key, Publishes public key as JWKS, MCP client presents JWT, MCP validates signature, iss, aud, exp, alg, Forward same bearer token to API, API validates JWT and checks jti denylist, Org middleware trusts matching org claim](../diagrams/auth-security-fig4.png)
 
-    classDef client fill:#E8EEF9,stroke:#0F6CBD,stroke-width:1px,color:#242424;
-    classDef svc fill:#F3F2F1,stroke:#8A8886,stroke-width:1px,color:#242424;
-    classDef core fill:#CFE4FA,stroke:#0F6CBD,stroke-width:2px,color:#242424;
-    classDef data fill:#FFF4CE,stroke:#C19C00,stroke-width:1px,color:#242424;
-    classDef ext fill:#F0E8F8,stroke:#8764B8,stroke-width:1px,color:#242424;
-    classDef runtime fill:#DDF3DD,stroke:#107C10,stroke-width:1px,color:#242424;
-    classDef evt fill:#D6F0F0,stroke:#038387,stroke-width:1px,color:#242424;
-
-    class Client client;
-    class JWKS,MCP,Forward svc;
-    class AS,API,Authz core;
-```
+<!-- Rendered from ../diagrams/src/auth-security-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Signing keys
 
@@ -678,9 +556,9 @@ Where this lives:
 - `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs`
 - `apps/Agentweaver.AgentHost/AgentHostStartupService.cs`
 - `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs`
-- `k8s/serviceaccount-agenthost.yaml`
-- `k8s/sandbox-warmpool-agenthost.yaml`
-- `k8s/sandbox-template-agenthost.yaml`
+- `k8s/base/serviceaccount-agenthost.yaml`
+- `k8s/base/sandbox-warmpool-agenthost.yaml`
+- `k8s/base/sandbox-template-agenthost.yaml`
 
 ## Rebuild checklist
 

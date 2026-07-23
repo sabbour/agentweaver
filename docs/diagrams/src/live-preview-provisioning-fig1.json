@@ -1,0 +1,169 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "End-to-end flow",
+  "alt": "End-to-end flow: Gate, Test, Approved or, PreviewCommandResolver, AgentHost /preview-runner, observe app port, forwarder, AgentPreviewGate, Gateway HTTPRoute, preview_ready / failed / skipped, Human review",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Gate",
+      "label": "Gate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Test",
+      "label": "Test",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Check",
+      "label": "Approved or",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "request changes?"
+    },
+    {
+      "id": "Resolve",
+      "label": "PreviewCommandResolver",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "find run command"
+    },
+    {
+      "id": "Runner",
+      "label": "AgentHost /preview-runner",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "start supervised process"
+    },
+    {
+      "id": "Port",
+      "label": "observe app port",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "logs + /proc tcp/tcp6"
+    },
+    {
+      "id": "Forward",
+      "label": "forwarder",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "0.0.0.0:publicPort"
+    },
+    {
+      "id": "Approval",
+      "label": "AgentPreviewGate",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "existing approval policy"
+    },
+    {
+      "id": "Route",
+      "label": "Gateway HTTPRoute",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      },
+      "subLabel": "preview_url"
+    },
+    {
+      "id": "Outcome",
+      "label": "preview_ready / failed / skipped",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "Human review",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "preview ready or unavailable"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Gate",
+      "to": "Check"
+    },
+    {
+      "from": "Check",
+      "to": "Review",
+      "label": "declined"
+    },
+    {
+      "from": "Check",
+      "to": "Resolve",
+      "label": "yes"
+    },
+    {
+      "from": "Resolve",
+      "to": "Runner"
+    },
+    {
+      "from": "Runner",
+      "to": "Port"
+    },
+    {
+      "from": "Port",
+      "to": "Forward"
+    },
+    {
+      "from": "Forward",
+      "to": "Approval"
+    },
+    {
+      "from": "Approval",
+      "to": "Route"
+    },
+    {
+      "from": "Route",
+      "to": "Outcome"
+    },
+    {
+      "from": "Outcome",
+      "to": "Review"
+    },
+    {
+      "from": "Resolve",
+      "to": "Outcome",
+      "label": "infra unavailable"
+    },
+    {
+      "from": "Port",
+      "to": "Outcome",
+      "label": "failure"
+    }
+  ]
+}

@@ -1,0 +1,182 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "End-to-end flow",
+  "alt": "End-to-end flow: GitHub Copilot SDK, CopilotAIAgent, Run event stream, token_usage_records, SSE /api/runs/{id}/stream, Dashboard, UsageEndpoints, /api/runs/{id}/usage, /api/workflow-runs/{id}/usage, /api/projects/{id}/usage, /api/usage",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "SDK",
+      "label": "GitHub Copilot SDK",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      },
+      "subLabel": "AssistantUsageEvent"
+    },
+    {
+      "id": "Agent",
+      "label": "CopilotAIAgent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "accumulate per turn"
+    },
+    {
+      "id": "Stream",
+      "label": "Run event stream",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      },
+      "subLabel": "IRunEventStream"
+    },
+    {
+      "id": "DB",
+      "label": "token_usage_records",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "subLabel": "table"
+    },
+    {
+      "id": "SSE",
+      "label": "SSE /api/runs/{id}/stream",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "Dashboard",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      },
+      "subLabel": "Overview",
+      "meta": "MCP tools"
+    },
+    {
+      "id": "Endpoints",
+      "label": "UsageEndpoints",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "4 hierarchy levels"
+    },
+    {
+      "id": "RunUsage",
+      "label": "/api/runs/{id}/usage",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "TokenUsageSummaryDto"
+    },
+    {
+      "id": "WFUsage",
+      "label": "/api/workflow-runs/{id}/usage",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "TokenUsageSummaryDto"
+    },
+    {
+      "id": "ProjUsage",
+      "label": "/api/projects/{id}/usage",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "TokenUsageSummaryDto"
+    },
+    {
+      "id": "AppUsage",
+      "label": "/api/usage",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "AppUsageDto"
+    }
+  ],
+  "edges": [
+    {
+      "from": "SDK",
+      "to": "Agent",
+      "label": "detected in StreamTurnOnceAsync"
+    },
+    {
+      "from": "Agent",
+      "to": "Stream",
+      "label": "AppendAsync agent.turn.usage"
+    },
+    {
+      "from": "Stream",
+      "to": "DB",
+      "label": "durably persisted"
+    },
+    {
+      "from": "Stream",
+      "to": "SSE",
+      "label": "live SSE frame"
+    },
+    {
+      "from": "SSE",
+      "to": "UI",
+      "label": "run stream reducers"
+    },
+    {
+      "from": "DB",
+      "to": "Endpoints",
+      "label": "reads on demand"
+    },
+    {
+      "from": "Endpoints",
+      "to": "RunUsage"
+    },
+    {
+      "from": "Endpoints",
+      "to": "WFUsage"
+    },
+    {
+      "from": "Endpoints",
+      "to": "ProjUsage"
+    },
+    {
+      "from": "Endpoints",
+      "to": "AppUsage"
+    },
+    {
+      "from": "RunUsage",
+      "to": "UI"
+    },
+    {
+      "from": "WFUsage",
+      "to": "UI"
+    },
+    {
+      "from": "ProjUsage",
+      "to": "UI"
+    },
+    {
+      "from": "AppUsage",
+      "to": "UI"
+    }
+  ]
+}

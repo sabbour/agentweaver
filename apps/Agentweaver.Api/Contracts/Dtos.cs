@@ -639,6 +639,28 @@ public sealed record CreateProjectRunRequest
     [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
 }
 
+/// <summary>One candidate owner returned by GET /api/projects/{id}/github/repository-owners.</summary>
+public sealed record RepositoryOwnerResponse(
+    [property: JsonPropertyName("login")] string Login,
+    [property: JsonPropertyName("type")] string Type);
+
+/// <summary>Request body for POST /api/projects/{id}/github/repository.</summary>
+public sealed record CreateProjectRepositoryRequest
+{
+    [JsonPropertyName("owner")] public required string Owner { get; init; }
+    [JsonPropertyName("name")] public string? Name { get; init; }
+    [JsonPropertyName("private")] public bool? Private { get; init; }
+}
+
+/// <summary>Response for POST /api/projects/{id}/github/repository.</summary>
+public sealed record ConnectedRepositoryResponse(
+    [property: JsonPropertyName("source_repository")] string SourceRepository,
+    [property: JsonPropertyName("html_url")] string HtmlUrl);
+
+/// <summary>Returned only by a webhook-secret rotation request; the value is not retrievable later.</summary>
+public sealed record WebhookSecretRotationResponse(
+    [property: JsonPropertyName("secret")] string Secret);
+
 // -----------------------------------------------------------------------
 // GitHub auth
 // -----------------------------------------------------------------------

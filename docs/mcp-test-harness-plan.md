@@ -1162,7 +1162,7 @@ canonical directories above.
    fields), and the exit codes (0 = drive+capture OK, non-zero = driver P0 fail). It lives
    with the code and is versioned alongside it, so the contract never drifts from the driver.
 
-2. **A thin pointer skill at `.github/skills/mcp-harness/SKILL.md`** — the actual
+2. **A thin pointer skill at `.github/skills/agentweaver-mcp-harness/SKILL.md`** — the actual
    Copilot-CLI-discoverable entry point. Its job is to:
    - describe **when to invoke** this skill — e.g. *"use when asked to validate the MCP
      tool surface end-to-end, test a specific persona's tool-call flow, or investigate an
@@ -1173,7 +1173,7 @@ canonical directories above.
 
    It follows this repo's existing skill-authoring convention — mirror the frontmatter and
    structure of an existing entry such as
-   [`.copilot/skills/docs-feature/SKILL.md`](../.copilot/skills/docs-feature/SKILL.md)
+   [`.copilot/skills/agentweaver-docs-feature/SKILL.md`](../.copilot/skills/agentweaver-docs-feature/SKILL.md)
    (`name` / `description` with trigger phrases / `domain` / `confidence` / `source`
    frontmatter, then a Markdown body). The pointer stays thin; the detailed contract stays in
    `scripts/mcp-harness/SKILL.md`.

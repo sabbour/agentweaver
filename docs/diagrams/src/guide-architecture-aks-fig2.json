@@ -1,0 +1,134 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Inbound request path",
+  "alt": "Inbound request path: 🌐 Client, Public LoadBalancer IP, Gateway: agentweaver-gateway, Service: agentweaver-api, Service: agentweaver-mcp, Service: agentweaver-frontend, API Pod :8080, MCP Pod :8080, Frontend Pod :8080",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Client",
+      "label": "🌐 Client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "subLabel": "HTTPS :443"
+    },
+    {
+      "id": "LB",
+      "label": "Public LoadBalancer IP",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "provisioned by approuting-istio"
+    },
+    {
+      "id": "GW",
+      "label": "Gateway: agentweaver-gateway",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "TLS terminated",
+      "meta": "DefaultDomainCertificate"
+    },
+    {
+      "id": "API_SVC",
+      "label": "Service: agentweaver-api",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "ClusterIP :8080"
+    },
+    {
+      "id": "MCP_SVC",
+      "label": "Service: agentweaver-mcp",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "ClusterIP :8080"
+    },
+    {
+      "id": "FE_SVC",
+      "label": "Service: agentweaver-frontend",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "ClusterIP :80"
+    },
+    {
+      "id": "API_POD",
+      "label": "API Pod :8080",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "MCP_POD",
+      "label": "MCP Pod :8080",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "FE_POD",
+      "label": "Frontend Pod :8080",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "ASP.NET Core · React SPA"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Client",
+      "to": "LB"
+    },
+    {
+      "from": "LB",
+      "to": "GW"
+    },
+    {
+      "from": "GW",
+      "to": "API_SVC",
+      "label": "PathPrefix /api PathPrefix /auth"
+    },
+    {
+      "from": "API_SVC",
+      "to": "API_POD"
+    },
+    {
+      "from": "GW",
+      "to": "MCP_SVC",
+      "label": "PathPrefix /mcp /mcp/health → /healthz"
+    },
+    {
+      "from": "MCP_SVC",
+      "to": "MCP_POD"
+    },
+    {
+      "from": "GW",
+      "to": "FE_SVC",
+      "label": "PathPrefix / (catch-all)"
+    },
+    {
+      "from": "FE_SVC",
+      "to": "FE_POD"
+    }
+  ]
+}

@@ -243,8 +243,8 @@ concerns are about — so it intentionally remains a fixed script driven by
 
 ### Execution
 
-- **Prefer the discoverable skill for the requested surface first.** Invoke `api-harness`, `ui-harness`, `mcp-harness`, or `agentweaver-harness` (the combined sweep) via the `skill` tool before falling back to raw commands — they carry the maintained CLI contract, safety controls, and evidence-shape guidance, and keep this agent's behavior in sync with what any other session would get from the same skill.
-- For scenario discovery or authoring, invoke the discoverable `harness-scenarios` skill first. It carries the maintained cross-surface catalog/generation contract, including the review constraints for newly generated deep scenarios.
+- **Prefer the discoverable skill for the requested surface first.** Invoke `agentweaver-api-harness`, `agentweaver-ui-harness`, `agentweaver-mcp-harness`, or `agentweaver-harness` (the combined sweep) via the `skill` tool before falling back to raw commands — they carry the maintained CLI contract, safety controls, and evidence-shape guidance, and keep this agent's behavior in sync with what any other session would get from the same skill.
+- For scenario discovery or authoring, invoke the discoverable `agentweaver-harness-scenarios` skill first. It carries the maintained cross-surface catalog/generation contract, including the review constraints for newly generated deep scenarios.
 - For a persona-behavior run (API surface), dispatch `PersonaActor` per the
   Invocation model above rather than curling the API yourself inline — you
   resolve the brief/target and dispatch; PersonaActor decides and calls each turn.
@@ -290,8 +290,8 @@ running as an actual Harness agent session:
 ### Example usage
 
 Scoped single-surface run (persona scenario, API surface): resolve the brief +
-target yourself (invoke the discoverable `api-harness` skill, via the `skill`
-tool, `skill: "api-harness"`, for the CLI contract details PersonaActor will use),
+target yourself (invoke the discoverable `agentweaver-api-harness` skill, via the `skill`
+tool, `skill: "agentweaver-api-harness"`, for the CLI contract details PersonaActor will use),
 interpret the actual ask into a concrete goal statement for this run (see
 "Resolve a concrete goal statement for this specific run" above — do not invent
 scope beyond what was asked, and do not map it onto a fixed phase list), create
@@ -346,7 +346,7 @@ to Judge afterward regardless of whether anyone watched it live.
 PersonaActor internally curls the spec, then curls whatever operation it
 resolves from it, appending each real request/response pair to the transcript
 file itself — you are dispatching it, not running it yourself inline. The same
-dynamic model applies to `ui-harness` and `mcp-harness` for their respective
+dynamic model applies to `agentweaver-ui-harness` and `agentweaver-mcp-harness` for their respective
 surfaces (a surface-appropriate actor drives; Harness dispatches and judges).
 
 Structured re-test from a caller-supplied `reproManifest` (fresh comparison,

@@ -237,7 +237,6 @@ test("16-provision-oauth-signing-key: generates and stores both secrets when abs
   const exec = fakeExec({
     captureImpl: (cmd, args) => {
       if (cmd === "az" && args[0] === "keyvault" && args[1] === "secret" && args[2] === "show") return { stdout: "", stderr: "", code: 1 };
-      if (cmd === "openssl" && args[0] === "rand") return { stdout: "deadbeef".repeat(8), stderr: "", code: 0 };
       return null;
     },
   });
@@ -245,21 +244,28 @@ test("16-provision-oauth-signing-key: generates and stores both secrets when abs
   const removed = [];
   const fsImpl = {
     mkdirSync: () => {},
+    writeFileSync: (p, content) => writes.push({ path: p, content }),
     rmSync: (p) => removed.push(p),
   };
   const log = noopLog();
   const result = await provisionOauthKey.run(CFG, { exec, log, fs: fsImpl, repoRoot: "C:\\fake\\repo" });
   assert.equal(result.signingKeyProvisioned, true);
   assert.equal(result.apiKeyProvisioned, true);
-  assert.ok(exec.calls.run.some((c) => c.cmd === "openssl" && c.args[0] === "genpkey"));
+  // Uses Node's built-in crypto module (no external openssl process) --
+  // assert the scratch PEM was written with real PKCS8 key material and cleaned up.
+  assert.ok(!exec.calls.run.some((c) => c.cmd === "openssl"));
+  assert.ok(writes.length === 1);
+  assert.ok(writes[0].content.includes("-----BEGIN PRIVATE KEY-----"));
   assert.ok(removed.length >= 1); // scratch PEM file cleaned up
 });
 
 // -------------------- 17-provision-postgres.mjs --------------------
 
 test("17-provision-postgres: generateAdminPassword strips shell-unsafe chars and caps length at 48", async () => {
-  const exec = fakeExec({ captureImpl: () => ({ stdout: "a".repeat(60) + "+=/" + "b".repeat(10) + "\n", stderr: "", code: 0 }) });
-  const password = await provisionPostgres.generateAdminPassword({ exec });
+  // Uses Node's built-in crypto.randomBytes (no external openssl process) --
+  // no exec stubbing needed; assert the invariants the rest of the pipeline
+  // depends on: length cap and absence of shell-unsafe characters.
+  const password = await provisionPostgres.generateAdminPassword();
   assert.equal(password.length, 48);
   assert.ok(!/[+=/]/.test(password));
 });

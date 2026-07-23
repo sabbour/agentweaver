@@ -537,12 +537,12 @@ public sealed class RunWatchLoopService
     /// <summary>
     /// Logical nodes whose <c>workflow.step</c> lifecycle is owned by a dedicated, richer emitter, so
     /// the generic MAF-event translator must NOT also emit for them (double-emit / status clobber):
-    /// agent, rai, merge, scribe self-emit from their executors (including revise/skipped/failed
-    /// nuances MAF lifecycle cannot express); review is driven by the HITL RequestInfoEvent + the
-    /// terminal handlers below.
+    /// agent, rai, merge, push-pr, and scribe self-emit from their executors (including
+    /// revise/skipped/failed nuances MAF lifecycle cannot express); review is driven by the HITL
+    /// RequestInfoEvent + the terminal handlers below.
     /// </summary>
     private static readonly HashSet<string> DedicatedStepNodes =
-        new(StringComparer.Ordinal) { "agent", "rai", "merge", "scribe", "review", "policy-rai", "policy-rubberduck", "policy-human-review" };
+        new(StringComparer.Ordinal) { "agent", "rai", "merge", "push-pr", "scribe", "review", "policy-rai", "policy-rubberduck", "policy-human-review" };
 
     private void EmitExecutorStep(string runId, RunStreamEntry entry, string executorId, string status)
     {
@@ -746,7 +746,6 @@ public sealed class RunWatchLoopService
             var changed = await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, now, turnFailed.Reason, CancellationToken.None).ConfigureAwait(false);
 
-            EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
             if (!entry.HasEventType(EventTypes.RunFailed))
             {
                 entry.RecordNext(EventTypes.RunFailed, new
@@ -758,6 +757,7 @@ public sealed class RunWatchLoopService
                     retryable = turnFailed.Retryable,
                 });
             }
+            EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
@@ -772,7 +772,6 @@ public sealed class RunWatchLoopService
             var changed = await _runStore.TrySetTerminalStatusAsync(
                 parsedRunId, RunStatus.Failed, now, childFailed.Reason, CancellationToken.None).ConfigureAwait(false);
 
-            EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
             if (!entry.HasEventType(EventTypes.RunFailed))
             {
                 entry.RecordNext(EventTypes.RunFailed, new
@@ -784,6 +783,7 @@ public sealed class RunWatchLoopService
                     retryable = childFailed.Retryable,
                 });
             }
+            EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
 
             _streamStore.Complete(runId);
             _ = _factory.PersistRunEventsAsync(runId);
@@ -1009,7 +1009,7 @@ public sealed class RunWatchLoopService
             AgentWeaverMetrics.RunErrors.Add(1, BuildRunTags(run, ("error_type", errorType ?? "failed")));
     }
 
-    private static KeyValuePair<string, object?>[] BuildRunTags(
+    internal static KeyValuePair<string, object?>[] BuildRunTags(
         Agentweaver.Domain.Run run,
         params (string Key, object? Value)[] extraTags)
     {
@@ -1017,9 +1017,13 @@ public sealed class RunWatchLoopService
         {
             new("agent_name", run.AgentName ?? "unknown"),
             new("run_type", string.IsNullOrEmpty(run.ParentRunId) ? "coordinator" : "child"),
+            new("run_id", run.Id.ToString()),
+            new("run.id", run.Id.ToString()),
         };
         if (run.ProjectId is { } projectId)
             tags.Add(new("project.id", projectId.ToString()));
+        if (!string.IsNullOrWhiteSpace(run.ParentRunId))
+            tags.Add(new("parent_run_id", run.ParentRunId));
         foreach (var (key, value) in extraTags)
             tags.Add(new(key, value));
         return tags.ToArray();

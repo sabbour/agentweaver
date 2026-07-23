@@ -2,7 +2,9 @@ name: Deploy Docs to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # Published GitHub Pages docs track dev, the integration branch, so
+    # documentation updates are visible promptly without release promotion.
+    branches: [dev]
     paths:
       - 'docs/**'
       - 'apps/web/src/**'
@@ -26,7 +28,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: docs/package-lock.json
 

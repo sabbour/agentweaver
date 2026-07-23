@@ -1,0 +1,71 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Review Policy Composition",
+  "alt": "Review Policy Composition: Selected workflow, Active review policy, Compose required gates, Validate composed graph, Bind to executors",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Selected",
+      "label": "Selected workflow",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "ReviewPolicy",
+      "label": "Active review policy",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Compose",
+      "label": "Compose required gates",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Validate",
+      "label": "Validate composed graph",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Bind",
+      "label": "Bind to executors",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Selected",
+      "to": "Compose"
+    },
+    {
+      "from": "ReviewPolicy",
+      "to": "Compose"
+    },
+    {
+      "from": "Compose",
+      "to": "Validate"
+    },
+    {
+      "from": "Validate",
+      "to": "Bind"
+    }
+  ]
+}

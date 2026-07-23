@@ -16,6 +16,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
 import * as secretDefault from "../lib/secret.mjs";
@@ -40,9 +41,14 @@ function pgOption(cfg, name) {
   return cfg[name] || PG_DEFAULTS[name];
 }
 
-/** Generates a strong random Postgres admin password (48 alphanumeric-ish chars, no shell metacharacters). */
-export async function generateAdminPassword({ exec = execDefault } = {}) {
-  const { stdout } = await exec.capture("openssl", ["rand", "-base64", "48"]);
+/**
+ * Generates a strong random Postgres admin password (48 alphanumeric-ish
+ * chars, no shell metacharacters). Uses Node's built-in crypto module
+ * (no external 'openssl' process) so this works identically on every
+ * platform, including Windows machines without openssl on PATH.
+ */
+export async function generateAdminPassword() {
+  const stdout = randomBytes(48).toString("base64");
   return stdout.replace(/[+=/]/g, "").slice(0, 48);
 }
 
@@ -207,7 +213,7 @@ export async function run(cfg, opts = {}) {
     log.skip(`Server '${PG_SERVER_NAME}' already exists (state: ${existingServer}).`);
   } else {
     log.info("  Generating admin password (not echoed; will be stored in K8s secret)...");
-    const PG_ADMIN_PASSWORD = await generateAdminPassword({ exec });
+    const PG_ADMIN_PASSWORD = await generateAdminPassword();
     secret.registerSecret(PG_ADMIN_PASSWORD, "postgres-admin-password");
 
     log.info(`  Creating Flexible Server '${PG_SERVER_NAME}' -- this takes ~5 minutes...`);

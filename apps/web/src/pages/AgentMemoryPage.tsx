@@ -67,23 +67,24 @@ export function AgentMemoryPage() {
   useEffect(() => {
     if (!projectId || !agentName) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    apiClient.getAgentMemory(projectId, agentName, { page, pageSize })
-      .then((result) => {
+    const loadEntries = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await apiClient.getAgentMemory(projectId, agentName, { page, pageSize });
         if (cancelled) return;
         setEntries(result.items);
         setTotalCount(result.total_count);
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
         setEntries([]);
         setTotalCount(0);
         setError(formatApiError(err));
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+    void loadEntries();
     return () => { cancelled = true; };
   }, [agentName, page, pageSize, projectId, reloadNonce]);
 

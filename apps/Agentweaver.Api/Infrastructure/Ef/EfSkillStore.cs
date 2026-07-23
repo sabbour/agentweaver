@@ -41,6 +41,7 @@ public sealed class EfSkillStore : ISkillStore
                 .SetProperty(x => x.Provenance, skill.Provenance.ToApiString())
                 .SetProperty(x => x.SourceRepository, skill.SourceRepository)
                 .SetProperty(x => x.SourceLocation, skill.SourceLocation)
+                .SetProperty(x => x.MarketplaceName, skill.MarketplaceName)
                 .SetProperty(x => x.ContentHash, skill.ContentHash)
                 .SetProperty(x => x.Status, skill.Status.ToApiString())
                 .SetProperty(x => x.UpdatedAt, skill.UpdatedAt), ct);
@@ -317,6 +318,7 @@ public sealed class EfSkillStore : ISkillStore
         Provenance = s.Provenance.ToApiString(),
         SourceRepository = s.SourceRepository,
         SourceLocation = s.SourceLocation,
+        MarketplaceName = s.MarketplaceName,
         ContentHash = s.ContentHash,
         Status = s.Status.ToApiString(),
         CreatedAt = s.CreatedAt,
@@ -334,6 +336,7 @@ public sealed class EfSkillStore : ISkillStore
         Provenance = SkillProvenanceExtensions.ParseProvenance(r.Provenance),
         SourceRepository = r.SourceRepository,
         SourceLocation = r.SourceLocation,
+        MarketplaceName = r.MarketplaceName,
         ContentHash = r.ContentHash,
         Status = SkillStatusExtensions.ParseStatus(r.Status),
         CreatedAt = r.CreatedAt,

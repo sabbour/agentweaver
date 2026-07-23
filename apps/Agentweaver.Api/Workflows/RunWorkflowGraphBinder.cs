@@ -386,6 +386,16 @@ internal static class RunWorkflowGraphBinder
                 ctx.ScribeOutputs.Add(b.ScribeOutputMerge);
                 return true;
 
+            // Merge succeeded or failed terminally -> publish/reuse the PR for the merged branch.
+            case (NodeKind.Merge, NodeKind.OpenPullRequest, "merged"):
+            {
+                var adapter = s.MergeToAgentOutputAdapter(edge);
+                g.AddEdge<MergeOutput>(b.MergeBinding, adapter,
+                    output => output is not null && output.Status != "blocked")
+                 .AddEdge(adapter, s.ResolveOpenPullRequestNode(toNode));
+                return true;
+            }
+
             // Merge blocked -> re-enter the review gate via HITL.
             case (NodeKind.Merge, NodeKind.HumanReview, "blocked"):
                 g.AddEdge<MergeOutput>(b.MergeBinding, b.BlockedAdapter,
@@ -760,6 +770,7 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.HumanReview, NodeKind.Agent, "request-changes") => true,
             (NodeKind.HumanReview, NodeKind.Terminal, "declined") => true,
             (NodeKind.Merge, NodeKind.Scribe, "merged") => true,
+            (NodeKind.Merge, NodeKind.OpenPullRequest, "merged") => true,
             (NodeKind.Merge, NodeKind.HumanReview, "blocked") => true,
             (NodeKind.Scribe, NodeKind.Terminal, null) => true,
             (NodeKind.Agent, NodeKind.Agent, null) => true,

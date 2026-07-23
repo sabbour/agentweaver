@@ -1,0 +1,54 @@
+# Gateway — wildcard HTTPS entry point for per-preview sandbox browser routes.
+#
+# A separate Gateway from agentweaver-gateway so the API can dynamically attach
+# per-preview HTTPRoute objects without touching the main exact-host Gateway listener.
+# GatewayClass is approuting-istio (same add-on as the primary gateway); the add-on
+# auto-provisions a per-gateway Deployment + Service named
+#   agentweaver-preview-gateway-approuting-istio
+# in the same namespace, with pods labelled
+#   gateway.networking.k8s.io/gateway-name: agentweaver-preview-gateway
+# NetworkPolicy (networkpolicy-sandbox.yaml) allows ingress from exactly those pods.
+#
+# TLS — CONFIRMED 2026-06-28 by live spike:
+#   AKS App Routing DefaultDomainCertificate does NOT support nested wildcards.
+#   The DDC CRD has no spec.hostname field; it always issues *.{zone} into the named
+#   secret regardless of DDC object name.  Therefore PREVIEW_TLS_SECRET is always
+#   "agentweaver-tls" (the existing zone wildcard) and PREVIEW_HOSTNAME is always
+#   "*.{zone}".  Preview subdomains take the single-label form {token}-preview.{zone}.
+#   (If AKS adds nested DDC support in the future, the deploy script sets these vars
+#    and this manifest renders correctly without changes.)
+#
+# OPEN QUESTION (a) — RESOLVED LOW RISK:
+#   approuting-istio accepts multiple Gateway objects per namespace (standard Gateway API).
+#   The main gateway uses exact hostname agentweaver.{zone}; this gateway uses *.{zone}.
+#   Istio selects the most-specific match (exact > wildcard) so the main host routes
+#   correctly. Smoke-test on first deploy to confirm add-on version handles this cleanly.
+#
+# The deploy script (steps/30-deploy.mjs) injects PREVIEW_HOSTNAME via the production
+# overlay's Kustomize `replacements` before `kubectl apply -k`.
+# allowedRoutes: Same — per-preview HTTPRoutes must be in namespace agentweaver.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agentweaver-preview-gateway
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  gatewayClassName: approuting-istio
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: "*.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          # Managed cert Secret. AKS App Routing's DefaultDomainCertificate always
+          # issues into agentweaver-tls (see comment above) so this is a static
+          # literal, not a per-deploy dynamic value.
+          - kind: Secret
+            name: agentweaver-tls
+      allowedRoutes:
+        namespaces:
+          from: Same

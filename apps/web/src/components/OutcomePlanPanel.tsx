@@ -19,7 +19,6 @@ import { Button,
   tokens,
   } from '@fluentui/react-components';
 import {
-  AppsListDetailRegular,
   CheckmarkCircleRegular,
   ChevronLeftRegular,
   DismissCircleRegular,
@@ -28,10 +27,9 @@ import {
   LockClosedRegular,
 } from '@fluentui/react-icons';
 import { AgentStepList } from './ui/agentic';
-import { DecomposePreviewDialog } from './DecomposePreviewDialog';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
-import type { OutcomeSpec, OutcomeSpecStatus, ProposedBacklogItem } from '../api/types';
+import type { OutcomeSpec, OutcomeSpecStatus } from '../api/types';
 import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
 const useStyles = makeStyles({
   panel: {
@@ -221,7 +219,6 @@ function actionErrorMessage(err: unknown): string {
 
 interface OutcomePlanPanelProps {
   runId: string;
-  projectId?: string;
   events: RunStreamEvent[];
   streamStatus: StreamStatus;
   runStatus?: string;
@@ -229,12 +226,9 @@ interface OutcomePlanPanelProps {
   onReconnect?: () => void;
   onClarifyPlan?: () => void;
   clarificationSent?: boolean;
-  /** True once the run has decomposed into a work plan / dispatched subtasks, or is terminal.
-   *  Hides the pre-dispatch "Break into tasks" authoring action for mid/post-run views. */
-  dispatched?: boolean;
 }
 
-export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false, dispatched = false }: OutcomePlanPanelProps) {
+export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false }: OutcomePlanPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -252,15 +246,6 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
   // Snapshot of spec content at the moment a revise request is submitted. Used to detect
   // when the coordinator has finished re-drafting (content changes while revising=true).
   const revisingSnapshotRef = useRef<string | null>(null);
-
-  // Decompose / "Break into tasks" state
-  const [decomposePreviewOpen, setDecomposePreviewOpen] = useState(false);
-  const [decomposeItems, setDecomposeItems] = useState<ProposedBacklogItem[]>([]);
-  const [decomposeWasCapped, setDecomposeWasCapped] = useState(false);
-  const [decomposeTotal, setDecomposeTotal] = useState(0);
-  const [decomposeLoading, setDecomposeLoading] = useState(false);
-  const [decomposeError, setDecomposeError] = useState<string | null>(null);
-  const [decomposeSuccess, setDecomposeSuccess] = useState(false);
   const [allowTaskPromotion, setAllowTaskPromotion] = useState(false);
 
   // Tracks whether the most recent getOutcomeSpec call returned 404 (spec not yet created).
@@ -447,17 +432,20 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
 
   // Compose the revise feedback from the per-question answers plus any free-form feedback.
   // Each answered question becomes a "Q: …\nA: …" block the coordinator re-drafts from.
-  const composedFeedback = useMemo(() => {
+  const composedFeedback = (() => {
     const qa = clarifying
       .map((q, i) => ({ q, a: (answers[i] ?? '').trim() }))
       .filter((x) => x.a.length > 0)
       .map((x) => `Q: ${x.q}\nA: ${x.a}`)
       .join('\n\n');
     return [qa, extraFeedback.trim()].filter((s) => s.length > 0).join('\n\n');
-  }, [clarifying, answers, extraFeedback]);
+  })();
 
   useEffect(() => {
-    setAllowTaskPromotion(spec?.allowTaskPromotion ?? false);
+    const syncAllowTaskPromotion = async () => {
+      setAllowTaskPromotion(spec?.allowTaskPromotion ?? false);
+    };
+    void syncAllowTaskPromotion();
   }, [spec?.allowTaskPromotion, spec?.status]);
 
   // Clear the revising spinner when the spec content changes — this fires when the coordinator
@@ -471,7 +459,7 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
       setRevising(false);
       revisingSnapshotRef.current = null;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [revising, specContentKey]);
 
   // 30-second safety-net: clear the spinner even if the content hasn't changed (e.g. the
@@ -495,43 +483,6 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
     setAnswers(clarifying.map(() => ''));
     setExtraFeedback('');
     setReviseOpen(true);
-  };
-
-  const handleBreakIntoTasks = async () => {
-    if (!projectId) return;
-    setDecomposeLoading(true);
-    setDecomposeError(null);
-    setDecomposeItems([]);
-    setDecomposeSuccess(false);
-    setDecomposePreviewOpen(true);
-    try {
-      const result = await apiClient.decomposeSpec(projectId, null, false, runId);
-      setDecomposeItems(result.proposed_items);
-      setDecomposeWasCapped(result.was_capped);
-      setDecomposeTotal(result.total_found);
-    } catch (err) {
-      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
-    } finally {
-      setDecomposeLoading(false);
-    }
-  };
-
-  const handleDecomposeConfirm = async () => {
-    if (!projectId) return;
-    setDecomposeLoading(true);
-    setDecomposeError(null);
-    try {
-      const result = await apiClient.decomposeSpec(projectId, null, true, runId);
-      setDecomposeItems(result.proposed_items);
-      setDecomposeWasCapped(result.was_capped);
-      setDecomposeTotal(result.total_found);
-      setDecomposePreviewOpen(false);
-      setDecomposeSuccess(true);
-    } catch (err) {
-      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
-    } finally {
-      setDecomposeLoading(false);
-    }
   };
 
   return (
@@ -635,12 +586,6 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
         </MessageBar>
       )}
 
-      {decomposeSuccess && (
-        <MessageBar intent="success">
-          <MessageBarBody>Tasks created successfully.</MessageBarBody>
-        </MessageBar>
-      )}
-
       {confirmDeadAfterDraft && (
         <MessageBar intent="warning" icon={<DismissCircleRegular />} data-testid="outcome-plan-dead-run-banner">
           <MessageBarBody>
@@ -685,17 +630,6 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
         </>
       )}
 
-      {status === 'confirmed' && projectId && !dispatched && (
-        <div role="group" className={styles.actionRow}>
-          <Button
-            appearance="secondary"
-            icon={<AppsListDetailRegular />}
-            onClick={() => void handleBreakIntoTasks()}
-          >
-            Break into tasks
-          </Button>
-        </div>
-      )}
 
       <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) { setAnswers([]); setExtraFeedback(''); } }}>
         <DialogSurface>
@@ -761,16 +695,6 @@ export function OutcomePlanPanel({ runId, projectId, events, streamStatus, runSt
         </DialogSurface>
       </Dialog>
 
-      <DecomposePreviewDialog
-        isOpen={decomposePreviewOpen}
-        onClose={() => { setDecomposePreviewOpen(false); setDecomposeError(null); }}
-        onConfirm={handleDecomposeConfirm}
-        proposedItems={decomposeItems}
-        wasCapped={decomposeWasCapped}
-        totalFound={decomposeTotal}
-        isLoading={decomposeLoading}
-        error={decomposeError}
-      />
     </div>
   );
 }

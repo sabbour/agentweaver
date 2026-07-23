@@ -1,0 +1,92 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "What a Workflow Template Is",
+  "alt": "What a Workflow Template Is: Workflow YAML, Start node, Typed nodes, Verdict edges, Labels, lanes, agent hints, Binder expands to runtime graph",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Template",
+      "label": "Workflow YAML",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Start",
+      "label": "Start node",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Nodes",
+      "label": "Typed nodes",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Edges",
+      "label": "Verdict edges",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Metadata",
+      "label": "Labels, lanes, agent hints",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Binder",
+      "label": "Binder expands to runtime graph",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Template",
+      "to": "Start"
+    },
+    {
+      "from": "Template",
+      "to": "Nodes"
+    },
+    {
+      "from": "Template",
+      "to": "Edges"
+    },
+    {
+      "from": "Template",
+      "to": "Metadata"
+    },
+    {
+      "from": "Start",
+      "to": "Binder"
+    },
+    {
+      "from": "Nodes",
+      "to": "Binder"
+    },
+    {
+      "from": "Edges",
+      "to": "Binder"
+    }
+  ]
+}

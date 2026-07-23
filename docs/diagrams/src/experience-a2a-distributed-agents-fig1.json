@@ -1,0 +1,88 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "1. The headline: runs behave identically to in-process",
+  "alt": "1. The headline: runs behave identically to in-process: User / operator, Web UI run timeline, Same SSE event stream, Same events,, Turn ran in worker, Turn ran in a pod",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "User",
+      "label": "User / operator",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "Web UI run timeline",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "SSE",
+      "label": "Same SSE event stream",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Same",
+      "label": "Same events,",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      },
+      "subLabel": "same order,",
+      "meta": "same gates?"
+    },
+    {
+      "id": "InProc",
+      "label": "Turn ran in worker",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Turn ran in a pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "User",
+      "to": "UI"
+    },
+    {
+      "from": "UI",
+      "to": "SSE"
+    },
+    {
+      "from": "SSE",
+      "to": "Same"
+    },
+    {
+      "from": "Same",
+      "to": "InProc",
+      "label": "in-api mode"
+    },
+    {
+      "from": "Same",
+      "to": "Pod",
+      "label": "pod-per-run mode"
+    }
+  ]
+}

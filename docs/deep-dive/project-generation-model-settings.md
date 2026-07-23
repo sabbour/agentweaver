@@ -4,16 +4,12 @@ Project generation model settings let one project choose different GitHub Copilo
 
 ## Flow
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-flowchart LR
-    Settings[Project Settings\nGeneration models] -->|PUT provider-settings| Project[(ProjectRecord)]
-    Project --> BlueprintEndpoint[Blueprint generate endpoint]
-    BlueprintEndpoint -->|ResolveBlueprintModel| BlueprintGen[CopilotBlueprintGenerator]
-    BlueprintEndpoint -->|ResolveWorkflowModel| WorkflowGen[IWorkflowGenerator fallback]
-    Project --> CoordinatorStart[CoordinatorRunService.ActivateAsync]
-    CoordinatorStart --> SpecDraft[CopilotCoordinatorSpecDrafter]
-```
+![Flow: Project Settings, ProjectRecord, Blueprint generate endpoint, CopilotBlueprintGenerator, IWorkflowGenerator fallback, CoordinatorRunService.ActivateAsync, CopilotCoordinatorSpecDrafter](../diagrams/project-generation-model-settings-fig1.png)
+
+<!-- Rendered from ../diagrams/src/project-generation-model-settings-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Stored fields
 

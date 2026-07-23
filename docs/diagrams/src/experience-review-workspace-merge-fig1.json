@@ -1,0 +1,170 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "The mental model",
+  "alt": "The mental model: Agent works in run worktree, Candidate commit + tree hash, Diff against originating branch, Human Review, Reviewer decision, Verify reviewed tree hash, Local git merge, Merged, Reviewer feedback, Agent revises same run worktree, Declined, Merge failed or returns to review",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Work",
+      "label": "Agent works in run worktree",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Candidate",
+      "label": "Candidate commit + tree hash",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Diff",
+      "label": "Diff against originating branch",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Review",
+      "label": "Human Review",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Decision",
+      "label": "Reviewer decision",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Verify",
+      "label": "Verify reviewed tree hash",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "LocalMerge",
+      "label": "Local git merge",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Merged",
+      "label": "Merged",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Feedback",
+      "label": "Reviewer feedback",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Revise",
+      "label": "Agent revises same run worktree",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Declined",
+      "label": "Declined",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "MergeProblem",
+      "label": "Merge failed or returns to review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Work",
+      "to": "Candidate"
+    },
+    {
+      "from": "Candidate",
+      "to": "Diff"
+    },
+    {
+      "from": "Diff",
+      "to": "Review"
+    },
+    {
+      "from": "Review",
+      "to": "Decision"
+    },
+    {
+      "from": "Decision",
+      "to": "Verify",
+      "label": "Commit and Merge / approve"
+    },
+    {
+      "from": "Verify",
+      "to": "LocalMerge"
+    },
+    {
+      "from": "LocalMerge",
+      "to": "Merged"
+    },
+    {
+      "from": "Decision",
+      "to": "Feedback",
+      "label": "Change / request changes"
+    },
+    {
+      "from": "Feedback",
+      "to": "Revise"
+    },
+    {
+      "from": "Revise",
+      "to": "Candidate"
+    },
+    {
+      "from": "Decision",
+      "to": "Declined",
+      "label": "Decline / reject"
+    },
+    {
+      "from": "Verify",
+      "to": "MergeProblem",
+      "label": "tree changed, conflict, or repository blocked"
+    }
+  ]
+}

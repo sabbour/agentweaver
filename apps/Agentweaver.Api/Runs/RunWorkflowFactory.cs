@@ -1178,7 +1178,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         {
             var id = EdgeId("merge-to-output", edge);
             return new VisualFunctionExecutor<MergeOutput, AgentTurnOutput>(
-                id, id, "Blocked → review", "plumbing", "action", true,
+                id, id, "Merge → output", "plumbing", "action", true,
                 async (mo, ctx, ct) =>
                 {
                     var ao = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);

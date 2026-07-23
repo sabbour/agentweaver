@@ -18,7 +18,7 @@ to make a change and get it merged. It has two parts:
 
 See [Prerequisites in the getting started guide](https://sabbour.me/agentweaver/guide/getting-started#prerequisites)
 for the tools you'll need (git, Node.js 22+, .NET 10 SDK, and Azure CLI if you're touching
-the deploy/upgrade scripts) and per-platform install instructions (winget/brew/apt-get).
+the provisioning/deployment scripts) and per-platform install instructions (winget/brew/apt-get).
 
 ## Getting set up
 
@@ -43,78 +43,60 @@ no `/api` prefix, since that endpoint is mapped at the root, not under `/api`).
 | `apps/web` | The React/Vite frontend |
 | `docs/` | VitePress documentation site (published at sabbour.me/agentweaver) |
 | `packages/` | Shared .NET libraries (agent runtime, squad model, etc.) |
-| `scripts/azure` | The Node.js build/deploy/upgrade/release toolchain (no bash/PowerShell) |
+| `scripts/azure` | The Node.js provisioning/deployment/release toolchain (no bash/PowerShell) |
 | `tests/Agentweaver.Tests` | .NET test suite |
 | `tests/e2e` | End-to-end tests |
-| `k8s/` | Kubernetes manifests (AKS deployment) |
+| `k8s/` | Kustomize-based Kubernetes manifests (AKS deployment): `k8s/base/` (generic manifests), `k8s/overlays/production/` (image tags, ConfigMap/replacements patches), `k8s/reference/` (non-deployed examples/one-off jobs) |
 
 ## Making a change
 
-1. **Use a short-lived branch and PR for every change.** This repo does not use a
-   `dev`/`preview` staging branch flow — protected `main` is the only long-lived branch.
-   Branch from current `origin/main` with a descriptive conventional prefix, e.g.
-   `fix/123-short-desc`, `feat/short-desc`, `docs/short-desc`.
-   - **Direct pushes to `main` are not allowed**, including tiny and docs-only changes.
-   - Before merge, the branch must be current with `main` and all blocking CI
-     must rerun successfully. GitHub enforces this through “require branches
-     to be up to date before merging.”
-   - **Squash-merge** so `main` keeps **one commit per logical change**.
-     GitHub automatically deletes the source branch after merge. That single commit
-     subject is what feeds the generated `CHANGELOG.md` (and matches the PR title used for the
-     GitHub Release notes), so a clean one-commit-per-change history keeps both in sync. See
-     [Releasing](RELEASING.md#branching-model).
-   - Do **not** create a long-lived local `integration`/`staging` branch as a
-     private promotion pipeline. A disposable merge-test branch or worktree is
-     fine, but delete it after validation; see
-     [No local integration branch](RELEASING.md#no-local-integration-branch).
+1. **Use a short-lived branch and PR for every change.** `dev` is the default,
+   protected integration branch. Branch from current `origin/dev` with a descriptive
+   conventional prefix, e.g. `fix/123-short-desc`, `feat/short-desc`, or
+   `docs/short-desc`.
+   - **Direct pushes to `dev` are not allowed**, including tiny and docs-only changes.
+   - Before merge, the branch must be current with `dev` and all blocking CI must rerun
+     successfully. GitHub enforces this through “require branches to be up to date
+     before merging.”
+   - **Squash-merge** so `dev` keeps **one commit per logical change**. GitHub
+     automatically deletes the source branch after merge.
+   - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
+     soaked release promotion or an audited emergency hotfix only.
+   - Do **not** create a long-lived local `integration`/`staging` branch as a private
+     promotion pipeline. A disposable merge-test branch or worktree is fine, but delete
+     it after validation.
 2. **Keep changes focused.** Scope one change to one concern — it's easier to review and
    to revert if something goes wrong.
 3. **Add or update tests** for any behavior change (see Testing below).
 4. **Update docs** if you changed user-facing behavior, npm scripts, or configuration —
    `README.md` and `docs/guide/` are the two places most likely to need updates.
-5. **Run the relevant test suite(s) locally before you push.** CI (see
-   [Continuous integration](#continuous-integration) below) re-runs the full suite on
-   every pull request and push to `main`, but running the
-   affected suite locally first keeps the feedback loop short and avoids red PRs.
-6. **Verify live for anything with runtime/deploy impact**, not just via unit tests —
-   e.g. after a change to `scripts/azure/`, run the affected command for real (with
-   `--dry-run` where supported) against an actual environment before considering the
-   change done. Peer review or a passing unit test alone does not mean a fix is verified
-   or deployed — only confirming it live, after a real deploy, does.
+5. **Run the relevant test suite(s) locally before you push.** CI re-runs the full suite
+   on every pull request and push to `dev` or `main`, but running the affected suite
+   locally first keeps the feedback loop short and avoids red PRs.
+6. **Add a changeset for shipped user-facing behavior** before opening the PR: run `npm run changeset`, use `patch` for compatible fixes and `minor` for features or breaking changes while Agentweaver is at `0.x`, and write prose for users rather than restating a commit title. Do not edit `VERSION`, package versions, or `CHANGELOG.md`. Docs/tests/CI-only changes normally need no changeset; use the `changeset:not-required` label only with a `Changeset exemption:` rationale in the PR body. Infrastructure and local deployment commands never consume changesets; `release:publish` consumes only metadata already prepared by `release:prepare`. **The `Changeset advisory` CI job blocks merge** if it detects a release-relevant change with no changeset and no exemption, so this can't be silently skipped. For the full playbook, see the [changelog skill](.copilot/skills/agentweaver-changelog/SKILL.md).
+7. **Verify live for anything with runtime/deploy impact**, not just via unit tests.
 
-## Branch Topology — room for growth
+### Writing a changeset
 
-Today's model is a protected `main`-only trunk: `main` is the sole long-lived
-integration branch. Do not add a permanent `dev` tier merely because the repository
-is growing. Instead, use this **Branch Topology Activation Plan**:
+Good: “Add exportable workflow bundles so operators can move a workflow between installations.”
 
-- **Trigger A — Merge Queue:** activate when the repository is organization-owned and
-  either at least **5 PRs in a rolling 14-day period** must rerun blocking CI solely
-  because another PR merged first, or the median time from “all review/check
-  requirements satisfied” to merge exceeds **one business day for two consecutive
-  weeks** because of update/retest serialization. Enable Merge Queue with
-  `merge_group` CI while keeping `main` as the sole integration branch.
-- **Trigger B — protected maintenance branch:** activate when the project makes its
-  **first explicit commitment to ship a fix for an older minor line after an
-  incompatible newer minor has landed on `main`**. Create and protect `release/X.Y`
-  from the last supported tag; publish patch tags from it and forward-port applicable
-  fixes to `main`.
-- **Trigger C — full `dev → release/vX.Y.Z → main` promotion tier:** adopt it only
-  when either **two consecutive releases** each require a combined release-candidate
-  soak of at least **3 business days**, while at least **two independent next-version
-  changes** must continue integrating during each soak and cannot reasonably be hidden
-  behind feature flags or isolated on short-lived branches; or the project formally
-  commits to a **durable externally consumed prerelease/next channel** whose supported
-  source must advance independently of the stable/published branch for at least one
-  release cycle.
+Bad: “feat: add export.” It repeats a commit title without explaining the user impact.
 
-**Checking triggers is manual today.** For Trigger A, spot-check GitHub Actions run
-history and PR merge timestamps over the prior 14 days; for Trigger B, record the
-explicit support commitment and the incompatible newer minor on `main`. No metrics
-automation exists yet; a lightweight measurement tool may be considered later.
+## Branch Topology
 
-For rationale and the migration playbook, see
-[Niobe's branching growth review](.squad/decisions/inbox/niobe-branching-growth-review.md).
+The active topology is `dev → release/vX.Y.Z → main`:
+
+- **`dev`** is the default, protected integration branch. Normal PRs target it and use
+  required PRs, blocking CI, up-to-date-before-merge, squash merge, and automatic source
+  branch deletion.
+- **`release/vX.Y.Z`** is an ephemeral release-candidate/soak branch cut from a green
+  `dev` SHA. Stabilization fixes land there by PR and are immediately forward-ported to
+  `dev`.
+- **`main`** is stable/published-only. It receives only a promotion PR from a soaked
+  release branch or an audited emergency hotfix, which must be forward-ported to `dev`.
+  Release tags are cut from the exact resulting `main` promotion SHA.
+
+The complete operating flow is in [RELEASING.md](RELEASING.md).
 
 ## Testing
 
@@ -125,8 +107,8 @@ Run only the suite(s) relevant to what you changed:
 # dev machines to avoid the Copilot SDK trying to download a CLI binary)
 dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 
-# Node.js build/deploy/upgrade/release toolchain
-node --test scripts/azure/tests/*.test.mjs
+# Node.js provisioning/deployment/release toolchain
+node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
 
 # Web frontend (Vitest)
 npm --prefix apps/web run test
@@ -140,39 +122,32 @@ npm run docs:build
 
 ## Continuous integration
 
-Pull requests and pushes to `main` are verified by the
+Pull requests and pushes to `dev` and `main` are verified by the
 [`CI` workflow](.github/workflows/ci.yml). It runs the same commands documented under
 [Testing](#testing) above, split into one job per area so each gets a dedicated runner
 (several .NET and web tests are timing-sensitive and flake under CPU contention if
-crowded onto a single runner):
+crowded onto a single runner). A `changes` job classifies each diff by path first, and
+every suite job below except `Changeset advisory` only runs when its path group
+actually changed (any edit to `.github/workflows/**` always runs everything, so the
+pipeline itself is always fully verified); a job that's skipped this way still counts
+as passing for required-status-checks purposes:
 
-| Job | What it runs | Gating |
-|---|---|---|
-| `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass |
-| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs` | Blocking — must pass |
-| `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass |
-| `Web lint` | `npm --prefix apps/web run lint` | **Advisory** — visible but non-blocking |
-| `Docs build` | `npm run docs:build` | Blocking — must pass |
+| Job | What it runs | Gating | Runs when |
+|---|---|---|---|
+| `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
+| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs` | Blocking — must pass | `scripts/azure/**` or `scripts/changesets/**` changed |
+| `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass | `apps/web/**` changed |
+| `Web lint` | `npm --prefix apps/web run lint` | Blocking — must pass | `apps/web/**` changed |
+| `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
+| `Changeset advisory` | `npm run version:check && npm run changeset:check` | Blocking — must pass | Always, on every PR |
 
-The `Web lint` job is currently **advisory**: a lint failure marks that one job red so the
-finding stays visible on the PR, but (via job-level `continue-on-error`) it does not fail
-the overall run or block merge. The `eslint-plugin-react-hooks` v7 upgrade introduced
-stricter React-Compiler-style rules that surface a pre-existing backlog of violations in
-`apps/web`; running lint in its own job keeps those findings visible, and the plan is to
-flip it to blocking once the backlog is cleared. Until then, **do not add new lint
-violations** — run `npm --prefix apps/web run lint` locally and keep your own changes clean.
-
-The repository policy requires these four blocking jobs on a branch that is
-up to date with `main`. Ahmed must activate the GitHub ruleset described in
-[`.github/main-branch-protection.md`](.github/main-branch-protection.md) to
-make admission mechanical. Until activation, follow the same PR and strict
-update/retest policy manually and never direct-push or merge around a failing
-blocking job.
-
-GitHub Merge Queue is unavailable while this repository is owned by the
-personal `sabbour` account. Strict up-to-date protection causes more
-update/retest churn when concurrent PRs race, but it is the enforceable
-fallback. Revisit Merge Queue only if the repository moves to an organization.
+The repository policy requires these six blocking jobs (path-conditional jobs count
+as passing when skipped) on a branch that is up to date with `dev`. The GitHub
+ruleset described in [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md)
+is **active**, so admission is mechanical: direct pushes to `dev` are rejected and
+merges are blocked until the branch is current and the required checks are green.
+`Changeset advisory` now fails the build (not just a warning) when a release-relevant
+change has no changeset and no `changeset:not-required` exemption.
 
 ## Opening a pull request
 
@@ -183,8 +158,8 @@ fallback. Revisit Merge Queue only if the repository moves to an organization.
   any live/deploy verification for runtime changes).
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
-- **Update, retest, then squash-merge.** If another PR reaches `main` first,
-  GitHub marks yours out of date. Update from `origin/main`, resolve conflicts,
+- **Update, retest, then squash-merge.** If another PR reaches `dev` first,
+  GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts,
   rerun relevant tests/CI, and merge only after all required checks are green
   on the updated branch.
 
@@ -192,7 +167,7 @@ fallback. Revisit Merge Queue only if the repository moves to an organization.
 
 Fork the repository on GitHub, clone **your fork**, add the canonical repository as
 the `upstream` remote, and create your short-lived branch from an up-to-date
-`upstream/main`. Open the PR from that branch to `main`; it follows the same CI,
+`upstream/dev`. Open the PR from that branch to `dev`; it follows the same CI,
 up-to-date, review, and squash-merge rules as every other contribution.
 
 Fork PRs do not receive repository secrets: CI uses the `pull_request` trigger (not
@@ -213,7 +188,7 @@ existing issues are not being mass-relabelled.
 
 ## Commit messages
 
-`CHANGELOG.md` is generated from commit history, bucketed by prefix. Please use a
+Changesets generates new `CHANGELOG.md` sections from reviewed release-note fragments. Please use a
 conventional-commit-style prefix:
 
 - `feat: ...` — new functionality
@@ -237,7 +212,7 @@ conventional-commit-style prefix:
 
 ## Where NOT to make changes
 
-- Do not hand-edit `CHANGELOG.md` — it's generated (`python scripts/gen-changelog.py`).
+- Do not hand-edit generated `CHANGELOG.md` release sections; add or correct the source changeset instead.
 - Do not add build/deploy logic outside `scripts/azure/` — bash/PowerShell scripts were
   fully removed in favor of the Node.js toolchain; don't reintroduce a second toolchain.
 - Do not commit secrets (API keys, GitHub OAuth client secrets, connection strings) —
@@ -279,7 +254,7 @@ business days.
 The assigned agent branches as `squad/{issue-number}-{slug}`, commits with a
 conventional-commit message that references the issue (`Closes #{number}`, including the
 `Co-authored-by: Copilot` trailer), pushes, and opens a PR with `gh pr create` against
-`main`. The full lifecycle, spawn context, and merge commands live in
+`dev`. The full lifecycle, spawn context, and merge commands live in
 [`.squad/templates/issue-lifecycle.md`](.squad/templates/issue-lifecycle.md); the
 orchestration rules live in [`.github/agents/squad.agent.md`](.github/agents/squad.agent.md).
 Agent PRs are gated by the same [CI](#continuous-integration) as everyone else's.
@@ -370,10 +345,7 @@ up: it **hard-fails** a PR when a committed generated reference (e.g.
 doc-relevant paths (API endpoints, workflows, blueprints, MCP tools) changes without any
 `docs/**` update.
 
-Do **not** hand-edit `CHANGELOG.md` — it is derived from git history by
-`scripts/gen-changelog.py` (bucketed by conventional-commit prefix), so a well-formed commit
-message is what feeds it; the GitHub Release notes are generated separately from merged PRs at
-release time (see [Releasing](RELEASING.md)). Finally, keep decision records and docs
+Do **not** hand-edit generated `CHANGELOG.md` release sections. Add or correct the source changeset instead; the matching GitHub Release notes project that same section (see [Releasing](RELEASING.md)). Finally, keep decision records and docs
 distinct: a `.squad/decisions/inbox/` entry captures *why* a choice was made (an internal
 audit trail) and never substitutes for updating `docs/guide/` / `README.md`, which tell users
 *how* to use the feature.

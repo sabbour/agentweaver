@@ -1,0 +1,223 @@
+# SandboxTemplate — agentweaver-agent-host (spec-018 P1.5, pod-per-run).
+#
+# This is the template reached through KubernetesSandboxOptions.AgentHostWarmPoolRef
+# (default "agentweaver-agent-host"). KubernetesSandboxExecutor.LaunchAgentHostPodAsync
+# creates a SandboxClaim with warmPoolRef=agentweaver-agent-host; the pod runs
+# Agentweaver.AgentHost which hosts the A2ATurnBridgeAgent over A2A and the
+# worker/api connects via RemoteAgentProxy.
+#
+# This supersedes the removed legacy sleep-infinity agentweaver-sandbox template/image.
+#   - image: agentweaver-agent-host (the real AgentHost), NOT the old sleep-infinity image.
+#   - envVarsInjectionPolicy: Allowed — the executor injects AgentHost__RunId etc.
+#   - PoC: RequireMtls=false comes from the mounted configmap-agenthost (plain http :8088).
+#   - PoC: readOnlyRootFilesystem relaxed to false (CopilotClient / git write to $HOME).
+#     PRODUCTION must restore readOnlyRootFilesystem: true + a writable $HOME emptyDir.
+#   - GitHub token (Option C / warm pool, workload identity): the pod runs as the dedicated
+#     agentweaver-agent-host ServiceAccount (workload identity / Managed Identity). At run-launch
+#     the executor POSTs /configure to the already-warm pod with the run owner's KV secret NAME;
+#     the pod fetches ONLY that secret from Key Vault via DefaultAzureCredential and caches it for
+#     the pod lifetime. NO CSI volume, NO per-run SecretProviderClass, NO shared RWX token store.
+#     HOME points at a writable emptyDir (/home/appuser) for CopilotClient/git.
+#
+# Pod labels `app: agentweaver-agent-host` and `agentweaver.dev/sandbox: "true"` identify
+# this workload narrowly. The sandbox NetworkPolicy selectors use the same app label
+# (ingress 8088 from worker+api, DNS egress, Cilium FQDN
+# egress allowlist). The extra component label distinguishes agent-host pods for observability.
+# The same NetworkPolicy that restricts ingress to worker+api is what guards the
+# unauthenticated /configure endpoint.
+#
+# Apply (Kustomize):
+#   kubectl apply -k k8s/overlays/production
+#   (image tag + AGENTHOST_KEYVAULT_URI are injected by the overlay's `images:`
+#   transformer and generated agentweaver-runtime-config ConfigMap, respectively.)
+---
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: agentweaver-agent-host
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+    app.kubernetes.io/component: agent-host
+spec:
+  # No env vars are injected via SandboxClaim spec.env — the v0.5.0 controller bypasses warm
+  # pool adoption whenever spec.env is present. All static config lives here in the template or
+  # in the agenthost-config ConfigMap mount. Per-run context (RunId / UserId / TurnBearerToken /
+  # KV secret name) is delivered AFTER bind via POST /configure.
+  envVarsInjectionPolicy: Allowed
+  podTemplate:
+    metadata:
+      labels:
+        app: agentweaver-agent-host
+        agentweaver.dev/sandbox: "true"
+        app.kubernetes.io/part-of: agentweaver
+        app.kubernetes.io/component: agent-host
+        # Workload identity webhook mutates the pod (projected SA token + AZURE_* env)
+        # so the CSI secrets-store driver can authenticate to Key Vault.
+        azure.workload.identity/use: "true"
+    spec:
+      dnsPolicy: ClusterFirst
+      runtimeClassName: kata-vm-isolation
+      # Dedicated kata scheduling (fix/kata-userpool): prefer the fixed kata USER pool
+      # (katapool, labeled agentweaver.io/kata=true, tainted sandbox=kata:NoSchedule) so
+      # sandbox/agent-host pods stop depending on the System pool (nodepool1). The toleration
+      # admits katapool's taint; the nodeAffinity is PREFERRED (not required) so pods fall
+      # back to any other kata-capable node (e.g. nodepool1's kata nodes) if katapool is
+      # full/unavailable — pods are never stranded.
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: kata
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: agentweaver.io/kata
+                    operator: In
+                    values:
+                      - "true"
+      restartPolicy: Never
+      serviceAccountName: agentweaver-agent-host
+      automountServiceAccountToken: true  # needed for CSI workload identity
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agentweaver-agent-host
+          image: agentweaverregistry.azurecr.io/agentweaver-agent-host:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            # PoC: relaxed so CopilotClient/git can write to $HOME. PRODUCTION: set true and
+            # add a writable emptyDir at /home/appuser (and keep /tmp writable).
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          # spec-018: A2A listener port (AgentHost:Port). PoC plain-http; prod mTLS.
+          ports:
+            - name: a2a
+              containerPort: 8088
+              protocol: TCP
+          env:
+            # ASP.NET reads config from env + the mounted appsettings.k8s.json (added AFTER
+            # env in Program.cs, so the configmap wins for shared keys). Per-run context
+            # (RunId/UserId/TurnBearerToken) is delivered via POST /configure; the rest come
+            # from the configmap.
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+            # Writable HOME on an emptyDir so CopilotClient/git can write (no shared RWX store).
+            - name: HOME
+              value: "/home/appuser"
+            # Option C (warm pool, workload identity): the pod fetches the run owner's GitHub token
+            # from Key Vault at /configure-time via DefaultAzureCredential (Managed Identity) — NO CSI
+            # volume mount. The KV URI is also injected at claim time; the per-user secret NAME arrives
+            # in the /configure POST. AgentHost__KeyVaultUri is injected by the production
+            # overlay's configMapGenerator (agentweaver-runtime-config) at deploy time.
+            # Static workspace paths — always /workspace for this deployment.
+            # These live here (not in the SandboxClaim) so warm pool adoption is not bypassed.
+            - name: AgentHost__WorkingDirectory
+              value: "/workspace"
+            - name: AgentHost__RepositoryPath
+              value: "/workspace"
+            # The pod's Kata VM is the command isolation boundary. Avoid a redundant nested bwrap
+            # layer, which cannot mount its private /proc under this hardened security context.
+            - name: AgentHost__SandboxMode
+              value: "kata"
+            # In-cluster AgentweaverMCP /mcp URL, required unconditionally at pod startup
+            # (Program.cs throws InvalidOperationException from DI if empty) -- the operator
+            # assistant purpose (#346/#347) is wired eagerly, not lazily per-run, so every
+            # AgentHost pod (including warm-pool pods never adopted for that purpose) needs
+            # this set. A constant cluster-internal Service DNS name/port, so it is safe to
+            # hardcode here rather than route through the runtime-config ConfigMap.
+            - name: AgentHost__McpEndpoint
+              value: "http://agentweaver-mcp:8080/mcp"
+            - name: AgentHost__KeyVaultUri
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: AGENTHOST_KEYVAULT_URI
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: appinsights-connection-string
+                  optional: true
+          # Capacity right-sizing (fix: agent-host resource-pressure eviction churn under concurrent
+          # wave load). The katapool nodes are small kata hosts (4 vCPU / 16Gi, ~3860m/~11.7Gi
+          # allocatable, plus per-pod Kata-VM overhead). The previous requests (500m / 1Gi) let the
+          # scheduler pack ~7-11 agent-host pods onto a single node while each pod's limit allows a
+          # 2000m / 4Gi build burst (npm install/build/test). Under a complex-app wave-1 (several
+          # concurrent build subtasks) the node's REAL memory (16Gi) was blown well before the
+          # request-based "allocatable" was exhausted -> kubelet MemoryPressure evictions + OOM-kills
+          # + FailedScheduling (Insufficient cpu/memory). Those mid-turn pod teardowns close the A2A
+          # watch stream before AgentHost flushes its terminal WorkflowOutputEvent, so a genuinely
+          # successful subtask surfaces as `watch_stream_completed_without_terminal_event` (the
+          # false-stall family). Raising REQUESTS to reflect a build's true working set makes the
+          # scheduler honest: CPU (1000m) becomes the binding constraint at ~3 pods/node, which also
+          # caps concurrent memory burst to ~3x4Gi=12Gi (<= 16Gi real), and forces the
+          # cluster-autoscaler (katapool minSize 1 / maxSize 5) to add kata nodes under load instead
+          # of overpacking one node into eviction. Limits are unchanged so a single heavy build can
+          # still burst. The terminal-event emission-robustness half (flush-before-teardown / durable
+          # terminal publication) is tracked separately as defense-in-depth under #242.
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+              # Reserve real build headroom (checkout + node_modules/.next + package caches).
+              ephemeral-storage: "2Gi"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+              ephemeral-storage: "8Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            # Disk-backed scratch for pod-local execution + preview. Keep this off tmpfs: Node/Next
+            # already needs the container's 4Gi memory budget.
+            - name: execution-scratch
+              mountPath: /local-workspace
+            - name: tmp
+              mountPath: /tmp
+            # Writable HOME (CopilotClient / git config + caches).
+            - name: home
+              mountPath: /home/appuser
+            # Optional in PoC (RequireMtls=false): server TLS cert. Required in production.
+            - name: a2a-tls
+              mountPath: /mnt/a2a-tls
+              readOnly: true
+            # AgentHost Kestrel/security config — RequireMtls=false (PoC) lives here.
+            - name: agenthost-config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: agentweaver-workspace
+        - name: execution-scratch
+          emptyDir:
+            # Initial measured budget for a checkout, node_modules/.next, and package caches.
+            # Revisit from scratch-usage telemetry before increasing.
+            sizeLimit: "8Gi"
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        - name: a2a-tls
+          secret:
+            secretName: agentweaver-a2a-server-tls
+            defaultMode: 0400
+            optional: true
+        - name: agenthost-config
+          configMap:
+            name: agenthost-config

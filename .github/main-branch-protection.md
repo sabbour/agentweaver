@@ -1,19 +1,17 @@
 # Required `main` ruleset and repository settings
 
-Agentweaver uses protected trunk-based GitHub Flow. The repository is owned by
-the personal account `sabbour`; GitHub Merge Queue is unavailable for
-personal-account repositories, regardless of visibility. This file therefore
-defines the enforceable near-term fallback. Workflow YAML cannot enable these
-GitHub settings by itself.
+`main` is Agentweaver's stable, published-only branch. It is not the default or
+normal integration branch: ordinary feature, bug-fix, documentation, and release
+preparation PRs target protected `dev`.
 
 ## Ruleset targeting `main`
 
-Create an **active branch ruleset** targeting only the default branch:
+Create an **active branch ruleset** targeting only `main`:
 
 - Enforcement status: **Active**
-- Bypass: repository administrators only, for audited emergencies; require a
-  pull request or issue explaining every bypass. Do not grant routine agent,
-  app, or maintainer bypass.
+- Bypass: repository administrators only, for audited emergencies; require a pull
+  request or issue explaining every bypass. Do not grant routine agent, app, or
+  maintainer bypass.
 - Restrict deletions: **enabled**
 - Block force pushes: **enabled**
 - Require linear history: **enabled**
@@ -33,10 +31,12 @@ Create an **active branch ruleset** targeting only the default branch:
   - Do **not** require `Web lint`; it remains advisory until its documented
     backlog is cleared.
 
-Strict up-to-date protection is less efficient than a real merge queue: when
-one PR merges, every competing PR becomes stale and must update/retest before
-it can merge. That churn is the only enforceable serialization mechanism
-available while the repository remains personal-account-owned.
+Only these PRs may enter `main`:
+
+1. A promotion PR from a soaked `release/vX.Y.Z` branch.
+2. An audited emergency hotfix PR for a critical production fix. Forward-port an
+   emergency fix to `dev` before normal integration resumes (and to any supported
+   maintenance branch when applicable).
 
 ## Repository merge settings
 
@@ -48,28 +48,23 @@ Under **Settings → General → Pull Requests**:
 - Default squash commit title: **pull request title**
 - Automatically delete head branches: **on**
 
-## Rollout
+Promotion PRs use **squash merge** so the promoted stable change is one auditable
+commit on `main`; tag that exact resulting SHA. A release branch is deleted after
+promotion.
 
-Ahmed (repo admin) must enable the ruleset and repository settings through
-GitHub Settings or an audited admin API call. Before activation, confirm the
-four exact check names on a pull-request run and fix any persistently red or
-flaky blocking check; do not create a bypass to normalize red CI.
+## Activation status
 
-The authenticated CLI identity was verified to have repository admin
-permission during this design pass, but no live ruleset mutation was made:
-activation changes repository-wide merge behavior and should be an explicit
-owner rollout after the pending process/CI changes land.
+**Active** as of 2026-07-21, ruleset `main-ruleset` (id `18399757`), applied via an
+audited `gh api` call at Ahmed's explicit direction — targeting `refs/heads/main`
+explicitly (not `~DEFAULT_BRANCH`, since `dev` is now the default branch). Repository
+merge settings (squash-only, auto-delete head branches) were applied at the same time.
+The companion [`dev` ruleset](dev-branch-protection.md) is active too, so the default
+integration branch is never an unprotected dumping ground.
 
 ## Future organization-owned option
 
-If the repository is transferred to a GitHub organization, GitHub Merge Queue
-becomes available for consideration. Public organization repositories can use
-it on any organization plan; private organization repositories require GitHub
-Enterprise Cloud. Transfer alone does not activate it: apply Trigger A in the
-[Branch Topology Activation Plan](../CONTRIBUTING.md#branch-topology--room-for-growth).
-When that trigger applies, add the CI `merge_group` trigger, require Merge
-Queue, start with merge groups of one, and disable the redundant “branch must
-be up to date” rule. This is a future option, not a current action item.
-
-For the measurable conditions that activate this future option or other topology
-changes, see [the Branch Topology Activation Plan](../CONTRIBUTING.md#branch-topology--room-for-growth).
+If the repository is transferred to a GitHub organization, GitHub Merge Queue becomes
+available for consideration. Public organization repositories can use it on any
+organization plan; private organization repositories require GitHub Enterprise Cloud.
+Transfer alone does not activate it: evaluate the then-current integration flow before
+enabling queue admission.
