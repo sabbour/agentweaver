@@ -222,6 +222,7 @@ public sealed class McpOAuthBrokerStoreTests : IDisposable
     private sealed class NotConfiguredOrgAuth : IGitHubOrgAuthorizationService
     {
         public bool IsConfigured => false;
+        public IReadOnlyList<string> AllowedOrgs => [];
         public Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct) =>
             Task.FromResult(OrgAuthResult.NotConfigured);
     }

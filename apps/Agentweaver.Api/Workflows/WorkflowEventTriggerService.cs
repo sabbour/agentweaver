@@ -11,12 +11,13 @@ namespace Agentweaver.Api.Workflows;
 /// <see cref="Coordinator.CoordinatorHeartbeatService"/> pickup path — an event firing is an
 /// accountable run visible on the board, claimed exactly once, same as every other backlog task.
 ///
-/// <para><b>SCOPE (explicitly not fully closed by this first pass):</b> this class is the trigger
-/// MECHANISM only. No concrete external event SOURCE is wired to call <see cref="FireEventAsync"/>
-/// yet — there is no GitHub webhook receiver, no issue/PR/comment listener, no scheduled poller for
-/// any specific event type. Until a real event source is wired (tracked as follow-up work), the only
-/// way to fire an event trigger is the explicit <c>POST /api/projects/{id}/workflow-events</c>
-/// endpoint (see <c>Endpoints.WorkflowTriggerEndpoints</c>) or calling this service directly.</para>
+/// <para><b>SCOPE:</b> this class is the trigger MECHANISM. Event sources call
+/// <see cref="FireEventAsync"/>: the project-scoped GitHub webhook receiver
+/// (<c>Endpoints.GitHubWebhookEndpoints</c>, HMAC-verified before it reaches here) and the explicit
+/// <c>POST /api/projects/{id}/workflow-events</c> endpoint (<c>Endpoints.WorkflowTriggerEndpoints</c>).
+/// This service treats the event name as an opaque, already-authenticated routing key —
+/// it never receives or interprets raw issue/PR/comment body text, so untrusted GitHub content cannot
+/// reach a prompt through this path.</para>
 /// </summary>
 public sealed class WorkflowEventTriggerService
 {

@@ -243,6 +243,7 @@ public sealed class McpOAuthServerTests : IDisposable
     private sealed class StubOrgAuth(OrgAuthResult result) : IGitHubOrgAuthorizationService
     {
         public bool IsConfigured => true;
+        public IReadOnlyList<string> AllowedOrgs => ["microsoft"];
         public Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct) =>
             Task.FromResult(result);
     }

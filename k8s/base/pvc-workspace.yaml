@@ -1,3 +1,30 @@
+# PersistentVolumeClaim — shared workspace (RWX Azure Files).
+#
+# SECURITY NOTE (Alert 2 — shared RWX workspace cross-run exposure): this single
+# ReadWriteMany volume is mounted at /workspace by the API, worker, AND every agent-host
+# sandbox pod, all running as uid 1000. It is therefore NOT an isolation boundary between
+# runs: a sandbox can traverse other runs' worktrees and the API's HOME
+# (/workspace/.home → token store, checkpoints). Claim teardown does not sanitize it.
+#
+# Why full isolation is NOT fixed in this PR (deliberate, tracked as follow-up):
+#   * Per-run dynamic PVCs (spec.volumeClaimTemplates) CANNOT be used: the agent-sandbox
+#     v0.5.0 controller bypasses warm-pool adoption whenever spec.volumeClaimTemplates (or
+#     spec.env) is present (see KubernetesSandboxExecutor), which would break the warm-pool
+#     pre-warming the run-launch critical path depends on.
+#   * "Per-directory access controls" are ineffective here: this Azure Files SMB share mounts
+#     with a fixed uid=1000/gid=1000 and file_mode=0644/dir_mode=0755 for ALL pods
+#     (storageclass-workspace.yaml), so unix permissions cannot separate same-uid workloads.
+#   * The per-run git worktrees live UNDER the API HOME tree
+#     ($HOME/.local/share/agentweaver, HOME=/workspace/.home), so a sandbox pod legitimately
+#     needs read/write there today — a subPath carve-out would break active runs.
+#
+# True isolation requires relocating worktrees off the shared HOME tree onto per-run volumes
+# (and secure teardown), which is an architectural change too large/risky for this hardening
+# PR. It is flagged as follow-up. In the meantime, this PR hardens the COMPOUNDING controls
+# the security assessment called out — sandbox egress is locked to public HTTPS only
+# (networkpolicy-sandbox.yaml) and the public MCP no longer shares the pod-create/exec
+# identity (serviceaccount-mcp.yaml) — shrinking the exfiltration/escalation surface.
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

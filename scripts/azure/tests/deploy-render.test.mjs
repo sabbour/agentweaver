@@ -87,6 +87,16 @@ test("buildRuntimeConfigLiterals() composites full URLs from HOST and passes thr
   assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
 });
 
+test("buildRuntimeConfigLiterals() passes GITHUB_ALLOWED_ORG through, defaulting to microsoft", () => {
+  // Config-driven, non-committed value: falls back to the committed default when unset...
+  assert.equal(buildRuntimeConfigLiterals(VARS).GITHUB_ALLOWED_ORG, "microsoft");
+  // ...and passes a supplied (possibly multi-org) value through verbatim.
+  assert.equal(
+    buildRuntimeConfigLiterals({ ...VARS, GITHUB_ALLOWED_ORG: "microsoft,contoso" }).GITHUB_ALLOWED_ORG,
+    "microsoft,contoso",
+  );
+});
+
 test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
   const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
   const original = fs.readFileSync(overlayPath, "utf8");

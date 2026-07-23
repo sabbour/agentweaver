@@ -178,12 +178,12 @@ public sealed class ProjectWorkspaceService
         if (resolved.WorktreeDirectory is { } worktreeRoot)
         {
             var root = worktreeRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fullPath = Path.GetFullPath(Path.Combine(root, normalizedPath));
+            var candidate = Path.GetFullPath(Path.Combine(root, normalizedPath));
 
-            // Path containment: reject any resolved path that escapes the worktree root.
-            var rootWithSep = root + Path.DirectorySeparatorChar;
-            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            if (!fullPath.StartsWith(rootWithSep, cmp))
+            // Path containment: resolve symlinks/reparse points BEFORE deciding the path is inside
+            // the worktree root. A lexical Path.GetFullPath check alone would follow a
+            // repository-planted symlink out of the worktree (e.g. to a secrets mount).
+            if (!WorkspacePathGuard.TryResolveContainedPath(root, candidate, out var fullPath))
                 return new WorkspaceContentResult(WorkspaceOutcome.InvalidPath, null);
 
             if (!File.Exists(fullPath))

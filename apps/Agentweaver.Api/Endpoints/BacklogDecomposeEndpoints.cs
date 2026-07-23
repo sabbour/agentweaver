@@ -197,15 +197,11 @@ public static class BacklogDecomposeEndpoints
                 {
                     var workspaceRoot = project.WorkingDirectory
                         .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                    var fullPath = Path.GetFullPath(Path.Combine(workspaceRoot, normalizedPath));
+                    var candidatePath = Path.GetFullPath(Path.Combine(workspaceRoot, normalizedPath));
 
-                    // Containment check: reject any resolved path that escapes the workspace root.
-                    var rootWithSep = workspaceRoot + Path.DirectorySeparatorChar;
-                    var cmp = OperatingSystem.IsWindows()
-                        ? StringComparison.OrdinalIgnoreCase
-                        : StringComparison.Ordinal;
-
-                    if (!fullPath.StartsWith(rootWithSep, cmp) && !fullPath.Equals(workspaceRoot, cmp))
+                    // Containment check: resolve symlinks/reparse points before deciding the path is
+                    // inside the workspace root, so a repository-planted symlink cannot escape it.
+                    if (!WorkspacePathGuard.TryResolveContainedPath(workspaceRoot, candidatePath, out var fullPath))
                         return Results.BadRequest(new { error = "File path must be within the project workspace." });
 
                     if (!File.Exists(fullPath))
