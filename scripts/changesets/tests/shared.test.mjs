@@ -11,6 +11,7 @@ import {
   validateReleasePreparation,
   validateReleasePreparationFiles,
   validateSyncBranch,
+  getUnexpectedIgnoredFiles,
 } from "../shared.mjs";
 
 test("version mirrors require VERSION, package.json, and lockfile to match", () => {
@@ -116,4 +117,43 @@ test("dev sync validates branch and prepared release metadata", () => {
   assert.doesNotThrow(() => validateReleasePreparationFiles("abc123", files));
   assert.throws(() => validateReleasePreparationFiles("abc123", files.filter((file) => file !== "VERSION")), /missing VERSION/);
   assert.throws(() => validateReleasePreparationFiles("abc123", files.slice(0, 4)), /does not consume changesets/);
+});
+
+test("getUnexpectedIgnoredFiles filters allowed ignored patterns", () => {
+  const stdout = [
+    "!! .squad/",
+    "!! .idea/",
+    "!! .vscode/",
+    "!! .vs/",
+    "!! .env",
+    "!! .env.local",
+    "!! npm-debug.log",
+    "!! scripts/azure/params.test.json",
+    "!! scripts/azure/steps/.rendered/",
+    "!! scripts/azure/tests/.scratch-123",
+    "!! .security/",
+    "!! test.user",
+    "!! node_modules/",
+    "!! dist/",
+    "!! malicious.js",
+    "!! src/malicious.js"
+  ].join("\n");
+  const unexpected = getUnexpectedIgnoredFiles(stdout);
+  assert.deepEqual(unexpected, ["node_modules/", "dist/", "malicious.js", "src/malicious.js"]);
+});
+
+test("getUnexpectedIgnoredFiles catches attacker planted files in common build dirs", () => {
+  const stdout = [
+    "!! node_modules/malicious.js",
+    "!! dist/malicious.js",
+    "!! bin/malicious.js",
+    "!! obj/malicious.js"
+  ].join("\n");
+  const unexpected = getUnexpectedIgnoredFiles(stdout);
+  assert.deepEqual(unexpected, [
+    "node_modules/malicious.js",
+    "dist/malicious.js",
+    "bin/malicious.js",
+    "obj/malicious.js"
+  ]);
 });
