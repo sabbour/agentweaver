@@ -60,7 +60,11 @@ GitHub Release. It never bumps, writes, builds, or deploys.
 export async function isWorkingTreeClean({ cwd, capture }) {
   const unstaged = await capture("git", ["diff", "--quiet"], { cwd, allowFailure: true });
   const staged = await capture("git", ["diff", "--cached", "--quiet"], { cwd, allowFailure: true });
-  return unstaged.code === 0 && staged.code === 0;
+  const status = await capture("git", ["status", "--porcelain", "--untracked-files=all"], {
+    cwd,
+    allowFailure: true,
+  });
+  return unstaged.code === 0 && staged.code === 0 && status.code === 0 && status.stdout.length === 0;
 }
 
 export async function validateMainSha({ cwd, capture }) {

@@ -22,7 +22,7 @@ function git(...args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 }
 
-if (git("status", "--porcelain")) {
+if (git("status", "--porcelain", "--untracked-files=all")) {
   throw new Error("Working tree must be clean before release preparation.");
 }
 
