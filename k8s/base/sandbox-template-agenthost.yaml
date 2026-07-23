@@ -12,11 +12,13 @@
 #   - PoC: RequireMtls=false comes from the mounted configmap-agenthost (plain http :8088).
 #   - PoC: readOnlyRootFilesystem relaxed to false (CopilotClient / git write to $HOME).
 #     PRODUCTION must restore readOnlyRootFilesystem: true + a writable $HOME emptyDir.
-#   - GitHub token (Option C / warm pool, workload identity): the pod runs as the dedicated
-#     agentweaver-agent-host ServiceAccount (workload identity / Managed Identity). At run-launch
-#     the executor POSTs /configure to the already-warm pod with the run owner's KV secret NAME;
-#     the pod fetches ONLY that secret from Key Vault via DefaultAzureCredential and caches it for
-#     the pod lifetime. NO CSI volume, NO per-run SecretProviderClass, NO shared RWX token store.
+#   - GitHub token (issue #471, brokered per-run): the pod runs as the dedicated
+#     agentweaver-agent-host ServiceAccount, which is federated to agentweaver-agenthost-identity — a
+#     SEPARATE managed identity with NO Key Vault role assignments. At run-launch the API resolves the
+#     run owner's GitHub token on the API side (which legitimately holds KV access) and delivers it
+#     in-memory via the POST /configure body (AgentHostRuntimeState.GitHubAccessToken). The sandbox
+#     never reads Key Vault directly, so abusing shell/tool execution inside the pod cannot enumerate
+#     other users' secrets. NO CSI volume, NO per-run SecretProviderClass, NO shared RWX token store.
 #     HOME points at a writable emptyDir (/home/appuser) for CopilotClient/git.
 #
 # Pod labels `app: agentweaver-agent-host` and `agentweaver.dev/sandbox: "true"` identify
@@ -119,11 +121,12 @@ spec:
             # Writable HOME on an emptyDir so CopilotClient/git can write (no shared RWX store).
             - name: HOME
               value: "/home/appuser"
-            # Option C (warm pool, workload identity): the pod fetches the run owner's GitHub token
-            # from Key Vault at /configure-time via DefaultAzureCredential (Managed Identity) — NO CSI
-            # volume mount. The KV URI is also injected at claim time; the per-user secret NAME arrives
-            # in the /configure POST. AgentHost__KeyVaultUri is injected by the production
-            # overlay's configMapGenerator (agentweaver-runtime-config) at deploy time.
+            # issue #471: the run owner's GitHub token is delivered in-memory via the API's POST
+            # /configure call (AgentHostRuntimeState.GitHubAccessToken); the sandbox does NOT read Key
+            # Vault directly and its identity holds no KV roles. AgentHost__KeyVaultUri is retained
+            # only as a defense-in-depth fallback target — with the dedicated KV-less identity any
+            # such call fails closed — and is injected by the production overlay's configMapGenerator
+            # (agentweaver-runtime-config) at deploy time.
             # Static workspace paths — always /workspace for this deployment.
             # These live here (not in the SandboxClaim) so warm pool adoption is not bypassed.
             - name: AgentHost__WorkingDirectory

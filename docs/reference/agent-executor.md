@@ -66,7 +66,7 @@ The conceptual alignment is strong at the *single-run* level. The natural integr
 
 **g) Isolation model.** Agentweaver uses **Kata VM** (hardware boundary). AX+Substrate assumes **gVisor** (its `ateom-gvisor` component). For code-executing agents, gVisor is a weaker threat model. Options: accept gVisor, or set a `kata-containers` runtime class on Substrate workers — technically possible on Kubernetes but fights Substrate's gVisor assumption. *Medium effort / risk.*
 
-**h) Authentication / Key Vault.** AgentHost uses Azure Workload Identity to fetch per-user GitHub tokens from Key Vault. This must be preserved: AX actor worker pods need the same Workload Identity annotations. *Low effort, but mandatory.*
+**h) Authentication / Key Vault.** AgentHost receives per-user GitHub tokens brokered by the API in `/configure`; the sandbox identity itself has no Key Vault access (issue #471). This delivery path must be preserved: AX actor worker pods need the same brokered-token wiring and workload-identity annotations. *Low effort, but mandatory.*
 
 ### Effort estimate and assessment
 
@@ -86,4 +86,4 @@ The conceptual alignment is strong at the *single-run* level. The natural integr
 | Git worktree / merge | `WorktreeManager`, integration branch | Unchanged; PVC mounted into AX actor | Low |
 | Review gate + steering | `OutcomeSpec` policy, `CoordinatorSteeringService` | **Blocked** — AX HITL is roadmap-only | N/A |
 | Isolation | Kata VM (hardware boundary) | gVisor default, or Kata runtime class | Medium / risk |
-| Auth / secrets | Workload Identity → Key Vault | Same, on AX worker pods | Low |
+| Auth / secrets | API brokers per-user token in `/configure`; sandbox has no KV access (issue #471) | Same brokered path, on AX worker pods | Low |

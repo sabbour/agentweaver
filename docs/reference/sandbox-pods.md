@@ -18,7 +18,7 @@ isolation model — filesystem containment, governance, executor selection, and 
 | `Sandbox:AgentExecutionMode` | `in-api`, `pod-per-run` | `in-api` | `in-api` runs the agent turn in-process in the API/worker (today's behavior, the **rollback path**). `pod-per-run` relocates each run's agent turn into its own Kata-isolated sandbox pod via the A2A bridge. |
 | `Sandbox:ReleasePodOnSuspend` | `true`, `false` | `true` | When `pod-per-run` is active and the workflow graph suspends on an external gate (a HITL/review `RequestPort`, or the coordinator idling while it awaits child runs), `true` checkpoints the run and **releases** the pod back to the warm pool. `false` keeps the pod warm across the suspension for low-latency resume or debugging, at the cost of held capacity. |
 | `Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds` | Positive integer seconds | `300` | Minimum age before the orphan reaper may delete an AgentHost claim that is absent from the active-run map. The effective grace is the larger of this value and `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds + 30` seconds. |
-| `AgentHost:KeyVaultUri` | URI | *(unset)* | Enables runtime Key Vault user-token fetch in warm AgentHost pods. The executor still injects this static value through the claim env because the pod needs the vault URI before `/configure` arrives. |
+| `AgentHost:KeyVaultUri` | URI | *(unset)* | Vault URI for the legacy runtime user-token fetch fallback. With the dedicated KV-less sandbox identity (issue #471) this fallback fails closed; the run owner's token is delivered via the brokered `gitHubAccessToken` in `/configure`. |
 | `AgentHost:ExecutionScratchRoot` | Absolute path | `/local-workspace` | Root of the disk-backed emptyDir used for pod-local execution workspaces and package caches. |
 | `AgentHost:ExecutionScratchMinimumFreeBytes` | Non-negative integer bytes | `8589934592` (8 GiB) | Minimum available scratch space required before AgentHost prepares a local workspace. Failure returns typed reason `insufficient_ephemeral_storage`. |
 | `Coordinator:AssemblyBuildTestTimeoutMinutes` | Positive number | `20` | Total assembly Build/Test wall-clock limit. Expiry cancels the gate and releases its retained AgentHost claim. |
@@ -37,7 +37,7 @@ isolation model — filesystem containment, governance, executor selection, and 
   `-preview` A2A transport — there is no alternate wire transport to deploy. See the
   [A2A reference](./a2a.md) for the transport's preview status and pinning.
 
-> AgentHost user-token delivery is selected by `AgentHost:KeyVaultUri` in AKS. File/CSI settings exist only for local compatibility; the warm-pool path uses runtime Key Vault fetch after `/configure`.
+> AgentHost user-token delivery is selected by `AgentHost:KeyVaultUri` in AKS. File/CSI settings exist only for local compatibility; the warm-pool path receives the run owner's token brokered by the API in `/configure` (issue #471), since the sandbox identity has no Key Vault access.
 
 ## Pod identity and quota
 
@@ -48,7 +48,7 @@ turns) rather than only ad-hoc shell commands.
 | Property | Value / behavior |
 |---|---|
 | Runtime class | `kata-vm-isolation` — a VM boundary around the container, so each run's secret and execution live inside a per-run microVM and are destroyed with it. |
-| Identity | Dedicated sandbox service account; **workload identity** (federated OIDC) is the preferred path for the model credential, projecting **only** the narrowly-scoped workload-identity token volume — not the full Kubernetes API service-account token. |
+| Identity | Dedicated sandbox service account federated to `agentweaver-agenthost-identity`, a managed identity with **no Key Vault role assignments** (issue #471). **Workload identity** (federated OIDC) projects **only** the narrowly-scoped workload-identity token volume — not the full Kubernetes API service-account token — but it grants no vault access, so the sandbox cannot read any user's secrets. |
 | Cluster API access | None. The pod does not automatically receive Kubernetes API credentials; the sandbox stays tokenless for the cluster API even when workload identity is enabled for the model endpoint. |
 | Provisioning | Claimed from a **warm pool** via a `SandboxClaim`; the executor waits until the claim is bound to a concrete pod. AgentHost uses the shared `agentweaver-agent-host` pool (`replicas: 2`), then receives per-run context through `POST /configure` before `/healthz` is expected to become ready. No separate per-run template or per-run warm pool is created for AgentHost. A claim that stays unbound (pod **Pending**) while Kubernetes schedules is a legitimate wait — there is no app-side capacity pre-check — surfaced on the child run's stream via `sandbox.provisioning_pending` heartbeats (issue #217). |
 | AgentHost readiness gate | Warm AgentHost pods start in standby. After binding, the executor calls `POST /configure` with run/user/token/KV secret context plus the workspace descriptor, then polls `GET {scheme}://{podIP}:8088/healthz` (bounded `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds`, default `90`s; `…ReadyPollIntervalMs`, default `1000`) before the first A2A turn. `/configure` is excluded from readiness and returns `409` if called again. The `a2a-sandbox-pod` HttpClient additionally retries connection-refused only. |
@@ -70,12 +70,12 @@ unparseable timestamp receives no grace and remains eligible for cleanup.
 
 ## Run-scoped GitHub token delivery
 
-A pod-per-run sandbox acts **as the run's signed-in user** and needs a GitHub credential to clone/push the worktree and call GitHub API tools. In AKS, user tokens are stored in Azure Key Vault and fetched by the configured AgentHost pod at run launch; they are not mounted via per-run CSI.
+A pod-per-run sandbox acts **as the run's signed-in user** and needs a GitHub credential to clone/push the worktree and call GitHub API tools. In AKS, user tokens are stored in Azure Key Vault, resolved by the API, and delivered to the configured AgentHost pod in the one-time `/configure` call; they are not mounted via per-run CSI, and the sandbox identity itself has no Key Vault access (issue #471).
 
 ### Sourcing
 
 - Each authenticated user's GitHub token is stored in Key Vault as `ghtok-user--{base32(userId)}`.
-- The executor resolves the run's submitting user and corresponding Key Vault secret name before configuring the pod. If the user cannot be resolved or has no usable token, the launch fails before the first turn rather than falling back to another scope.
+- The executor resolves the run's submitting user, pre-resolves that user's GitHub token via the API-side token store, and passes it as `gitHubAccessToken` in `/configure`. If the user cannot be resolved or has no usable token, the launch fails before the first turn rather than falling back to another scope.
 - Installation scope remains for background/system work with no caller; user runs use the owning user's scope.
 
 ### Delivery to the executing pod
@@ -84,7 +84,7 @@ A pod-per-run sandbox acts **as the run's signed-in user** and needs a GitHub cr
 2. The `SandboxClaim` binds one warm pod. Static config such as `AgentHost__KeyVaultUri` is already present because the pod needs the vault URI before configuration.
 3. `KubernetesSandboxExecutor` calls `POST /configure` with run identity, credentials, and the shared/local workspace descriptor.
 4. `AgentHostRuntimeState.TryConfigure(...)` stores those values once.
-5. `KeyVaultUserTokenProvider` uses `SecretClient` + `DefaultAzureCredential` to fetch only `kvUserSecretName`; `KeyVaultGitHubTokenStore` serves the deserialized token to the runtime and caches it in memory for the pod lifetime.
+5. `KeyVaultUserTokenProvider` prefers the pre-resolved `gitHubAccessToken` from `/configure` and serves it to the runtime, caching it in memory for the pod lifetime. The legacy `SecretClient` + `DefaultAzureCredential` fetch of `kvUserSecretName` remains only as a fallback and fails closed under the KV-less sandbox identity (issue #471).
 
 No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volume, or per-run warm pool is created. The JSON secret value matches the old file-mounted format, so downstream consumers still see the same token-store contract.
 
@@ -129,7 +129,7 @@ No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volum
 
 ### Security trade-off
 
-The previous CSI design isolated user tokens at the infrastructure layer: the pod filesystem contained only one projected file. The warm-pool design uses application-layer isolation: the pod identity can reach Key Vault, but AgentHost fetches only the secret name delivered in the one-time `/configure` call. NetworkPolicy protects `/configure`, one-time configuration prevents retargeting, and `message:stream` still requires the per-run bearer token.
+The previous CSI design isolated user tokens at the infrastructure layer: the pod filesystem contained only one projected file. The warm-pool design uses application-layer brokering: the API resolves the run owner's token and delivers it in the one-time `/configure` call, and the sandbox runs as a dedicated identity with **no Key Vault access** (issue #471), so it cannot read any vault secret. NetworkPolicy protects `/configure`, one-time configuration prevents retargeting, and `message:stream` still requires the per-run bearer token.
 
 ```mermaid
 sequenceDiagram
@@ -137,12 +137,10 @@ sequenceDiagram
     participant Claim as SandboxClaim
     participant Host as Warm AgentHost pod
     participant State as AgentHostRuntimeState
-    participant KV as Azure Key Vault
     Worker->>Claim: bind agentweaver-agent-host warm pool
     Claim-->>Worker: pod IP
-    Worker->>Host: POST /configure(runId, userId, token, kvSecret, workingDirectory)
-    Host->>State: TryConfigure once
-    Host->>KV: GetSecret(kvSecret) via workload identity
+    Worker->>Host: POST /configure(runId, userId, gitHubAccessToken, workingDirectory)
+    Host->>State: TryConfigure once (stores brokered token)
     Host-->>Worker: /healthz ready
     Worker->>Host: A2A message:stream (Bearer token)
 ```
@@ -322,7 +320,7 @@ sequenceDiagram
 | Control-plane isolation | The orchestration graph, HITL decisions, and run record stay in the **worker**; a compromised pod cannot alter *what happens next*. |
 | Credential blast radius | The pod holds **only a short-lived, run-scoped credential** — never a broker key, never refresh material, never another run's or user's scope. There is **no `CapabilityTokenService`** and no central token broker. |
 | A2A turn auth | `message:stream` requires `Authorization: Bearer {per-run token}`. The token is delivered only to the claimed AgentHost pod via `/configure` and removed from the registry when the pod is released. |
-| GitHub token exposure | **Fetched from Key Vault only for the configured run owner and cached in memory for the pod lifetime; no CSI user-token file or shared workspace copy exists. |
+| GitHub token exposure | **Brokered by the API for the configured run owner only** and delivered in the one-time `/configure` call, then cached in memory for the pod lifetime; the sandbox identity has **no Key Vault access** (issue #471), and no CSI user-token file or shared workspace copy exists. |
 | Egress | **Default-deny** with a narrow allowlist: model endpoint, the API/worker bridge endpoint, and the run's legitimate git remote(s). The **database is not reachable** from sandbox pods — all run-state I/O flows through the worker. |
 | At rest / past run | Token material does not persist past the pod lifetime; no per-run Secret/SPC is created, and the bearer token is no longer written to `SandboxClaim.spec.env` in etcd. |
 | Reversibility | The whole mode is gated by `Sandbox:AgentExecutionMode`; flipping to `in-api` restores in-process execution with no redeploy. |
