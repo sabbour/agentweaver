@@ -78,6 +78,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"          # Fail the build on HIGH/CRITICAL CVEs
           ignore-unfixed: true    # Only flag CVEs that have a fix available
+          trivyignores: apps/Agentweaver.AgentHost/.trivyignore
 
       - name: Upload Trivy SARIF to GitHub Security tab
         if: always()              # Upload even on scan failure so results are visible
