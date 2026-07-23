@@ -27,6 +27,8 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("memory_import")]
     [InlineData("skill_import")]
     [InlineData("skill_assign")]
+    [InlineData("skill_marketplace_source_add")]
+    [InlineData("skill_marketplace_source_remove")]
     [InlineData("workflow_save")]
     // Pre-existing consequential mutators stay gated.
     [InlineData("coordinator_start")]
@@ -44,6 +46,7 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("run_status")]
     [InlineData("memory_search")]
     [InlineData("sandbox_policy_get")]
+    [InlineData("skill_marketplace_sources_list")]
     [InlineData("list_project_workspace")]
     public void RequiresApproval_is_false_for_ungated_read_tools(string toolName)
     {

@@ -70,6 +70,11 @@ public static class OperatorToolApprovalPolicy
         "memory_import",
         "skill_import",
         "skill_assign",
+        // Registers an EXTERNAL, project-scoped marketplace content source by URL that later browses/
+        // imports pull from — an XPIA vector where injected content could point the marketplace at an
+        // attacker-controlled repo. Its removal is a symmetric state mutation.
+        "skill_marketplace_source_add",
+        "skill_marketplace_source_remove",
         "workflow_save",
     };
 
@@ -169,6 +174,7 @@ public static class OperatorToolApprovalPolicy
         "skill_list",
         "skill_marketplace_browse",
         "skill_marketplace_import",
+        "skill_marketplace_sources_list",
         "skill_marketplaces_list",
         "skill_sync",
         "skill_unassign",
