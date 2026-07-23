@@ -191,14 +191,14 @@ public sealed class SkillMarketplaceBrowseTests
         text.Should().BeNull();
     }
 
-    // ── Browse lists candidates from tree metadata only (ZERO blob downloads) ───────────
+    // ── Browse builds an INDEX (name + short definition) without bulk-downloading resources ──
 
     [Fact]
-    public async Task BrowseMarketplaceAsync_lists_candidates_without_downloading_any_blob()
+    public async Task BrowseMarketplaceAsync_builds_index_from_skill_manifests_without_downloading_resources()
     {
-        // Regression guard for the awesome-copilot browse timeout: browse must build the candidate
-        // list from the Git Trees metadata ALONE and download ZERO blobs — not even the SKILL.md
-        // manifests — so it stays fast no matter how large the marketplace is.
+        // Product contract: browse is a lightweight index — each candidate carries a name + short
+        // definition read from SKILL.md frontmatter, but the skill's OTHER resource files are NEVER
+        // downloaded at browse time (only at import). This is the awesome-copilot 30s regression guard.
         var blobs = new List<GitHubTreeBlob>
         {
             new("skills/pr-review/SKILL.md", 40),
@@ -207,7 +207,9 @@ public sealed class SkillMarketplaceBrowseTests
             new("skills/deploy/SKILL.md", 40),
             new("skills/deploy/runbook.md", 100),
         };
-        var tree = new RecordingTreeClient(blobs, _ => throw new InvalidOperationException("browse must not download any blob"));
+        var tree = new RecordingTreeClient(blobs, path => path.EndsWith("/SKILL.md", StringComparison.Ordinal)
+            ? $"---\nname: {Path.GetFileName(Path.GetDirectoryName(path))}\ndescription: A short definition for {Path.GetFileName(Path.GetDirectoryName(path))}.\n---\nDo the thing thoroughly and safely."
+            : throw new InvalidOperationException($"browse must not download resource blob {path}"));
         var svc = CreateService(tree);
 
         var (outcome, error, candidates) = await svc.BrowseMarketplaceAsync(
@@ -216,11 +218,13 @@ public sealed class SkillMarketplaceBrowseTests
         outcome.Should().Be(SkillOutcome.Ok);
         error.Should().BeNull();
         candidates!.Select(c => c.Location).Should().BeEquivalentTo("skills/pr-review", "skills/deploy");
-        // Name is derived from the skill directory name (tree metadata), not parsed from SKILL.md.
-        candidates.Should().Contain(c => c.Location == "skills/pr-review" && c.Name == "pr-review");
-        candidates.Should().OnlyContain(c => c.Valid);
-        // No blob content was fetched at all — only the tree listing.
-        tree.RawRequests.Should().BeEmpty();
+        // Each candidate carries a short definition parsed from its SKILL.md frontmatter.
+        candidates.Should().Contain(c => c.Location == "skills/pr-review"
+            && c.Name == "pr-review"
+            && c.Description == "A short definition for pr-review.");
+        candidates.Should().OnlyContain(c => c.Description != null && c.Description.Length > 0);
+        // ONLY the two SKILL.md manifests were fetched — never the reference/runbook/binary resources.
+        tree.RawRequests.Should().BeEquivalentTo("skills/pr-review/SKILL.md", "skills/deploy/SKILL.md");
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────────────────────
