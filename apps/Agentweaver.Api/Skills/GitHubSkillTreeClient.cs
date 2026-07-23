@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
@@ -53,9 +54,9 @@ public sealed class GitHubSkillTreeClient : IGitHubSkillTreeClient
         var url =
             $"https://api.github.com/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}"
             + $"/git/trees/{Uri.EscapeDataString(branch)}?recursive=1";
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        AddApiHeaders(request, token);
-        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = await SendWithAnonymousFallbackAsync(
+            http, tok => { var r = new HttpRequestMessage(HttpMethod.Get, url); AddApiHeaders(r, tok); return r; }, token, ct)
+            .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var tree = await response.Content.ReadFromJsonAsync<TreeResponse>(ct).ConfigureAwait(false);
@@ -88,9 +89,9 @@ public sealed class GitHubSkillTreeClient : IGitHubSkillTreeClient
         var url =
             $"https://raw.githubusercontent.com/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}"
             + $"/{Uri.EscapeDataString(branch)}/{encodedPath}";
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        AddRawHeaders(request, token);
-        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = await SendWithAnonymousFallbackAsync(
+            http, tok => { var r = new HttpRequestMessage(HttpMethod.Get, url); AddRawHeaders(r, tok); return r; }, token, ct)
+            .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             return null;
         if (response.Content.Headers.ContentLength is { } declared && declared > maxBytes)
@@ -102,6 +103,32 @@ public sealed class GitHubSkillTreeClient : IGitHubSkillTreeClient
         if (Array.IndexOf(bytes, (byte)0) >= 0)
             return null; // binary — skip (matches on-disk resource reading rules)
         return Encoding.UTF8.GetString(bytes);
+    }
+
+    /// <summary>
+    /// Sends the request built by <paramref name="buildRequest"/> and, when an <em>authenticated</em>
+    /// attempt is rejected with 401/403, retries the identical request once anonymously. The curated
+    /// marketplaces are PUBLIC repos, but a user's OAuth-App access token that has not been SSO-granted
+    /// for the repo's org (e.g. the SAML-enforced <c>microsoft</c> org) is refused on org resources via
+    /// the REST/raw APIs even though anonymous reads succeed. The unauthenticated 60/hr budget is ample
+    /// for a browse, so falling back keeps public marketplaces readable; the token is still tried first
+    /// to give SSO-authorized users the higher authenticated rate limit.
+    /// </summary>
+    private static async Task<HttpResponseMessage> SendWithAnonymousFallbackAsync(
+        HttpClient http, Func<string?, HttpRequestMessage> buildRequest, string? token, CancellationToken ct)
+    {
+        var request = buildRequest(token);
+        var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        request.Dispose();
+        if (!string.IsNullOrWhiteSpace(token)
+            && (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden))
+        {
+            response.Dispose();
+            var anonymous = buildRequest(null);
+            response = await http.SendAsync(anonymous, ct).ConfigureAwait(false);
+            anonymous.Dispose();
+        }
+        return response;
     }
 
     private static void AddApiHeaders(HttpRequestMessage request, string? token)

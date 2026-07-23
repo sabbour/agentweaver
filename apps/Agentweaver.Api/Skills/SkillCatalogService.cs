@@ -395,6 +395,11 @@ public sealed class SkillCatalogService
     // take ~100s and used to hang the "Browse marketplaces" dialog with no timeout. Instead of
     // cloning, fetch only the blobs under the marketplace's subpath via the GitHub Trees API, bound
     // the whole operation by a hard timeout, and surface a clear error rather than an infinite spin.
+    //
+    // Browse only needs to LIST candidate skills (name/description/valid), so it downloads just the
+    // SKILL.md manifests — never the bundled resource blobs. Fetching every resource under a large
+    // marketplace subpath (github/awesome-copilot) is what pushed browse past its timeout; resources
+    // are fetched only at import time, for the skills the user actually selected.
 
     public async Task<(SkillOutcome Outcome, string? Error, IReadOnlyList<SkillCandidateView>? Candidates)> BrowseMarketplaceAsync(
         ProjectId projectId, string owner, string repo, string branch, string subpath, CallerContext caller, CancellationToken ct)
@@ -410,7 +415,7 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, IsSkillManifest, cts.Token).ConfigureAwait(false);
             var candidates = BuildCandidates(DiscoverSkills(tempDir, subpath));
             if (candidates.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
@@ -447,7 +452,7 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, includeBlob: null, cts.Token).ConfigureAwait(false);
             var discovered = DiscoverSkills(tempDir, subpath);
             if (discovered.Count == 0)
                 return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
@@ -508,14 +513,23 @@ public sealed class SkillCatalogService
             };
         }).ToList();
 
+    /// <summary>True for a repository-root-relative path that is a skill manifest (<c>SKILL.md</c>).</summary>
+    private static bool IsSkillManifest(GitHubTreeBlob blob) =>
+        blob.Path.Equals("SKILL.md", StringComparison.Ordinal)
+        || blob.Path.EndsWith("/SKILL.md", StringComparison.Ordinal);
+
     /// <summary>
-    /// Downloads only the text blobs under <paramref name="subpath"/> into a fresh temp directory,
+    /// Downloads the text blobs under <paramref name="subpath"/> into a fresh temp directory,
     /// preserving repo-root-relative paths so <see cref="DiscoverSkills"/> can scan it exactly as if
-    /// the repository had been cloned. Oversized and binary blobs are skipped (they never contribute
-    /// to skill discovery). Runs bounded by <paramref name="ct"/> and a total-byte ceiling.
+    /// the repository had been cloned. When <paramref name="includeBlob"/> is supplied only matching
+    /// blobs are pulled — browse passes <see cref="IsSkillManifest"/> so it fetches just the
+    /// <c>SKILL.md</c> manifests it needs to list candidates, never the (potentially thousands of)
+    /// resource blobs. Oversized and binary blobs are skipped (they never contribute to skill
+    /// discovery). Runs bounded by <paramref name="ct"/> and a total-byte ceiling.
     /// </summary>
     private async Task<string> FetchSubtreeToTempAsync(
-        string owner, string repo, string branch, string subpath, string projectOwner, CancellationToken ct)
+        string owner, string repo, string branch, string subpath, string projectOwner,
+        Func<GitHubTreeBlob, bool>? includeBlob, CancellationToken ct)
     {
         var token = await ResolveTokenAsync(projectOwner, ct).ConfigureAwait(false);
         var blobs = await _treeClient!.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token, ct).ConfigureAwait(false);
@@ -529,6 +543,7 @@ public sealed class SkillCatalogService
 
         var downloads = blobs
             .Where(b => b.Size <= perFileCap)
+            .Where(b => includeBlob is null || includeBlob(b))
             .Select(async blob =>
             {
                 await gate.WaitAsync(ct).ConfigureAwait(false);
