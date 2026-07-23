@@ -320,6 +320,26 @@ public sealed class SkillMarketplaceBrowseTests
         page.Candidates.Select(c => c.Location).Should().BeEquivalentTo("skills/azure-openai", "skills/azure-storage");
     }
 
+    [Fact]
+    public async Task BrowseMarketplaceAsync_uses_anonymous_requests_even_when_a_user_token_is_available()
+    {
+        // Curated marketplaces are PUBLIC. Attaching the signed-in user's OAuth token to browse caused a
+        // slow token round-trip (and a token→403/hang→anon-retry) that made staging browse take 10-41s.
+        // Browse must therefore NEVER attach a token — every tree + raw request goes out anonymously —
+        // even when the caller IS signed in. (Import keeps its own auth behavior; this only covers browse.)
+        var tree = new RecordingTreeClient(SkillBlobs(3), SkillFrontmatter);
+        var svc = CreateService(tree, new AuthorizedTokenStore("a-real-user-token"));
+
+        var (outcome, _, page) = await svc.BrowseMarketplaceAsync(
+            ProjectRef.Id, "github", "awesome-copilot", "main", "skills", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
+
+        outcome.Should().Be(SkillOutcome.Ok);
+        page!.Candidates.Should().OnlyContain(c => c.Description != null && c.Description.Length > 0);
+        // The tree-list call plus every per-page SKILL.md fetch was made without a token.
+        tree.TokensSeen.Should().NotBeEmpty();
+        tree.TokensSeen.Should().OnlyContain(t => t == null);
+    }
+
     private static IReadOnlyList<GitHubTreeBlob> SkillBlobs(int count) =>
         Enumerable.Range(0, count).Select(i => new GitHubTreeBlob($"skills/skill-{i:D2}/SKILL.md", 40)).ToList();
 
@@ -347,13 +367,16 @@ public sealed class SkillMarketplaceBrowseTests
 
     private static readonly CallerContext Caller = new() { User = "owner-1" };
 
-    private static SkillCatalogService CreateService(IGitHubSkillTreeClient? treeClient) => new(
+    private static SkillCatalogService CreateService(IGitHubSkillTreeClient? treeClient) =>
+        CreateService(treeClient, new SignedOutTokenStore());
+
+    private static SkillCatalogService CreateService(IGitHubSkillTreeClient? treeClient, IGitHubTokenStore tokenStore) => new(
         new UnusedSkillStore(),
         new SingleProjectStore(ProjectRef),
         new ProjectGitInitializer(NullLogger<ProjectGitInitializer>.Instance),
         new SkillParser(),
         new InstallationScopeProvider(),
-        new SignedOutTokenStore(),
+        tokenStore,
         NullLogger<SkillCatalogService>.Instance,
         accessTokenProvider: null,
         treeClient: treeClient);
@@ -390,11 +413,15 @@ public sealed class SkillMarketplaceBrowseTests
     private sealed class RecordingTreeClient(IReadOnlyList<GitHubTreeBlob> blobs, Func<string, string?> content) : IGitHubSkillTreeClient
     {
         private readonly List<string> _rawRequests = new();
+        private readonly List<string?> _tokensSeen = new();
         public IReadOnlyList<string> RawRequests => _rawRequests;
+        /// <summary>Every token value passed to the client across list + raw calls (null == anonymous).</summary>
+        public IReadOnlyList<string?> TokensSeen => _tokensSeen;
 
         public Task<IReadOnlyList<GitHubTreeBlob>> ListSubtreeBlobsAsync(
             string owner, string repo, string branch, string subpath, string? token, CancellationToken ct)
         {
+            lock (_tokensSeen) _tokensSeen.Add(token);
             var normalized = subpath.Trim('/');
             var prefix = normalized.Length == 0 ? string.Empty : normalized + "/";
             IReadOnlyList<GitHubTreeBlob> scoped = blobs
@@ -407,6 +434,7 @@ public sealed class SkillMarketplaceBrowseTests
             string owner, string repo, string branch, string path, string? token, long maxBytes, CancellationToken ct)
         {
             lock (_rawRequests) _rawRequests.Add(path);
+            lock (_tokensSeen) _tokensSeen.Add(token);
             return Task.FromResult(content(path));
         }
     }
@@ -442,6 +470,17 @@ public sealed class SkillMarketplaceBrowseTests
     {
         public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
             Task.FromResult(new GitHubTokenEntry(GitHubTokenStatus.SignedOut, null));
+        public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubToken?>(null);
+        public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubIdentity?>(null);
+        public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>A signed-in store that always yields a user token, to prove browse still goes anonymous.</summary>
+    private sealed class AuthorizedTokenStore(string accessToken) : IGitHubTokenStore
+    {
+        public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult(new GitHubTokenEntry(GitHubTokenStatus.SignedIn, accessToken));
         public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubToken?>(null);
         public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubIdentity?>(null);
