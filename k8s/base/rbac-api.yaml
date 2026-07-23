@@ -35,6 +35,9 @@ rules:
       - patch
   # Legacy generic sandbox commands still use exec. Pod creation is deliberately
   # delegated to the SandboxClaim controller, never granted to this identity.
+  # Note (issue #473): Kubernetes RBAC does not support label-based resourceNames for 'create' on pods/exec.
+  # As a follow-up, we should add a ValidatingAdmissionPolicy or OPA constraint to restrict pods/exec
+  # to pods with the agentweaver.dev/sandbox: "true" label.
   - apiGroups:
       - ""
     resources:
@@ -116,6 +119,9 @@ rules:
       - list
   # Required only by the legacy generic command executor. Sandbox pod creation
   # remains exclusively with the SandboxClaim controller.
+  # Note (issue #473): Kubernetes RBAC does not support label-based resourceNames for 'create' on pods/exec.
+  # As a follow-up, we should add a ValidatingAdmissionPolicy or OPA constraint to restrict pods/exec
+  # to pods with the agentweaver.dev/sandbox: "true" label.
   - apiGroups:
       - ""
     resources:
