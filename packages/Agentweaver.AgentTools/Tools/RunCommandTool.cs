@@ -70,11 +70,6 @@ internal sealed class RunCommandTool : ISandboxTool
                     }
                 }
 
-                var (validatorAllowed, validatorReason) = ShellCommandValidator.Validate(
-                    command, ctx.WorkingDirectory, ctx.SandboxRoot);
-                if (!validatorAllowed)
-                    return $"Command rejected by shell validator: {validatorReason}";
-
                 var scratchDirectory = ResolveScratchDirectory(ctx);
                 var fsPolicy = SandboxFsPolicyBuilder.Build(
                     ctx.SandboxRoot,
@@ -82,6 +77,18 @@ internal sealed class RunCommandTool : ISandboxTool
                     additionalReadWriteRoots: string.IsNullOrWhiteSpace(scratchDirectory)
                         ? null
                         : [scratchDirectory]);
+
+                // Pass the run's own allowed roots (RW + RO) so the validator's shared-mount
+                // guard (#476) permits this run's own /workspace subtree in shared-execution
+                // mode while still rejecting absolute paths into sibling runs/projects.
+                var allowedRoots = fsPolicy.ReadWritePaths
+                    .Concat(fsPolicy.ReadOnlyPaths)
+                    .ToArray();
+                var (validatorAllowed, validatorReason) = ShellCommandValidator.Validate(
+                    command, ctx.WorkingDirectory, ctx.SandboxRoot, allowedRoots);
+                if (!validatorAllowed)
+                    return $"Command rejected by shell validator: {validatorReason}";
+
                 var timeout = timeout_ms ?? ctx.Options.DefaultTimeoutMs;
                 if (timeout <= 0)
                     timeout = ctx.Options.DefaultTimeoutMs;
