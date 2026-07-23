@@ -112,13 +112,18 @@ before recording; do not record the placeholder locator.
 **video-chapter**
 
 ```bash
-playwright-cli video-chapter "Inspect the team" --description="Show the agents, then import shared skills and assign them to each agent" --duration=16000
+playwright-cli video-chapter "Inspect the team" --description="Show the agents, browse the curated skills marketplace or import from any GitHub repo, then assign each skill" --duration=16000
 playwright-cli click "getByRole('link', { name: 'Agents', exact: true })"
 playwright-cli hover "getByRole('list', { name: 'Project agents' })"
 playwright-cli hover "getByRole('button', { name: 'Active Ripley Lead PM' })"
 playwright-cli hover "getByRole('button', { name: 'Active Dallas Customer Researcher' })"
 playwright-cli click "getByRole('link', { name: 'Skills', exact: true })"
-# Import Skill dialog — open to show pulling shared skills from GitHub; selector unverified, verify in mapping pass.
+# Browse marketplaces — puzzle-piece button that opens the curated marketplace dialog; selector unmapped, verify in mapping pass.
+playwright-cli click "TODO(mapping): 'Browse marketplaces' button on the Skills page"
+playwright-cli snapshot
+# Close the marketplace dialog before the plain import path — close control unmapped, verify in mapping pass.
+playwright-cli click "TODO(mapping): close control on the 'Browse curated marketplaces' dialog"
+# Import Skill dialog — open to show pulling a skill straight from a GitHub repo URL; selector unverified, verify in mapping pass.
 playwright-cli click "getByRole('button', { name: 'Import Skill' })"
 playwright-cli snapshot
 # Close the dialog before showing assignments — close control unverified, verify in mapping pass.
@@ -126,9 +131,9 @@ playwright-cli click "getByRole('tab', { name: 'Assignments', exact: true })"
 playwright-cli snapshot
 ```
 
-Narration: “Every agent has a name, a role, and a set of skills. On the Skills page,
-import shared skills straight from a GitHub repo and assign each one to the agents that
-need it.”
+Narration: “Every agent has a name, a role, and a set of skills. Browse the curated
+marketplaces — like GitHub Awesome Copilot and Azure Skills — or paste any GitHub repo to
+import a skill, then assign each one to the agents that need it.”
 
 Pacing: hold on the agents list, then on the Skills catalog, then on the Assignments grid
 so the per-agent checkboxes are legible.
@@ -136,15 +141,16 @@ so the per-agent checkboxes are legible.
 Note: Team memory is intentionally saved for the end (Beat 2.8), after a run has had a
 chance to write a decision.
 
-**Verify in mapping pass:** skills are shared by importing them from a GitHub source
-(`owner/repo` or a github.com URL) — there is no separate marketplace page. The **Import
-Skill** button, the import dialog, and its close control are shown in the docs but not yet
-mapped on staging. Capture the real selectors before recording, and do not record the
-placeholder locators.
+**Verify in mapping pass:** the Skills page has two import paths — **Browse marketplaces**
+(a puzzle-piece button that opens the **Browse curated marketplaces** dialog, with GitHub
+Awesome Copilot and Azure Skills configured on staging) and **Import Skill** (paste an
+`owner/repo` or github.com URL). The marketplace button and dialog, the Import Skill button
+and dialog, and their close controls are not mapped on staging yet. Capture the real
+selectors before recording, and do not record the placeholder locators.
 
-**NOT YET VERIFIED — needs follow-up run:** the Import Skill dialog and a real imported
-skill were not exercised on staging. Record the import surface only once its selectors and
-a real result are captured.
+**NOT YET VERIFIED — needs follow-up run:** the Browse marketplaces dialog, the Import
+Skill dialog, and a real imported skill were not exercised on staging. Record these
+surfaces only once their selectors and a real result are captured.
 
 ---
 
