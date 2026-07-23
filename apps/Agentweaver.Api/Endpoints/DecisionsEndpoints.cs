@@ -35,7 +35,9 @@ public static class DecisionsEndpoints
 app.MapPost("/api/projects/{id}/decisions/inbox", async (
     string id,
     SubmitDecisionInboxRequest request,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -43,6 +45,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
     if (string.IsNullOrWhiteSpace(request.AgentName) || string.IsNullOrWhiteSpace(request.Slug)
         || string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "agent_name, slug, type, and content are required." });
@@ -136,7 +139,9 @@ app.MapGet("/api/projects/{id}/decisions/inbox", async (
     string? agent,
     int? page,
     int? page_size,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -144,6 +149,7 @@ app.MapGet("/api/projects/{id}/decisions/inbox", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
     var statusFilter = status ?? "pending";
     var entries = (await memoryDb.DecisionInbox
         .Where(e => e.ProjectId == id)
@@ -166,7 +172,9 @@ app.MapGet("/api/projects/{id}/decisions/inbox", async (
 app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     string id,
     int entryId,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -174,6 +182,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
 
     await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
     var entry = await memoryDb.DecisionInbox
@@ -198,7 +207,9 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
 app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
     string id,
     int entryId,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -206,6 +217,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
 
     await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
     var entry = await memoryDb.DecisionInbox
@@ -230,7 +242,9 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
 app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
     string id,
     int entryId,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -238,6 +252,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
 
     await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
     var entry = await memoryDb.DecisionInbox
@@ -261,7 +276,9 @@ app.MapGet("/api/projects/{id}/decisions", async (
     string? agent,
     int? page,
     int? page_size,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -269,6 +286,7 @@ app.MapGet("/api/projects/{id}/decisions", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
     var statusFilter = status ?? "active";
     var decisions = (await memoryDb.Decisions
         .Where(d => d.ProjectId == id)
@@ -291,7 +309,9 @@ app.MapGet("/api/projects/{id}/decisions", async (
 app.MapGet("/api/projects/{id}/decisions/{decisionId}", async (
     string id,
     int decisionId,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -299,6 +319,7 @@ app.MapGet("/api/projects/{id}/decisions/{decisionId}", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
     var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
     if (decision is null || decision.ProjectId != id) return Results.NotFound();
     return Results.Ok(new
@@ -314,7 +335,9 @@ app.MapGet("/api/projects/{id}/decisions/{decisionId}", async (
 app.MapPost("/api/projects/{id}/decisions", async (
     string id,
     CreateDecisionRequest request,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -322,6 +345,7 @@ app.MapPost("/api/projects/{id}/decisions", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
     if (string.IsNullOrWhiteSpace(request.AgentName) || string.IsNullOrWhiteSpace(request.Type)
         || string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "agent_name, type, title, and content are required." });
@@ -360,7 +384,9 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     string id,
     int decisionId,
     UpdateDecisionRequest request,
+    HttpContext httpContext,
     IProjectStore projectStore,
+    IConfiguration configuration,
     MemoryDbContext memoryDb,
     CancellationToken ct) =>
 {
@@ -368,6 +394,7 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
 
     var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
     if (decision is null || decision.ProjectId != id) return Results.NotFound();

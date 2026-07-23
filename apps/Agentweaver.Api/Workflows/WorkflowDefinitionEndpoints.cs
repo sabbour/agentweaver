@@ -337,7 +337,16 @@ public static class WorkflowDefinitionEndpoints
             {
                 Directory.CreateDirectory(workflowsDir);
                 var filePath = Path.Combine(workflowsDir, $"{workflowId}.yaml");
-                await File.WriteAllTextAsync(filePath, request.Yaml, ct);
+
+                // Resolve symlinks/reparse points before writing: an existing symlink at the target
+                // (or a symlinked ancestor) could otherwise redirect the write to a file outside the
+                // project workspace and overwrite it.
+                var workspaceRoot = project.WorkingDirectory
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!WorkspacePathGuard.TryResolveContainedPath(workspaceRoot, filePath, out var safePath))
+                    return Results.BadRequest(new { error = "Invalid workflow id." });
+
+                await File.WriteAllTextAsync(safePath, request.Yaml, ct);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
