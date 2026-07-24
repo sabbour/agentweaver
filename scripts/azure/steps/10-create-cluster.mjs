@@ -176,6 +176,8 @@ export async function run(cfg, opts = {}) {
       "CriticalAddonsOnly=true:NoSchedule",
       "--enable-app-routing-istio",
       "--enable-gateway-api",
+      "--app-routing-default-nginx-controller",
+      "None",
       "--enable-default-domain",
       "--enable-addons",
       "azure-keyvault-secrets-provider",
