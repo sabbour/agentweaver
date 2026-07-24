@@ -74,13 +74,26 @@ export async function text(question, opts = {}) {
  * raw (untrimmed) answer typed by the user, returns either
  * `{ done: true, value }` (accept and return `value`) or
  * `{ done: false, error }` (print `error` and reprompt).
+ *
+ * Required-by-default: a prompt with no `default` key is required, so a blank
+ * answer reprompts. Prompts that allow blank input opt out with an explicit
+ * `default` (commonly "").
  * @param {string} rawAnswer
  * @param {{ default?: string, validate?: (value: string) => true | string }} [opts]
  * @returns {{done: true, value: string} | {done: false, error: string}}
  */
 export function resolveTextAnswer(rawAnswer, opts = {}) {
   const trimmed = String(rawAnswer ?? "").trim();
-  const value = trimmed.length === 0 && opts.default !== undefined ? opts.default : trimmed;
+  const hasDefault = opts.default !== undefined;
+  const value = trimmed.length === 0 && hasDefault ? opts.default : trimmed;
+  // A prompt with no configured default is required. Reprompt on empty rather
+  // than letting a blank required value flow downstream and fail much later
+  // (e.g. an empty GitHub client secret surfacing as "credentials missing"
+  // only after ~15 min of cluster provisioning). Prompts that legitimately
+  // allow blank input pass an explicit `default` (often "") to opt out.
+  if (value.length === 0 && !hasDefault) {
+    return { done: false, error: "This value is required." };
+  }
   if (typeof opts.validate !== "function") {
     return { done: true, value };
   }
@@ -414,16 +427,28 @@ export async function secret(question) {
   assertInteractive(question);
   const mutableStdout = new MutableStdout(process.stdout);
   const rl = openInterface({ output: mutableStdout, input: process.stdin });
+  const maxAttempts = 5;
   try {
-    // Write the prompt visibly FIRST, then mute so only the typed characters
-    // are swallowed. Muting before rl.question() would also swallow the prompt
-    // text itself -- the user would see nothing and the process would appear to
-    // hang waiting on invisible input.
-    process.stdout.write(`${question}: `);
-    mutableStdout.muted = true;
-    const answer = await rl.question("");
-    process.stdout.write("\n");
-    return answer.trim();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Write the prompt visibly FIRST, then mute so only the typed characters
+      // are swallowed. Muting before rl.question() would also swallow the prompt
+      // text itself -- the user would see nothing and the process would appear to
+      // hang waiting on invisible input.
+      process.stdout.write(`${question}: `);
+      mutableStdout.muted = true;
+      const answer = await rl.question("");
+      mutableStdout.muted = false;
+      process.stdout.write("\n");
+      const trimmed = answer.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+      // A secret is never legitimately empty. Reprompt with a clear message
+      // instead of letting an empty value flow downstream and fail far later
+      // (e.g. after ~15 min of cluster provisioning) as "credentials missing".
+      process.stdout.write("This value is required and cannot be empty.\n");
+    }
+    throw new Error(`${question}: no value provided after ${maxAttempts} attempts.`);
   } finally {
     mutableStdout.muted = false;
     rl.close();
