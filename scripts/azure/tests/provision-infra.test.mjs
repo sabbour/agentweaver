@@ -148,7 +148,7 @@ test("run: non-interactive path resolves config from flags and env, then delegat
   assert.equal(result.ok, true);
   assert.deepEqual(
     calls.map((c) => c.step),
-    ["createCluster", "setupIdentity", "provisionMonitoring", "oauthSigningKey", "provisionPostgres", "buildImages", "verifyProvenance", "genA2aMtlsCerts", "deployStep", "verifyStep"],
+    ["createCluster", "setupIdentity", "provisionMonitoring", "oauthSigningKey", "provisionPostgres", "buildImages", "genA2aMtlsCerts", "deployStep", "verifyProvenance", "verifyStep"],
   );
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");

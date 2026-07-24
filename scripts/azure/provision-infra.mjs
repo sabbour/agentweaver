@@ -493,14 +493,20 @@ export async function run(opts = {}) {
   log.step(6, 10, "Building and pushing images");
   const buildResult = await buildImages.run(cfg, { exec });
 
-  log.step(7, 10, "Verifying image provenance");
-  const provenanceResult = await verifyProvenance.run(cfg, { exec });
-
-  log.step(8, 10, "Ensuring A2A mTLS certificates");
+  log.step(7, 10, "Ensuring A2A mTLS certificates");
   await genA2aMtlsCerts.run(cfg, { exec, log, repoRoot });
 
-  log.step(9, 10, "Deploying manifests");
+  log.step(8, 10, "Deploying manifests");
   const deployResult = await deployStep.run(cfg, { run: exec.run, capture: exec.capture, log, repoRoot });
+
+  // Provenance verification is a POST-DEPLOY safety net: it inspects the image
+  // digests ACTUALLY running in the cluster, so it must run AFTER the deploy
+  // above. Running it before deploy compares against still-old (or, on a first
+  // provision, non-existent) pods -- the latter fails hard with "could not
+  // determine desired replica count". This mirrors deploy-from-local's
+  // build -> deploy -> verify-provenance order.
+  log.step(9, 10, "Verifying image provenance");
+  const provenanceResult = await verifyProvenance.run(cfg, { exec });
 
   log.step(10, 10, "Verifying deployment");
   const verifyResult = await verifyStep.run(cfg, { exec, log });
