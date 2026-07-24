@@ -336,17 +336,24 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   // --- GitHub OAuth credentials ---------------------------------------------
   log.info("");
   log.section("Create a GitHub OAuth App");
-  log.info("Before entering your GitHub OAuth client ID and secret, create (or reuse) a GitHub OAuth App:");
+  log.info("You need a GitHub OAuth App's client ID and secret. GitHub requires a callback URL up front,");
+  log.info("but this deployment's Gateway host does not exist yet -- so create the app now with a temporary");
+  log.info("placeholder callback URL, then update it once the real URL is printed at the end of this deploy.");
+  log.info("");
   log.info("  1. Open https://github.com/settings/applications/new");
   log.info("  2. Application name: e.g. 'Agentweaver' (or 'Agentweaver (staging)')");
-  log.info("  3. Homepage URL: your deployment's base URL (the final Gateway host is only assigned during this deploy)");
+  log.info("  3. Homepage URL: any placeholder for now (e.g. https://example.com) -- update it after deploy.");
   log.info("  4. Authorization callback URL:");
-  log.info("       - Local dev: http://localhost:5000/auth/github/callback");
-  log.info("       - Azure: https://<gateway-host>/auth/github/callback -- the exact <gateway-host> is printed as");
-  log.info("         'GitHub OAuth callback URL' in the OUTPUTS SUMMARY once this deploy finishes; come back and");
-  log.info("         update the OAuth App's callback URL to that value after deploy.");
-  log.info("  5. After creating the app: copy the Client ID, then click 'Generate a new client secret' and copy it");
-  log.info("     immediately -- GitHub only shows the secret once.");
+  log.info("       - Local dev: use the real value now -- http://localhost:5000/auth/github/callback");
+  log.info("       - Azure: GitHub won't accept an empty field, so enter a placeholder for now, e.g.");
+  log.info("         https://placeholder.invalid/auth/github/callback -- you'll replace it after deploy.");
+  log.info("  5. Click 'Register application'. Copy the Client ID, then click 'Generate a new client secret'");
+  log.info("     and copy it immediately -- GitHub only shows the secret once.");
+  log.info("");
+  log.info("After this deploy finishes, the real callback URL is printed as 'GitHub OAuth callback URL' in the");
+  log.info("OUTPUTS SUMMARY. Go back to the OAuth App at https://github.com/settings/developers and set both the");
+  log.info("Homepage URL and the Authorization callback URL to that value -- sign-in will not work until you do.");
+  log.info("");
   log.info("Note: sign-in is further restricted to members of the GitHub org(s) you allowlist next -- org SSO");
   log.info("authorization may need to be granted on the OAuth App for private membership to be visible.");
   log.info("");
@@ -522,7 +529,7 @@ export async function run(opts = {}) {
   );
   if (deployResult?.HOST) {
     log.info(
-      `  -> Update the GitHub OAuth App's Authorization callback URL to the value above at https://github.com/settings/developers`,
+      `  -> Update the GitHub OAuth App's Homepage URL and Authorization callback URL to the value above at https://github.com/settings/developers`,
     );
   }
   log.field("Verification", `${verifyResult.pass}/${verifyResult.pass + verifyResult.fail} checks passed`);
