@@ -6,7 +6,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reduceSelectKey, parseNumberedSelection, resolveTextAnswer, computeSelectWindow } from "../lib/prompt.mjs";
+import readlinePromises from "node:readline/promises";
+import { reduceSelectKey, parseNumberedSelection, resolveTextAnswer, computeSelectWindow, MutableStdout } from "../lib/prompt.mjs";
 
 test("reduceSelectKey: Down moves to the next index and wraps past the last", () => {
   const count = 3;
@@ -168,4 +169,31 @@ test("computeSelectWindow: rendered item count stays constant while scrolling to
 test("computeSelectWindow: a tiny cap still yields at least one visible item", () => {
   const w = computeSelectWindow({ activeIndex: 3, count: 10, maxVisible: 1 });
   assert.ok(w.end - w.start >= 1, "at least one item is always visible");
+});
+
+test("MutableStdout: readline can attach a resize listener (secret() prompt regression)", () => {
+  // Regression for `output.on is not a function`: readlinePromises treats the
+  // muted output as a stream and calls output.on('resize', ...) on a TTY.
+  const shim = new MutableStdout(process.stdout);
+  assert.equal(typeof shim.on, "function");
+  assert.equal(typeof shim.removeListener, "function");
+  const rl = readlinePromises.createInterface({ input: process.stdin, output: shim });
+  rl.close();
+});
+
+test("MutableStdout: swallows echoed writes while muted, delegates when unmuted", () => {
+  const seen = [];
+  const fakeReal = {
+    write: (chunk) => {
+      seen.push(String(chunk));
+      return true;
+    },
+  };
+  const shim = new MutableStdout(fakeReal);
+  shim.write("visible");
+  shim.muted = true;
+  shim.write("hidden");
+  shim.muted = false;
+  shim.write("again");
+  assert.deepEqual(seen, ["visible", "again"]);
 });

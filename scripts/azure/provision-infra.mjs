@@ -273,11 +273,16 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
 
   log.section("Agentweaver interactive installer");
 
+  // Show a live progress indicator around slow az discovery calls so the
+  // installer never looks hung. Falls back to running the task directly when
+  // the injected log has no withProgress (e.g. unit-test stubs).
+  const withProgress = (label, task) =>
+    typeof log.withProgress === "function" ? log.withProgress(label, task) : task();
+
   // --- Subscription ---------------------------------------------------------
-  const [subscriptions, current] = await Promise.all([
-    az.listSubscriptions().catch(() => []),
-    az.showAccount().catch(() => null),
-  ]);
+  const [subscriptions, current] = await withProgress("Loading Azure subscriptions", () =>
+    Promise.all([az.listSubscriptions().catch(() => []), az.showAccount().catch(() => null)]),
+  );
   if (Array.isArray(subscriptions) && subscriptions.length > 0) {
     const currentId = current?.id;
     const ordered = [...subscriptions].sort((a, b) => (a.id === currentId ? -1 : b.id === currentId ? 1 : 0));
@@ -300,7 +305,7 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   }
 
   // --- Resource group --------------------------------------------------------
-  const groups = await az.listResourceGroups().catch(() => []);
+  const groups = await withProgress("Loading resource groups", () => az.listResourceGroups().catch(() => []));
   const CREATE_NEW = Symbol("create-new-resource-group");
   const rgChoices = [
     { label: "Create new...", value: CREATE_NEW },
@@ -311,7 +316,7 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
     rgChoice === CREATE_NEW ? await prompt.text("New resource group name", { default: DEFAULTS.RESOURCE_GROUP }) : rgChoice;
 
   // --- Location ---------------------------------------------------------
-  const locations = await az.listLocations().catch(() => []);
+  const locations = await withProgress("Loading Azure regions", () => az.listLocations().catch(() => []));
   if (Array.isArray(locations) && locations.length > 0) {
     const names = locations.map((l) => l.name);
     const defaultIndex = names.indexOf(DEFAULTS.LOCATION);

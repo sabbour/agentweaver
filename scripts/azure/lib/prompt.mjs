@@ -428,7 +428,7 @@ export async function secret(question) {
 // Minimal Writable-like shim readline can write its prompt/echo through. When
 // `muted` is true, keystroke echo is swallowed but the initial prompt text
 // (written once, before muting begins) still appears.
-class MutableStdout {
+export class MutableStdout {
   constructor(realStdout) {
     this.realStdout = realStdout;
     this.muted = false;
@@ -460,5 +460,50 @@ class MutableStdout {
 
   moveCursor(...args) {
     return this.muted ? true : this.realStdout.moveCursor(...args);
+  }
+
+  // readline (readlinePromises) treats `output` as a stream and, on a TTY,
+  // attaches a "resize" listener via output.on(...). Delegate EventEmitter and
+  // TTY-probe members to the real stdout so the shim behaves like a stream.
+  get isTTY() {
+    return this.realStdout.isTTY;
+  }
+
+  get rows() {
+    return this.realStdout.rows;
+  }
+
+  on(...args) {
+    this.realStdout.on(...args);
+    return this;
+  }
+
+  once(...args) {
+    this.realStdout.once(...args);
+    return this;
+  }
+
+  off(...args) {
+    this.realStdout.off?.(...args);
+    return this;
+  }
+
+  removeListener(...args) {
+    this.realStdout.removeListener(...args);
+    return this;
+  }
+
+  addListener(...args) {
+    this.realStdout.addListener(...args);
+    return this;
+  }
+
+  emit(...args) {
+    return this.realStdout.emit(...args);
+  }
+
+  end(...args) {
+    if (typeof args[args.length - 1] === "function") args[args.length - 1]();
+    return this;
   }
 }
