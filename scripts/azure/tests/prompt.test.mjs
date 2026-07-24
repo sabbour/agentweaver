@@ -89,7 +89,16 @@ test("parseNumberedSelection: out-of-range or non-numeric answers are invalid", 
 test("resolveTextAnswer: no validator returns the trimmed answer (or default if blank)", () => {
   assert.deepEqual(resolveTextAnswer("  hello  "), { done: true, value: "hello" });
   assert.deepEqual(resolveTextAnswer("", { default: "fallback" }), { done: true, value: "fallback" });
-  assert.deepEqual(resolveTextAnswer(""), { done: true, value: "" });
+  // An explicit empty-string default opts a prompt into allowing blank input.
+  assert.deepEqual(resolveTextAnswer("", { default: "" }), { done: true, value: "" });
+});
+
+test("resolveTextAnswer: a blank answer with no configured default is required and reprompts", () => {
+  // No default => the prompt is required; empty input must reprompt rather than
+  // silently returning "" (which would fail downstream, e.g. as a missing OAuth secret).
+  const outcome = resolveTextAnswer("   ");
+  assert.equal(outcome.done, false);
+  assert.match(outcome.error, /required/);
 });
 
 test("resolveTextAnswer: a validator rejects an invalid answer with its error message, surfaced for reprompting", () => {
