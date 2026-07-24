@@ -1,10 +1,20 @@
 import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
 import { loadStorageState } from './auth.mjs';
 
+const GITHUB_OAUTH_ORIGIN = 'https://github.com';
+const GITHUB_OAUTH_PATHS = new Set(['/login', '/session']);
+
+function isAllowedGitHubOAuthNavigation(target, options) {
+  return options.allowGitHubOAuthNavigation === true
+    && target.origin === GITHUB_OAUTH_ORIGIN
+    && (target.pathname.startsWith('/login/oauth/') || GITHUB_OAUTH_PATHS.has(target.pathname));
+}
+
 function guardedUrl(baseUrl, destination, options) {
   assertTargetAllowed(baseUrl, options);
   const base = new URL(baseUrl);
   const target = new URL(destination, base);
+  if (target.origin !== base.origin && isAllowedGitHubOAuthNavigation(target, options)) return target;
   assertTargetAllowed(target, options);
   if (target.origin !== base.origin) throw new Error(`refusing cross-origin browser navigation from ${base.origin} to ${target.origin}`);
   return target;

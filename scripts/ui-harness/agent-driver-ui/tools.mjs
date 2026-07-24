@@ -79,7 +79,12 @@ export function assertApprovalAllowed({ adapterText, decision, gate }) {
 async function login(args) {
   const baseUrl = args['base-url'];
   if (!baseUrl) throw new Error('--base-url is required');
-  const session = await openBrowserSession({ baseUrl, headless: false, ...options(args) });
+  const session = await openBrowserSession({
+    baseUrl,
+    headless: false,
+    allowGitHubOAuthNavigation: true,
+    ...options(args),
+  });
   try {
     await session.goto('/');
     console.log('Complete login in the visible Chromium window, then resume Playwright to save the session.');
