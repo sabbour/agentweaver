@@ -307,9 +307,10 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   // --- Resource group --------------------------------------------------------
   const groups = await withProgress("Loading resource groups", () => az.listResourceGroups().catch(() => []));
   const CREATE_NEW = Symbol("create-new-resource-group");
+  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   const rgChoices = [
     { label: "Create new...", value: CREATE_NEW },
-    ...groups.map((g) => ({ label: g.name, value: g.name })),
+    ...sortedGroups.map((g) => ({ label: g.name, value: g.name })),
   ];
   const rgChoice = groups.length > 0 ? await prompt.select("Select a resource group", rgChoices, { default: 0 }) : CREATE_NEW;
   collected.RESOURCE_GROUP =
@@ -318,9 +319,12 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   // --- Location ---------------------------------------------------------
   const locations = await withProgress("Loading Azure regions", () => az.listLocations().catch(() => []));
   if (Array.isArray(locations) && locations.length > 0) {
-    const names = locations.map((l) => l.name);
+    const sortedLocations = [...locations].sort((a, b) =>
+      (a.displayName || a.name).localeCompare(b.displayName || b.name, undefined, { sensitivity: "base" }),
+    );
+    const names = sortedLocations.map((l) => l.name);
     const defaultIndex = names.indexOf(DEFAULTS.LOCATION);
-    const choices = locations.map((l) => ({ label: l.displayName || l.name, value: l.name }));
+    const choices = sortedLocations.map((l) => ({ label: l.displayName || l.name, value: l.name }));
     collected.LOCATION = await prompt.select("Select a location", choices, {
       default: defaultIndex >= 0 ? defaultIndex : 0,
     });

@@ -310,6 +310,41 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
   assert.ok(selectCalls.length >= 3);
 });
 
+test("runInteractiveInstaller: sorts resource groups and locations alphabetically for scannable menus", async () => {
+  const az = {
+    listSubscriptions: async () => [],
+    showAccount: async () => null,
+    listResourceGroups: async () => [{ name: "zeta-rg" }, { name: "alpha-rg" }, { name: "Mango-rg" }],
+    listLocations: async () => [
+      { name: "westus2", displayName: "West US 2" },
+      { name: "eastus", displayName: "East US" },
+      { name: "northeurope", displayName: "North Europe" },
+    ],
+  };
+  let rgChoicesSeen = null;
+  let locChoicesSeen = null;
+  const prompt = {
+    select: async (question, choices) => {
+      if (question.toLowerCase().includes("resource group")) rgChoicesSeen = choices;
+      if (question.toLowerCase().includes("location")) locChoicesSeen = choices;
+      return choices[0].value;
+    },
+    text: async (question, opts = {}) => opts.default ?? `answer-to-${question}`,
+    secret: async () => "super-secret-value",
+  };
+  await runInteractiveInstaller({ prompt, az, log: noopLog() });
+  assert.deepEqual(
+    rgChoicesSeen.map((c) => c.label),
+    ["Create new...", "alpha-rg", "Mango-rg", "zeta-rg"],
+    "resource groups sorted case-insensitively after 'Create new...'",
+  );
+  assert.deepEqual(
+    locChoicesSeen.map((c) => c.label),
+    ["East US", "North Europe", "West US 2"],
+    "locations sorted alphabetically by display name",
+  );
+});
+
 test("runInteractiveInstaller: normalizes a comma-separated GitHub org allowlist typed by the user", async () => {
   const az = {
     listSubscriptions: async () => [],
