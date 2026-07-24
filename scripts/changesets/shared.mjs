@@ -124,3 +124,61 @@ export function validateSyncBranch(branch) {
     throw new Error("Run release:sync-dev on a short-lived branch from current dev.");
   }
 }
+
+// `git status --porcelain --ignored=matching` COLLAPSES a wholly-ignored directory to a
+// single trailing-slash entry (e.g. `!! node_modules/`) and never enumerates the files
+// inside it. So flagging that collapsed root buys almost no protection (git already refuses
+// to show its contents) while making a release impossible from any real dev checkout, where
+// node_modules/, dist/, bin/, obj/ and test/harness output always exist. The meaningful
+// protection is catching ignored files in UNEXPECTED locations — a stray `!! malicious.js`
+// at the repo root, `!! src/malicious.js` inside a tracked source tree, or an unknown
+// ignored directory that isn't a recognized dependency/build/output location.
+//
+// Therefore the allowlist accepts the standard dependency/build/output roots (matching the
+// git-collapsed `dir/` form, at the repo root or nested under any package via an optional
+// leading path prefix) plus the harness run-artifact directories that keep a tracked
+// `.gitignore` and so enumerate individual files. Anything else — including a named file
+// that git somehow enumerates directly inside a collapsed root — is still flagged.
+export function getUnexpectedIgnoredFiles(stdout) {
+  const allowedPatterns = [
+    // Editor / local-tooling directories and files.
+    /^\.squad\//,
+    /^\.idea\//,
+    /^\.vscode\//,
+    /^\.vs\//,
+    /^\.security\//,
+    /^\.worktrees\//,
+    /^\.impeccable\/$/,
+    /^npm-debug\.log/,
+    /\.(user|suo|userprefs)$/,
+    // Local env / dev-only config, at the repo root or under a package (e.g. apps/web/.env).
+    /^(?:.+\/)?\.env(\.local)?$/,
+    /^(?:.+\/)?appsettings\.Development\.json$/,
+    // Standard wholly-ignored dependency/build/output directory roots (git collapses these
+    // to a single trailing-slash entry). Optional leading path prefix covers nested
+    // packages such as packages/Agentweaver.Domain/obj/ or scripts/api-harness/node_modules/.
+    /^(?:.+\/)?node_modules\/$/,
+    /^(?:.+\/)?dist\/$/,
+    /^(?:.+\/)?bin\/(?:Debug\/|Release\/)?$/,
+    /^(?:.+\/)?obj\/$/,
+    /^(?:.+\/)?\.vite\/$/,
+    /^(?:.+\/)?[Tt]est[Rr]esults\/$/,
+    /^(?:.+\/)?playwright-report\/$/,
+    /^(?:.+\/)?test-results\/$/,
+    /^(?:.+\/)?public\/specs\/$/,
+    // Harness run-artifact directories keep a tracked `.gitignore`, so git enumerates the
+    // ignored files inside them rather than collapsing. Allow those known output locations.
+    /^scripts\/(?:api|mcp|ui)-harness\/(?:findings|transcripts|transcripts-ui|verdicts|dispatch|sessions|node_modules|\.auth|test-results|playwright-report)\//,
+    // Rendered/scratch outputs from the azure deployment scripts.
+    /^scripts\/azure\/params\..*\.json$/,
+    /^scripts\/azure\/tests\/\.scratch-/,
+    /^scripts\/azure\/steps\/\.rendered\//
+  ];
+
+  return stdout
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("!! "))
+    .map(line => line.slice(3))
+    .filter(file => !allowedPatterns.some(pattern => pattern.test(file)));
+}

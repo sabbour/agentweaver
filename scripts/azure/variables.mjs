@@ -30,6 +30,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_REPO_ROOT = path.resolve(__dirname, "..", "..");
 
 export const IDENTITY_NAME = "agentweaver-api-identity";
+// Dedicated least-privilege identity for AgentHost sandbox pods (issue #471); no Key Vault roles.
+export const AGENTHOST_IDENTITY_NAME = "agentweaver-agenthost-identity";
 export const LOG_ANALYTICS_WORKSPACE_NAME = "agentweaver-logs";
 
 export const DEFAULTS = Object.freeze({
@@ -41,6 +43,7 @@ export const DEFAULTS = Object.freeze({
   NAMESPACE: "agentweaver",
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
+  GITHUB_ALLOWED_ORG: "microsoft",
 });
 
 /** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
@@ -134,6 +137,8 @@ export async function resolveVariables(options = {}) {
   const AGENTHOST_KEYVAULT_URI =
     env.AGENTHOST_KEYVAULT_URI || `https://${KEYVAULT_NAME}.vault.azure.net/`;
 
+  const GITHUB_ALLOWED_ORG = env.GITHUB_ALLOWED_ORG || DEFAULTS.GITHUB_ALLOWED_ORG;
+
   let TENANT_ID = env.TENANT_ID || "";
   if (!TENANT_ID && resolveLive) {
     TENANT_ID = await az.getTenantId();
@@ -142,6 +147,15 @@ export async function resolveVariables(options = {}) {
   let IDENTITY_CLIENT_ID = env.IDENTITY_CLIENT_ID || "";
   if (!IDENTITY_CLIENT_ID && resolveLive) {
     IDENTITY_CLIENT_ID = await az.getIdentityClientId(RESOURCE_GROUP, IDENTITY_NAME);
+  }
+
+  // Dedicated AgentHost identity client id (issue #471). Resolved the same way as the API identity;
+  // stays '' when the identity has not been provisioned yet (older cluster) so the deploy degrades
+  // gracefully — an empty annotation just means the sandbox pod gets no workload identity, and the
+  // GitHub token is brokered via the API /configure call regardless.
+  let AGENTHOST_IDENTITY_CLIENT_ID = env.AGENTHOST_IDENTITY_CLIENT_ID || "";
+  if (!AGENTHOST_IDENTITY_CLIENT_ID && resolveLive) {
+    AGENTHOST_IDENTITY_CLIENT_ID = await az.getIdentityClientId(RESOURCE_GROUP, AGENTHOST_IDENTITY_NAME);
   }
 
   let APPINSIGHTS_WORKSPACE_ID = env.APPINSIGHTS_WORKSPACE_ID || "";
@@ -174,8 +188,10 @@ export async function resolveVariables(options = {}) {
     ACR_LOGIN_SERVER,
     KEYVAULT_NAME,
     AGENTHOST_KEYVAULT_URI,
+    GITHUB_ALLOWED_ORG,
     TENANT_ID,
     IDENTITY_CLIENT_ID,
+    AGENTHOST_IDENTITY_CLIENT_ID,
     APPINSIGHTS_WORKSPACE_ID,
   };
 }
@@ -196,5 +212,6 @@ export function printSummary(vars, log) {
   log.field("AgentHost KV", vars.AGENTHOST_KEYVAULT_URI);
   log.field("Tenant ID", vars.TENANT_ID || "<not set>");
   log.field("Identity client", vars.IDENTITY_CLIENT_ID || "<not set>");
+  log.field("AgentHost identity client", vars.AGENTHOST_IDENTITY_CLIENT_ID || "<not set>");
   log.field("AppInsights workspace", vars.APPINSIGHTS_WORKSPACE_ID || "<not set>");
 }

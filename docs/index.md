@@ -27,6 +27,7 @@ import { withBase } from 'vitepress'
       <div class="aw-hero-quickstart" aria-label="Quick start">
         <div class="aw-hero-quickstart-card">
           <h3>Run locally</h3>
+          <CopyButton />
           <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
 npm run setup
@@ -34,6 +35,7 @@ npm run dev</code></pre>
         </div>
         <div class="aw-hero-quickstart-card">
           <h3>Deploy to Azure</h3>
+          <CopyButton />
           <pre class="aw-hero-quickstart-code"><code>git clone https://github.com/sabbour/agentweaver.git
 cd agentweaver
 npm run azure:provision-infra</code></pre>

@@ -1,4 +1,4 @@
-﻿import { apiClient } from '../api/apiClient';
+import { apiClient } from '../api/apiClient';
 import { MCP_URL } from '../config';
 import { ApiError } from '../api/client';
 import {
@@ -9,11 +9,9 @@ import {
   MessageBarBody,
   Spinner,
   Switch,
-  Textarea,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Copy24Regular } from '@fluentui/react-icons';
 import { useState } from 'react';
 import type { SandboxPolicy } from '../api/types';
 import {
@@ -50,17 +48,10 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
   },
-  helperText: {
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-  },
   formActions: {
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     alignItems: 'center',
-  },
-  codeBlock: {
-    fontFamily: tokens.fontFamilyMonospace,
   },
 });
 
@@ -73,63 +64,6 @@ export function SettingsPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [copiedConfig, setCopiedConfig] = useState<string | null>(null);
-
-  const clientConfigs = [
-    {
-      id: 'claude-desktop',
-      label: 'Claude Desktop (claude_desktop_config.json)',
-      value: JSON.stringify({
-        mcpServers: {
-          agentweaver: {
-            url: MCP_URL,
-            headers: { Authorization: 'Bearer ${AGENTWEAVER_TOKEN}' },
-          },
-        },
-      }, null, 2),
-    },
-    {
-      id: 'vs-code',
-      label: 'VS Code (mcp.json)',
-      value: JSON.stringify({
-        servers: {
-          agentweaver: {
-            type: 'http',
-            url: MCP_URL,
-            headers: { Authorization: 'Bearer ${input:agentweaver-token}' },
-          },
-        },
-        inputs: [{
-          id: 'agentweaver-token',
-          type: 'promptString',
-          description: 'Your existing Agentweaver/GitHub bearer token',
-          password: true,
-        }],
-      }, null, 2),
-    },
-    {
-      id: 'copilot-cli',
-      label: 'GitHub Copilot CLI (mcp.json)',
-      value: JSON.stringify({
-        mcpServers: {
-          agentweaver: {
-            type: 'http',
-            url: MCP_URL,
-            headers: { Authorization: 'Bearer ${AGENTWEAVER_TOKEN}' },
-          },
-        },
-      }, null, 2),
-    },
-  ];
-
-  const copyConfig = async (id: string, value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedConfig(id);
-    } catch {
-      setCopiedConfig(null);
-    }
-  };
 
   const handleFetch = async () => {
     if (!repositoryPath.trim()) return;
@@ -181,7 +115,7 @@ export function SettingsPage() {
     <PageContainer width="readable">
       <PageHeader
         title="Settings"
-        description="System-level configuration for local repository policy."
+        description="Manage your MCP connection and local repository sandbox policy."
       />
 
       <PageSection
@@ -195,33 +129,6 @@ export function SettingsPage() {
           >
             <Input value={MCP_URL} readOnly />
           </Field>
-
-          <Label as="p" className={styles.helperText}>
-            Agentweaver does not display your bearer token. Use the existing token from your
-            signed-in Agentweaver/GitHub session, or let a client that supports MCP OAuth sign in
-            interactively. For a manual configuration, set <code>AGENTWEAVER_TOKEN</code> in your
-            client environment before starting it.
-          </Label>
-
-          {clientConfigs.map((config) => (
-            <Field key={config.id} label={config.label}>
-              <Textarea
-                aria-label={config.label}
-                className={styles.codeBlock}
-                value={config.value}
-                readOnly
-                resize="vertical"
-                rows={config.value.split('\n').length + 1}
-              />
-              <Button
-                appearance="secondary"
-                icon={<Copy24Regular />}
-                onClick={() => void copyConfig(config.id, config.value)}
-              >
-                {copiedConfig === config.id ? 'Copied' : 'Copy config'}
-              </Button>
-            </Field>
-          ))}
         </div>
       </PageSection>
 

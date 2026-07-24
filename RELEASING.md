@@ -61,9 +61,19 @@ from its exact matching section; do not run another changelog generator.
    fragments as `chore(release): prepare vX.Y.Z`.
 5. Promote the prepared branch to `main` through a green PR.
 
+> `release:prepare` runs from a normal dev checkout — you do **not** need to
+> delete `node_modules/` or build output first (the script itself invokes the
+> Changesets CLI from `node_modules/`). Its clean-tree guard only rejects
+> ignored files **outside** recognized dependency/build/output locations
+> (`node_modules/`, `dist/`, `bin/`, `obj/`, test output, and the harness
+> run-artifact dirs are all fine). Keep the tree free of *stray* ignored files
+> — an ignored file at the repo root or inside a tracked source tree still
+> blocks the release so a human can investigate it.
+
 ## Publishing and deploying
 
-From a clean checkout at the exact resulting `origin/main` SHA:
+From a clean checkout at the exact resulting `origin/main` SHA (including no
+untracked or unexpected git-ignored files):
 
 ```bash
 # Repository identity only: tag + GitHub Release, no Azure deployment

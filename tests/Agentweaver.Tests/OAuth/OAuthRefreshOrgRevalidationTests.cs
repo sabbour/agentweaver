@@ -184,6 +184,7 @@ public sealed class OAuthRefreshOrgRevalidationTests
     {
         public OrgAuthResult Result { get; set; } = OrgAuthResult.Allowed;
         public bool IsConfigured => true;
+        public IReadOnlyList<string> AllowedOrgs => ["microsoft"];
         public Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct) =>
             Task.FromResult(Result);
     }

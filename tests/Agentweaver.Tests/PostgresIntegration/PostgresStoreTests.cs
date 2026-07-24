@@ -36,6 +36,8 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         migrations.Should().Contain("20260627000000_InitialPostgres",
             "migration must be discoverable via [DbContext] attribute + MigrationsAssembly config");
         migrations.Should().Contain("20260717003000_AddSkillProjectOwnershipCascades");
+        migrations.Should().Contain("20260722184157_AddDismissedNotifications",
+            "the notification-dismissal table is queried by the Postgres-backed API");
     }
 
     [PostgresFact]
@@ -66,6 +68,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         {
             "runs", "run_revisions", "projects", "backlog_tasks",
             "workflow_runs", "cast_proposals",
+            "dismissed_notifications",
             "\"RunEvents\"", "\"AgentMemory\"", "\"Decisions\"",
         };
 

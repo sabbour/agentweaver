@@ -18,7 +18,6 @@ public sealed class GitHubOrgAuthorizationMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly IGitHubOrgAuthorizationService _authzService;
-    private readonly IConfiguration _configuration;
     private readonly ILogger<GitHubOrgAuthorizationMiddleware> _logger;
     private readonly bool _bypassForTests;
 
@@ -54,7 +53,6 @@ public sealed class GitHubOrgAuthorizationMiddleware
     {
         _next = next;
         _authzService = authzService;
-        _configuration = configuration;
         _logger = logger;
 
         // F1: org-authorization bypass is honored ONLY in Development. In any other environment the
@@ -118,9 +116,13 @@ public sealed class GitHubOrgAuthorizationMiddleware
         // of making a per-request GitHub org call with a token that is not a GitHub credential.
         if (caller.IsOAuthJwt)
         {
-            var allowedOrg = _configuration["Auth:GitHub:AllowedOrg"]?.Trim();
-            if (!string.IsNullOrWhiteSpace(allowedOrg)
-                && string.Equals(caller.Org, allowedOrg, StringComparison.OrdinalIgnoreCase))
+            // Accept the token if its org claim matches ANY allowed org (membership is satisfied by
+            // membership of any one of the configured orgs). Reuse the service's parsed AllowedOrgs so
+            // the delimited-list split logic lives in exactly one place (GitHubOrgList.Parse).
+            var callerOrg = caller.Org;
+            if (!string.IsNullOrWhiteSpace(callerOrg)
+                && _authzService.AllowedOrgs.Any(
+                    o => string.Equals(o, callerOrg, StringComparison.OrdinalIgnoreCase)))
             {
                 await _next(context).ConfigureAwait(false);
                 return;

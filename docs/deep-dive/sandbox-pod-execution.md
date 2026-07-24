@@ -188,6 +188,20 @@ bubblewrap's PID/filesystem view. A same-UID adversarial command may therefore i
 metadata or projected credentials through `/proc`; that residual risk is accepted because the
 disposable per-run Kata VM is the primary isolation boundary.
 
+Because the Kata passthrough removes bubblewrap's filesystem view, the per-run **filesystem policy
+must be enforced by the executor itself**. Every Kata AgentHost pod also mounts the *shared* RWX
+`/workspace` PVC (used by all runs across all projects), so an adversarial command whose declared
+working directory stays inside its own tree could otherwise reach a sibling project through an
+absolute path (`cat /workspace/<other-project>/secrets`, `git -C /workspace/<other-project> …`).
+Two layers close this (#476): `ShellCommandValidator` (host-side, at the `run_command` tool) and
+`PassthroughExecutor` (executor boundary, consuming the `SandboxCommand.FilesystemPolicy`) both run
+`SharedWorkspacePathGuard`, which scans the command *text* for absolute paths that resolve under a
+protected shared-mount root (default `/workspace`, override via `AGENTWEAVER_PROTECTED_SHARED_ROOTS`)
+but outside the run's own allowed roots, and rejects them before the shell starts. This is
+defense-in-depth — a text filter cannot see every obfuscation — so it complements, rather than
+replaces, the tracked follow-up of giving each run a private per-run volume instead of the shared
+`/workspace` mount.
+
 ## The agent-sandbox controller (MXC vs. the controller)
 
 In-cluster, the sandbox pod a run executes in is not created by Agentweaver directly and is **not** MXC.

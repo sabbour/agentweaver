@@ -281,12 +281,19 @@ already-committed ref that should be deployed without switching this checkout.
 
 With no flags, in an interactive terminal, this prompts you through Azure
 subscription, resource group, location, cluster/ACR/Key Vault names (smart
-defaults, all editable), and your GitHub OAuth App client ID + secret — then
-provisions AKS, PostgreSQL, Key Vault, ACR, identity, and monitoring, builds
-and pushes images, and deploys and verifies the release. It prints an
-outputs summary at the end (cluster, ACR, gateway host, **GitHub OAuth
-callback URL**, verification pass/fail counts) and never prints the OAuth
-client secret.
+defaults, all editable — navigate list prompts with the arrow keys and Enter,
+or type a digit; falls back to the classic numbered prompt automatically when
+raw-mode input isn't available), your GitHub OAuth App client ID + secret,
+and the GitHub org(s) allowed to sign in (comma-separated, default
+`microsoft`; invalid entries are rejected with a clear message and
+re-prompted rather than crashing the installer). Before asking for the OAuth
+credentials, it walks you through creating the OAuth App itself (with the
+[creation link](https://github.com/settings/applications/new) and the right
+callback URL for local vs. Azure). It then provisions AKS, PostgreSQL, Key
+Vault, ACR, identity, and monitoring, builds and pushes images, and deploys
+and verifies the release. It prints an outputs summary at the end (cluster,
+ACR, gateway host, **GitHub OAuth callback URL**, **allowed GitHub org(s)**,
+verification pass/fail counts) and never prints the OAuth client secret.
 
 > **GitHub OAuth App callback URL — local vs. Azure.** The callback URL you
 > register on the GitHub OAuth App must match where the app is actually
