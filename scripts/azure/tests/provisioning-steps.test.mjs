@@ -109,6 +109,16 @@ test("10-create-cluster: run() creates RG/ACR/cluster/node pools when absent, an
   const sshIdx = createCall.args.indexOf("--ssh-access");
   assert.ok(sshIdx !== -1 && createCall.args[sshIdx + 1] === "disabled", "az aks create must pass --ssh-access disabled");
   assert.ok(!createCall.args.includes("--generate-ssh-keys"), "az aks create must not enable SSH via --generate-ssh-keys");
+
+  // App routing: use the Gateway API / istio path only. The managed default
+  // nginx ingress controller must be skipped at create time (we route via
+  // HTTPRoute on the istio gateway), otherwise app-routing provisions an
+  // unused second public LoadBalancer.
+  const nginxIdx = createCall.args.indexOf("--app-routing-default-nginx-controller");
+  assert.ok(
+    nginxIdx !== -1 && createCall.args[nginxIdx + 1] === "None",
+    "az aks create must pass --app-routing-default-nginx-controller None",
+  );
 });
 
 test("10-create-cluster: skips resource creation when everything already exists", async () => {

@@ -8,7 +8,16 @@ metadata:
   labels:
     app.kubernetes.io/part-of: agentweaver
 spec:
-  podSelector: {}
+  # NOTE: the ingress gateway pods (label gateway.networking.k8s.io/gateway-name)
+  # must be EXCLUDED from default-deny — they are the public entrypoint and must
+  # accept traffic from the internet and the Azure LB health probe. Selecting
+  # them here (e.g. podSelector: {}) silently blackholes all ingress on :443.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: agentweaver
+    matchExpressions:
+      - key: gateway.networking.k8s.io/gateway-name
+        operator: DoesNotExist
   policyTypes:
     - Ingress
 ---
