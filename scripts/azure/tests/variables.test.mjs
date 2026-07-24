@@ -94,6 +94,18 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.AGENTHOST_KEYVAULT_URI, `https://${DEFAULTS.KEYVAULT_NAME}.vault.azure.net/`);
   assert.equal(vars.IMAGE_TAG, "deadbee");
   assert.equal(vars.AGENTHOST_IMAGE_TAG, "deadbee", "AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG");
+  assert.equal(vars.GITHUB_ALLOWED_ORG, DEFAULTS.GITHUB_ALLOWED_ORG, "defaults to microsoft");
+  assert.equal(vars.GITHUB_ALLOWED_ORG, "microsoft");
+});
+
+test("resolveVariables: GITHUB_ALLOWED_ORG env override beats the microsoft default", async () => {
+  const vars = await resolveVariables({
+    env: { GITHUB_ALLOWED_ORG: "microsoft,contoso" },
+    repoRoot: FAKE_REPO_ROOT,
+    resolveLive: false,
+    gitShortSha: async () => "deadbee",
+  });
+  assert.equal(vars.GITHUB_ALLOWED_ORG, "microsoft,contoso");
 });
 
 test("resolveVariables: env overrides beat defaults for every field", async () => {

@@ -288,9 +288,14 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
     listLocations: async () => [{ name: "westus2", displayName: "West US 2" }],
   };
   const selectCalls = [];
+  let rgChoicesSeen = null;
   const prompt = {
     select: async (question, choices) => {
       selectCalls.push(question);
+      if (question.toLowerCase().includes("resource group")) {
+        rgChoicesSeen = choices;
+        return choices.find((c) => c.label === "existing-rg").value;
+      }
       return choices[0].value;
     },
     text: async (question, opts = {}) => opts.default ?? `answer-to-${question}`,
@@ -298,9 +303,90 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
   };
   const collected = await runInteractiveInstaller({ prompt, az, log: noopLog() });
   assert.equal(collected.RESOURCE_GROUP, "existing-rg");
+  assert.equal(rgChoicesSeen[0].label, "Create new...", "Create new... must be the first resource-group choice");
   assert.equal(collected.LOCATION, "westus2");
   assert.equal(collected.GITHUB_CLIENT_SECRET, "super-secret-value");
+  assert.equal(collected.GITHUB_ALLOWED_ORG, "microsoft");
   assert.ok(selectCalls.length >= 3);
+});
+
+test("runInteractiveInstaller: normalizes a comma-separated GitHub org allowlist typed by the user", async () => {
+  const az = {
+    listSubscriptions: async () => [],
+    showAccount: async () => null,
+    listResourceGroups: async () => [],
+    listLocations: async () => [],
+  };
+  const prompt = {
+    select: async (_q, choices) => choices[0].value,
+    text: async (question) => {
+      if (question.startsWith("GitHub org(s)")) return " microsoft ,  azure-management-and-platforms ,,";
+      return `answer-to-${question}`;
+    },
+    secret: async () => "super-secret-value",
+  };
+  const collected = await runInteractiveInstaller({ prompt, az, log: noopLog() });
+  assert.equal(collected.GITHUB_ALLOWED_ORG, "microsoft,azure-management-and-platforms");
+});
+
+test("run: GITHUB_ALLOWED_ORG resolves from a flag, appears in the resolved-config log, and reaches resolveVariables' env override", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls),
+    verifyProvenance: fakeStep("verifyProvenance", calls),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, {}),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 1, fail: 0 }),
+  };
+  const exec = { async run() { return { code: 0 }; }, async capture() { return { stdout: "", stderr: "", code: 0 }; } };
+  let capturedEnv;
+  const resolveVariablesFn = async ({ env: e }) => {
+    capturedEnv = e;
+    return { RESOURCE_GROUP: e.RESOURCE_GROUP, GITHUB_ALLOWED_ORG: e.GITHUB_ALLOWED_ORG, IMAGE_TAG: "dev", AGENTHOST_IMAGE_TAG: "dev" };
+  };
+  const fields = [];
+  const log = { ...noopLog(), field: (label, value) => fields.push([label, value]) };
+
+  await run({
+    argv: [
+      "--resource-group",
+      "my-rg",
+      "--github-client-id",
+      "id",
+      "--github-client-secret",
+      "sec",
+      "--github-allowed-org",
+      " microsoft , azure-management-and-platforms ",
+    ],
+    env: {},
+    prompt: { isInteractive: () => false },
+    exec,
+    log,
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  assert.equal(capturedEnv.GITHUB_ALLOWED_ORG, "microsoft,azure-management-and-platforms");
+  const orgField = fields.find(([label]) => label === "Allowed GitHub org(s)");
+  assert.ok(orgField, "expected an 'Allowed GitHub org(s)' field in the resolved-config/outputs logs");
+  assert.equal(orgField[1], "microsoft,azure-management-and-platforms");
+});
+
+test("run: --github-allowed-org rejects an invalid org login with a clear validation error", async () => {
+  await assert.rejects(
+    run({
+      argv: ["--github-client-id", "id", "--github-client-secret", "sec", "--github-allowed-org", "not a valid org!"],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+    }),
+    /GITHUB_ALLOWED_ORG/,
+  );
 });
 
 test("run: NEVER logs the GitHub OAuth client secret anywhere in output", async () => {

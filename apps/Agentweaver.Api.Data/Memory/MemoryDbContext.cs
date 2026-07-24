@@ -49,6 +49,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<CastProposalRecord> CastProposals => Set<CastProposalRecord>();
     public DbSet<SkillRecord> Skills => Set<SkillRecord>();
     public DbSet<SkillAssignmentRecord> SkillAssignments => Set<SkillAssignmentRecord>();
+    public DbSet<SkillMarketplaceSourceRecord> SkillMarketplaceSources => Set<SkillMarketplaceSourceRecord>();
     public DbSet<BlueprintPackageLibraryRecord> BlueprintPackageLibrary => Set<BlueprintPackageLibraryRecord>();
     public DbSet<BlueprintPackageVersionRecord> BlueprintPackageVersions => Set<BlueprintPackageVersionRecord>();
     public DbSet<BlueprintPackagePayloadRecord> BlueprintPackagePayloads => Set<BlueprintPackagePayloadRecord>();
@@ -167,6 +168,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<WorkflowCheckpointRecord>();
             model.Ignore<SkillRecord>();
             model.Ignore<SkillAssignmentRecord>();
+            model.Ignore<SkillMarketplaceSourceRecord>();
             model.Ignore<BlueprintPackageLibraryRecord>();
             model.Ignore<BlueprintPackageVersionRecord>();
             model.Ignore<BlueprintPackagePayloadRecord>();
@@ -437,6 +439,28 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .HasPrincipalKey(s => new { s.ProjectId, s.SkillId })
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_skill_assignments_skills_project_id_skill_id");
+        });
+
+        model.Entity<SkillMarketplaceSourceRecord>(e =>
+        {
+            e.ToTable("skill_marketplace_sources").HasKey(s => s.SourceId);
+            e.Property(s => s.SourceId).HasColumnName("source_id");
+            e.Property(s => s.ProjectId).HasColumnName("project_id");
+            e.Property(s => s.Name).HasColumnName("name");
+            e.Property(s => s.Repository).HasColumnName("repository");
+            e.Property(s => s.Branch).HasColumnName("branch");
+            e.Property(s => s.Subpath).HasColumnName("subpath");
+            e.Property(s => s.ParseStrategy).HasColumnName("parse_strategy");
+            e.Property(s => s.Enabled).HasColumnName("enabled");
+            e.Property(s => s.CreatedAt).HasColumnName("created_at");
+            e.Property(s => s.UpdatedAt).HasColumnName("updated_at");
+            // Case-insensitive uniqueness parity with SQLite (name COLLATE NOCASE): a functional unique
+            // index on (project_id, lower(name)) is created in the AddSkillMarketplaceSources migration.
+            e.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(s => s.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_skill_marketplace_sources_projects_project_id");
         });
 
         // Shared MAF workflow checkpoints. Each row is an independent, unique-PK checkpoint so the two

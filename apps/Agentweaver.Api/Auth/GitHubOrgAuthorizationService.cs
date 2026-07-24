@@ -9,6 +9,13 @@ public interface IGitHubOrgAuthorizationService
     /// <summary>True when Auth:GitHub:AllowedOrg is set and the middleware should enforce membership.</summary>
     bool IsConfigured { get; }
 
+    /// <summary>
+    /// The parsed, ordered, de-duplicated list of allowed GitHub orgs (a caller is authorized if they
+    /// are a member of ANY of these). Empty when unconfigured. Exposed so the org-authorization
+    /// middleware and the API-key middleware can reuse it without re-parsing the config value.
+    /// </summary>
+    IReadOnlyList<string> AllowedOrgs { get; }
+
     Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct);
 }
 
@@ -18,7 +25,7 @@ public interface IGitHubOrgAuthorizationService
 /// </summary>
 public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationService
 {
-    private readonly string? _allowedOrg;
+    private readonly IReadOnlyList<string> _allowedOrgs;
     private readonly string? _teamOrg;
     private readonly string? _teamSlug;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -33,7 +40,7 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         IMemoryCache cache,
         ILogger<GitHubOrgAuthorizationService> logger)
     {
-        _allowedOrg = configuration["Auth:GitHub:AllowedOrg"]?.Trim();
+        _allowedOrgs = GitHubOrgList.Parse(configuration["Auth:GitHub:AllowedOrg"]);
         _httpClientFactory = httpClientFactory;
         _cache = cache;
         _logger = logger;
@@ -56,14 +63,19 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         }
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(_allowedOrg);
+    public bool IsConfigured => _allowedOrgs.Count > 0;
+
+    public IReadOnlyList<string> AllowedOrgs => _allowedOrgs;
 
     public async Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_allowedOrg))
+        if (_allowedOrgs.Count == 0)
             return OrgAuthResult.NotConfigured;
 
-        var cacheKey = $"ghorg_authz_{login}_{_allowedOrg}_{_teamSlug ?? string.Empty}";
+        // Cache key incorporates ALL allowed orgs deterministically (lowercased, joined with '|') so a
+        // config change to the org list cannot collide with a previously-cached decision for the login.
+        var orgsKey = string.Join('|', _allowedOrgs.Select(o => o.ToLowerInvariant()));
+        var cacheKey = $"ghorg_authz_{login}_{orgsKey}_{_teamSlug ?? string.Empty}";
 
         if (_cache.TryGetValue(cacheKey, out OrgAuthResult cached))
             return cached;
@@ -81,72 +93,68 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
 
     private async Task<OrgAuthResult> ResolveMembershipAsync(string accessToken, string login, CancellationToken ct)
     {
-        var orgResult = await CheckEndpointAsync(
-            accessToken,
-            $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/members/{Uri.EscapeDataString(login)}",
-            ct).ConfigureAwait(false);
+        // Membership is satisfied by ANY allowed org: iterate the list, and the FIRST org that confirms
+        // membership (private OR public) short-circuits to the team check. If no org confirms, we
+        // distinguish a DEFINITIVE denial (every org gave a definitive not-a-member answer) from an
+        // INCONCLUSIVE outcome (at least one org's authenticated primary check failed — expired token /
+        // 5xx / network), so callers such as the refresh-time re-check don't hard-deny on a transient blip.
+        var anyPrimaryInconclusive = false;
+        var anySamlEnforced = false;
+        string? confirmedOrg = null;
 
-        // If primary check fails (SAML redirect → 302, not a member → 404, or inconclusive → token
-        // expired/network/5xx), fall back to the public members endpoint (UNAUTHENTICATED) before
-        // deciding. This handles the common case where the token is not SAML-authorized so the private
-        // endpoint returns 302/401 rather than a definitive answer.
-        // SECURITY (Seraph findings-auth Alert 5): when the AUTHENTICATED private-members check returns
-        // a definitive SAML-enforcement 403 (OrgAccessNotGranted), the org actively enforces SAML SSO
-        // for this token. We MUST treat that as a denial requiring SSO authorization and MUST NOT let an
-        // unauthenticated public-membership lookup silently satisfy it — otherwise a public member with
-        // a non-SAML-authorized (or compromised) token would bypass corporate SAML enforcement.
-        if (orgResult == CheckResult.OrgAccessNotGranted)
+        foreach (var org in _allowedOrgs)
         {
-            _logger.LogWarning(
-                "GitHub org '{Org}' membership check for '{Login}' returned SAML-enforcement (403). " +
-                "Requiring SSO authorization; NOT falling back to public membership.",
-                _allowedOrg, login);
-            return OrgAuthResult.OrgAccessNotGranted;
+            var (orgMember, primaryInconclusive, samlEnforced) =
+                await ResolveSingleOrgAsync(accessToken, login, org, ct).ConfigureAwait(false);
+
+            if (primaryInconclusive)
+                anyPrimaryInconclusive = true;
+
+            if (samlEnforced)
+                anySamlEnforced = true;
+
+            if (orgMember)
+            {
+                confirmedOrg = org;
+                break;
+            }
         }
 
-        // CRITICAL: This call MUST be unauthenticated. For a SAML-enforced org, GitHub applies SAML
-        // enforcement to any AUTHENTICATED request whose token is not SAML-authorized — even against the
-        // public_members endpoint — and returns 403 instead of the public 204. An UNAUTHENTICATED request
-        // bypasses SAML and returns the true public-membership status (204 for a publicized member).
-        // The trade-off is GitHub's 60/hr-per-IP unauthenticated rate limit; rate-limit responses are
-        // classified as Inconclusive below (and never cached) so a transient blip cannot pin a false denial.
-        if (orgResult != CheckResult.Member)
+        if (confirmedOrg is null)
         {
-            var publicResult = await CheckEndpointAsync(
-                accessToken,
-                $"https://api.github.com/orgs/{Uri.EscapeDataString(_allowedOrg!)}/public_members/{Uri.EscapeDataString(login)}",
-                ct,
-                sendAuthHeader: false).ConfigureAwait(false);
-
-            if (publicResult != CheckResult.Member)
+            // Aggregation precedence when NO allowed org confirmed membership:
+            //   1. SAML-enforced (any org's private check returned a definitive 403 — PR #464 fix) →
+            //      OrgAccessNotGranted. This MUST take precedence over a plain Denied: the user may well
+            //      be a member but first needs to authorize the org's SAML SSO for this token, so we
+            //      surface the actionable "authorize SSO" signal rather than a dead-end denial.
+            //   2. Inconclusive (any org's primary authenticated check failed — expired token / 5xx /
+            //      network) → don't hard-deny a possibly-valid member on a transient blip.
+            //   3. Otherwise every org gave a definitive not-a-member answer → Denied.
+            if (anySamlEnforced)
             {
-                // Fix 2 (Seraph T4–T7 review): distinguish INCONCLUSIVE (we could not determine private
-                // membership because the authenticated call failed — expired token / 5xx / network)
-                // from a DEFINITIVE not-a-member (a valid token that returned 404/302). Callers such as
-                // the refresh-time re-check use this to avoid hard-denying private-org members whose
-                // brokered GitHub token has expired.
-                if (orgResult == CheckResult.Inconclusive)
-                {
-                    _logger.LogWarning(
-                        "Org membership re-check for '{Login}' on org '{Org}' was INCONCLUSIVE " +
-                        "(authenticated GitHub call failed — likely an expired/unauthorized token). " +
-                        "Not treating as a definitive non-membership.",
-                        login, _allowedOrg);
-                    return OrgAuthResult.Inconclusive;
-                }
-
                 _logger.LogWarning(
-                    "GitHub login '{Login}' is not a public member of org '{Org}'. " +
-                    "If you are a member, publicize your membership at https://github.com/orgs/{Org}/people.",
-                    login, _allowedOrg, _allowedOrg);
-                return OrgAuthResult.Denied;
+                    "GitHub login '{Login}' is not a confirmed member of any allowed org, and at least one " +
+                    "allowed org [{AllowedOrgs}] enforces SAML SSO for this token. Requiring SSO authorization; " +
+                    "NOT satisfied by unauthenticated public membership.",
+                    login, string.Join(", ", _allowedOrgs));
+                return OrgAuthResult.OrgAccessNotGranted;
             }
 
-            _logger.LogInformation(
-                "GitHub login '{Login}' verified via PUBLIC membership of org '{Org}' " +
-                "(private endpoint unavailable due to SAML SSO enforcement).",
-                login, _allowedOrg);
-            // Public membership confirmed — fall through to team check / Allowed.
+            if (anyPrimaryInconclusive)
+            {
+                _logger.LogWarning(
+                    "Org membership re-check for '{Login}' was INCONCLUSIVE (an authenticated GitHub call " +
+                    "failed — likely an expired/unauthorized token) and no allowed org confirmed membership. " +
+                    "Not treating as a definitive non-membership.",
+                    login);
+                return OrgAuthResult.Inconclusive;
+            }
+
+            _logger.LogWarning(
+                "GitHub login '{Login}' is not a member of any allowed org [{AllowedOrgs}]. " +
+                "If you are a member, publicize your membership at https://github.com/orgs/<org>/people.",
+                login, string.Join(", ", _allowedOrgs));
+            return OrgAuthResult.Denied;
         }
 
         // If team restriction is configured, also verify team membership.
@@ -176,6 +184,86 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         }
 
         return OrgAuthResult.Allowed;
+    }
+
+    /// <summary>
+    /// Runs the two-step membership check for a SINGLE org (authenticated private members primary,
+    /// then UNAUTHENTICATED public_members fallback). Returns whether the login is a confirmed member
+    /// of this org, whether the PRIMARY authenticated check was inconclusive, and whether this org
+    /// definitively enforces SAML SSO for this token (a 403 on the private endpoint) — the last two so
+    /// the caller can aggregate "inconclusive" and "needs SSO authorization" across the allowed-org list.
+    /// </summary>
+    private async Task<(bool IsMember, bool PrimaryInconclusive, bool SamlEnforced)> ResolveSingleOrgAsync(
+        string accessToken, string login, string org, CancellationToken ct)
+    {
+        var orgResult = await CheckEndpointAsync(
+            accessToken,
+            $"https://api.github.com/orgs/{Uri.EscapeDataString(org)}/members/{Uri.EscapeDataString(login)}",
+            ct).ConfigureAwait(false);
+
+        if (orgResult == CheckResult.Member)
+            return (true, false, false);
+
+        // SECURITY (Seraph findings-auth Alert 5 / PR #464): when the AUTHENTICATED private-members
+        // check returns a definitive SAML-enforcement 403 (OrgAccessNotGranted — distinct from a
+        // rate-limit 403, which CheckEndpointAsync already maps to Inconclusive), this org actively
+        // enforces SAML SSO for this token. We MUST NOT fall back to the UNAUTHENTICATED public_members
+        // endpoint for THIS org: an unauthenticated lookup bypasses SAML and would return the true
+        // public status (204), letting a public member with a non-SAML-authorized (or compromised)
+        // token bypass corporate SAML enforcement. Record it as SAML-enforced and move to the next org.
+        if (orgResult == CheckResult.OrgAccessNotGranted)
+        {
+            _logger.LogWarning(
+                "GitHub org '{Org}' membership check for '{Login}' returned SAML-enforcement (403). " +
+                "Requiring SSO authorization; NOT falling back to public membership for this org.",
+                org, login);
+            return (false, false, true);
+        }
+
+        // If primary check fails (SAML redirect → 302, not a member → 404, or inconclusive → token
+        // expired/network/5xx), fall back to the public members endpoint (UNAUTHENTICATED) before
+        // deciding. This handles the common case where the token is not SAML-authorized so the private
+        // endpoint returns 302/401 rather than a definitive answer.
+        // CRITICAL: This call MUST be unauthenticated. For a SAML-enforced org, GitHub applies SAML
+        // enforcement to any AUTHENTICATED request whose token is not SAML-authorized — even against the
+        // public_members endpoint — and returns 403 instead of the public 204. An UNAUTHENTICATED request
+        // bypasses SAML and returns the true public-membership status (204 for a publicized member).
+        // The trade-off is GitHub's 60/hr-per-IP unauthenticated rate limit; rate-limit responses are
+        // classified as Inconclusive below (and never cached) so a transient blip cannot pin a false denial.
+        var publicResult = await CheckEndpointAsync(
+            accessToken,
+            $"https://api.github.com/orgs/{Uri.EscapeDataString(org)}/public_members/{Uri.EscapeDataString(login)}",
+            ct,
+            sendAuthHeader: false).ConfigureAwait(false);
+
+        if (publicResult == CheckResult.Member)
+        {
+            _logger.LogInformation(
+                "GitHub login '{Login}' verified via PUBLIC membership of org '{Org}' " +
+                "(private endpoint unavailable due to SAML SSO enforcement).",
+                login, org);
+            return (true, false, false);
+        }
+
+        // Not a member of this org. Report whether the PRIMARY authenticated check was inconclusive
+        // (expired token / 5xx / network) so the caller can distinguish a transient failure from a
+        // definitive not-a-member (a valid token that returned 404/302) when aggregating across orgs.
+        // Fix 2 (Seraph T4–T7 review): the refresh-time re-check uses this to avoid hard-denying
+        // private-org members whose brokered GitHub token has expired.
+        if (orgResult == CheckResult.Inconclusive)
+        {
+            _logger.LogWarning(
+                "Org membership check for '{Login}' on org '{Org}' was INCONCLUSIVE " +
+                "(authenticated GitHub call failed — likely an expired/unauthorized token).",
+                login, org);
+            return (false, true, false);
+        }
+
+        _logger.LogWarning(
+            "GitHub login '{Login}' is not a public member of org '{Org}'. " +
+            "If you are a member, publicize your membership at https://github.com/orgs/{Org}/people.",
+            login, org, org);
+        return (false, false, false);
     }
 
     private enum CheckResult { Member, NotMember, OrgAccessNotGranted, Inconclusive }

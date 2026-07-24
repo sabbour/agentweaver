@@ -81,3 +81,45 @@ export function command(cmdLine) {
 }
 
 export const isColorEnabled = () => colorEnabled;
+
+const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/**
+ * Runs an async task while showing a live progress indicator so long-running
+ * Azure calls don't look like the installer has hung. On a TTY an animated
+ * spinner is drawn in place and replaced by an `[OK] label` line when the task
+ * resolves; on a non-TTY (or when output is redirected) a single `label...`
+ * line is printed up front, then `[OK] label`. The indicator is always torn
+ * down (spinner cleared, interval stopped) even when the task rejects.
+ * @template T
+ * @param {string} label Human-readable description, e.g. "Loading resource groups".
+ * @param {() => Promise<T>} task The async work to run.
+ * @returns {Promise<T>}
+ */
+export async function withProgress(label, task) {
+  if (!isTTY) {
+    write(process.stdout, `${label}...`);
+    const result = await task();
+    ok(label);
+    return result;
+  }
+  let i = 0;
+  const draw = () => process.stdout.write(`\r\x1b[2K${color("cyan", spinnerFrames[i])} ${redact(label)}...`);
+  draw();
+  const timer = setInterval(() => {
+    i = (i + 1) % spinnerFrames.length;
+    draw();
+  }, 80);
+  if (typeof timer.unref === "function") timer.unref();
+  try {
+    const result = await task();
+    clearInterval(timer);
+    process.stdout.write("\r\x1b[2K");
+    ok(label);
+    return result;
+  } catch (err) {
+    clearInterval(timer);
+    process.stdout.write("\r\x1b[2K");
+    throw err;
+  }
+}

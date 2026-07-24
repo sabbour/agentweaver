@@ -164,6 +164,7 @@ export function buildRuntimeConfigLiterals(vars) {
     OAUTH_AUDIENCE: host ? `https://${host}/mcp` : "",
     GITHUB_CALLBACK_URL: host ? `https://${host}/auth/github/callback` : "",
     GITHUB_FRONTEND_URL: host ? `https://${host}/` : "",
+    GITHUB_ALLOWED_ORG: str(vars.GITHUB_ALLOWED_ORG) || "microsoft",
     TOKEN_STORE_KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
     AGENTHOST_KEYVAULT_URI: str(vars.AGENTHOST_KEYVAULT_URI),
     APPINSIGHTS_WORKSPACE_ID: str(vars.APPINSIGHTS_WORKSPACE_ID),
