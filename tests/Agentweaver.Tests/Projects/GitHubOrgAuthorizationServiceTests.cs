@@ -105,14 +105,14 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
-    // 4b. SECURITY (Seraph findings-auth Alert 5): a SAML-enforcement 403 on the AUTHENTICATED
-    //     private-members endpoint must NOT be overridden by a public-membership 204. The org
-    //     actively enforces SAML SSO for this token, so the result must be OrgAccessNotGranted
-    //     (deny, require SSO) — a public member with a non-SAML-authorized token must not slip
-    //     through the unauthenticated public-membership fallback.
+    // 4b. A SAML-enforcement 403 on the AUTHENTICATED private-members endpoint falls back to the
+    //     UNAUTHENTICATED public-members endpoint. A publicized org member is therefore admitted even
+    //     when their token is not (yet) SAML-SSO-authorized (the identity is the SSO-authenticated
+    //     GitHub login and the org tie is confirmed via public membership). This intentionally relaxes
+    //     the former PR #464 hard-deny, which blocked legitimate public members after OAuth-app rotation.
     // ---------------------------------------------------------------------
     [Fact]
-    public async Task CheckMembershipAsync_DoesNotLetPublicMembershipBypassSamlEnforcement()
+    public async Task CheckMembershipAsync_Allows_WhenPrivateSamlForbiddenButPublicMember()
     {
         var handler = new RoutingHttpMessageHandler(req =>
         {
@@ -124,11 +124,33 @@ public sealed class GitHubOrgAuthorizationServiceTests
 
         var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
 
-        result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
-            "a SAML-enforcement 403 on the private endpoint must require SSO, not be satisfied by public membership");
-        handler.RequestUris.Should().NotContain(uri =>
+        result.Should().Be(OrgAuthResult.Allowed,
+            "a SAML-enforcement 403 on the private endpoint now falls back to public membership, which confirms the member");
+        handler.RequestUris.Should().Contain(uri =>
             uri.AbsolutePath.Contains("/public_members/", StringComparison.Ordinal),
-            "the public-membership fallback must be skipped entirely once SAML enforcement is detected");
+            "the public-membership fallback must run after a SAML 403 on the private endpoint");
+    }
+
+    // ---------------------------------------------------------------------
+    // 4c. A SAML-enforcement 403 on the private endpoint AND not a public member either → the actionable
+    //     SAML-enforced signal (OrgAccessNotGranted) is preserved so the user is told to authorize SSO,
+    //     rather than a dead-end plain denial.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_ReturnsOrgAccessNotGranted_WhenPrivateSamlForbiddenAndNotPublicMember()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            if (IsPrivateMembers(req)) return HttpStatusCode.Forbidden;   // 403 SAML SSO enforcement
+            if (IsPublicMembers(req))  return HttpStatusCode.NotFound;    // not a public member
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler);
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
+            "a SAML 403 with no confirming public membership should still surface the 'authorize SSO' signal");
     }
     // ---------------------------------------------------------------------
     [Fact]
@@ -265,11 +287,11 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
-    // 11. SECURITY (multi-org SAML): org A (microsoft) enforces SAML SSO (private 403) and the caller
-    //     is definitively not a member of org B (contoso, 404 everywhere) => OrgAccessNotGranted.
-    //     SAML-enforcement precedence must beat a plain Denied AND the microsoft public_members
-    //     fallback must be skipped entirely, so a public member with a non-SAML-authorized token
-    //     cannot bypass corporate SAML enforcement via a second org's negative result.
+    // 11. Multi-org SAML: org A (microsoft) enforces SAML SSO (private 403) and the caller is not a
+    //     public member of microsoft either (public 404), and is definitively not a member of org B
+    //     (contoso, 404 everywhere) => OrgAccessNotGranted. SAML-enforcement precedence beats a plain
+    //     Denied. The microsoft public_members fallback IS attempted (and fails), preserving the
+    //     actionable "authorize SSO" signal.
     // ---------------------------------------------------------------------
     [Fact]
     public async Task CheckMembershipAsync_ReturnsOrgAccessNotGranted_WhenFirstOrgSamlEnforcedAndNotMemberOfSecond()
@@ -287,9 +309,9 @@ public sealed class GitHubOrgAuthorizationServiceTests
 
         result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
             "a SAML-enforced org takes precedence over a plain not-a-member denial from another allowed org");
-        handler.RequestUris.Should().NotContain(uri =>
+        handler.RequestUris.Should().Contain(uri =>
             uri.AbsolutePath == "/orgs/microsoft/public_members/octocat",
-            "the public-membership fallback must be skipped for the SAML-enforced org");
+            "the public-membership fallback is attempted for the SAML-enforced org before preserving the SSO signal");
     }
 
     // ---------------------------------------------------------------------

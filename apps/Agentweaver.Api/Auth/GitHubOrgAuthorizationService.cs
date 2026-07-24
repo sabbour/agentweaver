@@ -211,13 +211,19 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         // endpoint for THIS org: an unauthenticated lookup bypasses SAML and would return the true
         // public status (204), letting a public member with a non-SAML-authorized (or compromised)
         // token bypass corporate SAML enforcement. Record it as SAML-enforced and move to the next org.
+        // SECURITY NOTE (was PR #464 hard-deny): a definitive SAML-enforcement 403 on the AUTHENTICATED
+        // private members endpoint no longer hard-denies. GitHub org membership is required, and we treat
+        // a publicized org member as sufficient even when the token is not (yet) SAML-SSO-authorized —
+        // because forcing per-token SSO authorization for a public member blocks legitimate sign-ins
+        // (e.g. right after rotating the OAuth app) with no membership-integrity gain: the identity is
+        // the SSO-authenticated GitHub login and the org tie is confirmed via public membership. So on a
+        // SAML 403 we fall through to the UNAUTHENTICATED public_members check below rather than returning.
         if (orgResult == CheckResult.OrgAccessNotGranted)
         {
             _logger.LogWarning(
-                "GitHub org '{Org}' membership check for '{Login}' returned SAML-enforcement (403). " +
-                "Requiring SSO authorization; NOT falling back to public membership for this org.",
+                "GitHub org '{Org}' membership check for '{Login}' returned SAML-enforcement (403); " +
+                "falling back to public membership verification.",
                 org, login);
-            return (false, false, true);
         }
 
         // If primary check fails (SAML redirect → 302, not a member → 404, or inconclusive → token
@@ -257,6 +263,18 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
                 "(authenticated GitHub call failed — likely an expired/unauthorized token).",
                 login, org);
             return (false, true, false);
+        }
+
+        // Public fallback was attempted only because AllowPublicMembershipFallbackOnSamlDenial is enabled
+        // AND the private check returned a SAML-enforcement 403. The login is not a public member either,
+        // so preserve the SAML-enforced signal (actionable "authorize SSO") rather than a plain not-member.
+        if (orgResult == CheckResult.OrgAccessNotGranted)
+        {
+            _logger.LogWarning(
+                "GitHub login '{Login}' is not a public member of org '{Org}' and the private check was " +
+                "SAML-enforced (403). Requiring SSO authorization.",
+                login, org);
+            return (false, false, true);
         }
 
         _logger.LogWarning(
