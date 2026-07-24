@@ -97,6 +97,38 @@ test("run: all-pass scenario reports ok:true with no HOST-dependent checks skipp
   assert.ok(result.pass > 0);
 });
 
+test("run: probes pods/exec create via --subresource=exec, not the deprecated slash form", async () => {
+  const canIArgs = [];
+  const captureImpl = (cmd, args) => {
+    const joined = args.join(" ");
+    if (joined.includes("auth can-i")) {
+      canIArgs.push(joined);
+      return { stdout: "yes", stderr: "", code: 0 };
+    }
+    if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "pod-1\n", stderr: "", code: 0 };
+    if (joined.includes("Programmed") || joined.includes("Accepted") || joined.includes("ResolvedRefs")) return { stdout: "True", stderr: "", code: 0 };
+    if (joined.includes("addresses")) return { stdout: "1.2.3.4", stderr: "", code: 0 };
+    if (joined.includes("defaultdomaincertificate")) return { stdout: "", stderr: "", code: 0 };
+    if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 };
+    return { stdout: "", stderr: "", code: 0 };
+  };
+  const exec = fakeExec(captureImpl);
+  await run(CFG, { exec, log: noopLog(), env: {} });
+  const execProbes = canIArgs.filter((a) => a.includes("--subresource=exec"));
+  assert.ok(execProbes.length >= 2, "both API and worker SAs must probe pods/exec via --subresource=exec");
+  for (const probe of execProbes) {
+    assert.ok(
+      /\bcreate pods\b/.test(probe) && probe.includes("--subresource=exec"),
+      `expected 'create pods ... --subresource=exec', got: ${probe}`,
+    );
+  }
+  assert.ok(
+    !canIArgs.some((a) => /\bpods\/exec\b/.test(a)),
+    "must not use the deprecated 'pods/exec' slash form (kubectl >=1.33 returns a false 'no')",
+  );
+});
+
 test("run: reports failures for missing pods and unprogrammed gateway", async () => {
   const captureImpl = (cmd, args) => {
     const joined = args.join(" ");
