@@ -40,3 +40,29 @@ test('browser target boundary permits only GitHub OAuth navigation in login mode
     /refusing non-staging target/,
   );
 });
+
+test('browser target boundary permits only generated previews in preview mode', () => {
+  const baseUrl = 'https://agentweaver.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io';
+  const previewUrl = 'https://swift-falcon-amber-abcdefghijklmnopqrstuvwxyz-preview.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io';
+
+  assert.equal(
+    guardedUrl(baseUrl, previewUrl, { allowAgentweaverPreviewNavigation: true }).hostname,
+    new URL(previewUrl).hostname,
+  );
+  assert.throws(
+    () => guardedUrl(baseUrl, previewUrl, {}),
+    /cross-origin/,
+  );
+  assert.throws(
+    () => guardedUrl(baseUrl, 'https://evil-preview.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io', {
+      allowAgentweaverPreviewNavigation: true,
+    }),
+    /cross-origin/,
+  );
+  assert.throws(
+    () => guardedUrl(baseUrl, 'https://swift-falcon-amber-abcdefghijklmnopqrstuvwxyz-preview.other.staging.example.com', {
+      allowAgentweaverPreviewNavigation: true,
+    }),
+    /cross-origin/,
+  );
+});

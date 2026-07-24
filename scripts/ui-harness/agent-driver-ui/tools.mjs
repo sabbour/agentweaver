@@ -111,11 +111,21 @@ async function init(args) {
 
 async function action(args) {
   const session = await loadSession(args.session);
-  const runtime = await openBrowserSession({ baseUrl: session.baseUrl, storageState: session.storageState, headless: true, ...options(args) });
+  const command = args._[0];
+  const runtime = await openBrowserSession({
+    baseUrl: session.baseUrl,
+    storageState: session.storageState,
+    headless: true,
+    allowAgentweaverPreviewNavigation: command === 'open-preview',
+    ...options(args),
+  });
   const capture = attachPageCapture(runtime.page);
   try {
-    const command = args._[0];
     if (command === 'goto') await runtime.goto(args.path ?? '/');
+    else if (command === 'open-preview') {
+      if (!args.url) throw new Error('--url is required for open-preview');
+      await runtime.gotoPreview(args.url);
+    }
     else if (command === 'click') await keyedLocator(runtime.page, { testId: args['test-id'], role: args.role, name: args.name }).click({ timeout: Number(args.timeout ?? 10_000) });
     else if (command === 'type-coordinator') await keyedLocator(runtime.page, { testId: args['test-id'] ?? 'coordinator-composer', role: args.role, name: args.name }).fill(args.text ?? '');
     else if (command === 'resolve-approval') {
