@@ -59,6 +59,17 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <se
 node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId> --path /<path>
 ```
 
+To open an Agentweaver sandbox preview returned by the UI, use the dedicated
+preview action:
+
+```powershell
+node scripts/ui-harness/agent-driver-ui/tools.mjs open-preview --session <sessionId> --url https://<generated-preview-host>
+```
+
+The browser permits this cross-origin navigation only for a generated
+`{token}-preview.<staging-zone>` host associated with the session's Agentweaver
+staging host. Other cross-origin navigation remains blocked.
+
 For `click` and `type-coordinator`, use `--test-id` where available. Otherwise provide
 both `--role <aria-role>` and `--name <exact-accessible-name>`. Do not use arbitrary CSS
 selectors. `click` also accepts `--timeout <milliseconds>`; action evidence can record

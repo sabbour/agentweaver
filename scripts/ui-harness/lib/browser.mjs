@@ -1,10 +1,39 @@
 import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
 import { loadStorageState } from './auth.mjs';
 
+const GITHUB_OAUTH_ORIGIN = 'https://github.com';
+const GITHUB_OAUTH_PATHS = new Set(['/login', '/session']);
+const GENERATED_PREVIEW_LABEL = /^(?:[a-z]+-){3}[a-z2-7]{26}-preview$/;
+
+function isAllowedGitHubOAuthNavigation(target, options) {
+  return options.allowGitHubOAuthNavigation === true
+    && target.origin === GITHUB_OAUTH_ORIGIN
+    && (target.pathname.startsWith('/login/oauth/') || GITHUB_OAUTH_PATHS.has(target.pathname));
+}
+
+function isAllowedAgentweaverPreviewNavigation(base, target, options) {
+  if (options.allowAgentweaverPreviewNavigation !== true || target.protocol !== 'https:') return false;
+  assertTargetAllowed(target, options);
+
+  const baseHost = base.hostname.toLowerCase().replace(/\.$/, '');
+  if (!baseHost.startsWith('agentweaver.')) return false;
+
+  const zone = baseHost.slice('agentweaver.'.length);
+  const previewSuffixes = [`preview.${zone}`, zone];
+  const previewSuffix = previewSuffixes.find((suffix) => target.hostname.endsWith(`.${suffix}`));
+  const previewLabel = previewSuffix
+    ? target.hostname.slice(0, target.hostname.length - previewSuffix.length - 1)
+    : '';
+
+  return GENERATED_PREVIEW_LABEL.test(previewLabel);
+}
+
 function guardedUrl(baseUrl, destination, options) {
   assertTargetAllowed(baseUrl, options);
   const base = new URL(baseUrl);
   const target = new URL(destination, base);
+  if (target.origin !== base.origin && isAllowedGitHubOAuthNavigation(target, options)) return target;
+  if (target.origin !== base.origin && isAllowedAgentweaverPreviewNavigation(base, target, options)) return target;
   assertTargetAllowed(target, options);
   if (target.origin !== base.origin) throw new Error(`refusing cross-origin browser navigation from ${base.origin} to ${target.origin}`);
   return target;
@@ -39,6 +68,10 @@ export async function openBrowserSession(opts) {
     baseUrl: base.toString(),
     browser, context, page,
     goto: (destination = '/') => page.goto(guardedUrl(base, destination, opts).toString(), { waitUntil: 'domcontentloaded' }),
+    gotoPreview: (destination) => page.goto(guardedUrl(base, destination, {
+      ...opts,
+      allowAgentweaverPreviewNavigation: true,
+    }).toString(), { waitUntil: 'domcontentloaded' }),
     close: async () => { await context.close(); await browser.close(); },
   };
 }
