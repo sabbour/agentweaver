@@ -82,6 +82,63 @@ export function command(cmdLine) {
 
 export const isColorEnabled = () => colorEnabled;
 
+const boxChars = { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" };
+
+/**
+ * Draws a boxed banner. The box is sized to the longest line; `title` is bold
+ * and any following `lines` are dimmed. Box-drawing characters render on all
+ * modern terminals; color is applied only when enabled (TTY + not NO_COLOR),
+ * and padding is computed from raw text length so alignment is unaffected by
+ * the (zero-width) color escape codes.
+ * @param {string} title
+ * @param {...string} lines Optional subtitle/detail lines.
+ */
+export function banner(title, ...lines) {
+  const content = [title, ...lines];
+  const inner = Math.max(...content.map((l) => l.length));
+  const top = `${boxChars.tl}${boxChars.h.repeat(inner + 2)}${boxChars.tr}`;
+  const bottom = `${boxChars.bl}${boxChars.h.repeat(inner + 2)}${boxChars.br}`;
+  write(process.stdout, color("cyan", top));
+  content.forEach((text, idx) => {
+    const pad = " ".repeat(inner - text.length);
+    const styled = idx === 0 ? color("bold", text) : color("dim", text);
+    write(process.stdout, `${color("cyan", boxChars.v)} ${styled}${pad} ${color("cyan", boxChars.v)}`);
+  });
+  write(process.stdout, color("cyan", bottom));
+}
+
+/** A full-width dimmed horizontal rule, optionally centered around a label. */
+export function rule(label) {
+  const width = Math.min(60, (process.stdout.columns || 60));
+  if (!label) {
+    write(process.stdout, color("gray", boxChars.h.repeat(width)));
+    return;
+  }
+  const text = ` ${label} `;
+  const side = Math.max(2, Math.floor((width - text.length) / 2));
+  const line = `${boxChars.h.repeat(side)}${text}${boxChars.h.repeat(Math.max(2, width - side - text.length))}`;
+  write(process.stdout, color("gray", line));
+}
+
+/**
+ * Prints a numbered step header with an inline progress bar, e.g.
+ * `▸ Step 3/9  Provisioning monitoring` followed by `  [████░░░░] 33%`.
+ * Purely visual — degrades to plain text without color on non-TTY / NO_COLOR.
+ * @param {number} current 1-based current step.
+ * @param {number} total Total number of steps.
+ * @param {string} title Human-readable step title.
+ */
+export function step(current, total, title) {
+  const width = 24;
+  const ratio = total > 0 ? Math.min(1, Math.max(0, current / total)) : 0;
+  const filled = Math.round(ratio * width);
+  const bar = `${color("green", "█".repeat(filled))}${color("gray", "░".repeat(width - filled))}`;
+  const pct = Math.round(ratio * 100);
+  write(process.stdout, "");
+  write(process.stdout, `${color("cyan", "▸")} ${color("bold", `Step ${current}/${total}`)}  ${title}`);
+  write(process.stdout, `  ${bar} ${color("dim", `${pct}%`)}`);
+}
+
 const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /**

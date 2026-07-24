@@ -21,7 +21,7 @@ import { NonInteractiveError } from "../lib/prompt.mjs";
 
 function noopLog() {
   const rec = () => () => {};
-  return { info: rec(), section: rec(), field: rec(), ok: rec(), skip: rec(), warn: rec(), error: rec(), debug: rec(), command: rec() };
+  return { info: rec(), section: rec(), field: rec(), ok: rec(), skip: rec(), warn: rec(), error: rec(), debug: rec(), command: rec(), banner: rec(), rule: rec(), step: rec(), withProgress: (_label, task) => task() };
 }
 
 function fakeStep(name, calls, result = {}) {

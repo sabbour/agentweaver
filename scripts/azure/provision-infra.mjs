@@ -271,7 +271,7 @@ function buildSchema({ prompt, az }) {
 export async function runInteractiveInstaller({ prompt = promptDefault, az = azDefault, log = logDefault } = {}) {
   const collected = {};
 
-  log.section("Agentweaver interactive installer");
+  log.banner("Agentweaver interactive installer", "Provision Azure infrastructure and deploy");
 
   // Show a live progress indicator around slow az discovery calls so the
   // installer never looks hung. Falls back to running the task directly when
@@ -460,12 +460,10 @@ export async function run(opts = {}) {
     : resolveCfg());
   cfg = { ...cfg, GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET, repoRoot };
 
-  log.info("");
-  log.info("Step 1/9: Creating cluster (ACR + AKS)...");
+  log.step(1, 10, "Creating cluster (ACR + AKS)");
   await createCluster.run(cfg, { exec, log });
 
-  log.info("");
-  log.info("Step 2/9: Setting up identity...");
+  log.step(2, 10, "Setting up identity");
   await setupIdentity.run(cfg, { exec, log, az, prompt });
 
   // Re-resolve variables so IDENTITY_CLIENT_ID (populated live by az after
@@ -475,44 +473,36 @@ export async function run(opts = {}) {
   cfg = await resolveVariablesFn({ env: { ...env, ...envOverride }, repoRoot });
   cfg = { ...cfg, GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET, repoRoot };
 
-  log.info("");
-  log.info("Step 3/9: Provisioning monitoring...");
+  log.step(3, 10, "Provisioning monitoring");
   await provisionMonitoring.run(cfg, { exec, log });
 
   if (!flags.SKIP_OAUTH_KEY) {
-    log.info("");
-    log.info("Step 4/9: Provisioning MCP OAuth signing key...");
+    log.step(4, 10, "Provisioning MCP OAuth signing key");
     await oauthSigningKey.run(cfg, { exec, log, repoRoot });
   } else {
     log.skip("Skipping 16-provision-oauth-signing-key (--skip-oauth-key)");
   }
 
   if (!flags.SKIP_POSTGRES) {
-    log.info("");
-    log.info("Step 5/9: Provisioning Postgres...");
+    log.step(5, 10, "Provisioning Postgres");
     await provisionPostgres.run(cfg, { exec, log, repoRoot });
   } else {
     log.skip("Skipping 17-provision-postgres (--skip-postgres)");
   }
 
-  log.info("");
-  log.info("Step 6/9: Building and pushing images...");
+  log.step(6, 10, "Building and pushing images");
   const buildResult = await buildImages.run(cfg, { exec });
 
-  log.info("");
-  log.info("Step 7/9: Verifying image provenance...");
+  log.step(7, 10, "Verifying image provenance");
   const provenanceResult = await verifyProvenance.run(cfg, { exec });
 
-  log.info("");
-  log.info("Step 8/9: Ensuring A2A mTLS certificates...");
+  log.step(8, 10, "Ensuring A2A mTLS certificates");
   await genA2aMtlsCerts.run(cfg, { exec, log, repoRoot });
 
-  log.info("");
-  log.info("Step 8/9: Deploying manifests...");
+  log.step(9, 10, "Deploying manifests");
   const deployResult = await deployStep.run(cfg, { run: exec.run, capture: exec.capture, log, repoRoot });
 
-  log.info("");
-  log.info("Step 9/9: Verifying deployment...");
+  log.step(10, 10, "Verifying deployment");
   const verifyResult = await verifyStep.run(cfg, { exec, log });
 
   log.info("");
@@ -537,6 +527,13 @@ export async function run(opts = {}) {
   }
   log.field("Verification", `${verifyResult.pass}/${verifyResult.pass + verifyResult.fail} checks passed`);
   // NEVER print GITHUB_CLIENT_SECRET or any credential value here.
+
+  log.info("");
+  if (verifyResult.ok) {
+    log.banner("Deployment complete", deployResult?.HOST ? `https://${deployResult.HOST}` : "Environment provisioned");
+  } else {
+    log.banner("Deployment finished with failing checks", "Review the verification results above");
+  }
 
   return {
     ok: verifyResult.ok,
