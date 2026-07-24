@@ -183,7 +183,8 @@ export async function run(cfg, opts = {}) {
       "--enable-workload-identity",
       "--attach-acr",
       acrId,
-      "--generate-ssh-keys",
+      "--ssh-access",
+      "disabled",
       "--output",
       "table",
     ]);

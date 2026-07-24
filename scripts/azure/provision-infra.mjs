@@ -454,7 +454,10 @@ export async function run(opts = {}) {
   };
   if (flags.IMAGE_TAG) envOverride.IMAGE_TAG = flags.IMAGE_TAG;
 
-  let cfg = await resolveVariablesFn({ env: { ...env, ...envOverride }, repoRoot });
+  const resolveCfg = () => resolveVariablesFn({ env: { ...env, ...envOverride }, repoRoot });
+  let cfg = await (typeof log.withProgress === "function"
+    ? log.withProgress("Resolving deploy configuration", resolveCfg)
+    : resolveCfg());
   cfg = { ...cfg, GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET, repoRoot };
 
   log.info("");

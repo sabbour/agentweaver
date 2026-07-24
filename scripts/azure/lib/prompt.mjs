@@ -415,8 +415,13 @@ export async function secret(question) {
   const mutableStdout = new MutableStdout(process.stdout);
   const rl = openInterface({ output: mutableStdout, input: process.stdin });
   try {
+    // Write the prompt visibly FIRST, then mute so only the typed characters
+    // are swallowed. Muting before rl.question() would also swallow the prompt
+    // text itself -- the user would see nothing and the process would appear to
+    // hang waiting on invisible input.
+    process.stdout.write(`${question}: `);
     mutableStdout.muted = true;
-    const answer = await rl.question(`${question}: `);
+    const answer = await rl.question("");
     process.stdout.write("\n");
     return answer.trim();
   } finally {

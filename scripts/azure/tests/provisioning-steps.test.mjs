@@ -101,6 +101,14 @@ test("10-create-cluster: run() creates RG/ACR/cluster/node pools when absent, an
   assert.ok(runCommands.some((c) => c.startsWith("az acr create")));
   assert.ok(runCommands.some((c) => c.startsWith("az aks create")));
   assert.ok(runCommands.some((c) => c === "az aks nodepool"));
+
+  // Security: the system pool created by `az aks create` must disable SSH
+  // access (not enable it via --generate-ssh-keys), matching the user pools.
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "aks" && c.args[1] === "create");
+  assert.ok(createCall, "expected an 'az aks create' call");
+  const sshIdx = createCall.args.indexOf("--ssh-access");
+  assert.ok(sshIdx !== -1 && createCall.args[sshIdx + 1] === "disabled", "az aks create must pass --ssh-access disabled");
+  assert.ok(!createCall.args.includes("--generate-ssh-keys"), "az aks create must not enable SSH via --generate-ssh-keys");
 });
 
 test("10-create-cluster: skips resource creation when everything already exists", async () => {
