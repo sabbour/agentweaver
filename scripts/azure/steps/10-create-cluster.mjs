@@ -99,7 +99,7 @@ export async function run(cfg, opts = {}) {
     log.skip(`Resource group '${cfg.RESOURCE_GROUP}' already exists.`);
   } else {
     log.info(`Creating resource group '${cfg.RESOURCE_GROUP}' in ${cfg.LOCATION}...`);
-    await exec.run("az", ["group", "create", "--name", cfg.RESOURCE_GROUP, "--location", cfg.LOCATION, "--output", "table"]);
+    await exec.run("az", ["group", "create", "--name", cfg.RESOURCE_GROUP, "--location", cfg.LOCATION, "--output", "none"]);
   }
 
   // -- ACR --
@@ -120,7 +120,7 @@ export async function run(cfg, opts = {}) {
       "--admin-enabled",
       "false",
       "--output",
-      "table",
+      "none",
     ]);
   }
 
@@ -186,7 +186,7 @@ export async function run(cfg, opts = {}) {
       "--ssh-access",
       "disabled",
       "--output",
-      "table",
+      "none",
     ]);
   }
 
@@ -232,7 +232,7 @@ export async function run(cfg, opts = {}) {
       "--ssh-access",
       "disabled",
       "--output",
-      "table",
+      "none",
     ]);
   }
 
@@ -272,7 +272,7 @@ export async function run(cfg, opts = {}) {
       "--ssh-access",
       "disabled",
       "--output",
-      "table",
+      "none",
     ]);
   }
 
