@@ -288,9 +288,14 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
     listLocations: async () => [{ name: "westus2", displayName: "West US 2" }],
   };
   const selectCalls = [];
+  let rgChoicesSeen = null;
   const prompt = {
     select: async (question, choices) => {
       selectCalls.push(question);
+      if (question.toLowerCase().includes("resource group")) {
+        rgChoicesSeen = choices;
+        return choices.find((c) => c.label === "existing-rg").value;
+      }
       return choices[0].value;
     },
     text: async (question, opts = {}) => opts.default ?? `answer-to-${question}`,
@@ -298,6 +303,7 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
   };
   const collected = await runInteractiveInstaller({ prompt, az, log: noopLog() });
   assert.equal(collected.RESOURCE_GROUP, "existing-rg");
+  assert.equal(rgChoicesSeen[0].label, "Create new...", "Create new... must be the first resource-group choice");
   assert.equal(collected.LOCATION, "westus2");
   assert.equal(collected.GITHUB_CLIENT_SECRET, "super-secret-value");
   assert.equal(collected.GITHUB_ALLOWED_ORG, "microsoft");

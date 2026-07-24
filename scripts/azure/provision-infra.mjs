@@ -303,10 +303,10 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   const groups = await az.listResourceGroups().catch(() => []);
   const CREATE_NEW = Symbol("create-new-resource-group");
   const rgChoices = [
-    ...groups.map((g) => ({ label: g.name, value: g.name })),
     { label: "Create new...", value: CREATE_NEW },
+    ...groups.map((g) => ({ label: g.name, value: g.name })),
   ];
-  const rgChoice = groups.length > 0 ? await prompt.select("Select a resource group", rgChoices) : CREATE_NEW;
+  const rgChoice = groups.length > 0 ? await prompt.select("Select a resource group", rgChoices, { default: 0 }) : CREATE_NEW;
   collected.RESOURCE_GROUP =
     rgChoice === CREATE_NEW ? await prompt.text("New resource group name", { default: DEFAULTS.RESOURCE_GROUP }) : rgChoice;
 

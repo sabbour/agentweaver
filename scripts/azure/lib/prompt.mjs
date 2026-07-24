@@ -184,38 +184,47 @@ function selectRenderHeight(count, maxVisible) {
  * block overwrites the old one instead of appending beneath it.
  */
 function renderSelectList(normalized, activeIndex, maxVisible, prevHeight) {
-  if (prevHeight > 0) {
-    process.stdout.write(`\x1b[${prevHeight}A`);
-  }
   const count = normalized.length;
   const showIndicators = count > Math.max(1, maxVisible);
   const { start, end, hasAbove, hasBelow } = computeSelectWindow({ activeIndex, count, maxVisible });
+
+  const lines = [];
   if (showIndicators) {
-    process.stdout.write("\x1b[2K");
-    process.stdout.write(hasAbove ? `  \x1b[2m↑ (${start} more)\x1b[22m\n` : "\n");
+    lines.push(hasAbove ? `  \x1b[2m↑ (${start} more)\x1b[22m` : "");
   }
   for (let i = start; i < end; i++) {
-    process.stdout.write("\x1b[2K");
     const label = redact(normalized[i].label);
-    if (i === activeIndex) {
-      process.stdout.write(`\x1b[7m❯ ${label}\x1b[27m\n`);
-    } else {
-      process.stdout.write(`  ${label}\n`);
-    }
+    lines.push(i === activeIndex ? `\x1b[7m❯ ${label}\x1b[27m` : `  ${label}`);
   }
   if (showIndicators) {
-    process.stdout.write("\x1b[2K");
-    process.stdout.write(hasBelow ? `  \x1b[2m↓ (${count - end} more)\x1b[22m\n` : "\n");
+    lines.push(hasBelow ? `  \x1b[2m↓ (${count - end} more)\x1b[22m` : "");
   }
+
+  // On redraw, the cursor sits at the END of the last line of the previous
+  // block (we never emit a trailing newline, so the block never forces the
+  // terminal to scroll). Move up to the first line, return to column 0, and
+  // clear everything below before repainting. Emitting a trailing newline here
+  // instead would scroll the terminal whenever the block sits at the bottom,
+  // desyncing the cursor-up count and reprinting the list endlessly.
+  if (prevHeight > 0) {
+    process.stdout.write(`\x1b[${prevHeight - 1}A\r\x1b[0J`);
+  }
+  // Clear each line before its content so leftover glyphs from a wider prior
+  // render never linger, and join without a trailing newline.
+  process.stdout.write(lines.map((l) => `\x1b[2K${l}`).join("\n"));
 }
 
-/** Clears the previously rendered choice list block (leaves cursor at its start). */
+/**
+ * Clears the previously rendered choice list block. The cursor sits at the end
+ * of the block's last line (no trailing newline is ever emitted); move up to
+ * the first line and clear to the end of the screen, leaving the cursor at the
+ * block's start so the caller can print the final selection summary there.
+ */
 function clearSelectList(height) {
-  process.stdout.write(`\x1b[${height}A`);
-  for (let i = 0; i < height; i++) {
-    process.stdout.write("\x1b[2K\n");
+  if (height > 0) {
+    process.stdout.write(`\x1b[${height - 1}A`);
   }
-  process.stdout.write(`\x1b[${height}A`);
+  process.stdout.write("\r\x1b[0J");
 }
 
 /**
