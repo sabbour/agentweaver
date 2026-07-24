@@ -58,6 +58,7 @@ export const FILE_RESOURCES = Object.freeze({
   "serviceaccount-api.yaml": [{ kind: "ServiceAccount", name: "agentweaver-api" }],
   "serviceaccount-worker.yaml": [{ kind: "ServiceAccount", name: "agentweaver-worker" }],
   "serviceaccount-agenthost.yaml": [{ kind: "ServiceAccount", name: "agentweaver-agent-host" }],
+  "serviceaccount-mcp.yaml": [{ kind: "ServiceAccount", name: "agentweaver-mcp" }],
   "secret-provider-class.yaml": [
     { kind: "SecretProviderClass", name: "agentweaver-secrets" },
     { kind: "SecretProviderClass", name: "agentweaver-user-tokens" },
