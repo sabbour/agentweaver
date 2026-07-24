@@ -136,29 +136,96 @@ export function reduceSelectKey(state, key) {
   return { index, action: "none" };
 }
 
-/** Redraws the choice list in place (used by the arrow-key raw-mode path). */
-function renderSelectList(normalized, activeIndex, isFirstRender) {
-  if (!isFirstRender) {
-    process.stdout.write(`\x1b[${normalized.length}A`);
+/**
+ * Pure viewport calculation for the arrow-key select() UI. Given the active
+ * index, total choice count, and the maximum number of *lines* the list block
+ * may occupy, returns the half-open window `[start, end)` of items to render
+ * plus whether items are hidden above/below. Exported so the scrolling logic
+ * is unit-testable without a real TTY.
+ *
+ * When everything fits (`count <= maxVisible`) the whole list is returned with
+ * no scroll indicators. Otherwise two of the `maxVisible` lines are reserved
+ * for the `↑ (n more)` / `↓ (n more)` indicator rows and the remaining rows
+ * form a window kept centered on the active index and clamped to the ends.
+ * @param {{activeIndex:number, count:number, maxVisible:number}} state
+ * @returns {{start:number, end:number, hasAbove:boolean, hasBelow:boolean}}
+ */
+export function computeSelectWindow({ activeIndex, count, maxVisible }) {
+  const cap = Math.max(1, maxVisible);
+  if (count <= cap) {
+    return { start: 0, end: count, hasAbove: false, hasBelow: false };
   }
-  normalized.forEach((c, i) => {
+  const visible = Math.max(1, cap - 2); // reserve two rows for scroll indicators
+  let start = activeIndex - Math.floor(visible / 2);
+  if (start < 0) start = 0;
+  if (start > count - visible) start = count - visible;
+  const end = start + visible;
+  return { start, end, hasAbove: start > 0, hasBelow: end < count };
+}
+
+/**
+ * The constant number of terminal lines the select() block occupies for a
+ * given choice count and viewport cap. This MUST stay constant across every
+ * redraw within one select() call so the in-place cursor-up math is exact;
+ * when the list scrolls, the indicator rows are drawn as blanks at the edges
+ * rather than being added/removed (which would desync the redraw and cause the
+ * list to reprint endlessly).
+ */
+function selectRenderHeight(count, maxVisible) {
+  const cap = Math.max(1, maxVisible);
+  if (count <= cap) return count;
+  return Math.max(1, cap - 2) + 2;
+}
+
+/**
+ * Redraws the choice list in place (used by the arrow-key raw-mode path).
+ * `prevHeight` is the number of lines the previous render wrote (0 on the very
+ * first render); the cursor is moved up by exactly that many lines so the new
+ * block overwrites the old one instead of appending beneath it.
+ */
+function renderSelectList(normalized, activeIndex, maxVisible, prevHeight) {
+  if (prevHeight > 0) {
+    process.stdout.write(`\x1b[${prevHeight}A`);
+  }
+  const count = normalized.length;
+  const showIndicators = count > Math.max(1, maxVisible);
+  const { start, end, hasAbove, hasBelow } = computeSelectWindow({ activeIndex, count, maxVisible });
+  if (showIndicators) {
     process.stdout.write("\x1b[2K");
-    const label = redact(c.label);
+    process.stdout.write(hasAbove ? `  \x1b[2m↑ (${start} more)\x1b[22m\n` : "\n");
+  }
+  for (let i = start; i < end; i++) {
+    process.stdout.write("\x1b[2K");
+    const label = redact(normalized[i].label);
     if (i === activeIndex) {
       process.stdout.write(`\x1b[7m❯ ${label}\x1b[27m\n`);
     } else {
       process.stdout.write(`  ${label}\n`);
     }
-  });
+  }
+  if (showIndicators) {
+    process.stdout.write("\x1b[2K");
+    process.stdout.write(hasBelow ? `  \x1b[2m↓ (${count - end} more)\x1b[22m\n` : "\n");
+  }
 }
 
 /** Clears the previously rendered choice list block (leaves cursor at its start). */
-function clearSelectList(count) {
-  process.stdout.write(`\x1b[${count}A`);
-  for (let i = 0; i < count; i++) {
+function clearSelectList(height) {
+  process.stdout.write(`\x1b[${height}A`);
+  for (let i = 0; i < height; i++) {
     process.stdout.write("\x1b[2K\n");
   }
-  process.stdout.write(`\x1b[${count}A`);
+  process.stdout.write(`\x1b[${height}A`);
+}
+
+/**
+ * Maximum number of terminal lines the select() list block may use. Derived
+ * from the terminal height, reserving a few rows for the question line and
+ * surrounding output, with a sane fallback when the row count is unknown.
+ */
+function selectMaxVisible() {
+  const rows = Number.isInteger(process.stdout.rows) ? process.stdout.rows : 12;
+  return Math.max(3, rows - 3);
 }
 
 /**
@@ -174,8 +241,11 @@ async function selectArrowKey(question, normalized, opts) {
     Number.isInteger(opts.default) && opts.default >= 0 && opts.default < normalized.length ? opts.default : 0;
   let state = { index: defaultIndex, count: normalized.length };
 
+  const maxVisible = selectMaxVisible();
+  const renderHeight = selectRenderHeight(normalized.length, maxVisible);
+
   process.stdout.write(`${question}\n`);
-  renderSelectList(normalized, state.index, true);
+  renderSelectList(normalized, state.index, maxVisible, 0);
 
   let onData;
   process.stdin.resume();
@@ -194,7 +264,7 @@ async function selectArrowKey(question, normalized, opts) {
           resolve({ index: state.index });
           return;
         }
-        renderSelectList(normalized, state.index, false);
+        renderSelectList(normalized, state.index, maxVisible, renderHeight);
       };
       onData = (chunk) => {
         pending += chunk.toString("utf8");
@@ -223,7 +293,7 @@ async function selectArrowKey(question, normalized, opts) {
       return undefined; // unreachable, keeps linters happy
     }
 
-    clearSelectList(normalized.length);
+    clearSelectList(renderHeight);
     process.stdout.write(`${question}: ${redact(normalized[outcome.index].label)}\n`);
     return normalized[outcome.index].value;
   } finally {

@@ -6,7 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reduceSelectKey, parseNumberedSelection, resolveTextAnswer } from "../lib/prompt.mjs";
+import { reduceSelectKey, parseNumberedSelection, resolveTextAnswer, computeSelectWindow } from "../lib/prompt.mjs";
 
 test("reduceSelectKey: Down moves to the next index and wraps past the last", () => {
   const count = 3;
@@ -114,4 +114,58 @@ test("resolveTextAnswer: an empty answer with no default and a validator is reje
   const outcome = resolveTextAnswer("   ", { validate: () => true });
   assert.equal(outcome.done, false);
   assert.match(outcome.error, /required/);
+});
+
+test("computeSelectWindow: list shorter than the cap shows everything with no indicators", () => {
+  const w = computeSelectWindow({ activeIndex: 2, count: 5, maxVisible: 10 });
+  assert.deepEqual(w, { start: 0, end: 5, hasAbove: false, hasBelow: false });
+});
+
+test("computeSelectWindow: list equal to the cap still shows everything with no indicators", () => {
+  const w = computeSelectWindow({ activeIndex: 0, count: 8, maxVisible: 8 });
+  assert.deepEqual(w, { start: 0, end: 8, hasAbove: false, hasBelow: false });
+});
+
+test("computeSelectWindow: active at the very top clamps the window to the start", () => {
+  const w = computeSelectWindow({ activeIndex: 0, count: 20, maxVisible: 7 });
+  // 7 lines cap -> 5 item rows + 2 indicator rows.
+  assert.equal(w.start, 0);
+  assert.equal(w.end, 5);
+  assert.equal(w.hasAbove, false);
+  assert.equal(w.hasBelow, true);
+});
+
+test("computeSelectWindow: active at the very bottom clamps the window to the end", () => {
+  const w = computeSelectWindow({ activeIndex: 19, count: 20, maxVisible: 7 });
+  assert.equal(w.end, 20);
+  assert.equal(w.start, 15);
+  assert.equal(w.hasAbove, true);
+  assert.equal(w.hasBelow, false);
+});
+
+test("computeSelectWindow: active in the middle keeps the window centered", () => {
+  const w = computeSelectWindow({ activeIndex: 10, count: 20, maxVisible: 7 });
+  const visible = 5;
+  assert.equal(w.end - w.start, visible);
+  assert.ok(w.start <= 10 && 10 < w.end, "active index is inside the window");
+  assert.equal(w.hasAbove, true);
+  assert.equal(w.hasBelow, true);
+});
+
+test("computeSelectWindow: rendered item count stays constant while scrolling top->bottom", () => {
+  const count = 30;
+  const maxVisible = 8; // -> 6 item rows every time
+  let expected = null;
+  for (let active = 0; active < count; active++) {
+    const w = computeSelectWindow({ activeIndex: active, count, maxVisible });
+    const items = w.end - w.start;
+    if (expected === null) expected = items;
+    assert.equal(items, expected, `window item count changed at active=${active}`);
+    assert.ok(w.start <= active && active < w.end, `active=${active} not visible`);
+  }
+});
+
+test("computeSelectWindow: a tiny cap still yields at least one visible item", () => {
+  const w = computeSelectWindow({ activeIndex: 3, count: 10, maxVisible: 1 });
+  assert.ok(w.end - w.start >= 1, "at least one item is always visible");
 });
