@@ -56,6 +56,27 @@ private static readonly string[] CoordinatorPhaseSuffixes =
     "-coordinator-orchestrate",
 ];
 
+/// <summary>
+/// True when <paramref name="candidateRunId"/> is a synthetic coordinator-phase approval-gate key
+/// (<paramref name="postedRunId"/> + one of <see cref="CoordinatorPhaseSuffixes"/>) rather than a
+/// real, independently-persisted run id. <see cref="ResolveApprovalOwningRunIdAsync"/> can return
+/// such a synthetic id to key the approval-gate lookup, but it is NOT a row in the run store — it
+/// must never be passed to <c>RunId.Parse</c>. Callers should treat it as referring to the SAME
+/// underlying run as <paramref name="postedRunId"/> for ownership/status/RunId-parsing purposes,
+/// while still using the synthetic id (unchanged) as the approval-gate lookup key.
+/// </summary>
+internal static bool IsCoordinatorPhaseSuffixedId(string candidateRunId, string postedRunId)
+{
+    foreach (var suffix in CoordinatorPhaseSuffixes)
+    {
+        if (candidateRunId.Length == postedRunId.Length + suffix.Length
+            && candidateRunId.StartsWith(postedRunId, StringComparison.Ordinal)
+            && candidateRunId.EndsWith(suffix, StringComparison.Ordinal))
+            return true;
+    }
+    return false;
+}
+
 internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
     string postedRunId,
     Run postedRun,
