@@ -17,7 +17,8 @@
 - 0b544d1: Restore the production AgentHost A2A listener so hardened deployments bind the
   expected mTLS endpoint on port 8088 and reject clients whose certificates are
   not signed by the mounted Agentweaver CA.
-
+- f241d0c: Fix notification requests failing on PostgreSQL deployments after a
+  notification is dismissed.
 ## 0.11.0
 
 ### Minor Changes
