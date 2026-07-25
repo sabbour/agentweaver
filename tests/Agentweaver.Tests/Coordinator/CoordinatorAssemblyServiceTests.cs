@@ -1615,6 +1615,64 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Should().Be(RunStatus.Completed);
     }
 
+    /// <summary>
+    /// Cross-pod reconciler race regression: <c>WorkPlans.Status</c> must never be observable as
+    /// <see cref="WorkPlanStatus.InReview"/> before the durable <c>AssemblyReviews</c> row backing that
+    /// gate exists. A peer pod's <c>CoordinatorReconciler</c> sweep treats "status InReview + no pending
+    /// review row" as an orphan and re-arms assembly, colliding with the still-live owner on the same
+    /// AgentHost claim mid-<c>/configure</c>. This polls the DB tightly, from a separate task, concurrently
+    /// with the gate opening, and fails if it EVER observes the status flipped with no backing row —
+    /// proving the write order (review row persisted before the status update) closes the window.
+    /// </summary>
+    [Fact]
+    public async Task RunAssembly_ReviewGate_NeverExposesInReviewStatusBeforeReviewRowExists()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        using var pollCts = new CancellationTokenSource();
+        var sawUnbackedInReview = false;
+        var pollTask = Task.Run(async () =>
+        {
+            while (!pollCts.IsCancellationRequested)
+            {
+                using var scope = _provider.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var status = await db.WorkPlans.AsNoTracking()
+                    .Where(w => w.Id == workPlanId)
+                    .Select(w => w.Status)
+                    .FirstOrDefaultAsync(pollCts.Token);
+                if (status == WorkPlanStatus.InReview)
+                {
+                    var hasRow = await db.AssemblyReviews.AsNoTracking()
+                        .AnyAsync(r => r.CoordinatorRunId == coordinatorRunId, pollCts.Token);
+                    if (!hasRow)
+                    {
+                        sawUnbackedInReview = true;
+                        return;
+                    }
+                }
+                await Task.Delay(1, pollCts.Token);
+            }
+        }, pollCts.Token);
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        pollCts.Cancel();
+        try { await pollTask; } catch (OperationCanceledException) { }
+
+        sawUnbackedInReview.Should().BeFalse(
+            "the review row must be persisted BEFORE WorkPlans.Status flips to InReview, so no peer-pod " +
+            "reconciler sweep can ever observe InReview with no backing review row and wrongly re-arm assembly");
+
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"));
+        await run;
+    }
+
     // ── #226: a human /steer at the LIVE assembly review gate must DRAIN (not queue into the void) ──
 
     /// <summary>
