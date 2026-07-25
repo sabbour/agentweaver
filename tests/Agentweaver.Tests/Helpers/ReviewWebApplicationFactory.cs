@@ -57,6 +57,14 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
                 ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
                 ["RunBounds:MaxSteps"]                    = "50",
                 ["RunBounds:MaxMinutes"]                  = "10",
+                // This fixture is the only one whose tests actually resolve the named
+                // "a2a-sandbox-pod"/streaming HttpClients (A2ATransportTimeoutTests), which
+                // triggers AgentHostMtlsClientHandler.Create(). RequireMtls defaults to true in
+                // SandboxAgentOptions (production-safe default), which would make the handler try
+                // to load client cert files that don't exist outside a real cluster. These tests
+                // only assert HttpClient timeout wiring, not mTLS behavior (see
+                // AgentHostMtlsClientHandlerTests for that), so disable it here explicitly.
+                ["Sandbox:AgentHost:RequireMtls"]         = "false",
             });
         });
     }
