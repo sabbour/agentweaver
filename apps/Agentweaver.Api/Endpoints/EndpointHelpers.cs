@@ -41,6 +41,21 @@ internal static bool IsOwner(HttpContext context, Run run) =>
 /// child run knows the request_id. This is the server-side, definitive owning-run resolution that
 /// makes tool approval robust regardless of which run id the client targets (recurrence of #196).
 /// </summary>
+/// <summary>
+/// Synthetic run-id suffixes used to key approval-gate context for coordinator-phase LLM turns
+/// (drafting, decomposing, orchestrating) that run under the coordinator's OWN run id rather than
+/// a persisted child subtask run — see <c>CopilotCoordinatorSpecDrafter</c> (SetupAsync runId:
+/// <c>input.RunId + "-coordinator-draft"</c>) and <c>IRunAgentHostContextResolver</c>'s matching
+/// list. These ids never exist as RunStore rows, so the child-subtask fan-out below can never find
+/// them; they must be checked directly against the posted (parent) run id first.
+/// </summary>
+private static readonly string[] CoordinatorPhaseSuffixes =
+[
+    "-coordinator-draft",
+    "-coordinator-decompose",
+    "-coordinator-orchestrate",
+];
+
 internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
     string postedRunId,
     Run postedRun,
@@ -52,6 +67,13 @@ internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
 {
     if (gate.GetRequestState(postedRunId, requestId) != ToolApprovalRequestState.Unknown)
         return postedRunId;
+
+    foreach (var suffix in CoordinatorPhaseSuffixes)
+    {
+        var suffixedRunId = postedRunId + suffix;
+        if (gate.GetRequestState(suffixedRunId, requestId) != ToolApprovalRequestState.Unknown)
+            return suffixedRunId;
+    }
 
     // Only a coordinator/parent run (ParentRunId == null && AgentName == "Coordinator") fans out to
     // child subtask runs; a plain run or a child never owns another run's approval requests.
