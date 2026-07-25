@@ -78,6 +78,28 @@ public sealed class SandboxAgentOptions
     /// </summary>
     public string AgentHostA2APath { get; init; } = "/a2a/agent";
 
+    /// <summary>
+    /// Path to the worker/API's own client certificate (PEM) presented to the AgentHost pod's
+    /// Kestrel A2A listener when <see cref="RequireMtls"/> is <see langword="true"/>. Only read
+    /// in that mode. Config key: <c>Sandbox:AgentHost:ClientCertificatePath</c>. Default matches
+    /// the <c>agentweaver-a2a-client-tls</c> secret mount used by api-deployment.yaml /
+    /// worker-deployment.yaml.
+    /// </summary>
+    public string ClientCertificatePath { get; init; } = "/mnt/a2a-client-tls/tls.crt";
+
+    /// <summary>Private key counterpart to <see cref="ClientCertificatePath"/>.
+    /// Config key: <c>Sandbox:AgentHost:ClientCertificateKeyPath</c>.</summary>
+    public string ClientCertificateKeyPath { get; init; } = "/mnt/a2a-client-tls/tls.key";
+
+    /// <summary>
+    /// Path to the CA certificate (PEM, public only) used to validate the AgentHost pod's server
+    /// certificate. AgentHost pods have ephemeral, per-run IPs, so the server cert's CN/SAN
+    /// cannot name every pod in advance — validation trusts this pinned CA and deliberately
+    /// ignores hostname mismatch (see <see cref="AgentHostMtlsClientHandler"/>), it does NOT skip
+    /// chain-of-trust validation. Config key: <c>Sandbox:AgentHost:ClientCACertPath</c>.
+    /// </summary>
+    public string ClientCACertPath { get; init; } = "/mnt/a2a-client-tls/ca.crt";
+
     /// <summary>Parses the <c>Sandbox:AgentExecutionMode</c> string value.</summary>
     internal static AgentExecutionMode ParseMode(string? raw) =>
         raw?.ToLowerInvariant() switch

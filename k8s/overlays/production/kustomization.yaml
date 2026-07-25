@@ -31,8 +31,12 @@ resources:
 #     credentials are encrypted + the caller is authenticated (security Alert 5).
 #     Requires the a2a-tls / a2a-client-tls secrets to be provisioned first
 #     (gen-a2a-mtls-certs.sh); see that file's header.
+#   * patch-agenthost-mtls-client.yaml — matching client-side flip: api/worker must use
+#     Sandbox__AgentHost__RequireMtls=true too, or they call the now-HTTPS-only AgentHost
+#     listener over plain http and every readiness check/A2A call fails deterministically.
 patches:
   - path: patch-agenthost-mtls.yaml
+  - path: patch-agenthost-mtls-client.yaml
 
 # Image tag / registry injection — replaces the old envsubst ACR_LOGIN_SERVER /
 # IMAGE_TAG / AGENTHOST_IMAGE_TAG substitution. `name` matches the base

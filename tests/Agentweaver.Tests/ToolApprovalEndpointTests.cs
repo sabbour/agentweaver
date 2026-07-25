@@ -38,6 +38,37 @@ public sealed class ToolApprovalEndpointTests
         (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
     }
 
+    // Regression guard: ResolveApprovalOwningRunIdAsync can resolve the approval-gate context to a
+    // SYNTHETIC coordinator-phase key ("{coordinatorId}-coordinator-draft") when the approval was
+    // raised during a coordinator-phase LLM turn (spec drafting) rather than by a persisted child
+    // subtask run. That synthetic id is not a real run-store row and must never reach RunId.Parse —
+    // before the fix this crashed with a bare 500 ("Guid should contain 32 digits...") on the very
+    // FIRST approval click of a run, before decompose even started.
+    [Fact]
+    public async Task Approve_CoordinatorPhaseApproval_DoesNotCrash_AndResolvesToCoordinatorRun()
+    {
+        using var factory = new AgentweaverWebApplicationFactory();
+        using var client = CreateAuthenticatedClient(factory);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+
+        var coordinatorId = RunId.New();
+        await InsertRunAsync(runStore, coordinatorId, RunStatus.InProgress);
+
+        const string requestId = "toolu_coordinator_draft_web_fetch";
+        var draftRunKey = coordinatorId + "-coordinator-draft";
+        var pendingApproval = approvalGate.WaitForApprovalAsync(
+            draftRunKey, requestId, "web_fetch", "https://github.com/example/repo/issues/1",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/runs/{coordinatorId}/tool-approvals",
+            new { request_id = requestId, scope = "once" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "the coordinator-phase synthetic key must resolve without crashing");
+        (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+    }
+
     // #349 — exact repro: an agent issues 3 concurrent approval-gated web_fetch tool.call events,
     // but the SDK invokes the permission callback sequentially so only the FIRST registers a real
     // backend approval gate (+ tool.approval_required). The frontend optimistically renders a card

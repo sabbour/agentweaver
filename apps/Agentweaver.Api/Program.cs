@@ -517,12 +517,14 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             : TimeSpan.FromMinutes(2);
 
     // Finite client for AgentHost control-plane calls (preview runner, readiness, approvals).
-    // When RequireMtls=true (production, H1), attach the client-certificate handler here so the
-    // worker presents its workload-bound cert on every pod connection (wiring owned by Link via
-    // a mounted secret — left as the documented hook). When RequireMtls=false (PoC), no client
-    // cert is configured and the worker connects over plain http.
+    // When RequireMtls=true (production, H1), AgentHostMtlsClientHandler attaches the worker's
+    // client certificate and validates the pod's server certificate against the pinned CA
+    // (ignoring hostname — pod IPs are ephemeral/per-run and can't be enumerated in the cert's
+    // SAN list in advance). When RequireMtls=false (PoC), no client cert is configured and the
+    // worker connects over plain http.
     builder.Services.AddHttpClient("a2a-sandbox-pod")
         .ConfigureHttpClient(c => c.Timeout = agentHostHttpTimeout)
+        .ConfigurePrimaryHttpMessageHandler(() => AgentHostMtlsClientHandler.Create(sandboxAgentOptions))
         // Defense-in-depth for the A2A cold-start race: retry ONLY connection-refused (the AgentHost
         // Kestrel listener has not bound :8088 yet). See ConnectRefusedRetryHandler.
         .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
@@ -532,6 +534,7 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     // linked worker-side total/read-idle deadlines, so a dead pod cannot fall through to the 4h watch loop.
     builder.Services.AddHttpClient(RemoteAgentProxy.StreamingHttpClientName)
         .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan)
+        .ConfigurePrimaryHttpMessageHandler(() => AgentHostMtlsClientHandler.Create(sandboxAgentOptions))
         .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
             logger: sp.GetRequiredService<ILoggerFactory>().CreateLogger<ConnectRefusedRetryHandler>()));
     builder.Services.Configure<RemoteAgentProxyOptions>(

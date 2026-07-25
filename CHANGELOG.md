@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.11.2
+
+### Patch Changes
+
+- 0c2debd: Fix AgentHost client mTLS: `agentweaver-api` and `agentweaver-worker` now present a
+  client certificate and validate AgentHost's server certificate against the pinned CA
+  when calling the AgentHost A2A endpoint over HTTPS, and their
+  `Sandbox__AgentHost__RequireMtls` setting is kept in sync with AgentHost's own Kestrel
+  mTLS listener via a dedicated overlay patch, so a redeploy can no longer silently
+  revert the client side to plain HTTP while the server side still requires mTLS.
+- 866ec1f: Fix a Postgres foreign-key violation that could silently drop a whole decomposed
+  work plan. `BacklogPromotionService` now saves task rows in their own
+  `SaveChangesAsync` call before adding and saving their dependency rows, so EF
+  Core/Npgsql's batched insert ordering can no longer race the dependency rows
+  ahead of the tasks they reference (`FK_backlog_task_dependencies_backlog_tasks_depends_on_task_id`).
+- 6843b4a: Fail fast when the UI harness reuses an empty Playwright storage state so staging dry-runs report AUTH_EXPIRED instead of proceeding with a broken session.
+- dd9f01f: Fix tool-approval "AgentHost approval endpoint is unreachable" (503) during the
+  coordinator draft/decompose/orchestrate phases. `ResolveApprovalOwningRunIdAsync` did
+  not know about the synthetic `-coordinator-draft`/`-coordinator-decompose`/
+  `-coordinator-orchestrate` run-id suffixes used to key approval-gate context for those
+  LLM turns, so an operator's "Allow once" click on a grounding tool call (e.g.
+  `web_fetch`) raised during outcome-spec drafting always failed with `no_context`.
+- ca08eb0: Fix AgentHost mTLS startup so loading the mounted CA certificate no longer
+  attempts to parse a private key from the public-only `ca.crt` PEM.
+- dd9f01f: Fix a 500 error when approving or denying the very first tool call of a run
+  (e.g. a `web_fetch` during coordinator spec drafting). The approval-gate
+  owning-run resolution could return a synthetic coordinator-phase key (e.g.
+  `{runId}-coordinator-draft`) that is not a real run id, which then crashed in
+  `RunId.Parse`. That synthetic key is now recognized and treated as the posted
+  coordinator run for ownership/status checks, while still using it to look up
+  the approval-gate request.
+- fcdfcc4: Fix UI harness auth replay for staging: Agentweaver's session token lives in
+  `sessionStorage`, which Playwright's `context.storageState()` does not capture
+  (only cookies and `localStorage` are persisted). Headless dry-runs replaying a
+  saved storage state always landed back on the GitHub sign-in page even with a
+  freshly captured, non-empty state. The `login` command now also captures a
+  companion `sessionStorage` seed file, and headless sessions re-hydrate it via
+  `context.addInitScript` before any page script runs.
+- 06007b7: Fix a bug where GitHub org-membership checks could intermittently return a
+  hard "authorize SSO" 403 (`OrgAuthResult.OrgAccessNotGranted`) even for
+  callers whose org membership is genuinely public. When the primary
+  authenticated membership check hit SAML-enforcement (403), the fallback
+  unauthenticated `public_members` check's own rate-limit responses were
+  silently treated as a confirmed "not a public member" instead of a
+  retryable inconclusive result. The fallback's rate-limited/inconclusive
+  result is now correctly surfaced as `Inconclusive` so the caller retries
+  instead of hard-denying access.
+- 0b544d1: Restore the production AgentHost A2A listener so hardened deployments bind the
+  expected mTLS endpoint on port 8088 and reject clients whose certificates are
+  not signed by the mounted Agentweaver CA.
+
 ## 0.11.1
 
 ### Patch Changes
@@ -19,6 +70,7 @@
   not signed by the mounted Agentweaver CA.
 - f241d0c: Fix notification requests failing on PostgreSQL deployments after a
   notification is dismissed.
+
 ## 0.11.0
 
 ### Minor Changes
