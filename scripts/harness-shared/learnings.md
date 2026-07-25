@@ -444,3 +444,38 @@ On staging v0.11.1, a browser session can still load /projects and render authen
 - status: fixed
 
 Follow-on to #499/#500: patch-agenthost-mtls.yaml correctly flips the AgentHost pod's own Kestrel A2A listener to https-only mTLS (RequireMtls=true), but never flipped the matching client-side Sandbox__AgentHost__RequireMtls env var on api-deployment.yaml/worker-deployment.yaml, which still defaulted to the PoC 'false' value from k8s/base. Left mismatched, api/worker build plain http:// AgentHost readiness-probe/A2A URLs against a TLS-only listener, so every readiness check's connection got dropped mid-handshake (HttpIOException: response ended prematurely) -- a deterministic mismatch, not transient flakiness, once the mTLS overlay patch was applied. Confirmed via kubectl: agenthost-config configmap on the pod showed RequireMtls:true/https://0.0.0.0:8088, while both agentweaver-api replicas and the worker replica showed Sandbox__AgentHost__RequireMtls=false. The client cert secret (agentweaver-a2a-client-tls) was already provisioned and mounted, so no cert work was needed -- just the env var. Immediate unblock applied live via kubectl set env on staging; permanent fix added as k8s/overlays/production/patch-agenthost-mtls-client.yaml (new patch flipping both Deployments' env var to true), wired into kustomization.yaml patches list. Verified the built manifest via kubectl kustomize k8s/overlays/production shows RequireMtls=true for both api and worker containers after the fix.
+
+---
+
+## Backlog pickup run can stall in outcome-plan drafting
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging build f2e7983, a coordinator run spawned by board autopilot from a Ready backlog task (`ea20292c-e034-4f2d-94a8-2e53a0415eee` in project `e93c3b6d-5501-4b6f-85ac-5d14bb65c612`) remained stuck in `coordinator_status=drafting` for more than 6 minutes. Persisted state never advanced past three events (`run.options_set`, `coordinator.started`, `coordinator.outcome_spec.drafting`); `/api/runs/{id}/outcome-spec` stayed `status=drafting` with empty `desiredOutcome`/`scope`/`assumptions`, and no work plan or approval surfaced. This is distinct from direct orchestrations in the same project, which continued to draft/confirm normally.
+
+---
+
+## Assembly build-test can fail at AgentHost configure after all subtasks finish
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging build f2e7983, direct bug-fix run `c6a6eb31-00dc-4898-aac3-e41964cfe3da` confirmed successfully with independent task promotion left OFF, persisted work plan 12, and drove three child subtasks (`7ab82034-20fd-4fb6-917f-f09ec32d473d`, `70d26d58-74f1-4dbd-b1fa-4351a3fa5cba`, `9c1e6e4d-ca5a-4cb9-8d79-1fba9bed167d`) all the way to `assemble_ready`. RAI then passed green, preview applicability reported `preview_required`, and assembly immediately failed at the Build & Test gate with `build_test_infra_agenthost_configure_failed`: `AgentHost /configure for run 'c6a6eb31-00dc-4898-aac3-e41964cfe3da' failed: HTTP 500`. No preview or review surface followed, so this is now the hard blocker after child execution completes.
+
+---
+
+## Fresh bug-fix coordinator web_fetch approvals now fail with generic 500
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: fixed
+
+On staging build f2e7983, two fresh direct bug-fix runs that otherwise had the correct issue URL blocked during coordinator grounding on the first `web_fetch https://github.com/sabbour/agentweaver-demo-dryrun/issues/1` approval. Run `db469dc6-7dda-4464-8521-c0048a4e7398` requested approval at `2026-07-25T15:37:01.3414140+00:00`; manual POST to `/api/runs/{id}/tool-approvals` returned `500 {"error":"An unexpected error occurred."}` and the run remained stuck in `coordinator_status=drafting` with repeating `tool.approval_pending`. A second fresh project/run (`c04b41ee-c8d1-4654-b111-02a9620e4841`) reproduced the same failure even when `auto_approve_tools=true` was enabled immediately after run creation: approval required at `2026-07-25T15:41:56.5762430+00:00`, and repeated manual approve still returned the same generic 500 (captured again at `2026-07-25T15:43:54.054Z`). This regresses the earlier coordinator-approval-path fix and currently blocks reaching outcome confirmation, decompose, and the later Build & Test repro path.
+
+Root-caused via kubectl API-pod logs at the exact 500 timestamps: `System.FormatException: Guid should contain 32 digits...` at `RunId.Parse` inside `RunEndpoints.cs`'s `/tool-approvals`/`/tool-denials` handlers. `EndpointHelpers.ResolveApprovalOwningRunIdAsync` can legitimately return a synthetic coordinator-phase key (e.g. `{runId}-coordinator-draft`) used only to key the approval-gate lookup for coordinator-phase LLM turns — not a real run-store row — but both endpoints unconditionally called `RunId.Parse(targetRunId)` whenever `targetRunId != id`, crashing on this synthetic (non-GUID) string. Fixed by adding `EndpointHelpers.IsCoordinatorPhaseSuffixedId(candidateRunId, postedRunId)` so callers can distinguish "same run, different gate-lookup key" from "genuinely different child run requiring `RunId.Parse`". Regression test added (`Approve_CoordinatorPhaseApproval_DoesNotCrash_AndResolvesToCoordinatorRun`), verified to fail pre-fix/pass post-fix. Fixed in PR #506, deployed to staging.
