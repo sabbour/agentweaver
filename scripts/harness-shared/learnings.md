@@ -444,3 +444,31 @@ On staging v0.11.1, a browser session can still load /projects and render authen
 - status: fixed
 
 Follow-on to #499/#500: patch-agenthost-mtls.yaml correctly flips the AgentHost pod's own Kestrel A2A listener to https-only mTLS (RequireMtls=true), but never flipped the matching client-side Sandbox__AgentHost__RequireMtls env var on api-deployment.yaml/worker-deployment.yaml, which still defaulted to the PoC 'false' value from k8s/base. Left mismatched, api/worker build plain http:// AgentHost readiness-probe/A2A URLs against a TLS-only listener, so every readiness check's connection got dropped mid-handshake (HttpIOException: response ended prematurely) -- a deterministic mismatch, not transient flakiness, once the mTLS overlay patch was applied. Confirmed via kubectl: agenthost-config configmap on the pod showed RequireMtls:true/https://0.0.0.0:8088, while both agentweaver-api replicas and the worker replica showed Sandbox__AgentHost__RequireMtls=false. The client cert secret (agentweaver-a2a-client-tls) was already provisioned and mounted, so no cert work was needed -- just the env var. Immediate unblock applied live via kubectl set env on staging; permanent fix added as k8s/overlays/production/patch-agenthost-mtls-client.yaml (new patch flipping both Deployments' env var to true), wired into kustomization.yaml patches list. Verified the built manifest via kubectl kustomize k8s/overlays/production shows RequireMtls=true for both api and worker containers after the fix.
+
+---
+
+## Fresh bug-fix run now approves correctly but build-test rejects docs-only repo
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: fixed
+
+On staging build 43632442177b with api scaled to 1 replica, fresh run 7d3f8d19-2494-492d-9e79-b912a1199ca7 in fresh project 17124a09-4eeb-4602-a6b3-61677b12a93c proved the coordinator approval fix: the first coordinator-draft web_fetch https://github.com/sabbour/agentweaver-demo-dryrun/issues/1 approval succeeded with HTTP 200 at 2026-07-25T18:41:24.239Z instead of failing. The run then reached outcome confirmation, persisted work plan 13, dispatched/ran children, and reached assembly Build & Test. But Build & Test did not reproduce the earlier AgentHost /configure failure; instead it revised at 2026-07-25T18:49:44.8970787+00:00 with feedback that the repository contains no source code, package manifests, build config, or tests -- only .squad/, .agentweaver/, and docs/bugfix/issue-1-triage.md. Preview was skipped as not applicable (llm_docs_or_non_runtime), and the coordinator redispatched subtasks 18/19/20 rather than reaching preview/review/merge. This blocks the intended recording path because the seeded repo no longer presents a runnable bug-fix target.
+
+Root cause: sabbour/agentweaver-demo-dryrun was genuinely empty (gh api repos/.../contents returned "This repository is empty", gh repo view showed isEmpty: true, no default branch) -- a pre-existing gap in demo environment setup, not a code bug. Fixed by seeding a minimal, dependency-free static web app (index.html/styles.css/package.json/build.js/test.js) with an intentional, verified-reproducing CSS bug matching issue #1 (banner absolutely positioned at 96px base height; tablet-breakpoint main margin-top drops to 64px, less than the banner's realistic ~140px wrapped height on narrow tablet widths) and pushing it to main. test.js was verified locally to fail pre-fix with a clear message and pass once the CSS margin is corrected, giving Build & Test something genuine to catch.
+
+---
+
+## Org-membership check flip-flops between 200 and 403 across adjacent polls even when membership is public
+
+- date: 2026-07-25
+- category: bug
+- surface: api
+- status: fixed
+
+During demo-recording runs, /api/runs/... /work-plan and /events routes intermittently returned 403 "Could not verify membership of the required GitHub organization. Ensure your org membership is set to Public..." (OrgAuthResult.OrgAccessNotGranted) even though the caller's microsoft org membership was confirmed already-public (gh api orgs/microsoft/public_members/<login> returns 204). The same login/org combination alternated between success and this 403 across polls seconds apart in the same session.
+
+Root cause: in GitHubOrgAuthorizationService.ResolveSingleOrgAsync (apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs), when the primary AUTHENTICATED private-members check returns a SAML-enforcement 403 (CheckResult.OrgAccessNotGranted), the code correctly falls back to an UNAUTHENTICATED public_members check. That fallback call is itself subject to GitHub's 60/hr-per-IP unauthenticated rate limit (shared across the whole cluster's egress NAT IP). CheckEndpointAsync already classifies a rate-limited response as CheckResult.Inconclusive, but ResolveSingleOrgAsync never inspected the public fallback's result for Inconclusive -- it only special-cased publicResult == CheckResult.Member, and otherwise fell through to branch on the stale primary orgResult alone. A rate-limited (thus inconclusive) public-fallback check was silently conflated with "definitively not a public member," so whenever the primary check had also been a SAML 403, the aggregate result came back as the actionable-looking "authorize SSO" denial (OrgAuthResult.OrgAccessNotGranted) instead of a retryable Inconclusive -- even though the membership genuinely was public and only the fallback lookup itself had transiently hit the unauthenticated rate limit.
+
+Fix: ResolveSingleOrgAsync now checks publicResult == CheckResult.Inconclusive before falling through to the orgResult-based branches, returning the same "transient, not yet a member" tuple used for primary-check Inconclusive so the caller retries instead of hard-denying. Added a regression test (CheckMembershipAsync_Inconclusive_WhenPrivateSamlForbiddenAndPublicFallbackRateLimited in tests/Agentweaver.Tests/Projects/GitHubOrgAuthorizationServiceTests.cs) simulating a SAML-403 private check plus a rate-limited (403 + X-RateLimit-Remaining: 0) public fallback, asserting the aggregate result is Inconclusive.
