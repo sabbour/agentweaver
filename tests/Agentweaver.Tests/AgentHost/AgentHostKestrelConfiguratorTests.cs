@@ -1,4 +1,5 @@
 extern alias agenthost;
+using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using agenthost::Agentweaver.AgentHost;
@@ -62,6 +63,32 @@ public sealed class AgentHostKestrelConfiguratorTests
             .Should().BeFalse();
         AgentHostKestrelConfigurator.ValidateClientCertificate(null, trustedCa)
             .Should().BeFalse();
+    }
+
+    [Fact]
+    public void LoadPublicCertificate_loads_certificate_only_pem_for_chain_validation()
+    {
+        using var trustedCa = CreateCertificateAuthority("CN=agentweaver-test-ca");
+        using var clientCertificate = CreateClientCertificate("CN=agentweaver-worker", trustedCa);
+        var certificatePath = Path.Combine(
+            AppContext.BaseDirectory,
+            $"{nameof(AgentHostKestrelConfiguratorTests)}-{Guid.NewGuid():N}-ca.crt");
+        File.WriteAllText(certificatePath, trustedCa.ExportCertificatePem());
+
+        try
+        {
+            using var loadedCertificate = AgentHostKestrelConfigurator.LoadPublicCertificate(certificatePath);
+
+            loadedCertificate.HasPrivateKey.Should().BeFalse();
+            loadedCertificate.Thumbprint.Should().Be(trustedCa.Thumbprint);
+            loadedCertificate.PublicKey.Should().NotBeNull();
+            AgentHostKestrelConfigurator.ValidateClientCertificate(clientCertificate, loadedCertificate)
+                .Should().BeTrue();
+        }
+        finally
+        {
+            File.Delete(certificatePath);
+        }
     }
 
     private static IConfiguration BuildConfiguration(Dictionary<string, string?> values) =>
