@@ -29,6 +29,15 @@ data:
   appsettings.k8s.json: |
     {
       "Kestrel": {
+        "Endpoints": {
+          "A2A": {
+            "Url": "https://0.0.0.0:8088",
+            "Certificate": {
+              "Path": "/mnt/a2a-tls/tls.crt",
+              "KeyPath": "/mnt/a2a-tls/tls.key"
+            }
+          }
+        },
         "Limits": {
           "MaxConcurrentConnections": 50,
           "MaxConcurrentUpgradedConnections": 50,
@@ -41,6 +50,8 @@ data:
         "RequireMtls": true,
         "Port": 8088,
         "A2APath": "/a2a/agent",
+        "ServerCertificatePath": "/mnt/a2a-tls/tls.crt",
+        "ServerCertificateKeyPath": "/mnt/a2a-tls/tls.key",
         "ClientCACertPath": "/mnt/a2a-tls/ca.crt",
         "HeartbeatIntervalSeconds": 15,
         "Security": {

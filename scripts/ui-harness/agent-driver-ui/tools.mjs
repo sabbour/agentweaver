@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPersona } from '../../persona-briefs/index.mjs';
 import { adaptUiEvidence } from '../../harness-judge/adapters/ui.mjs';
-import { ensureAuthDirectory, DEFAULT_STORAGE_STATE } from '../lib/auth.mjs';
+import { ensureAuthDirectory, DEFAULT_STORAGE_STATE, saveSessionStorageSeed } from '../lib/auth.mjs';
 import { attachPageCapture, captureTurn } from '../lib/evidence.mjs';
 import { guardedUrl, keyedLocator, openBrowserSession } from '../lib/browser.mjs';
 import { computeDriverP0, reportDriverP0 } from '../lib/reporter-ui.mjs';
@@ -79,13 +79,22 @@ export function assertApprovalAllowed({ adapterText, decision, gate }) {
 async function login(args) {
   const baseUrl = args['base-url'];
   if (!baseUrl) throw new Error('--base-url is required');
-  const session = await openBrowserSession({ baseUrl, headless: false, ...options(args) });
+  const session = await openBrowserSession({
+    baseUrl,
+    headless: false,
+    allowGitHubOAuthNavigation: true,
+    ...options(args),
+  });
   try {
     await session.goto('/');
     console.log('Complete login in the visible Chromium window, then resume Playwright to save the session.');
     await session.page.pause();
     await ensureAuthDirectory();
-    await session.context.storageState({ path: args['storage-state'] ?? DEFAULT_STORAGE_STATE });
+    const statePath = args['storage-state'] ?? DEFAULT_STORAGE_STATE;
+    await session.context.storageState({ path: statePath });
+    // Agentweaver's session token lives in sessionStorage, which storageState()
+    // cannot capture — save it separately so headless replay can restore it too.
+    await saveSessionStorageSeed(session.page, statePath);
     console.log('Stored browser session locally. It was not printed.');
   } finally {
     await session.close();
@@ -106,11 +115,21 @@ async function init(args) {
 
 async function action(args) {
   const session = await loadSession(args.session);
-  const runtime = await openBrowserSession({ baseUrl: session.baseUrl, storageState: session.storageState, headless: true, ...options(args) });
+  const command = args._[0];
+  const runtime = await openBrowserSession({
+    baseUrl: session.baseUrl,
+    storageState: session.storageState,
+    headless: true,
+    allowAgentweaverPreviewNavigation: command === 'open-preview',
+    ...options(args),
+  });
   const capture = attachPageCapture(runtime.page);
   try {
-    const command = args._[0];
     if (command === 'goto') await runtime.goto(args.path ?? '/');
+    else if (command === 'open-preview') {
+      if (!args.url) throw new Error('--url is required for open-preview');
+      await runtime.gotoPreview(args.url);
+    }
     else if (command === 'click') await keyedLocator(runtime.page, { testId: args['test-id'], role: args.role, name: args.name }).click({ timeout: Number(args.timeout ?? 10_000) });
     else if (command === 'type-coordinator') await keyedLocator(runtime.page, { testId: args['test-id'] ?? 'coordinator-composer', role: args.role, name: args.name }).fill(args.text ?? '');
     else if (command === 'resolve-approval') {

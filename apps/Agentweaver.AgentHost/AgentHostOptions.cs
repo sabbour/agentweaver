@@ -40,6 +40,26 @@ public sealed class AgentHostOptions
     public int Port { get; init; } = 8088;
 
     /// <summary>
+    /// PEM-encoded server certificate path for the AgentHost A2A listener. The production
+    /// Kubernetes overlay mounts this at <c>/mnt/a2a-tls/tls.crt</c>.
+    /// Config key: <c>AgentHost:ServerCertificatePath</c>.
+    /// </summary>
+    public string ServerCertificatePath { get; init; } = "/mnt/a2a-tls/tls.crt";
+
+    /// <summary>
+    /// PEM-encoded private key path for <see cref="ServerCertificatePath"/>. The production
+    /// Kubernetes overlay mounts this at <c>/mnt/a2a-tls/tls.key</c>.
+    /// Config key: <c>AgentHost:ServerCertificateKeyPath</c>.
+    /// </summary>
+    public string ServerCertificateKeyPath { get; init; } = "/mnt/a2a-tls/tls.key";
+
+    /// <summary>
+    /// PEM-encoded certificate authority used to validate incoming client certificates for the
+    /// mTLS A2A listener. Config key: <c>AgentHost:ClientCACertPath</c>.
+    /// </summary>
+    public string ClientCACertPath { get; init; } = "/mnt/a2a-tls/ca.crt";
+
+    /// <summary>
     /// Bearer token required to access the A2A agent-card endpoint (H3 — authz-gated
     /// discovery). Callers must supply <c>Authorization: Bearer {CardBearerToken}</c>.
     /// If empty, the card endpoint is accessible without authentication (not recommended
