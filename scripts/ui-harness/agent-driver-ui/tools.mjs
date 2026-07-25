@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPersona } from '../../persona-briefs/index.mjs';
 import { adaptUiEvidence } from '../../harness-judge/adapters/ui.mjs';
-import { ensureAuthDirectory, DEFAULT_STORAGE_STATE } from '../lib/auth.mjs';
+import { ensureAuthDirectory, DEFAULT_STORAGE_STATE, saveSessionStorageSeed } from '../lib/auth.mjs';
 import { attachPageCapture, captureTurn } from '../lib/evidence.mjs';
 import { guardedUrl, keyedLocator, openBrowserSession } from '../lib/browser.mjs';
 import { computeDriverP0, reportDriverP0 } from '../lib/reporter-ui.mjs';
@@ -90,7 +90,11 @@ async function login(args) {
     console.log('Complete login in the visible Chromium window, then resume Playwright to save the session.');
     await session.page.pause();
     await ensureAuthDirectory();
-    await session.context.storageState({ path: args['storage-state'] ?? DEFAULT_STORAGE_STATE });
+    const statePath = args['storage-state'] ?? DEFAULT_STORAGE_STATE;
+    await session.context.storageState({ path: statePath });
+    // Agentweaver's session token lives in sessionStorage, which storageState()
+    // cannot capture — save it separately so headless replay can restore it too.
+    await saveSessionStorageSeed(session.page, statePath);
     console.log('Stored browser session locally. It was not printed.');
   } finally {
     await session.close();

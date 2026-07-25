@@ -1,5 +1,5 @@
 import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
-import { loadStorageState } from './auth.mjs';
+import { loadStorageState, loadSessionStorageSeed } from './auth.mjs';
 
 const GITHUB_OAUTH_ORIGIN = 'https://github.com';
 const GITHUB_OAUTH_PATHS = new Set(['/login', '/session']);
@@ -52,6 +52,18 @@ export async function openBrowserSession(opts) {
   const contextOptions = {};
   if (opts.storageState) contextOptions.storageState = await loadStorageState(opts.storageState);
   const context = await browser.newContext(contextOptions);
+  if (opts.storageState) {
+    const seed = await loadSessionStorageSeed(opts.storageState);
+    if (seed && seed.origin === base.origin) {
+      // Re-hydrate sessionStorage before any page script runs, since Agentweaver's
+      // auth token lives there and storageState() cannot capture it (see auth.mjs).
+      await context.addInitScript((entries) => {
+        for (const [key, value] of Object.entries(entries)) {
+          try { window.sessionStorage.setItem(key, value); } catch { /* storage unavailable */ }
+        }
+      }, seed.entries);
+    }
+  }
   const page = await context.newPage();
   await context.route('**/*', async (route) => {
     if (route.request().isNavigationRequest()) {
