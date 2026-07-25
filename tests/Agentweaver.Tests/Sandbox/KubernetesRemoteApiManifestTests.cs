@@ -132,6 +132,10 @@ public sealed class KubernetesRemoteApiManifestTests
         var patch = ReadOverlayManifest("production", "patch-agenthost-mtls.yaml");
 
         patch.Should().Contain("name: agenthost-config");
+        patch.Should().Contain("\"A2A\": {");
+        patch.Should().Contain("\"Url\": \"https://0.0.0.0:8088\"");
+        patch.Should().Contain("\"Path\": \"/mnt/a2a-tls/tls.crt\"");
+        patch.Should().Contain("\"KeyPath\": \"/mnt/a2a-tls/tls.key\"");
         patch.Should().Contain("\"RequireMtls\": true");
         patch.Should().Contain("\"RequireClientCertificate\": true");
         patch.Should().Contain("\"SkipTlsHostnameVerification\": false");
