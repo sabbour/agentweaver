@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
+using System.IO;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
@@ -111,6 +112,6 @@ internal static class AgentHostKestrelConfigurator
 
     internal static X509Certificate2 LoadPublicCertificate(string certificatePath)
     {
-        return X509Certificate2.CreateFromPemFile(certificatePath);
+        return X509Certificate2.CreateFromPem(File.ReadAllText(certificatePath));
     }
 }
