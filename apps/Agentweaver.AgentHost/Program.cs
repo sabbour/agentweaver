@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text.Json.Serialization;
 using Agentweaver.AgentHost;
 using Agentweaver.AgentRuntime;
@@ -28,27 +27,14 @@ builder.Services.Configure<PreviewRunnerOptions>(builder.Configuration.GetSectio
 // ── A2A listener: mTLS (production default) vs plain HTTP (PoC) ─────────────────
 // Sandbox:AgentHost:RequireMtls maps here as AgentHost:RequireMtls. Default TRUE keeps the
 // secure path (H1): the mounted appsettings.k8s.json (at /app/config) drives
-// Kestrel:Endpoints:A2A with the workload-bound server cert + RequireCertificate. When FALSE
-// (PoC only), no Kestrel:Endpoints are configured and the listener falls back to plain HTTP on
-// AgentHost:Port. The SandboxTemplate sets envVarsInjectionPolicy=Disallowed, so this config is
-// read from the mounted ConfigMap, not per-run env vars.
+// Kestrel:Endpoints:A2A, while this bootstrap layer applies the mTLS client-certificate policy and
+// fail-closed HTTPS fallback if the endpoint block is absent. When FALSE (PoC only), the listener
+// falls back to plain HTTP on AgentHost:Port. The SandboxTemplate sets
+// envVarsInjectionPolicy=Disallowed, so this config is read from the mounted ConfigMap, not per-run
+// env vars.
 builder.Configuration.AddJsonFile("/app/config/appsettings.k8s.json", optional: true);
-
-var requireMtls = !string.Equals(
-    builder.Configuration["AgentHost:RequireMtls"], "false", StringComparison.OrdinalIgnoreCase);
-var a2aPort = int.TryParse(builder.Configuration["AgentHost:Port"], out var parsedPort)
-    ? parsedPort
-    : 8088;
-var kestrelEndpointsConfigured = builder.Configuration.GetSection("Kestrel:Endpoints").GetChildren().Any();
-
-if (!requireMtls && !kestrelEndpointsConfigured)
-{
-    // PoC path: no explicit Kestrel endpoint config → bind plain HTTP on the A2A port.
-    // MUST NOT be used in production (set AgentHost:RequireMtls=true + provide Kestrel:Endpoints).
-    // Use IPAddress.Any (0.0.0.0) rather than ListenAnyIP ([::]) so the pod is reachable on
-    // single-stack IPv4 clusters where the IPv4 podIP is dialled directly by the API.
-    builder.WebHost.ConfigureKestrel(kestrel => kestrel.Listen(IPAddress.Any, a2aPort));
-}
+builder.WebHost.ConfigureKestrel(kestrel =>
+    AgentHostKestrelConfigurator.Configure(kestrel, builder.Configuration));
 
 // ── GitHub credential chain ────────────────────────────────────────────────────
 // Three paths, selected in priority order:
