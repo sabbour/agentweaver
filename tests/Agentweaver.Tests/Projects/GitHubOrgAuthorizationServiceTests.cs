@@ -315,6 +315,41 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
+    // 12. BUG FIX regression: the private endpoint returns a SAML-enforcement 403, and the
+    //     UNAUTHENTICATED public_members fallback itself gets rate-limited (403 with
+    //     X-RateLimit-Remaining: 0) rather than giving a definitive answer. This must NOT be
+    //     reported as "confirmed not a public member, SAML enforced" (OrgAccessNotGranted) — that
+    //     conflates "couldn't verify" with "verified not a member" and produces a hard, misleading
+    //     403 for what is really a transient rate-limit blip. It must surface as Inconclusive so the
+    //     caller retries instead of hard-denying/erroring out a possibly-already-public member.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Inconclusive_WhenPrivateSamlForbiddenAndPublicFallbackRateLimited()
+    {
+        var handler = new HeaderAwareRoutingHttpMessageHandler(req =>
+        {
+            if (IsPrivateMembers(req))
+                return new HttpResponseMessage(HttpStatusCode.Forbidden); // SAML SSO enforcement
+
+            if (IsPublicMembers(req))
+            {
+                var rateLimited = new HttpResponseMessage(HttpStatusCode.Forbidden);
+                rateLimited.Headers.Add("X-RateLimit-Remaining", "0");
+                return rateLimited;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+        var service = BuildService(handler);
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Inconclusive,
+            "a rate-limited public-membership fallback must not be conflated with a confirmed " +
+            "not-a-public-member answer — it must surface as a retryable transient failure");
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
@@ -378,5 +413,22 @@ public sealed class GitHubOrgAuthorizationServiceTests
         public SingleClientHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
 
         public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    }
+
+    /// <summary>
+    /// Like <see cref="RoutingHttpMessageHandler"/> but lets the router return a full
+    /// <see cref="HttpResponseMessage"/> (with headers) so tests can simulate rate-limit
+    /// signals such as <c>X-RateLimit-Remaining: 0</c> or <c>Retry-After</c>.
+    /// </summary>
+    private sealed class HeaderAwareRoutingHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _router;
+
+        public HeaderAwareRoutingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> router) =>
+            _router = router;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) => Task.FromResult(_router(request));
     }
 }

@@ -251,6 +251,28 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
             return (true, false, false);
         }
 
+        // BUG FIX (demo-recording investigation): the UNAUTHENTICATED public_members fallback shares a
+        // 60/hr-per-IP GitHub rate limit across every pod egressing through the same NAT IP, so it can
+        // itself come back Inconclusive (rate-limited / network / 5xx) rather than a definitive answer.
+        // Previously this case fell through to the orgResult-based branches below, which — whenever the
+        // PRIVATE check had returned a SAML-enforcement 403 — reported a confident "not a public member,
+        // SAML enforced" (OrgAccessNotGranted) even though we never actually got a definitive public
+        // membership answer. That produced a hard, actionable-looking 403 ("ensure your org membership is
+        // Public") for what was really just a transient rate-limit blip on the fallback call — observed
+        // as the login's org-membership check flipping between 200 and 403 across adjacent polls in the
+        // same session even though the membership was, in fact, already public the whole time. Treat this
+        // the same as a primary-check Inconclusive: don't conflate "couldn't verify" with "verified not
+        // a public member".
+        if (publicResult == CheckResult.Inconclusive)
+        {
+            _logger.LogWarning(
+                "Public membership fallback check for '{Login}' on org '{Org}' was INCONCLUSIVE " +
+                "(rate-limited/network/5xx on the unauthenticated call) — treating as transient, not a " +
+                "confirmed non-membership.",
+                login, org);
+            return (false, true, false);
+        }
+
         // Not a member of this org. Report whether the PRIMARY authenticated check was inconclusive
         // (expired token / 5xx / network) so the caller can distinguish a transient failure from a
         // definitive not-a-member (a valid token that returned 404/302) when aggregating across orgs.

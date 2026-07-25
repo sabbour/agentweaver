@@ -264,6 +264,17 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
             lastKey = orderKey;
         }
 
+        // Persist the tasks first, in their own SaveChangesAsync call. The dependency
+        // junction rows below reference these tasks via two separate FKs to the same
+        // self-referencing table (TaskId, DependsOnTaskId); EF Core/Npgsql's batched
+        // command ordering does not reliably guarantee the parent-task INSERTs are
+        // sent before the dependency INSERTs when both are tracked in a single
+        // SaveChangesAsync call, which can trip the
+        // FK_backlog_task_dependencies_backlog_tasks_depends_on_task_id constraint.
+        // Splitting into two saves (still inside the same transaction) guarantees the
+        // correct order.
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+
         foreach (var story in stories)
         {
             var taskId = keyToTaskId[story.Key.Trim()];

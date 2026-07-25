@@ -27,6 +27,21 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
         _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rv-wt-{Guid.NewGuid():N}");
         _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rv-cp-{Guid.NewGuid():N}");
         _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rv-ccp-{Guid.NewGuid():N}");
+
+        // Program.cs computes SandboxAgentOptions.RequireMtls from builder.Configuration
+        // *before* builder.Build() runs, at the top level of the minimal-hosting Program.cs.
+        // WebApplicationFactory's ConfigureWebHost/ConfigureAppConfiguration additions (see
+        // below) are only visible to configuration reads that happen at/after Build() -- they
+        // do NOT reach this early read. Environment variables, in contrast, are loaded by
+        // WebApplication.CreateBuilder(args) itself, so they ARE visible to that early read.
+        // This fixture is the only one whose tests actually resolve the named
+        // "a2a-sandbox-pod"/streaming HttpClients (A2ATransportTimeoutTests), which triggers
+        // AgentHostMtlsClientHandler.Create(). RequireMtls defaults to true (production-safe
+        // default), which would make the handler try to load client cert files that don't exist
+        // outside a real cluster. These tests only assert HttpClient timeout wiring, not mTLS
+        // behavior (see AgentHostMtlsClientHandlerTests for that), so disable it here via an
+        // env var set before the host is built.
+        Environment.SetEnvironmentVariable("Sandbox__AgentHost__RequireMtls", "false");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

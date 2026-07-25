@@ -422,3 +422,88 @@ Fixed in PR #381 (`k8s/base/networkpolicy-agenthost-egress.yaml`): added an expl
 Discovered 2026-07-25 during post-security-hardening-batch regression hunt (PRs #460-485 merged 2026-07-23). 3 independent POST /api/assistant/runs attempts against staging all failed with HTTP 503 agenthost_unavailable/ProviderUnavailable after ~90s: 'AgentHost pod ... did not become ready at http://<pod-ip>:8088/healthz within 90s; failing the launch.' Confirmed on 2 distinct pods (agentweaver-agent-host-vdfjz, agentweaver-agent-host-4hthh, different IPs) ruling out a single-node flake. Event streams show run.started -> agent.message -> sandbox.execution_pod.bound -> run.error with zero tool.call/tool_approval events ever emitted -- the pipeline never reaches PR #467's fail-closed tool-approval gating logic, so that specific security regression question is CANNOT_DETERMINE, not pass/fail. This is a NEW failure mode, distinct from the previously-fixed #376 (session-creation SetupAsync bug) and #381 (NetworkPolicy egress gap) -- both of those are believed already fixed; this is a fresh /healthz readiness timeout. Also observed two run-bookkeeping inconsistencies: GET /api/runs/{id} reports status=in_progress (ended_at/result null) despite a terminal run.error event, and a subsequent POST /api/assistant/runs returned 201 with a run_id that turned out to be a stale reused run (identical events, no new activity) rather than a fresh run. Example run ids: ef478f66-66d1-4995-a6ce-59f5876e18ed, 9a792528-7538-4d72-aeec-2618ae03cdbc. Evidence: scripts/api-harness/transcripts/oracle-operator-20260725T033449.jsonl, scripts/api-harness/verdicts/oracle-operator-verdict.json.
 
 Root-caused to a code/manifest gap in PR #463: the production mTLS overlay (`k8s/overlays/production/patch-agenthost-mtls.yaml`) set `AgentHost:RequireMtls=true`, which disables the plain-HTTP Kestrel fallback bind in `apps/Agentweaver.AgentHost/Program.cs`, but no `Kestrel:Endpoints:A2A` config was ever added to bind the secure listener using the mounted server cert -- so Kestrel bound zero endpoints and silently fell back to `ASPNETCORE_HTTP_PORTS` (8080), leaving nothing listening on 8088. Verified via `kubectl exec` that `curl 127.0.0.1:8088` from inside the pod itself returns instant connection-refused (rules out NetworkPolicy, which would time out/drop silently instead). Certs were correctly generated and mounted (not an install-crash). Filed as issue #499, fixed in PR #500 (adds `Kestrel:Endpoints:A2A` wiring plus CA-pinned `ClientCertificateMode.RequireCertificate` validation, security-reviewed by Seraph).
+
+---
+
+## Run pages 403 after Outcome confirm when org membership cannot be re-verified
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging v0.11.1, a browser session can still load /projects and render authenticated chrome, but after confirming an orchestration outcome plan the run routes can flip to Permission required with GET /runs failed (403). The API error body is: 'Could not verify membership of the required GitHub organization. Ensure your org membership is set to Public in GitHub org settings (the private membership endpoint is blocked by SAML SSO enforcement).' In the 2026-07-25 blueprint-demo dry-run, parent run b42fa206-a0cf-4884-ab57-574371baf89f reached awaiting_confirmation, revise took ~18s, confirm returned 200, then the run page blocked and the child run 660a35bd-e5a1-4e54-8c52-39cede8b7815 could not be opened due to this 403. This is distinct from the earlier AgentHost mTLS launch failure: the child run was dispatched, but UI/API access to run details failed on org-membership re-verification.
+
+---
+
+## Staging AgentHost readiness: api/worker client mTLS flag mismatched vs AgentHost server (fixed)
+
+- date: 2026-07-25
+- category: bug
+- surface: api
+- status: fixed
+
+Follow-on to #499/#500: patch-agenthost-mtls.yaml correctly flips the AgentHost pod's own Kestrel A2A listener to https-only mTLS (RequireMtls=true), but never flipped the matching client-side Sandbox__AgentHost__RequireMtls env var on api-deployment.yaml/worker-deployment.yaml, which still defaulted to the PoC 'false' value from k8s/base. Left mismatched, api/worker build plain http:// AgentHost readiness-probe/A2A URLs against a TLS-only listener, so every readiness check's connection got dropped mid-handshake (HttpIOException: response ended prematurely) -- a deterministic mismatch, not transient flakiness, once the mTLS overlay patch was applied. Confirmed via kubectl: agenthost-config configmap on the pod showed RequireMtls:true/https://0.0.0.0:8088, while both agentweaver-api replicas and the worker replica showed Sandbox__AgentHost__RequireMtls=false. The client cert secret (agentweaver-a2a-client-tls) was already provisioned and mounted, so no cert work was needed -- just the env var. Immediate unblock applied live via kubectl set env on staging; permanent fix added as k8s/overlays/production/patch-agenthost-mtls-client.yaml (new patch flipping both Deployments' env var to true), wired into kustomization.yaml patches list. Verified the built manifest via kubectl kustomize k8s/overlays/production shows RequireMtls=true for both api and worker containers after the fix.
+
+---
+
+## Backlog pickup run can stall in outcome-plan drafting
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging build f2e7983, a coordinator run spawned by board autopilot from a Ready backlog task (`ea20292c-e034-4f2d-94a8-2e53a0415eee` in project `e93c3b6d-5501-4b6f-85ac-5d14bb65c612`) remained stuck in `coordinator_status=drafting` for more than 6 minutes. Persisted state never advanced past three events (`run.options_set`, `coordinator.started`, `coordinator.outcome_spec.drafting`); `/api/runs/{id}/outcome-spec` stayed `status=drafting` with empty `desiredOutcome`/`scope`/`assumptions`, and no work plan or approval surfaced. This is distinct from direct orchestrations in the same project, which continued to draft/confirm normally.
+
+---
+
+## Assembly build-test can fail at AgentHost configure after all subtasks finish
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging build f2e7983, direct bug-fix run `c6a6eb31-00dc-4898-aac3-e41964cfe3da` confirmed successfully with independent task promotion left OFF, persisted work plan 12, and drove three child subtasks (`7ab82034-20fd-4fb6-917f-f09ec32d473d`, `70d26d58-74f1-4dbd-b1fa-4351a3fa5cba`, `9c1e6e4d-ca5a-4cb9-8d79-1fba9bed167d`) all the way to `assemble_ready`. RAI then passed green, preview applicability reported `preview_required`, and assembly immediately failed at the Build & Test gate with `build_test_infra_agenthost_configure_failed`: `AgentHost /configure for run 'c6a6eb31-00dc-4898-aac3-e41964cfe3da' failed: HTTP 500`. No preview or review surface followed, so this is now the hard blocker after child execution completes.
+
+---
+
+## Fresh bug-fix coordinator web_fetch approvals now fail with generic 500
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: fixed
+
+On staging build f2e7983, two fresh direct bug-fix runs that otherwise had the correct issue URL blocked during coordinator grounding on the first `web_fetch https://github.com/sabbour/agentweaver-demo-dryrun/issues/1` approval. Run `db469dc6-7dda-4464-8521-c0048a4e7398` requested approval at `2026-07-25T15:37:01.3414140+00:00`; manual POST to `/api/runs/{id}/tool-approvals` returned `500 {"error":"An unexpected error occurred."}` and the run remained stuck in `coordinator_status=drafting` with repeating `tool.approval_pending`. A second fresh project/run (`c04b41ee-c8d1-4654-b111-02a9620e4841`) reproduced the same failure even when `auto_approve_tools=true` was enabled immediately after run creation: approval required at `2026-07-25T15:41:56.5762430+00:00`, and repeated manual approve still returned the same generic 500 (captured again at `2026-07-25T15:43:54.054Z`). This regresses the earlier coordinator-approval-path fix and currently blocks reaching outcome confirmation, decompose, and the later Build & Test repro path.
+
+Root-caused via kubectl API-pod logs at the exact 500 timestamps: `System.FormatException: Guid should contain 32 digits...` at `RunId.Parse` inside `RunEndpoints.cs`'s `/tool-approvals`/`/tool-denials` handlers. `EndpointHelpers.ResolveApprovalOwningRunIdAsync` can legitimately return a synthetic coordinator-phase key (e.g. `{runId}-coordinator-draft`) used only to key the approval-gate lookup for coordinator-phase LLM turns — not a real run-store row — but both endpoints unconditionally called `RunId.Parse(targetRunId)` whenever `targetRunId != id`, crashing on this synthetic (non-GUID) string. Fixed by adding `EndpointHelpers.IsCoordinatorPhaseSuffixedId(candidateRunId, postedRunId)` so callers can distinguish "same run, different gate-lookup key" from "genuinely different child run requiring `RunId.Parse`". Regression test added (`Approve_CoordinatorPhaseApproval_DoesNotCrash_AndResolvesToCoordinatorRun`), verified to fail pre-fix/pass post-fix. Fixed in PR #506, deployed to staging.
+
+---
+
+## Fresh bug-fix run now approves correctly but build-test rejects docs-only repo
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: fixed
+
+On staging build 43632442177b with api scaled to 1 replica, fresh run 7d3f8d19-2494-492d-9e79-b912a1199ca7 in fresh project 17124a09-4eeb-4602-a6b3-61677b12a93c proved the coordinator approval fix: the first coordinator-draft web_fetch https://github.com/sabbour/agentweaver-demo-dryrun/issues/1 approval succeeded with HTTP 200 at 2026-07-25T18:41:24.239Z instead of failing. The run then reached outcome confirmation, persisted work plan 13, dispatched/ran children, and reached assembly Build & Test. But Build & Test did not reproduce the earlier AgentHost /configure failure; instead it revised at 2026-07-25T18:49:44.8970787+00:00 with feedback that the repository contains no source code, package manifests, build config, or tests -- only .squad/, .agentweaver/, and docs/bugfix/issue-1-triage.md. Preview was skipped as not applicable (llm_docs_or_non_runtime), and the coordinator redispatched subtasks 18/19/20 rather than reaching preview/review/merge. This blocks the intended recording path because the seeded repo no longer presents a runnable bug-fix target.
+
+Root cause: sabbour/agentweaver-demo-dryrun was genuinely empty (gh api repos/.../contents returned "This repository is empty", gh repo view showed isEmpty: true, no default branch) -- a pre-existing gap in demo environment setup, not a code bug. Fixed by seeding a minimal, dependency-free static web app (index.html/styles.css/package.json/build.js/test.js) with an intentional, verified-reproducing CSS bug matching issue #1 (banner absolutely positioned at 96px base height; tablet-breakpoint main margin-top drops to 64px, less than the banner's realistic ~140px wrapped height on narrow tablet widths) and pushing it to main. test.js was verified locally to fail pre-fix with a clear message and pass once the CSS margin is corrected, giving Build & Test something genuine to catch.
+
+---
+
+## Org-membership check flip-flops between 200 and 403 across adjacent polls even when membership is public
+
+- date: 2026-07-25
+- category: bug
+- surface: api
+- status: fixed
+
+During demo-recording runs, /api/runs/... /work-plan and /events routes intermittently returned 403 "Could not verify membership of the required GitHub organization. Ensure your org membership is set to Public..." (OrgAuthResult.OrgAccessNotGranted) even though the caller's microsoft org membership was confirmed already-public (gh api orgs/microsoft/public_members/<login> returns 204). The same login/org combination alternated between success and this 403 across polls seconds apart in the same session.
+
+Root cause: in GitHubOrgAuthorizationService.ResolveSingleOrgAsync (apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs), when the primary AUTHENTICATED private-members check returns a SAML-enforcement 403 (CheckResult.OrgAccessNotGranted), the code correctly falls back to an UNAUTHENTICATED public_members check. That fallback call is itself subject to GitHub's 60/hr-per-IP unauthenticated rate limit (shared across the whole cluster's egress NAT IP). CheckEndpointAsync already classifies a rate-limited response as CheckResult.Inconclusive, but ResolveSingleOrgAsync never inspected the public fallback's result for Inconclusive -- it only special-cased publicResult == CheckResult.Member, and otherwise fell through to branch on the stale primary orgResult alone. A rate-limited (thus inconclusive) public-fallback check was silently conflated with "definitively not a public member," so whenever the primary check had also been a SAML 403, the aggregate result came back as the actionable-looking "authorize SSO" denial (OrgAuthResult.OrgAccessNotGranted) instead of a retryable Inconclusive -- even though the membership genuinely was public and only the fallback lookup itself had transiently hit the unauthenticated rate limit.
+
+Fix: ResolveSingleOrgAsync now checks publicResult == CheckResult.Inconclusive before falling through to the orgResult-based branches, returning the same "transient, not yet a member" tuple used for primary-check Inconclusive so the caller retries instead of hard-denying. Added a regression test (CheckMembershipAsync_Inconclusive_WhenPrivateSamlForbiddenAndPublicFallbackRateLimited in tests/Agentweaver.Tests/Projects/GitHubOrgAuthorizationServiceTests.cs) simulating a SAML-403 private check plus a rate-limited (403 + X-RateLimit-Remaining: 0) public fallback, asserting the aggregate result is Inconclusive.
