@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.1
+
+### Patch Changes
+
+- 6843b4a: Fail fast when the UI harness reuses an empty Playwright storage state so staging dry-runs report AUTH_EXPIRED instead of proceeding with a broken session.
+- ca08eb0: Fix AgentHost mTLS startup so loading the mounted CA certificate no longer
+  attempts to parse a private key from the public-only `ca.crt` PEM.
+- fcdfcc4: Fix UI harness auth replay for staging: Agentweaver's session token lives in
+  `sessionStorage`, which Playwright's `context.storageState()` does not capture
+  (only cookies and `localStorage` are persisted). Headless dry-runs replaying a
+  saved storage state always landed back on the GitHub sign-in page even with a
+  freshly captured, non-empty state. The `login` command now also captures a
+  companion `sessionStorage` seed file, and headless sessions re-hydrate it via
+  `context.addInitScript` before any page script runs.
+- 0b544d1: Restore the production AgentHost A2A listener so hardened deployments bind the
+  expected mTLS endpoint on port 8088 and reject clients whose certificates are
+  not signed by the mounted Agentweaver CA.
+
 ## 0.11.0
 
 ### Minor Changes
