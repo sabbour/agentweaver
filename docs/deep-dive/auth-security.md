@@ -505,7 +505,8 @@ AgentHost pods need a valid GitHub token for the signed-in user so they can call
 
 - **Per-user source of truth.** OAuth callbacks store only the authenticated caller's token in `GitHubTokenScope.ForUser(login)`, backed by a Key Vault secret named `ghtok-user--{base32(userId)}`.
 - **No shared storage mirror.** GitHub tokens are not written to the workspace PVC or any shared filesystem.
-- **No user-token CSI mount.** AgentHost no longer creates per-run `SecretProviderClass` objects or mounts `/mnt/user-tokens`. The pod fetches the configured user's secret with workload identity.
+- **No user-token CSI mount.** AgentHost no longer creates per-run `SecretProviderClass` objects or mounts `/mnt/user-tokens`.
+- **Brokered token, no sandbox vault access (issue #471).** The API resolves the run owner's token on the API side (which legitimately holds Key Vault access) and delivers it in-memory in the one-time `POST /configure` body. The AgentHost sandbox runs as a **dedicated managed identity (`agentweaver-agenthost-identity`) with no Key Vault role assignments**, so untrusted shell/tool execution inside the pod cannot exchange its workload-identity token for a vault token and read other users' secrets. The in-pod `KeyVaultUserTokenProvider` prefers the brokered token and only falls back to a direct vault fetch, which now fails closed because the identity has no KV roles.
 
 ### End-to-end flow
 
@@ -522,17 +523,18 @@ sequenceDiagram
     API->>KV: store token as secret ghtok-user--{base32(userId)}
     API->>Claim: bind shared agentweaver-agent-host warm pool
     Claim-->>API: pod IP
-    API->>Pod: POST /configure(runId, userId, turnBearerToken, kvUserSecretName, workingDirectory)
+    API->>KV: resolve run owner's token (API identity)
+    API->>Pod: POST /configure(runId, userId, turnBearerToken, gitHubAccessToken, kvUserSecretName, workingDirectory)
     Pod->>Pod: AgentHostRuntimeState.TryConfigure once
     Pod->>Agent: SetupAsync after configure
-    Agent->>KV: KeyVaultUserTokenProvider fetches kvUserSecretName
+    Note over Pod,KV: Sandbox identity has NO KV roles; it uses the brokered gitHubAccessToken (no vault call)
     API->>Pod: POST /a2a/agent/v1/message:stream
     Note over API,Pod: Authorization: Bearer {turnBearerToken}
 ```
 
 `AgentHostRuntimeState` is the mutable singleton that bridges warm-pool startup and per-run configuration. If a pod starts without `RunId`, `AgentHostStartupService` enters standby and logs that it is waiting for `/configure`. If a pod is launched with env vars for backward compatibility, `InitializeFromOptions` seeds the same runtime state and SetupAsync runs immediately.
 
-`POST /configure` accepts `{ runId, userId, turnBearerToken, kvUserSecretName?, workingDirectory? }`. `workingDirectory` is the run's `WorktreePath`; when present, AgentHost passes it to `SetupAsync` so file tools use the same shared worktree named by the run's system prompt. The endpoint returns `400` when `runId` is missing and `409` when the pod was already configured. It is excluded from the readiness gate so standby pods can receive configuration before they are A2A-ready.
+`POST /configure` accepts `{ runId, userId, turnBearerToken, gitHubAccessToken?, kvUserSecretName?, workingDirectory? }`. `gitHubAccessToken` is the run owner's token pre-resolved by the API (issue #471) — the primary, sandbox-vault-free delivery path; `kvUserSecretName` remains a defense-in-depth fallback that no longer succeeds because the sandbox identity has no Key Vault roles. `workingDirectory` is the run's `WorktreePath`; when present, AgentHost passes it to `SetupAsync` so file tools use the same shared worktree named by the run's system prompt. The endpoint returns `400` when `runId` is missing and `409` when the pod was already configured. It is excluded from the readiness gate so standby pods can receive configuration before they are A2A-ready.
 
 ### Security model
 
@@ -540,11 +542,11 @@ sequenceDiagram
 - `/configure` is **not protected by `TurnBearerToken`** because it delivers that token. The guard is Kubernetes NetworkPolicy: AgentHost ingress on port `8088` is restricted to API/worker pods.
 - `POST /a2a/agent/v1/message:stream` is unchanged: it still requires `Authorization: Bearer {per-run token}` and rejects mismatches.
 - `TurnBearerToken` is no longer written into `SandboxClaim.spec.env` in etcd; it travels over in-cluster HTTP from executor to claimed pod.
-- User GitHub token isolation moved from infrastructure-layer CSI projection (pod filesystem contained only one user's file) to application-layer isolation (AgentHost fetches only the configured Key Vault secret name using workload identity). This is an explicit trade-off for warm-pool prewarming.
+- User GitHub token isolation moved from infrastructure-layer CSI projection (pod filesystem contained only one user's file) to application-layer brokering: the API resolves the run owner's token and delivers it in the one-time `/configure` body, and the AgentHost sandbox runs as a dedicated managed identity (`agentweaver-agenthost-identity`) with **no Key Vault role assignments** (issue #471), so the pod cannot read any vault secret directly. This is an explicit trade-off for warm-pool prewarming.
 
 ### Configuration
 
-`AgentHost:KeyVaultUri` enables the warm-pool runtime fetch path. The AgentHost template injects it as static config because the pod must know which vault to call before `/configure` arrives. `AgentHost:KvTokenMountPath` and `AgentHost:UseSharedTokenStore` remain local compatibility paths, not the AKS production path.
+`AgentHost:KeyVaultUri` names the vault for the legacy runtime-fetch fallback path; with the dedicated KV-less sandbox identity (issue #471) that fallback fails closed, and the run owner's token is delivered via the brokered `gitHubAccessToken` in `/configure` instead. `AgentHost:KvTokenMountPath` and `AgentHost:UseSharedTokenStore` remain local compatibility paths, not the AKS production path.
 
 > **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) covers `AgentHostRuntimeState`, `KeyVaultUserTokenProvider`, the configure endpoint, and the security trade-off.
 

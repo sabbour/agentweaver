@@ -110,6 +110,33 @@ describe('NotificationBell + NotificationsProvider', () => {
     expect(await screen.findByText('Awaiting your review')).toBeTruthy();
   });
 
+  it('toasts a backlog_promoted notification with board-specific copy ("Subtasks created" / "View board")', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const promoted = makeNotification({
+      id: 'backlog_promoted:run-9',
+      type: 'backlog_promoted',
+      title: '2 subtasks created',
+      cta_path: '/projects/proj-1/board',
+    });
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([]))
+      .mockResolvedValueOnce(respond([promoted]));
+
+    renderBell(1000);
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(2));
+
+    // Type-aware toast copy — not the generic "Awaiting your review".
+    expect(await screen.findByText('Subtasks created')).toBeTruthy();
+    expect(screen.getByText('View board')).toBeTruthy();
+    expect(screen.queryByText('Awaiting your review')).toBeNull();
+  });
+
   it('opening the popover marks all notifications as seen (badge resets)', async () => {
     vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([makeNotification()]));
     const user = userEvent.setup();
@@ -239,6 +266,22 @@ describe('NotificationBell + NotificationsProvider', () => {
       const badge = await screen.findByTestId('notification-type-badge');
       expect(badge.textContent).toContain('Tool Approval');
       expect(badge.getAttribute('data-notification-type')).toBe('tool_approval');
+    });
+
+    it('renders the Board badge for a backlog_promoted notification', async () => {
+      vi.mocked(apiClient.getNotifications).mockResolvedValue(
+        respond([makeNotification({ type: 'backlog_promoted' })]),
+      );
+      const user = userEvent.setup();
+
+      renderBell();
+
+      await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalled());
+      await user.click(screen.getByTestId('notification-bell'));
+
+      const badge = await screen.findByTestId('notification-type-badge');
+      expect(badge.textContent).toContain('Board');
+      expect(badge.getAttribute('data-notification-type')).toBe('backlog_promoted');
     });
 
     it('renders a generic fallback badge for an unrecognized type without crashing', async () => {

@@ -185,14 +185,16 @@ public sealed class SkillTools(AgentweaverApiClient api)
     public async Task<string> SkillMarketplacesListAsync(CancellationToken ct = default) =>
         await ExecuteJsonAsync("skill_marketplaces_list", token => api.GetAsync<object>("api/skill-marketplaces", token), ct);
 
-    [McpServerTool(Name = "skill_marketplace_browse"), Description("Browse or search a curated marketplace without changing the project catalog.")]
+    [McpServerTool(Name = "skill_marketplace_browse"), Description("Browse or search a curated marketplace (paginated) without changing the project catalog.")]
     public async Task<string> SkillMarketplaceBrowseAsync(
         [Description("Project ID")] string project_id,
         [Description("Marketplace name as returned by skill_marketplaces_list")] string marketplace,
-        [Description("Optional skill name, description, or metadata search text")] string? query = null,
+        [Description("Optional skill name or location search text")] string? query = null,
+        [Description("1-based page number (default 1)")] int? page = null,
+        [Description("Candidates per page (default 25, max 50)")] int? page_size = null,
         CancellationToken ct = default) =>
         await ExecuteJsonAsync("skill_marketplace_browse", token => api.PostAsync<object>(
-            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/browse", new { query }, token), ct);
+            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/browse", new { query, page, pageSize = page_size }, token), ct);
 
     [McpServerTool(Name = "skill_marketplace_import"), Description("Import selected candidates from a curated marketplace through the normal repository-import pipeline.")]
     public async Task<string> SkillMarketplaceImportAsync(
@@ -203,6 +205,38 @@ public sealed class SkillTools(AgentweaverApiClient api)
         await ExecuteJsonAsync("skill_marketplace_import", token => api.PostAsync<object>(
             $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/{Uri.EscapeDataString(marketplace)}/import",
             new { locations = locations.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) }, token), ct);
+
+    [McpServerTool(Name = "skill_marketplace_sources_list"), Description("List all skill marketplaces available to a project: administrator-curated config marketplaces plus the project's own URL-added sources.")]
+    public async Task<string> SkillMarketplaceSourcesListAsync(
+        [Description("Project ID")] string project_id,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync("skill_marketplace_sources_list", token => api.GetAsync<object>(
+            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces", token), ct);
+
+    [McpServerTool(Name = "skill_marketplace_source_add"), Description("Add a project-scoped skill marketplace source by public GitHub repo URL or owner/repo. Subpath is optional (auto-detected when omitted). The source is then browsable/importable by its name.")]
+    public async Task<string> SkillMarketplaceSourceAddAsync(
+        [Description("Project ID")] string project_id,
+        [Description("GitHub repo as owner/repo or https://github.com/owner/repo(/tree/branch/subpath) URL")] string repository,
+        [Description("Optional display name (defaults to the repo name); must be unique in the project")] string? name = null,
+        [Description("Optional branch (defaults to the URL branch or main)")] string? branch = null,
+        [Description("Optional subpath; omit to auto-detect the skill layout")] string? subpath = null,
+        [Description("Optional parse strategy: auto (default), skillmd, or llm")] string? parse_strategy = null,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync("skill_marketplace_source_add", token => api.PostAsync<object>(
+            $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/sources",
+            new { repository, name, branch, subpath, parseStrategy = parse_strategy }, token), ct);
+
+    [McpServerTool(Name = "skill_marketplace_source_remove"), Description("Remove a project-scoped marketplace source by name. Administrator-curated config marketplaces cannot be removed.")]
+    public async Task<string> SkillMarketplaceSourceRemoveAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Source name as returned by skill_marketplace_sources_list")] string name,
+        CancellationToken ct = default) =>
+        await ExecuteMessageAsync(
+            "skill_marketplace_source_remove",
+            token => api.DeleteAsync(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/skill-marketplaces/sources/{Uri.EscapeDataString(name)}", token),
+            "removed",
+            ct);
 
     [McpServerTool(Name = "skill_defaults_preview"), Description("Preview explicit bundled role-skill defaults for a confirmed project team. Returns a digest required by skill_defaults_apply; makes no changes.")]
     public async Task<string> SkillDefaultsPreviewAsync(

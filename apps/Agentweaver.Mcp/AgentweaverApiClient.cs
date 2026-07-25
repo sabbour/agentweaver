@@ -294,8 +294,9 @@ public sealed class AgentweaverApiClient
     // Injected when registered as scoped/singleton-with-accessor.
     // When present, the caller's own bearer token (API key, or an Agentweaver-minted OAuth access
     // token validated by McpBearerTokenMiddleware) is forwarded to the backend so the backend sees
-    // the real caller identity instead of the shared service identity. Only stdio mode (no inbound
-    // HTTP context) falls back to the shared AGENTWEAVER_API_KEY.
+    // the real caller identity instead of the shared service identity. In stdio mode (no inbound
+    // HTTP context) the configured per-user token (AGENTWEAVER_TOKEN) is used; the shared
+    // AGENTWEAVER_API_KEY is only a last-resort fallback for in-process/service callers (#474).
     private readonly IHttpContextAccessor? _httpContextAccessor;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -318,14 +319,18 @@ public sealed class AgentweaverApiClient
     /// Returns the Bearer token to use for this request.
     /// Prefers the caller's own token stored in <c>mcp.bearer_token</c> (set by the inbound
     /// middleware after validating the GitHub token), so the backend receives the real caller
-    /// identity. Falls back to the configured shared API key only when no per-request token
-    /// is available (e.g. stdio mode).
+    /// identity. In stdio mode there is no inbound HTTP context, so it uses the configured per-user
+    /// token (<c>AGENTWEAVER_TOKEN</c>). The shared service key (<c>AGENTWEAVER_API_KEY</c>) is used
+    /// only as a last resort — for genuine in-process/service callers — because the API maps it to
+    /// the trusted <c>agentweaver-internal</c> identity that bypasses project-ownership checks (#474).
     /// </summary>
     private string GetEffectiveApiKey()
     {
         var ctx = _httpContextAccessor?.HttpContext;
         if (ctx?.Items.TryGetValue("mcp.bearer_token", out var callerToken) == true && callerToken is string token)
             return token;
+        if (!string.IsNullOrWhiteSpace(_config.UserToken))
+            return _config.UserToken;
         return _config.ApiKey;
     }
 

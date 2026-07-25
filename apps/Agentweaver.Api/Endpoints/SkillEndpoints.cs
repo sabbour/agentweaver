@@ -7,6 +7,7 @@ using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -195,28 +196,123 @@ public static class SkillEndpoints
             Results.Ok(marketplaces.ListEnabled().Select(m => new { name = m.Name, repository = m.Repository, subpath = m.Subpath, layout_note = m.LayoutNote })))
             .WithName("ListSkillMarketplaces").WithTags("Skills");
 
-        app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/browse", async (
-            HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, SkillMarketplaceRegistry marketplaces, SkillCatalogService svc, CancellationToken ct) =>
+        // GET /api/projects/{id}/skill-marketplaces — config definitions + this project's URL sources.
+        app.MapGet("/api/projects/{id}/skill-marketplaces", async (
+            HttpContext http, string id, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
-            var definition = marketplaces.FindEnabled(marketplace);
-            if (definition is null) return Results.NotFound();
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var list = await sources.ListForProjectAsync(project!.Id, ct);
+            return Results.Ok(list.Select(m => new
+            {
+                name = m.Name,
+                repository = $"{m.Owner}/{m.Repo}",
+                branch = m.Branch,
+                subpath = m.Subpath,
+                auto_detect = m.IsAuto,
+                parse_strategy = m.ParseStrategy,
+                project_source = m.IsProjectSource,
+            }));
+        }).WithName("ListProjectSkillMarketplaces").WithTags("Skills");
+
+        // POST /api/projects/{id}/skill-marketplaces/sources — add a marketplace source by repo URL.
+        app.MapPost("/api/projects/{id}/skill-marketplaces/sources", async (
+            HttpContext http, string id, AddMarketplaceSourceRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
+        {
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            if (body is null || string.IsNullOrWhiteSpace(body.Repository))
+                return Results.BadRequest(new { error = "A GitHub repository URL or owner/repo is required." });
+            var result = await sources.AddSourceAsync(
+                project!.Id, body.Repository, body.Name, body.Branch, body.Subpath, body.ParseStrategy, ct);
+            return result.Outcome switch
+            {
+                AddSourceOutcome.Ok => Results.Created(
+                    $"/api/projects/{id}/skill-marketplaces/{Uri.EscapeDataString(result.Source!.Name)}",
+                    new
+                    {
+                        name = result.Source!.Name,
+                        repository = $"{result.Source.Owner}/{result.Source.Repo}",
+                        branch = result.Source.Branch,
+                        subpath = result.Source.Subpath,
+                        auto_detect = result.Source.IsAuto,
+                        parse_strategy = result.Source.ParseStrategy,
+                        project_source = true,
+                    }),
+                AddSourceOutcome.NotFound => Results.NotFound(),
+                AddSourceOutcome.Conflict => Results.Conflict(new { error = result.Error }),
+                AddSourceOutcome.NotPublic => Results.UnprocessableEntity(new { error = result.Error }),
+                AddSourceOutcome.Unavailable => Results.UnprocessableEntity(new { error = result.Error }),
+                _ => Results.BadRequest(new { error = result.Error }),
+            };
+        }).WithName("AddProjectSkillMarketplaceSource").WithTags("Skills");
+
+        // DELETE /api/projects/{id}/skill-marketplaces/sources/{name} — remove a project source.
+        app.MapDelete("/api/projects/{id}/skill-marketplaces/sources/{name}", async (
+            HttpContext http, string id, string name, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
+        {
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var outcome = await sources.RemoveSourceAsync(project!.Id, name, ct);
+            return outcome == AddSourceOutcome.Ok ? Results.NoContent() : Results.NotFound();
+        }).WithName("RemoveProjectSkillMarketplaceSource").WithTags("Skills");
+
+        app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/browse", async (
+            HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
+        {
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var projectId = project!.Id;
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var (outcome, error, candidates) = await svc.PreviewRepoCandidatesAsync(projectId, SkillMarketplaceRegistry.ToImportUrl(definition), caller, ct);
+            var source = await sources.ResolveAsync(projectId, marketplace, ct);
+            if (source is null) return Results.NotFound();
+            var page = body?.Page ?? 1;
+            var pageSize = body?.PageSize ?? SkillCatalogService.DefaultMarketplacePageSize;
+
+            // A URL source with no configured subpath auto-detects its layout (heuristic + LLM fallback);
+            // config definitions keep the existing hardcoded-subpath browse path unchanged.
+            var (outcome, error, result) = source.IsAuto
+                ? await svc.BrowseMarketplaceAutoAsync(projectId, source.Owner, source.Repo, source.Branch, body?.Query, page, pageSize, caller, ct, source.ParseStrategy)
+                : await svc.BrowseMarketplaceAsync(projectId, source.Owner, source.Repo, source.Branch, source.Subpath!, body?.Query, page, pageSize, caller, ct);
             if (outcome != SkillOutcome.Ok) return outcome == SkillOutcome.NotFound ? Results.NotFound() : Results.UnprocessableEntity(new { error });
-            var query = body?.Query?.Trim();
-            var filtered = string.IsNullOrEmpty(query) ? candidates! : candidates!.Where(c => $"{c.Name} {c.Description} {c.Location} {definition.Name} {definition.Repository}".Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-            return Results.Ok(new { marketplace = definition.Name, candidates = filtered });
+            return Results.Ok(new
+            {
+                marketplace = source.Name,
+                candidates = result!.Candidates,
+                total = result.Total,
+                page = result.Page,
+                page_size = result.PageSize,
+                has_more = result.HasMore,
+            });
         }).WithName("BrowseSkillMarketplace").WithTags("Skills");
 
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/import", async (
-            HttpContext http, string id, string marketplace, MarketplaceImportRequest body, SkillMarketplaceRegistry marketplaces, SkillCatalogService svc, CancellationToken ct) =>
+            HttpContext http, string id, string marketplace, MarketplaceImportRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId)) return Results.BadRequest(new { error = "Invalid project id." });
-            var definition = marketplaces.FindEnabled(marketplace);
-            if (definition is null) return Results.NotFound();
+            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            if (failure is not null) return failure;
+            var projectId = project!.Id;
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
-            var result = await svc.ImportFromRepoAsync(projectId, SkillMarketplaceRegistry.ToImportUrl(definition), body?.Locations, caller, ct, definition.Name);
+            var source = await sources.ResolveAsync(projectId, marketplace, ct);
+            if (source is null) return Results.NotFound();
+
+            // For an auto-detected source the selected candidate location IS the import subpath: fetch
+            // just that directory (locations=null → the single skill under it is imported). Config
+            // sources keep passing their hardcoded subpath + the selected candidate locations.
+            SkillAcquisitionResult result;
+            if (source.IsAuto)
+            {
+                var selected = body?.Locations is { Count: > 0 } ? body.Locations[0] : null;
+                if (string.IsNullOrWhiteSpace(selected))
+                    return Results.BadRequest(new { error = "Select a skill location to import." });
+                result = await svc.ImportMarketplaceAsync(
+                    projectId, source.Owner, source.Repo, source.Branch, selected, locations: null, caller, source.Name, ct);
+            }
+            else
+            {
+                result = await svc.ImportMarketplaceAsync(
+                    projectId, source.Owner, source.Repo, source.Branch, source.Subpath!, body?.Locations, caller, source.Name, ct);
+            }
             return MapAcquisition(result);
         }).WithName("ImportSkillMarketplace").WithTags("Skills");
 
@@ -309,6 +405,13 @@ public static class SkillEndpoints
         });
     }
 
+    private static (string Owner, string Repo) SplitRepository(string repository)
+    {
+        var trimmed = (repository ?? string.Empty).Trim().Trim('/');
+        var slash = trimmed.IndexOf('/');
+        return slash < 0 ? (trimmed, string.Empty) : (trimmed[..slash], trimmed[(slash + 1)..]);
+    }
+
     private static IResult MapAcquisition(SkillAcquisitionResult result) => result.Outcome switch
     {
         SkillOutcome.Ok => Results.Ok(new { results = result.Results, marked_missing = result.MarkedMissing }),
@@ -393,8 +496,9 @@ public static class SkillEndpoints
         updated_at = s.UpdatedAt,
     };
 
-    public sealed record MarketplaceBrowseRequest(string? Query);
+    public sealed record MarketplaceBrowseRequest(string? Query, int? Page, int? PageSize);
     public sealed record MarketplaceImportRequest(IReadOnlyList<string>? Locations);
+    public sealed record AddMarketplaceSourceRequest(string Repository, string? Name, string? Branch, string? Subpath, string? ParseStrategy);
     public sealed record ImportPreviewRequest(string? RepoUrl);
     public sealed record ImportRequest(string? RepoUrl, IReadOnlyList<string>? Locations);
     public sealed record CreateSkillRequest(string? Name, string? DisplayName, string? Description, string? Instructions);

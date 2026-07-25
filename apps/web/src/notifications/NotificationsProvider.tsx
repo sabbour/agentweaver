@@ -21,6 +21,16 @@ import type { ReactNode } from 'react';
 // rationale). 20s balances "feels live" against load; the endpoint is a couple of indexed DB reads.
 export const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 
+// Per-type toast copy. The title + CTA label differ by notification kind so a "subtasks created"
+// promotion notice doesn't read "Awaiting your review". Unknown/future types fall back to a
+// generic prompt so the toast never renders blank (mirrors NotificationTypeBadge's fallback).
+const TOAST_COPY: Record<string, { title: string; cta: string }> = {
+  human_review: { title: 'Awaiting your review', cta: 'Review now' },
+  tool_approval: { title: 'Approval needed', cta: 'Review now' },
+  backlog_promoted: { title: 'Subtasks created', cta: 'View board' },
+};
+const FALLBACK_TOAST_COPY = { title: 'Action needed', cta: 'Open' };
+
 export interface NotificationsProviderProps {
   children: ReactNode;
   /** Test seam — override the poll interval so tests don't wait out the real 20s default. */
@@ -49,12 +59,13 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
 
   const announce = useCallback((notification: NotificationDto) => {
     const toastId = `notif-${notification.id}`;
+    const copy = TOAST_COPY[notification.type] ?? FALLBACK_TOAST_COPY;
     dispatchToast(
       <Toast>
-        <ToastTitle>Awaiting your review</ToastTitle>
+        <ToastTitle>{copy.title}</ToastTitle>
         <ToastBody subtitle={notification.project_name ?? undefined}>{notification.title}</ToastBody>
         <ToastFooter>
-          <FluentLink onClick={() => handleCta(notification, toastId)}>Review now</FluentLink>
+          <FluentLink onClick={() => handleCta(notification, toastId)}>{copy.cta}</FluentLink>
         </ToastFooter>
       </Toast>,
       { toastId, intent: 'info', timeout: 12000 },

@@ -599,15 +599,20 @@ public static class WorkflowDefinitionEndpoints
 
     /// <summary>Attempts to read a workflow's raw YAML from <paramref name="dir"/>/<paramref
     /// name="workflowId"/>.yaml (or .yml). Returns null when neither file exists.</summary>
-    private static async Task<string?> TryReadWorkflowYamlAsync(string dir, string workflowId, CancellationToken ct)
+    internal static async Task<string?> TryReadWorkflowYamlAsync(string dir, string workflowId, CancellationToken ct)
     {
+        if (IsReparsePoint(dir))
+            return null;
+
         foreach (var ext in new[] { ".yaml", ".yml" })
         {
             var path = Path.Combine(dir, $"{workflowId}{ext}");
             try
             {
-                if (File.Exists(path))
-                    return await File.ReadAllTextAsync(path, ct);
+                if (File.Exists(path) &&
+                    !IsReparsePoint(path) &&
+                    WorkspacePathGuard.TryResolveContainedPath(dir, path, out var safePath))
+                    return await File.ReadAllTextAsync(safePath, ct);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -617,5 +622,18 @@ public static class WorkflowDefinitionEndpoints
             }
         }
         return null;
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _ = ex;
+            return true;
+        }
     }
 }

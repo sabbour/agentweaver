@@ -101,6 +101,24 @@ test("10-create-cluster: run() creates RG/ACR/cluster/node pools when absent, an
   assert.ok(runCommands.some((c) => c.startsWith("az acr create")));
   assert.ok(runCommands.some((c) => c.startsWith("az aks create")));
   assert.ok(runCommands.some((c) => c === "az aks nodepool"));
+
+  // Security: the system pool created by `az aks create` must disable SSH
+  // access (not enable it via --generate-ssh-keys), matching the user pools.
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "aks" && c.args[1] === "create");
+  assert.ok(createCall, "expected an 'az aks create' call");
+  const sshIdx = createCall.args.indexOf("--ssh-access");
+  assert.ok(sshIdx !== -1 && createCall.args[sshIdx + 1] === "disabled", "az aks create must pass --ssh-access disabled");
+  assert.ok(!createCall.args.includes("--generate-ssh-keys"), "az aks create must not enable SSH via --generate-ssh-keys");
+
+  // App routing: use the Gateway API / istio path only. The managed default
+  // nginx ingress controller must be skipped at create time (we route via
+  // HTTPRoute on the istio gateway), otherwise app-routing provisions an
+  // unused second public LoadBalancer.
+  const nginxIdx = createCall.args.indexOf("--app-routing-default-nginx-controller");
+  assert.ok(
+    nginxIdx !== -1 && createCall.args[nginxIdx + 1] === "None",
+    "az aks create must pass --app-routing-default-nginx-controller None",
+  );
 });
 
 test("10-create-cluster: skips resource creation when everything already exists", async () => {
@@ -164,7 +182,7 @@ test("15-setup-identity: setSecretWithRetry throws immediately on a non-RBAC fai
   await assert.rejects(() => setupIdentity.setSecretWithRetry("agentweaver-kv", "github-client-id", "value", { exec, log, sleep: async () => {} }));
 });
 
-test("15-setup-identity: run() creates federated credentials only when they do not already exist", async () => {
+test("15-setup-identity: run() skips all federated credentials when they already exist", async () => {
   const exec = fakeExec({
     captureImpl: (cmd, args) => {
       if (cmd === "az" && args[0] === "identity" && args[1] === "federated-credential" && args[2] === "show") {
@@ -180,6 +198,112 @@ test("15-setup-identity: run() creates federated credentials only when they do n
   await setupIdentity.run({ ...CFG, GITHUB_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret" }, { exec, log, az, prompt });
   const fedCredCreateCalls = exec.calls.run.filter((c) => c.cmd === "az" && c.args[1] === "federated-credential" && c.args[2] === "create");
   assert.equal(fedCredCreateCalls.length, 0);
+});
+
+test("15-setup-identity: run() provisions a dedicated KV-less AgentHost identity (issue #471)", async () => {
+  // Distinct object/client ids per identity so we can prove the agent-host identity is NEVER a KV
+  // role-assignment target and that the agent-host federated credential is created on it.
+  const idValue = (name, field) => {
+    if (name === "agentweaver-api-identity") return field === "clientId" ? "api-client-id" : "api-object-id";
+    if (name === "agentweaver-agenthost-identity") return field === "clientId" ? "agenthost-client-id" : "agenthost-object-id";
+    return "";
+  };
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "identity" && args[1] === "show") {
+        const name = args[args.indexOf("--name") + 1];
+        const field = args[args.indexOf("--query") + 1];
+        return { stdout: idValue(name, field), stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "identity" && args[1] === "federated-credential" && args[2] === "show") {
+        return { stdout: "", stderr: "not found", code: 1 }; // force create path
+      }
+      if (cmd === "az" && args[0] === "keyvault" && args[1] === "show") {
+        // Return a fake KV id from the `--query id` capture, "" for the existence probe.
+        return args.includes("--query")
+          ? { stdout: "/subscriptions/x/kv-id", stderr: "", code: 0 }
+          : { stdout: "", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "ad" && args[1] === "signed-in-user") return { stdout: "caller-oid", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "true", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  const az = {};
+  const prompt = { isInteractive: () => false };
+  const log = noopLog();
+  const result = await setupIdentity.run(
+    { ...CFG, GITHUB_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret" },
+    { exec, log, az, prompt },
+  );
+
+  // The dedicated identity is created.
+  const identityCreates = exec.calls.run.filter(
+    (c) => c.cmd === "az" && c.args[0] === "identity" && c.args[1] === "create",
+  );
+  assert.ok(
+    identityCreates.some((c) => c.args[c.args.indexOf("--name") + 1] === "agentweaver-agenthost-identity"),
+    "agentweaver-agenthost-identity must be created",
+  );
+
+  // The agent-host federated credential is created on the DEDICATED identity, not the API identity.
+  const fedCredCreates = exec.calls.run.filter(
+    (c) => c.cmd === "az" && c.args[1] === "federated-credential" && c.args[2] === "create",
+  );
+  const agentHostFedCred = fedCredCreates.find(
+    (c) => c.args[c.args.indexOf("--name") + 1] === "agentweaver-agenthost-fedcred",
+  );
+  assert.ok(agentHostFedCred, "agent-host federated credential must be created");
+  assert.equal(
+    agentHostFedCred.args[agentHostFedCred.args.indexOf("--identity-name") + 1],
+    "agentweaver-agenthost-identity",
+    "agent-host fedcred must target the dedicated identity",
+  );
+
+  // CRITICAL (issue #471): the agent-host identity object id must NEVER be a Key Vault role target.
+  const roleCreates = exec.calls.capture.filter(
+    (c) => c.cmd === "az" && c.args[0] === "role" && c.args[1] === "assignment" && c.args[2] === "create",
+  );
+  for (const c of roleCreates) {
+    assert.ok(
+      !c.args.includes("agenthost-object-id"),
+      "the AgentHost identity must have NO Key Vault role assignments",
+    );
+  }
+
+  assert.equal(result.AGENTHOST_IDENTITY_CLIENT_ID, "agenthost-client-id");
+});
+
+test("15-setup-identity: run() removes a legacy agent-host fedcred from the API identity (migration)", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "identity" && args[1] === "federated-credential" && args[2] === "show") {
+        const identityName = args[args.indexOf("--identity-name") + 1];
+        // Legacy fedcred still present on the API identity; absent on the dedicated identity.
+        return identityName === "agentweaver-api-identity" && args.includes("agentweaver-agenthost-fedcred")
+          ? { stdout: "", stderr: "", code: 0 }
+          : { stdout: "", stderr: "not found", code: 1 };
+      }
+      if (cmd === "az" && args[0] === "keyvault" && args[1] === "show") {
+        return args.includes("--query") ? { stdout: "/subscriptions/x/kv-id", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "true", stderr: "", code: 0 };
+      return { stdout: "some-value", stderr: "", code: 0 };
+    },
+  });
+  const az = {};
+  const prompt = { isInteractive: () => false };
+  const log = noopLog();
+  await setupIdentity.run({ ...CFG, GITHUB_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret" }, { exec, log, az, prompt });
+
+  const legacyDelete = exec.calls.run.find(
+    (c) =>
+      c.cmd === "az" &&
+      c.args[1] === "federated-credential" &&
+      c.args[2] === "delete" &&
+      c.args[c.args.indexOf("--identity-name") + 1] === "agentweaver-api-identity",
+  );
+  assert.ok(legacyDelete, "legacy agent-host fedcred must be deleted from the API identity");
 });
 
 // -------------------- 15-provision-monitoring.mjs --------------------

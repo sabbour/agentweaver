@@ -368,9 +368,31 @@ builder.Services.AddSingleton<ProjectService>();
     }
 }
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IGitHubSkillTreeClient, Agentweaver.Api.Skills.GitHubSkillTreeClient>();
 builder.Services.Configure<Agentweaver.Api.Skills.SkillMarketplaceOptions>(builder.Configuration.GetSection("SkillMarketplaces"));
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillMarketplaceRegistry>();
+// Project-scoped, user-added marketplace sources (step-1b). Provider-aware, mirroring the skill store.
+{
+    var _srcProvider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    if (_srcProvider is "postgres" or "postgresql")
+    {
+        builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.Ef.EfProjectMarketplaceSourceStore>();
+        builder.Services.AddSingleton<Agentweaver.Domain.Skills.IProjectMarketplaceSourceStore>(
+            sp => sp.GetRequiredService<Agentweaver.Api.Infrastructure.Ef.EfProjectMarketplaceSourceStore>());
+    }
+    else
+    {
+        builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.SqliteProjectMarketplaceSourceStore>();
+        builder.Services.AddSingleton<Agentweaver.Domain.Skills.IProjectMarketplaceSourceStore>(
+            sp => sp.GetRequiredService<Agentweaver.Api.Infrastructure.SqliteProjectMarketplaceSourceStore>());
+    }
+}
+// Catalog indexer + cache + tool-less LLM classifier for auto-detected (URL) marketplace sources.
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogCache, Agentweaver.Api.Skills.MarketplaceCatalogCache>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogClassifier, Agentweaver.Api.Skills.CopilotMarketplaceCatalogClassifier>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogIndexer, Agentweaver.Api.Skills.MarketplaceCatalogIndexer>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceSourceService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();

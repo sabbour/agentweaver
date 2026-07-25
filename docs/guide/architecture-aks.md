@@ -144,7 +144,7 @@ See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
 
 ### Secrets management
 
-Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are fetched at `/configure` time by the pod itself using workload identity and the configured Key Vault URI. There are no static credentials in any manifest.
+Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are resolved on the API side and brokered to the sandbox pod in the one-time `/configure` call (`gitHubAccessToken`), because the sandbox identity has no Key Vault access (issue #471). There are no static credentials in any manifest.
 
 ![Secrets management: Managed Identity, ServiceAccount, ServiceAccount, AKS OIDC Issuer, AKS OIDC Issuer, Azure Key Vault, SecretProviderClass, Per-user GitHub token secret, API Pod, Warm AgentHost Pod, MCP Pod](../diagrams/guide-architecture-aks-fig5.png)
 
@@ -153,7 +153,7 @@ Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
-The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing warm AgentHost pods to call Key Vault directly with workload identity.
+The API's and worker's `ServiceAccount`s (`agentweaver-api`, `agentweaver-worker`) are federated to the shared, Key-Vault-privileged user-assigned `agentweaver-api-identity` through the cluster's OIDC issuer (`agentweaver-api-fedcred` and `agentweaver-worker-fedcred` respectively). The worker has its own Kubernetes RBAC identity and receives only sandbox lifecycle and legacy exec permissions; it does not inherit the API's preview-management permissions. The `agentweaver-agent-host` ServiceAccount is federated to a **separate, dedicated managed identity (`agentweaver-agenthost-identity`) that has no Key Vault role assignments** (issue #471) via its own federated credential (`agentweaver-agenthost-fedcred`). Because the sandbox runs untrusted shell/tool code, it must not be able to read Key Vault; the run owner's GitHub token is instead brokered per-run by the API in the `/configure` call.
 
 One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
 

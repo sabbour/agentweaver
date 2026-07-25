@@ -212,6 +212,10 @@ type OrchPhase =
   | 'merge'
   | 'scribe'
   | 'complete'
+  // All stories were promoted to the Board as independent backlog tasks (0 inline subtasks left in
+  // the parent work plan). The coordinator run is terminal/complete by design and the collective
+  // assembly stages (RAI / Human Review / Merge / Scribe) are intentionally skipped.
+  | 'delegated'
   | 'failed'
   | 'blocked'
   | 'needs_resolution'
@@ -285,6 +289,7 @@ function normalizePhase(raw: string | undefined | null): OrchPhase {
   if (k.includes('outcomespecdraft') || k.includes('draftingoutcome') || k.includes('defineoutcome') || k.includes('planning') || k === 'drafting') return 'drafting_outcome';
   if (k.includes('awaitingassembly')) return 'awaiting_assembly';
   if (k.includes('needsresolution')) return 'needs_resolution';
+  if (k.includes('delegat')) return 'delegated';
   if (k.includes('reviewpreserved')) return 'in_review';
   if (k.includes('reviewapproved')) return 'merge';
   if (k.includes('assembling')) return 'assembling';
@@ -621,6 +626,7 @@ function deriveOrchState(
 function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
   switch (phase) {
     case 'complete': return 'completed';
+    case 'delegated': return 'completed';
     case 'failed':
     case 'declined': return 'failed';
     case 'blocked': return 'blocked';
@@ -648,6 +654,10 @@ function assemblyTerminalStageMatchesRole(role: string, terminalStage: string | 
 
 function assemblyNodeStatus(role: string, phase: OrchPhase, terminalStage?: string): StepStatus | undefined {
   switch (phase) {
+    case 'delegated':
+      // All work was promoted to the Board; the collective-assembly stages are intentionally
+      // skipped for every role. Render them as a terminal skipped ("Delegated to backlog") state.
+      return 'skipped';
     case 'assembling':
     case 'build_test':
     case 'rai':
@@ -698,6 +708,7 @@ function orchPhaseLabel(phase: OrchPhase): string {
     case 'merge':             return 'Merging';
     case 'scribe':            return 'Scribing';
     case 'complete':          return 'Complete';
+    case 'delegated':         return 'Delegated to backlog';
     case 'failed':            return 'Failed';
     case 'blocked':           return 'Blocked';
     case 'needs_resolution':  return 'Needs resolution';
@@ -1880,6 +1891,7 @@ function semanticStateColorForStatus(status: string | undefined): SemanticStateC
     case 'confirmed':
     case 'done':
     case 'success':
+    case 'delegated_to_backlog':
       return 'success';
     case 'failed':
     case 'merge_failed':
@@ -1924,6 +1936,7 @@ function runTreeStatusLabel(status: string, confirmedBy?: string): string {
     case 'pending_capacity': return 'Waiting for capacity';
     case 'blocked': return 'Blocked';
     case 'completed': return 'Completed';
+    case 'delegated_to_backlog': return 'Delegated to backlog';
     case 'assemble_ready': return 'Ready for assembly';
     case 'awaiting_review': return 'Action needed';
     case 'revising': return 'Changes requested — revising';
@@ -2912,8 +2925,17 @@ export function CoordinatorRunPage() {
       // merge/scribe begin), the orchestration phase can linger on `in_review`, which would
       // otherwise keep the Human Review gate showing "Awaiting your review". A real decline still
       // surfaces via phaseStatus === 'failed', which keeps precedence.
+      // When the plan was delegated to the backlog (all stories promoted to independent Board
+      // tasks, 0 inline subtasks), the assembly stages are intentionally skipped. The server marks
+      // these nodes with status="delegated" (single source of truth); we also honour the derived
+      // orch phase. Render every assembly role as a terminal skipped ("Delegated to backlog") state.
+      const nodeIsDelegated = isAssemblyRole
+        && (orch.phase === 'delegated'
+          || node.status === 'delegated'
+          || readStr(node.data ?? {}, ['status']) === 'delegated');
       const assemblyStatus = isAssemblyRole
-        ? (phaseStatus === 'failed' ? 'failed'
+        ? (nodeIsDelegated ? 'skipped'
+           : phaseStatus === 'failed' ? 'failed'
            : timingStatus === 'completed' ? 'completed'
            : (phaseStatus ?? timingStatus))
         : undefined;
@@ -2943,6 +2965,12 @@ export function CoordinatorRunPage() {
       const st: ExecutorState = nodePlanned
         ? { status: 'pending' }
         : { status: stepStatus };
+
+      // Skipped assembly stages on a delegated run carry an explicit sub-label so the pill reads
+      // "Delegated to backlog" rather than a bare "Skipped".
+      if (nodeIsDelegated && !nodePlanned) {
+        st.message = 'Delegated to backlog';
+      }
 
       // Human Review gate awaiting a decision renders on-face action buttons and grows — reserve the
       // room in the layout so the staircase keeps clear of it. (Matches WorkflowNode's isHumanWaiting.)
@@ -3167,6 +3195,7 @@ export function CoordinatorRunPage() {
               ? (workPlanSeen ? 'completed' : 'pending')
               : roleKey === 'review' && orch.phase === 'in_review' && !viewState.terminal
                 ? 'awaiting_review'
+              : data.state.status === 'skipped' && data.state.message === 'Delegated to backlog' ? 'delegated_to_backlog'
               : data.state.status === 'started' ? 'running'
                 : data.state.status === 'completed' ? 'completed'
                   : data.state.status === 'failed' ? 'failed'

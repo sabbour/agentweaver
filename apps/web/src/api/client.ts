@@ -675,12 +675,21 @@ export class AgentweaverApiClient {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import`, { repoUrl, locations });
   }
 
-  listSkillMarketplaces(): Promise<import('./types').SkillMarketplaceDto[]> {
-    return this.request<import('./types').SkillMarketplaceDto[]>('GET', '/skill-marketplaces');
+  // Project-scoped list: built-in config marketplaces + this project's user-added URL sources.
+  listSkillMarketplaces(projectId: string): Promise<import('./types').SkillMarketplaceDto[]> {
+    return this.request<import('./types').SkillMarketplaceDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces`);
   }
 
-  browseSkillMarketplace(projectId: string, marketplace: string, query?: string): Promise<import('./types').SkillMarketplaceBrowseResponse> {
-    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query });
+  addSkillMarketplaceSource(projectId: string, body: import('./types').AddSkillMarketplaceSourceRequest): Promise<import('./types').SkillMarketplaceDto> {
+    return this.request<import('./types').SkillMarketplaceDto>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/sources`, body);
+  }
+
+  removeSkillMarketplaceSource(projectId: string, name: string): Promise<void> {
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/sources/${encodeURIComponent(name)}`);
+  }
+
+  browseSkillMarketplace(projectId: string, marketplace: string, query?: string, page?: number, pageSize?: number): Promise<import('./types').SkillMarketplaceBrowseResponse> {
+    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query, page, pageSize });
   }
 
   importMarketplaceSkills(projectId: string, marketplace: string, locations: string[]): Promise<import('./types').SkillAcquisitionResponse> {

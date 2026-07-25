@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -116,6 +117,154 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
+    }
+
+    private async Task<int> InsertOutcomeSpecAsync(MemoryDbContext db, string projectId, string coordinatorRunId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var spec = new OutcomeSpec
+        {
+            ProjectId = projectId,
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "Ship the thing",
+            DesiredOutcome = "It ships",
+            Scope = "in",
+            Assumptions = "none",
+            Status = "confirmed",
+            AllowTaskPromotion = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+        return spec.Id;
+    }
+
+    private async Task InsertDelegatedWorkPlanAsync(string projectId, string coordinatorRunId, DateTimeOffset? updatedAt = null)
+        => await InsertWorkPlanAsync(projectId, coordinatorRunId, WorkPlanStatus.Delegated, updatedAt);
+
+    private async Task InsertWorkPlanAsync(string projectId, string coordinatorRunId, string status, DateTimeOffset? updatedAt = null)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var outcomeSpecId = await InsertOutcomeSpecAsync(db, projectId, coordinatorRunId);
+        var now = updatedAt ?? DateTimeOffset.UtcNow;
+        db.WorkPlans.Add(new WorkPlan
+        {
+            OutcomeSpecId = outcomeSpecId,
+            ProjectId = projectId,
+            CoordinatorRunId = coordinatorRunId,
+            Status = status,
+            CreatedAt = now.AddMinutes(-3),
+            UpdatedAt = now,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task InsertPromotedBacklogTaskAsync(string projectId, string parentPrdRunId, string title, string orderKey = "n", DateTimeOffset? archivedAt = null)
+    {
+        var backlogStore = _factory.Services.GetRequiredService<Agentweaver.Domain.IBacklogTaskStore>();
+        var taskId = BacklogTaskId.New();
+        var pid = ProjectId.Parse(projectId);
+        await backlogStore.InsertAsync(new BacklogTask
+        {
+            Id = taskId,
+            ProjectId = pid,
+            Title = title,
+            State = BacklogTaskState.Backlog,
+            OrderKey = orderKey,
+            CapturedBy = ProjectsWebApplicationFactory.TestUser,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ParentPrdRunId = RunId.Parse(parentPrdRunId),
+        });
+        if (archivedAt is not null)
+            await backlogStore.TryArchiveAsync(pid, taskId, archivedAt.Value);
+    }
+
+    [Fact]
+    public async Task GetNotifications_SurfacesBacklogPromotedNotification_ForDelegatedRun()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Board");
+        var coordinatorRunId = RunId.New().ToString();
+        await InsertDelegatedWorkPlanAsync(projectId, coordinatorRunId);
+        await InsertPromotedBacklogTaskAsync(projectId, coordinatorRunId, "Build the API", orderKey: "n");
+        await InsertPromotedBacklogTaskAsync(projectId, coordinatorRunId, "Build the Web", orderKey: "u");
+
+        var response = await _client.GetAsync("/api/notifications");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var match = body.GetProperty("notifications").EnumerateArray()
+            .Should().ContainSingle(n => n.GetProperty("id").GetString() == $"backlog_promoted:{coordinatorRunId}")
+            .Subject;
+
+        match.GetProperty("type").GetString().Should().Be("backlog_promoted");
+        match.GetProperty("project_id").GetString().Should().Be(projectId);
+        match.GetProperty("title").GetString().Should().Be("2 subtasks created");
+        match.GetProperty("cta_path").GetString().Should().Be($"/projects/{projectId}/board");
+    }
+
+    [Fact]
+    public async Task GetNotifications_BacklogPromoted_UsesSingularTitle_ForOneTask()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Board Single");
+        var coordinatorRunId = RunId.New().ToString();
+        await InsertDelegatedWorkPlanAsync(projectId, coordinatorRunId);
+        await InsertPromotedBacklogTaskAsync(projectId, coordinatorRunId, "The only task");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var match = body.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("id").GetString() == $"backlog_promoted:{coordinatorRunId}");
+
+        match.GetProperty("title").GetString().Should().Be("1 subtask created");
+    }
+
+    [Fact]
+    public async Task GetNotifications_BacklogPromoted_ExcludesNonDelegatedPlans()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Board NonDelegated");
+        var coordinatorRunId = RunId.New().ToString();
+        await InsertWorkPlanAsync(projectId, coordinatorRunId, WorkPlanStatus.Complete);
+        await InsertPromotedBacklogTaskAsync(projectId, coordinatorRunId, "A promoted task");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("id").GetString() == $"backlog_promoted:{coordinatorRunId}");
+    }
+
+    [Fact]
+    public async Task GetNotifications_BacklogPromoted_ExcludesDelegatedRunWithNoLiveTasks()
+    {
+        // Defensive: a delegated plan whose promoted tasks were all archived has nothing to announce.
+        var projectId = await CreateBlankProjectAsync("Notif Project Board Archived");
+        var coordinatorRunId = RunId.New().ToString();
+        await InsertDelegatedWorkPlanAsync(projectId, coordinatorRunId);
+        await InsertPromotedBacklogTaskAsync(projectId, coordinatorRunId, "Archived task", archivedAt: DateTimeOffset.UtcNow);
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("id").GetString() == $"backlog_promoted:{coordinatorRunId}");
+    }
+
+    [Fact]
+    public async Task GetNotifications_BacklogPromoted_ExcludesStaleDelegatedRun()
+    {
+        // Outside the 24h recency window: the terminal delegated run should no longer surface.
+        var projectId = await CreateBlankProjectAsync("Notif Project Board Stale");
+        var coordinatorRunId = RunId.New().ToString();
+        await InsertDelegatedWorkPlanAsync(projectId, coordinatorRunId, updatedAt: DateTimeOffset.UtcNow.AddHours(-30));
+        await InsertPromotedBacklogTaskAsync(projectId, coordinatorRunId, "Old task");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("id").GetString() == $"backlog_promoted:{coordinatorRunId}");
     }
 
     [Fact]

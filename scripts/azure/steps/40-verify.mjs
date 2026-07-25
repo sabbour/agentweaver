@@ -34,13 +34,24 @@ const HTTP_ROUTES = ["agentweaver-api-route", "agentweaver-frontend-route", "age
 
 const SECRET_PROVIDER_CLASSES = ["agentweaver-secrets", "agentweaver-user-tokens"];
 
-const API_SANDBOX_RESOURCES = [
-  "sandboxclaims.extensions.agents.x-k8s.io",
-  "sandboxtemplates.extensions.agents.x-k8s.io",
-  "sandboxwarmpools.extensions.agents.x-k8s.io",
-  "secretproviderclasses.secrets-store.csi.x-k8s.io",
-  "pods/exec",
+// Resources the API/worker ServiceAccounts must be able to `create` for the
+// pod-per-run sandbox model. `pods/exec` is expressed as a resource+subresource
+// pair, NOT the legacy "pods/exec" slash string: modern kubectl (>=1.33) stopped
+// resolving the slash form in `kubectl auth can-i`, so it returns a false "no"
+// even though RBAC grants create on the exec subresource. That grant is
+// deliberately retained (and natively scoped to agentweaver-agent-host- pods by
+// vap-sandbox-exec.yaml, issue #473 / security review Alert 4), so the probe must
+// use `--subresource=exec` to reflect the real, hardened authorization.
+const SANDBOX_CREATE_RESOURCES = [
+  { resource: "sandboxclaims.extensions.agents.x-k8s.io" },
+  { resource: "pods", subresource: "exec" },
 ];
+
+function canICreateArgs({ resource, subresource }, serviceAccount, namespace) {
+  const args = ["auth", "can-i", "create", resource, `--as=${serviceAccount}`, "--namespace", namespace];
+  if (subresource) args.push(`--subresource=${subresource}`);
+  return args;
+}
 
 /** Counts Running pods matching a label selector. Mirrors the bash/ps1 `Get-RunningPodCount`. */
 export async function runningPodCount(namespace, selector, { exec = execDefault } = {}) {
@@ -250,15 +261,32 @@ export async function run(cfg, opts = {}) {
 
   const apiServiceAccount = `system:serviceaccount:${NAMESPACE}:agentweaver-api`;
   let canCreateAll = true;
-  for (const resource of API_SANDBOX_RESOURCES) {
-    const canCreate = await kubectlOk(["auth", "can-i", "create", resource, `--as=${apiServiceAccount}`, "--namespace", NAMESPACE], { exec });
+  for (const resource of SANDBOX_CREATE_RESOURCES) {
+    const canCreate = await kubectlOk(canICreateArgs(resource, apiServiceAccount, NAMESPACE), { exec });
     if (!canCreate) canCreateAll = false;
   }
   record(
     canCreateAll,
     canCreateAll
-      ? "API ServiceAccount can create SandboxClaims, run-scoped templates/pools/SPCs, and pods/exec"
-      : "API ServiceAccount lacks required sandbox or run-scoped SPC permissions",
+      ? "API ServiceAccount can create SandboxClaims and use legacy pods/exec"
+      : "API ServiceAccount lacks required sandbox permissions",
+  );
+
+  const workerRoleOk = await kubectlOk(["get", "role", "agentweaver-worker-sandbox", "--namespace", NAMESPACE], { exec });
+  const workerRoleBindingOk = await kubectlOk(["get", "rolebinding", "agentweaver-worker-sandbox", "--namespace", NAMESPACE], { exec });
+  record(workerRoleOk && workerRoleBindingOk, workerRoleOk && workerRoleBindingOk ? "Worker sandbox Role and RoleBinding exist" : "Worker sandbox Role/RoleBinding missing");
+
+  const workerServiceAccount = `system:serviceaccount:${NAMESPACE}:agentweaver-worker`;
+  let workerCanCreateAll = true;
+  for (const resource of SANDBOX_CREATE_RESOURCES) {
+    const canCreate = await kubectlOk(canICreateArgs(resource, workerServiceAccount, NAMESPACE), { exec });
+    if (!canCreate) workerCanCreateAll = false;
+  }
+  record(
+    workerCanCreateAll,
+    workerCanCreateAll
+      ? "Worker ServiceAccount can create SandboxClaims and use legacy pods/exec"
+      : "Worker ServiceAccount lacks required sandbox permissions",
   );
 
   log.info("");

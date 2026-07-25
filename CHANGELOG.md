@@ -1,5 +1,133 @@
 # Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- 9e55ed8: Add LLM-assisted skill marketplace catalog parsing (step-1b): a project can now add a curated marketplace source by GitHub repo URL. A new catalog indexer auto-detects skills from the repo tree (deterministic `SKILL.md` heuristic with a bounded, fail-closed Copilot classifier fallback), caches the parsed index per repo revision, and paginates browse from it (anonymous-first, page-lazy descriptions). Project sources are persisted per project (SQLite + Postgres) with add/list/remove endpoints; existing config marketplaces are unchanged.
+- a5925f5: Fixed a High-severity security-assessment finding: stdio MCP clients (e.g. the
+  CLI, editor integrations) previously authenticated backend calls with the
+  shared `AGENTWEAVER_API_KEY`, which the API maps to the trusted
+  `agentweaver-internal` identity and exempts from project-ownership checks —
+  letting any stdio client reach every project on the backend, not just the
+  operator's own.
+
+  Stdio clients should now set `AGENTWEAVER_TOKEN` to a per-user bearer token
+  (an Agentweaver-minted OAuth access token, or a GitHub token such as `gh auth
+token`) so the backend attributes calls to the real user and enforces
+  project ownership. Credential precedence is: inbound per-request token (HTTP
+  transports) → `AGENTWEAVER_TOKEN` → `AGENTWEAVER_API_KEY` (last-resort
+  fallback).
+
+  **Breaking change for stdio deployments still relying on the shared key**:
+  if `AGENTWEAVER_TOKEN` is not set and `AGENTWEAVER_API_KEY` is, the MCP
+  server now refuses to start in stdio mode by default. Set
+  `AGENTWEAVER_ALLOW_SHARED_KEY=true` to explicitly opt back into the
+  insecure fallback (e.g. for first-party service-to-service callers that
+  intentionally use the shared identity). See `docs/guide/mcp-cli.md` for
+  migration guidance.
+
+### Patch Changes
+
+- 01d6699: Fixed a Critical security-assessment finding: AgentHost sandbox pods (which
+  execute untrusted agent/tool shell commands) previously federated to the same
+  Key Vault identity as the API (`agentweaver-api-identity`), granted Key Vault
+  Secrets User/Officer roles. Untrusted code running in a sandbox could exchange
+  its projected workload-identity token for a Key Vault access token and read
+  every user's secrets.
+
+  AgentHost now federates to a dedicated, least-privilege managed identity
+  (`agentweaver-agenthost-identity`) with no Key Vault role assignments. This is
+  a functional no-op for legitimate use: the run owner's GitHub token is already
+  brokered per-run by the API through the `/configure` call rather than fetched
+  directly from Key Vault by the sandbox. Deploying this change to an existing
+  cluster also removes the legacy `agentweaver-agenthost-fedcred` federated
+  credential from the API identity so older deployments can't retain the
+  vault-privileged mapping.
+
+- faaff4c: Render fully-promoted ("delegated to backlog") coordinator runs as complete instead of
+  leaving RAI, Human Review, Merge, and Scribe stuck as "Pending forever", and notify the
+  user when subtasks are promoted to the Board.
+
+  - The coordinator graph descriptor now marks the skipped assembly stages of a delegated
+    run with an authoritative `delegated` status (single source of truth); the run tree and
+    workflow graph render those nodes as a terminal "Delegated to backlog" state and the
+    coordinator/work-plan nodes as Completed.
+  - A poll-derived "N subtasks created" notification (linking to the project Board) is
+    emitted for delegated runs, reusing the existing notification center with board-specific
+    toast/badge copy.
+
+- 6681a50: Enforce the per-run filesystem policy at the Kata command boundary (security, #476):
+
+  - **Cross-run workspace escape**: every Kata AgentHost pod mounts the _shared_ RWX
+    `/workspace` PVC, and the Kata-mode `PassthroughExecutor` previously ignored the per-run
+    filesystem policy entirely. A prompt-injected command could keep its declared working
+    directory inside its own tree yet read/write a sibling project via an absolute path
+    (`cat /workspace/<other-project>/secrets`, `git -C /workspace/<other-project> …`).
+  - **New guard**: `SharedWorkspacePathGuard` scans a command's _text_ for absolute paths
+    that resolve under a protected shared-mount root (default `/workspace`, override via
+    `AGENTWEAVER_PROTECTED_SHARED_ROOTS`) but outside the run's own allowed roots, and rejects
+    them before the shell starts. It is wired into both `ShellCommandValidator` (the
+    `run_command` tool) and `PassthroughExecutor` (the executor boundary, consuming
+    `SandboxCommand.FilesystemPolicy`), collapsing `.`/`..` traversal and handling quoting,
+    `--flag=` assignment, and colon path-lists.
+
+  This is defense-in-depth, not a substitute for true per-run volume isolation (the shared
+  RWX PVC follow-up remains tracked architectural work); a command-text filter cannot catch
+  every obfuscation, but it closes the direct cross-project read/write path described in #476.
+
+- 9b43fdb: Fix the "Browse curated marketplaces" dialog freezing when selecting a source: browsing a marketplace now fetches only the source's subtree via the GitHub Trees API (bounded by a hard timeout) instead of a full, untimed repository clone, so failures surface as a clear error and a loading state is shown while browsing. Browsing also now falls back to an anonymous request when a user's token is refused with any non-success status (public marketplaces in SAML-enforced orgs such as `microsoft/skills`, whose Trees API returns 403 and whose raw blobs return 404 for an un-SSO'd token, no longer come back empty). Browse is now a paginated index: it enumerates every candidate skill + location from the Git Trees metadata (one call, zero blob downloads), then fetches each `SKILL.md` frontmatter definition ONLY for the requested page (default 25, cap 50) — concurrently and anonymously (curated marketplaces are public, so browse attaches no user token, avoiding a slow token round-trip) — so even large marketplaces like `github/awesome-copilot` (~400 skills) return one fully-described page in a few seconds; a skill's full content is downloaded only at import time. Browse's throwaway placeholder tree is written to local ephemeral scratch instead of the data directory, which in production is a CIFS/Azure Files SMB mount whose per-file latency made browsing large marketplaces take tens of seconds. The browse request accepts `page`/`pageSize` and the response returns `total`, `page`, `page_size`, and `has_more`; the Skills page wires this to a "Load more" control. Skill descriptions written as YAML block scalars (`description: |` / `>`) are parsed correctly. The "Azure Skills" marketplace subpath is also corrected to a plugin path that actually exists (`.github/plugins/azure-sdk-dotnet/skills`).
+- 3d2fbc9: Simplify the Account settings MCP clients section to show only the MCP server URL, removing the per-client (Claude Desktop, VS Code, GitHub Copilot CLI) config snippets and copy buttons. Update the page description to cover both the MCP connection and the repository sandbox policy.
+- de4b433: Fixed the release preparation ignored-file guard so it no longer rejects standard dependency/build/output directories (node_modules, dist, bin, obj, test output, harness artifacts), which had made `release:prepare`/`release:publish` unrunnable from a normal checkout, while still flagging unexpected ignored files in source/config locations.
+- 45f2d3e: Added a copy-to-clipboard button to the install/quick-start command blocks on the documentation landing page.
+- ecc5a8f: GitHub org allowlist now accepts multiple orgs via config
+  (`Auth:GitHub:AllowedOrg` / `GITHUB_ALLOWED_ORG`).
+
+  The GitHub organization authorization gate previously enforced membership of a
+  single, exact-match org. It now parses `Auth:GitHub:AllowedOrg` as a delimited
+  LIST (split on `,` and `;`, trimmed, empty entries dropped, de-duplicated
+  case-insensitively, order preserved) and authorizes a caller who is a member of
+  **any** listed org. For each allowed org the existing two-step check is applied
+  verbatim (authenticated `/orgs/{org}/members/{login}`, then the unauthenticated
+  `/orgs/{org}/public_members/{login}` SAML fallback). Fail-closed behavior is
+  unchanged: empty/whitespace config yields an empty list and blocks every
+  non-exempt request. When no org confirms membership but at least one org's
+  primary authenticated check was inconclusive (expired token / 5xx / network),
+  the result is `Inconclusive` rather than a hard denial, preserving the
+  refresh-time re-check semantics. The single-org list parser is shared by the
+  authorization service, the org-authorization middleware, and the API-key
+  middleware.
+
+  The value is now config-driven and non-committed: it flows from the deploy-time
+  `GITHUB_ALLOWED_ORG` environment variable through the `agentweaver-runtime-config`
+  ConfigMap into the API and worker deployments (mirroring `GITHUB_CALLBACK_URL`).
+  Committed defaults remain `microsoft`.
+
+- 20f6dea: `azure:provision-infra` interactive installer now supports arrow-key selection (with the numbered prompt as a fallback when raw-mode TTY is unavailable), walks you through creating a GitHub OAuth App (with link and callback-URL guidance) before asking for the client ID/secret, and prompts for the GitHub org(s) allowed to sign in (`GITHUB_ALLOWED_ORG`, also available as `--github-allowed-org`). Prompts now validate and reprompt on invalid input, and az-backed discovery (subscription/resource group/location) degrades to a manual prompt instead of crashing on transient failures.
+- aa6b6ff: Hardened sandbox RBAC (High-severity security-assessment finding): split the
+  combined API/worker sandbox permissions into distinct least-privilege Roles
+  (`agentweaver-api-sandbox`, `agentweaver-worker-sandbox`) each bound to its own
+  ServiceAccount, added a namespace-wide default-deny `NetworkPolicy` with
+  explicit compensating allows for DNS, Postgres, and AgentHost orchestration
+  traffic, and restricted `pods/exec` — which cannot be scoped via RBAC
+  `resourceNames` because sandbox pod names are dynamic — with a
+  `ValidatingAdmissionPolicy` (`k8s/base/vap-sandbox-exec.yaml`) that permits
+  exec only from the `agentweaver-api`/`agentweaver-worker` ServiceAccounts
+  against pods named `agentweaver-agent-host-*`, closing the lateral-movement
+  path where either identity could previously exec into any pod in the
+  namespace (including each other or Postgres).
+- 16dcabd: Hardened the release pipeline (`azure:release-publish`, changeset prepare/sync
+  scripts) to reject untracked AND unexpectedly git-ignored files in the working
+  tree before publishing or syncing a release. Previously the check only ran
+  `git status --porcelain --untracked-files=all`, which does not surface files
+  that match a `.gitignore` pattern — an attacker-planted file under a path like
+  `node_modules/` or `dist/` could have been silently bundled into a release
+  artifact. The check now also flags unexpected ignored files, with a narrow
+  allowlist limited to genuinely safe, never-shipped editor/local-tooling paths
+  (`.vscode/`, `.idea/`, `.squad/`, etc.). Requires running these scripts from a
+  truly clean checkout, per the existing `RELEASING.md` guidance.
+- 0b5374e: Prevent workflow and skill discovery from reading through repository symlinks.
+
 ## 0.10.1
 
 ### Patch Changes

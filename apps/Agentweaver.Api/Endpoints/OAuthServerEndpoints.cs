@@ -159,7 +159,11 @@ public static class OAuthServerEndpoints
                 if (error is not null)
                     return BadOAuthRequest(error.Error, error.ErrorDescription);
 
-                var org = config["Auth:GitHub:AllowedOrg"]?.Trim();
+                // The org claim is informational and must be one of the allowed orgs so the
+                // GitHubOrgAuthorizationMiddleware fast-path accepts the minted token. Membership was
+                // already verified upstream; with a multi-org allowlist we stamp the FIRST allowed org
+                // (deterministic, and always in the allowed list) — preserving single-org behavior.
+                var org = GitHubOrgList.Parse(config["Auth:GitHub:AllowedOrg"]).FirstOrDefault();
                 var clientId = form["client_id"].ToString();
 
                 var accessToken = tokenService.CreateAccessToken(

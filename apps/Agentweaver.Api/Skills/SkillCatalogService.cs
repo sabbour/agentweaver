@@ -77,6 +77,20 @@ public sealed record SkillCandidateView
     [JsonPropertyName("errors")] public IReadOnlyList<string> Errors { get; init; } = Array.Empty<string>();
 }
 
+/// <summary>A single page of marketplace browse results plus the paging metadata needed to page through
+/// the full candidate list. Every candidate on <see cref="Candidates"/> is fully hydrated with a short
+/// definition; <see cref="Total"/> is the full (query-filtered) candidate count across all pages.</summary>
+public sealed record MarketplaceBrowsePage(
+    IReadOnlyList<SkillCandidateView> Candidates,
+    int Total,
+    int Page,
+    int PageSize,
+    bool HasMore);
+
+/// <summary>A marketplace candidate's stable identity (import location + display name) before its
+/// short definition is fetched for the current page.</summary>
+internal sealed record MarketplaceCandidate(string Location, string Name);
+
 /// <summary>Result of upserting a single skill during acquisition.</summary>
 public sealed record SkillUpsertView
 {
@@ -124,6 +138,40 @@ public sealed class SkillCatalogService
     private static readonly Regex SkillNameRegex = new("^[a-z0-9][a-z0-9-]{0,63}$", RegexOptions.Compiled);
     private static readonly HttpClient RawHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
 
+    /// <summary>Message surfaced when a curated marketplace source could not be reached in time.</summary>
+    internal const string MarketplaceTimeoutMessage =
+        "Timed out while reading the marketplace source. Please try again in a moment.";
+
+    /// <summary>Message surfaced when a curated marketplace source is unreachable or misconfigured.</summary>
+    internal const string MarketplaceUnavailableMessage =
+        "Could not reach the marketplace source. Check network/GitHub access and try again.";
+
+    /// <summary>Hard ceiling on how long a marketplace browse/import may spend fetching from GitHub.</summary>
+    private static readonly TimeSpan MarketplaceFetchTimeout = TimeSpan.FromSeconds(60);
+    private const int MarketplaceFetchConcurrency = 16;
+    private const long MaxMarketplaceSubtreeBytes = 32L * 1024 * 1024;
+
+    /// <summary>Hard ceiling on how many candidate skills a single marketplace browse will list.</summary>
+    private const int MaxMarketplaceCandidates = 500;
+
+    /// <summary>Concurrency used to fetch the current page's SKILL.md descriptions.</summary>
+    private const int MarketplaceIndexConcurrency = 32;
+
+    /// <summary>Default number of candidates returned per browse page.</summary>
+    internal const int DefaultMarketplacePageSize = 25;
+
+    /// <summary>Hard ceiling on browse page size (a page fetches this many SKILL.md blobs).</summary>
+    internal const int MaxMarketplacePageSize = 50;
+
+    /// <summary>
+    /// Root for browse's request-scoped placeholder scratch tree. Deliberately LOCAL/ephemeral
+    /// (system temp, typically ext4/tmpfs) rather than <see cref="AppPaths.DataDirectory"/>, which in
+    /// production is a CIFS/Azure Files SMB mount whose ~16-33ms per-file op latency made browsing large
+    /// marketplaces take tens of seconds. Placeholders are empty and deleted within the same request, so
+    /// they need no durability — see WriteCandidatePlaceholdersToTempAsync.
+    /// </summary>
+    internal static string BrowseScratchRoot => Path.Combine(Path.GetTempPath(), "agentweaver-skill-browse");
+
     private readonly ISkillStore _skills;
     private readonly IProjectStore _projects;
     private readonly ProjectGitInitializer _gitInit;
@@ -131,6 +179,8 @@ public sealed class SkillCatalogService
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    private readonly IGitHubSkillTreeClient? _treeClient;
+    private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
     private readonly ILogger<SkillCatalogService> _logger;
 
     public SkillCatalogService(
@@ -141,7 +191,9 @@ public sealed class SkillCatalogService
         IGitHubTokenScopeProvider scopeProvider,
         IGitHubTokenStore tokenStore,
         ILogger<SkillCatalogService> logger,
-        IGitHubAccessTokenProvider? accessTokenProvider = null)
+        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        IGitHubSkillTreeClient? treeClient = null,
+        IMarketplaceCatalogIndexer? catalogIndexer = null)
     {
         _skills = skills;
         _projects = projects;
@@ -150,6 +202,8 @@ public sealed class SkillCatalogService
         _scopeProvider = scopeProvider;
         _tokenStore = tokenStore;
         _accessTokenProvider = accessTokenProvider;
+        _treeClient = treeClient;
+        _catalogIndexer = catalogIndexer;
         _logger = logger;
     }
 
@@ -286,19 +340,7 @@ public sealed class SkillCatalogService
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
                 discovered = DiscoverSkills(cloneDir, subpath);
             }
-            var candidates = discovered.Select(raw =>
-            {
-                var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
-                return new SkillCandidateView
-                {
-                    Location = raw.RelativeLocation,
-                    Name = parsed.Name,
-                    Description = parsed.Description,
-                    Valid = parsed.IsValid,
-                    ResourceCount = raw.Resources.Count,
-                    Errors = parsed.Errors,
-                };
-            }).ToList();
+            var candidates = BuildCandidates(discovered);
             if (candidates.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
             return (SkillOutcome.Ok, null, candidates);
@@ -384,6 +426,481 @@ public sealed class SkillCatalogService
         {
             TryDeleteDirectory(cloneDir);
         }
+    }
+
+    // ── Curated marketplaces ───────────────────────────────────────────────────────
+    // Marketplace repos are large (tens of MB + full history), so a LibGit2Sharp clone of them can
+    // take ~100s and used to hang the "Browse marketplaces" dialog with no timeout. Instead of
+    // cloning, fetch only the blobs under the marketplace's subpath via the GitHub Trees API, bound
+    // the whole operation by a hard timeout, and surface a clear error rather than an infinite spin.
+    //
+    // Browse is a lightweight INDEX (skill name + short definition), never a bulk clone. It reads the
+    // recursive Git Trees metadata once to enumerate every candidate skill + its location (zero blob
+    // downloads), then hydrates each candidate's short description from its SKILL.md frontmatter ALONE
+    // — concurrently and bounded by a soft time budget — so the endpoint returns in a few seconds even
+    // for a large marketplace like github/awesome-copilot (~400 skills). It NEVER downloads a skill's
+    // other resource files at browse time. The full skill payload (SKILL.md + resources) is downloaded
+    // only at IMPORT time, for the one skill the user selects.
+
+    public async Task<(SkillOutcome Outcome, string? Error, MarketplaceBrowsePage? Page)> BrowseMarketplaceAsync(
+        ProjectId projectId, string owner, string repo, string branch, string subpath,
+        string? query, int page, int pageSize, CallerContext caller, CancellationToken ct)
+    {
+        // Ownership is enforced by the endpoint via ProjectAuthorization (owner OR the trusted
+        // agentweaver-internal loopback identity). A second caller.Owns here would silently defeat that
+        // exemption, so we keep only a cheap project-existence guard as defense-in-depth.
+        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+            return (SkillOutcome.NotFound, null, null);
+        if (_treeClient is null)
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+
+        var normalizedPage = page < 1 ? 1 : page;
+        var normalizedSize = pageSize <= 0 ? DefaultMarketplacePageSize : Math.Min(pageSize, MaxMarketplacePageSize);
+        var normalizedQuery = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
+
+        string? tempDir = null;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(MarketplaceFetchTimeout);
+        try
+        {
+            // Curated marketplaces are PUBLIC repos, so browse goes ANONYMOUS on the happy path: no
+            // user token is attached to the tree call or the per-page description fetches. This avoids a
+            // slow token round-trip (and a token→403/hang→anon-retry) on every request; anonymous reads
+            // are fast and 26 requests/page is far under the 60/hr unauthenticated limit. The tree
+            // client still keeps an anonymous fallback as a safety net. (Import keeps its auth behavior.)
+            var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token: null, cts.Token).ConfigureAwait(false);
+
+            // Build the FULL candidate list (name + location) from the tree metadata alone — zero blob
+            // downloads. Placeholders let DiscoverSkills compute locations byte-identically to import.
+            tempDir = await WriteCandidatePlaceholdersToTempAsync(blobs, cts.Token).ConfigureAwait(false);
+            var allCandidates = DiscoverSkills(tempDir, subpath)
+                .Select(raw => new MarketplaceCandidate(raw.RelativeLocation, MarketplaceCandidateName(raw.RelativeLocation)))
+                .OrderBy(c => c.Location, StringComparer.Ordinal)
+                .ToList();
+
+            // An empty UNFILTERED list means the source/subpath is misconfigured; an empty FILTERED list
+            // is simply a query with no matches (a valid empty page).
+            if (allCandidates.Count == 0)
+                return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
+
+            var matched = normalizedQuery is null
+                ? allCandidates
+                : allCandidates
+                    .Where(c => c.Name.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                             || c.Location.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+            var total = matched.Count;
+            var pageItems = matched.Skip((normalizedPage - 1) * normalizedSize).Take(normalizedSize).ToList();
+
+            // Fetch SKILL.md frontmatter descriptions ONLY for this page's items (never resource blobs,
+            // never off-page candidates). A page is at most MaxMarketplacePageSize small fetches, so the
+            // whole page is fully hydrated in a few seconds for any marketplace — no partial rows.
+            var descriptions = await HydratePageDescriptionsAsync(owner, repo, branch, pageItems, token: null, cts.Token).ConfigureAwait(false);
+            var candidates = pageItems.Select(c => BuildPagedCandidate(c, descriptions)).ToList();
+
+            var hasMore = (long)normalizedPage * normalizedSize < total;
+            return (SkillOutcome.Ok, null, new MarketplaceBrowsePage(candidates, total, normalizedPage, normalizedSize, hasMore));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Marketplace browse timed out reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return (SkillOutcome.SourceUnavailable, MarketplaceTimeoutMessage, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Marketplace browse failed reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+        }
+        finally
+        {
+            TryDeleteDirectory(tempDir);
+        }
+    }
+
+    // ── URL-source (auto-detected) marketplaces ────────────────────────────────────
+    // A marketplace source added by just a repo URL has NO configured subpath, so its skill layout is
+    // auto-detected instead of hardcoded. Browse lists the FULL recursive tree once (anonymous, cheap),
+    // then the catalog indexer derives the candidate skills from that tree — the deterministic SKILL.md
+    // heuristic covers both flat (github/awesome-copilot) and nested (microsoft/skills plugin) layouts
+    // with zero blob downloads; a bounded, fail-closed LLM classifier is the fallback only when the tree
+    // has no SKILL.md at all. The parsed catalog is cached per repo revision (tree fingerprint), so the
+    // LLM fires at most once per revision, never per page. Pagination, query-before-paginate, anonymous
+    // reads and page-only description hydration all match the config-source browse path exactly; import
+    // of a selected candidate needs no change (its location is passed as the import subpath).
+    public async Task<(SkillOutcome Outcome, string? Error, MarketplaceBrowsePage? Page)> BrowseMarketplaceAutoAsync(
+        ProjectId projectId, string owner, string repo, string branch,
+        string? query, int page, int pageSize, CallerContext caller, CancellationToken ct, string? parseStrategy = null)
+    {
+        // Ownership is enforced by the endpoint via ProjectAuthorization (owner OR the trusted
+        // agentweaver-internal loopback identity); keep only a project-existence guard here.
+        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+            return (SkillOutcome.NotFound, null, null);
+        if (_treeClient is null || _catalogIndexer is null)
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+
+        var normalizedPage = page < 1 ? 1 : page;
+        var normalizedSize = pageSize <= 0 ? DefaultMarketplacePageSize : Math.Min(pageSize, MaxMarketplacePageSize);
+        var normalizedQuery = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(MarketplaceFetchTimeout);
+        try
+        {
+            // Anonymous-first, full recursive tree (subpath ""), no placeholder scratch files: candidates
+            // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
+            var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
+            var index = await _catalogIndexer.GetOrBuildAsync(
+                owner, repo, branch, blobs, submittingUser: project.Owner, parseStrategy: parseStrategy, cts.Token).ConfigureAwait(false);
+
+            if (index.Entries.Count == 0)
+                return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
+
+            var matched = normalizedQuery is null
+                ? index.Entries
+                : index.Entries
+                    .Where(e => e.Name.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                             || e.Location.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                             || (e.Description is not null && e.Description.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+            var total = matched.Count;
+            var pageEntries = matched.Skip((normalizedPage - 1) * normalizedSize).Take(normalizedSize).ToList();
+
+            // Prefer a description already present in the cached catalog (LLM path); otherwise hydrate the
+            // page's SKILL.md frontmatter — only for entries missing a description, only for this page.
+            var toHydrate = pageEntries
+                .Where(e => string.IsNullOrWhiteSpace(e.Description))
+                .Select(e => new MarketplaceCandidate(e.Location, e.Name))
+                .ToList();
+            var descriptions = await HydratePageDescriptionsAsync(owner, repo, branch, toHydrate, token: null, cts.Token).ConfigureAwait(false);
+
+            var candidates = pageEntries.Select(e => BuildAutoCandidate(e, descriptions)).ToList();
+            var hasMore = (long)normalizedPage * normalizedSize < total;
+            return (SkillOutcome.Ok, null, new MarketplaceBrowsePage(candidates, total, normalizedPage, normalizedSize, hasMore));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Marketplace auto-browse timed out reading {Owner}/{Repo}", owner, repo);
+            return (SkillOutcome.SourceUnavailable, MarketplaceTimeoutMessage, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Marketplace auto-browse failed reading {Owner}/{Repo}", owner, repo);
+            return (SkillOutcome.SourceUnavailable, MarketplaceUnavailableMessage, null);
+        }
+    }
+
+    /// <summary>
+    /// Builds a browse-page candidate for an auto-detected catalog entry, preferring the catalog's own
+    /// description (LLM path) and otherwise the page-hydrated SKILL.md frontmatter (heuristic path).
+    /// </summary>
+    private SkillCandidateView BuildAutoCandidate(MarketplaceCatalogEntry entry, IReadOnlyDictionary<string, string> descriptions)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.Description))
+        {
+            return new SkillCandidateView
+            {
+                Location = entry.Location,
+                Name = entry.Name,
+                Description = entry.Description,
+                Valid = true,
+                ResourceCount = 0,
+                Errors = Array.Empty<string>(),
+            };
+        }
+
+        if (descriptions.TryGetValue(ManifestPathFor(entry.Location), out var markdown) && !string.IsNullOrWhiteSpace(markdown))
+        {
+            var parsed = _parser.Parse(markdown);
+            if (!string.IsNullOrWhiteSpace(parsed.Name) || !string.IsNullOrWhiteSpace(parsed.Description))
+            {
+                return new SkillCandidateView
+                {
+                    Location = entry.Location,
+                    Name = string.IsNullOrWhiteSpace(parsed.Name) ? entry.Name : parsed.Name,
+                    Description = parsed.Description,
+                    Valid = parsed.IsValid,
+                    ResourceCount = 0,
+                    Errors = parsed.IsValid ? Array.Empty<string>() : parsed.Errors,
+                };
+            }
+        }
+
+        return new SkillCandidateView
+        {
+            Location = entry.Location,
+            Name = entry.Name,
+            Description = null,
+            Valid = true,
+            ResourceCount = 0,
+            Errors = Array.Empty<string>(),
+        };
+    }
+
+    public async Task<SkillAcquisitionResult> ImportMarketplaceAsync(
+        ProjectId projectId, string owner, string repo, string branch, string subpath,
+        IReadOnlyList<string>? locations, CallerContext caller, string marketplaceName, CancellationToken ct)
+    {
+        // Ownership is enforced by the endpoint via ProjectAuthorization (owner OR the trusted
+        // agentweaver-internal loopback identity); keep only a project-existence guard here.
+        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.NotFound };
+        if (_treeClient is null)
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = MarketplaceUnavailableMessage };
+
+        string? tempDir = null;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(MarketplaceFetchTimeout);
+        try
+        {
+            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            var discovered = DiscoverSkills(tempDir, subpath);
+            if (discovered.Count == 0)
+                return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
+
+            IEnumerable<RawSkill> chosen = discovered;
+            if (locations is { Count: > 0 })
+            {
+                var set = new HashSet<string>(locations, StringComparer.OrdinalIgnoreCase);
+                chosen = discovered.Where(d => set.Contains(d.RelativeLocation));
+            }
+            else if (discovered.Count > 1)
+            {
+                return new SkillAcquisitionResult
+                {
+                    Outcome = SkillOutcome.Invalid,
+                    Error = "Repository contains multiple skills; specify which location(s) to import.",
+                };
+            }
+
+            var sourceRepo = $"{owner}/{repo}";
+            var results = new List<SkillUpsertView>();
+            foreach (var raw in chosen)
+            {
+                var upsert = await UpsertAsync(projectId, raw, SkillProvenance.Marketplace, sourceRepo, raw.RelativeLocation, cts.Token, marketplaceName)
+                    .ConfigureAwait(false);
+                results.Add(upsert);
+            }
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.Ok, Results = results };
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Marketplace import timed out reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = MarketplaceTimeoutMessage };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Marketplace import failed reading {Owner}/{Repo} subpath {Subpath}", owner, repo, subpath);
+            return new SkillAcquisitionResult { Outcome = SkillOutcome.SourceUnavailable, Error = MarketplaceUnavailableMessage };
+        }
+        finally
+        {
+            TryDeleteDirectory(tempDir);
+        }
+    }
+
+    private IReadOnlyList<SkillCandidateView> BuildCandidates(IReadOnlyList<RawSkill> discovered) =>
+        discovered.Select(raw =>
+        {
+            var parsed = _parser.Parse(raw.SkillMarkdown, raw.Resources);
+            return new SkillCandidateView
+            {
+                Location = raw.RelativeLocation,
+                Name = parsed.Name,
+                Description = parsed.Description,
+                Valid = parsed.IsValid,
+                ResourceCount = raw.Resources.Count,
+                Errors = parsed.Errors,
+            };
+        }).ToList();
+
+    /// <summary>
+    /// Builds a single browse-page candidate: its location plus a short definition parsed from the
+    /// page-hydrated <c>SKILL.md</c> frontmatter (keyed by repo-root-relative <c>SKILL.md</c> path in
+    /// <paramref name="descriptions"/>). Because descriptions are fetched for every item on the page
+    /// before this runs, each row carries a real definition; if a manifest genuinely lacks a
+    /// description, the directory-derived name is still shown. Import always re-downloads and
+    /// re-validates the selected skill, so optimistic validity here never lets a bad skill through.
+    /// </summary>
+    private SkillCandidateView BuildPagedCandidate(MarketplaceCandidate candidate, IReadOnlyDictionary<string, string> descriptions)
+    {
+        if (descriptions.TryGetValue(ManifestPathFor(candidate.Location), out var markdown) && !string.IsNullOrWhiteSpace(markdown))
+        {
+            var parsed = _parser.Parse(markdown);
+            if (!string.IsNullOrWhiteSpace(parsed.Name) || !string.IsNullOrWhiteSpace(parsed.Description))
+            {
+                return new SkillCandidateView
+                {
+                    Location = candidate.Location,
+                    Name = string.IsNullOrWhiteSpace(parsed.Name) ? candidate.Name : parsed.Name,
+                    Description = parsed.Description,
+                    Valid = parsed.IsValid,
+                    ResourceCount = 0,
+                    Errors = parsed.IsValid ? Array.Empty<string>() : parsed.Errors,
+                };
+            }
+        }
+
+        return new SkillCandidateView
+        {
+            Location = candidate.Location,
+            Name = candidate.Name,
+            Description = null,
+            Valid = true,
+            ResourceCount = 0,
+            Errors = Array.Empty<string>(),
+        };
+    }
+
+    /// <summary>Display name for a marketplace candidate: the skill's directory name from its location.</summary>
+    private static string MarketplaceCandidateName(string location)
+    {
+        var trimmed = location.EndsWith("/SKILL.md", StringComparison.Ordinal)
+            ? location[..^"/SKILL.md".Length]
+            : location;
+        if (trimmed.Length == 0)
+            trimmed = location;
+        var slash = trimmed.LastIndexOf('/');
+        return slash >= 0 ? trimmed[(slash + 1)..] : trimmed;
+    }
+
+    /// <summary>Repo-root-relative <c>SKILL.md</c> path for a candidate location (as the tree lists it).</summary>
+    private static string ManifestPathFor(string location) =>
+        location.Equals("SKILL.md", StringComparison.Ordinal) || location.EndsWith("/SKILL.md", StringComparison.Ordinal)
+            ? location
+            : location + "/SKILL.md";
+
+    /// <summary>True for a repository-root-relative path that is a skill manifest (<c>SKILL.md</c>).</summary>
+    private static bool IsSkillManifest(GitHubTreeBlob blob) =>
+        blob.Path.Equals("SKILL.md", StringComparison.Ordinal)
+        || blob.Path.EndsWith("/SKILL.md", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Writes an empty placeholder for every <c>SKILL.md</c> the tree lists (capped at
+    /// <see cref="MaxMarketplaceCandidates"/>) into a fresh temp directory, preserving repo-root-relative
+    /// paths, so <see cref="DiscoverSkills"/> reports the exact same candidate locations a clone would —
+    /// without downloading a single blob. Descriptions are fetched separately, only for the requested
+    /// page.
+    /// </summary>
+    private async Task<string> WriteCandidatePlaceholdersToTempAsync(IReadOnlyList<GitHubTreeBlob> blobs, CancellationToken ct)
+    {
+        // Browse writes an empty placeholder SKILL.md for EVERY skill in the tree just so DiscoverSkills
+        // can derive candidate locations byte-identically to import. These files are request-scoped
+        // throwaways with zero durability need, so they go to a LOCAL ephemeral scratch dir
+        // (BrowseScratchRoot) — never the CIFS-backed AppPaths.DataDirectory, whose per-file latency made
+        // browsing large marketplaces take tens of seconds. See BrowseScratchRoot for the full rationale.
+        var dir = Path.Combine(BrowseScratchRoot, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        var written = 0;
+        foreach (var blob in blobs)
+        {
+            if (!IsSkillManifest(blob))
+                continue;
+            if (written >= MaxMarketplaceCandidates)
+                break;
+            var safe = SkillPaths.NormalizeRelative(blob.Path);
+            if (safe is null)
+                continue;
+            var full = Path.Combine(dir, safe.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            await File.WriteAllTextAsync(full, string.Empty, ct).ConfigureAwait(false);
+            written++;
+        }
+
+        return dir;
+    }
+
+    /// <summary>
+    /// Downloads the <c>SKILL.md</c> frontmatter for exactly the candidates on the current page,
+    /// concurrently, and returns a map keyed by repo-root-relative <c>SKILL.md</c> path. Only SKILL.md
+    /// manifests are fetched — never a skill's other resource files, and never off-page candidates — so
+    /// a page hydrates in a few seconds no matter how large the marketplace is. The whole batch is
+    /// bounded by the caller's marketplace-fetch timeout.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>> HydratePageDescriptionsAsync(
+        string owner, string repo, string branch, IReadOnlyList<MarketplaceCandidate> pageItems, string? token, CancellationToken ct)
+    {
+        var descriptions = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        if (pageItems.Count == 0)
+            return descriptions;
+
+        var perFileCap = (long)SkillParser.MaxResourceBytes * 2;
+        using var gate = new SemaphoreSlim(MarketplaceIndexConcurrency);
+        var fetches = pageItems.Select(async candidate =>
+        {
+            var manifestPath = ManifestPathFor(candidate.Location);
+            await gate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var text = await _treeClient!.GetRawTextAsync(owner, repo, branch, manifestPath, token, perFileCap, ct).ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(text))
+                    descriptions[manifestPath] = text;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        await Task.WhenAll(fetches).ConfigureAwait(false);
+        return descriptions;
+    }
+
+    /// <summary>
+    /// Downloads the text blobs under <paramref name="subpath"/> into a fresh temp directory,
+    /// preserving repo-root-relative paths so <see cref="DiscoverSkills"/> can scan it exactly as if
+    /// the repository had been cloned. Used at IMPORT time, where the full skill payload (SKILL.md +
+    /// bundled resources) is needed. Oversized and binary blobs are skipped (they never contribute to
+    /// skill discovery). Runs bounded by <paramref name="ct"/> and a total-byte ceiling.
+    /// </summary>
+    private async Task<string> FetchSubtreeToTempAsync(
+        string owner, string repo, string branch, string subpath, string projectOwner, CancellationToken ct)
+    {
+        var token = await ResolveTokenAsync(projectOwner, ct).ConfigureAwait(false);
+        var blobs = await _treeClient!.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token, ct).ConfigureAwait(false);
+
+        var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        using var gate = new SemaphoreSlim(MarketplaceFetchConcurrency);
+        var totalBytes = 0L;
+        var perFileCap = (long)SkillParser.MaxResourceBytes * 2;
+
+        var downloads = blobs
+            .Where(b => b.Size <= perFileCap)
+            .Select(async blob =>
+            {
+                await gate.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    if (Interlocked.Read(ref totalBytes) > MaxMarketplaceSubtreeBytes)
+                        return;
+                    var text = await _treeClient!.GetRawTextAsync(owner, repo, branch, blob.Path, token, perFileCap, ct)
+                        .ConfigureAwait(false);
+                    if (text is null)
+                        return;
+                    if (Interlocked.Add(ref totalBytes, Encoding.UTF8.GetByteCount(text)) > MaxMarketplaceSubtreeBytes)
+                        return;
+                    var safe = SkillPaths.NormalizeRelative(blob.Path);
+                    if (safe is null)
+                        return;
+                    var full = Path.Combine(dir, safe.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                    await File.WriteAllTextAsync(full, text, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            });
+
+        await Task.WhenAll(downloads).ConfigureAwait(false);
+        return dir;
     }
 
     // ── Upload ────────────────────────────────────────────────────────────────────
@@ -585,18 +1102,41 @@ public sealed class SkillCatalogService
     private static IReadOnlyList<SkillResource> ReadResources(string skillDir)
     {
         var resources = new List<SkillResource>();
-        foreach (var file in Directory.EnumerateFiles(skillDir, "*", SearchOption.AllDirectories))
+        if (IsReparsePoint(skillDir))
+            return resources;
+
+        var directories = new Stack<string>();
+        directories.Push(skillDir);
+        while (directories.Count > 0)
         {
-            if (string.Equals(Path.GetFileName(file), "SKILL.md", StringComparison.Ordinal)
-                && string.Equals(Path.GetDirectoryName(file), skillDir, StringComparison.Ordinal))
-                continue;
-            if (IsReparsePoint(file))
-                continue;
-            var text = SafeReadText(file);
-            if (text is null)
-                continue; // unreadable/binary — skipped; validation size caps still apply
-            var rel = Path.GetRelativePath(skillDir, file).Replace(Path.DirectorySeparatorChar, '/');
-            resources.Add(new SkillResource { RelativePath = rel, Content = text });
+            var directory = directories.Pop();
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                // Do not descend into directory symlinks/junctions or read file symlinks.
+                if (IsReparsePoint(entry))
+                    continue;
+
+                if (Directory.Exists(entry))
+                {
+                    if (WorkspacePathGuard.TryResolveContainedPath(skillDir, entry, out var safeDirectory))
+                        directories.Push(safeDirectory);
+                    continue;
+                }
+
+                if (!File.Exists(entry) ||
+                    !WorkspacePathGuard.TryResolveContainedPath(skillDir, entry, out var safeFile))
+                    continue;
+
+                if (string.Equals(Path.GetFileName(safeFile), "SKILL.md", StringComparison.Ordinal)
+                    && string.Equals(Path.GetDirectoryName(safeFile), skillDir, StringComparison.Ordinal))
+                    continue;
+
+                var text = SafeReadText(safeFile);
+                if (text is null)
+                    continue; // unreadable/binary — skipped; validation size caps still apply
+                var rel = Path.GetRelativePath(skillDir, safeFile).Replace(Path.DirectorySeparatorChar, '/');
+                resources.Add(new SkillResource { RelativePath = rel, Content = text });
+            }
         }
         return resources;
     }
