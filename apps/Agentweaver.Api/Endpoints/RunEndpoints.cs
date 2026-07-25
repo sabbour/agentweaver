@@ -1654,7 +1654,10 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
 
     // A coordinator can leave InProgress while a child still waits for this approval.
     // The owning run, rather than the posted parent run, determines whether the request is stale.
-    var targetRun = targetRunId == id
+    // A synthetic coordinator-phase key (e.g. "{id}-coordinator-draft") is not a real run id — it
+    // refers to the SAME posted run, just a different approval-gate lookup key (see
+    // IsCoordinatorPhaseSuffixedId), so it must never reach RunId.Parse.
+    var targetRun = targetRunId == id || EndpointHelpers.IsCoordinatorPhaseSuffixedId(targetRunId, id)
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
     if (targetRun is null)
@@ -1753,7 +1756,8 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
 
     // A coordinator can leave InProgress while a child still waits for this approval.
     // The owning run, rather than the posted parent run, determines whether the request is stale.
-    var targetRun = targetRunId == id
+    // A synthetic coordinator-phase key is not a real run id — see IsCoordinatorPhaseSuffixedId.
+    var targetRun = targetRunId == id || EndpointHelpers.IsCoordinatorPhaseSuffixedId(targetRunId, id)
         ? run
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
     if (targetRun is null)
