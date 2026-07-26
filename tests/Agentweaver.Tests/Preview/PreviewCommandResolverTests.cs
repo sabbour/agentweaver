@@ -101,6 +101,22 @@ public sealed class PreviewCommandResolverTests : IDisposable
     }
 
     [Fact]
+    public void Python_UsesPython3Interpreter()
+    {
+        // Regression guard for #426: the sandbox image only has `python3` on PATH, not a bare
+        // `python` symlink (confirmed live: `which python` -> not found, `which python3` ->
+        // /usr/bin/python3). A resolved command that invokes bare `python` fails every preview
+        // for a Python app with "process_exited: exitCode=127 ... python: not found".
+        File.WriteAllText(Path.Combine(_dir, "app.py"), "print('hi')");
+
+        var result = _resolver.Resolve(_dir);
+
+        result.Resolved.Should().BeTrue();
+        result.Command.Should().StartWith("python3 ",
+            because: "the sandbox image does not have a bare `python` binary on PATH (#426)");
+    }
+
+    [Fact]
     public void GenericNpmScript_SetsHostEnvToAllInterfaces()
     {
         WritePackageJson("\"start\": \"node build/index.js\"");

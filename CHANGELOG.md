@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.11.4
+
+### Patch Changes
+
+- c8ed32c: Fix an intermittent `GitHubCopilotUnauthorizedException` at the build-test assembly
+  gate: `KubernetesSandboxExecutor` now resolves the GitHub access token shipped in the
+  AgentHost `/configure` request through the refresh-aware `IGitHubAccessTokenProvider`
+  (falling back to the raw token store only when the provider is unavailable), instead
+  of reading a potentially stale/expired token directly. This closes a race where the
+  build-test gate's freshly-launched AgentHost pod could receive a token that expired
+  during earlier subtask stages of the same run.
+
+  Also improve `assembly_merge_failed` diagnostics: a working-tree-divergence merge
+  `Blocked` outcome (uncommitted local content that cannot be safely reconciled with the
+  merge result) now reports the affected relative file path(s) via `conflictingFiles`,
+  instead of always showing an empty list alongside the "cannot be safely reconciled"
+  message. This is a diagnostics-only change — the merge-safety refusal decision itself
+  is unchanged.
+
+- c49fc95: Fix sandbox preview creation for Python apps ("app.py"/"main.py" entrypoints):
+  the resolved preview command invoked a bare `python` binary, which does not
+  exist on the agent sandbox image (only `python3` is installed). Every preview
+  attempt for a Python-only app failed with `process_exited: exitCode=127
+... python: not found`. The resolver now emits `python3 ...` for both
+  entrypoints.
+- 3234ada: Remove the unsafe hardcoded `KEYVAULT_NAME` default (`agentweaver-kv`) from the
+  Azure deploy tooling (`scripts/azure/variables.mjs`). That generic default was
+  never a real Key Vault in any provisioned subscription, and deploy commands
+  silently fell back to it (or to a manually-typed-but-wrong vault name) whenever
+  an operator forgot to set `KEYVAULT_NAME` explicitly -- corrupting the rendered
+  `agentweaver-runtime-config` ConfigMap and the `agentweaver-secrets`/
+  `agentweaver-user-tokens` SecretProviderClasses' `keyvaultName`/Key Vault URI
+  fields and silently breaking GitHub OAuth sign-in.
+
+  `KEYVAULT_NAME` is now REQUIRED with no generic default: `resolveVariables()`
+  fails fast with an actionable error if it is unset. `steps/30-deploy.mjs`
+  additionally verifies (`az keyvault show`) that the named vault actually
+  exists BEFORE rendering or applying any manifest, catching typos that happen
+  to name a real-but-wrong vault too (not just a made-up name). This is internal
+  deploy-tooling reliability hardening; there is no user-facing application
+  behavior change.
+
+- 143aea4: Bump the `agent-sandbox` controller pin (kubernetes-sigs/agent-sandbox) from `v0.5.0` to
+  `v0.5.3` in `scripts/azure/steps/10-create-cluster.mjs`. v0.5.2 renamed the core install
+  asset from `manifest.yaml` to `sandbox.yaml`, so the script's default manifest URL is
+  updated to match; the `SANDBOX_CONTROLLER_MANIFEST_URL` override remains available for
+  anyone pinning an older controller version. No user-facing behavior change is expected.
+
 ## 0.11.3
 
 ### Patch Changes

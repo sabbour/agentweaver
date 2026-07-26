@@ -137,6 +137,41 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
+    // HM-2a — Low-level diagnostic regression test for #523: a Blocked outcome
+    // (working-tree divergence, not a git merge conflict) must now populate
+    // ConflictingFiles with the divergent path(s), instead of always reporting
+    // an empty list alongside "cannot be safely reconciled". This calls
+    // WorktreeManager.MergeWorktree directly (bypassing the HTTP endpoint /
+    // WorktreeOperationsAdapter, which intentionally discards ConflictingFiles
+    // for Blocked outcomes on the review-approval HTTP surface) so the new
+    // diagnostic is actually observable.
+    // =========================================================================
+    [Fact]
+    public async Task MergeWorktree_CheckedOut_ModifiedTrackedFile_Blocked_ReportsConflictingFiles()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
+
+        // Dirty the main working tree the same way as HM-2, but drive
+        // WorktreeManager directly instead of going through the review endpoint.
+        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "locally modified content");
+
+        var worktreeManager = _factory.Services.GetRequiredService<WorktreeManager>();
+        var outcome = worktreeManager.MergeWorktree(
+            repoPath, run.OriginatingBranch, run.WorktreeBranch!, run.TreeHash!);
+
+        outcome.Kind.Should().Be(MergeOutcomeKind.Blocked,
+            "uncommitted content that diverges from the merge result must block rather than conflict");
+        outcome.Reason.Should().Contain("cannot be safely reconciled");
+        outcome.ConflictingFiles.Should().NotBeNullOrEmpty(
+            "#523: a Blocked outcome must now report which path(s) diverged, instead of an " +
+            "always-empty conflictingFiles list that contradicts the 'cannot be safely reconciled' reason");
+        outcome.ConflictingFiles.Should().Contain("readme.txt",
+            "the divergent path (readme.txt) must be identified by relative path only " +
+            "(no absolute paths or file content, per the safe-string guarantee)");
+    }
+
+    // =========================================================================
     // HM-2b — Checked-out branch, a tracked file staged as deleted whose content
     // is UNCHANGED by the merge (the real-world #348 shape: an index that has
     // fallen behind HEAD for a path the run never touched) → the merge

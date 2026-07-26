@@ -43,8 +43,13 @@ metadata:
     app.kubernetes.io/component: agent-host
 spec:
   # No env vars are injected via SandboxClaim spec.env — the v0.5.0 controller bypasses warm
-  # pool adoption whenever spec.env is present. All static config lives here in the template or
-  # in the agenthost-config ConfigMap mount. Per-run context (RunId / UserId / TurnBearerToken /
+  # pool adoption whenever spec.env is present. #487 bumped the controller to v0.5.3; per the
+  # blocker re-assessment on #481, none of the v0.5.1/v0.5.2/v0.5.3 release notes explicitly
+  # document a fix for this adoption-bypass behavior (v0.5.3's "Efficient Warm Pool Adoption"
+  # work is a performance/single-reconcile-pass change, not a documented behavior fix for this
+  # specific bypass), so this workaround is kept until it is empirically re-verified against
+  # v0.5.3 in a non-prod cluster. All static config lives here in the template or in the
+  # agenthost-config ConfigMap mount. Per-run context (RunId / UserId / TurnBearerToken /
   # KV secret name) is delivered AFTER bind via POST /configure.
   envVarsInjectionPolicy: Allowed
   podTemplate:

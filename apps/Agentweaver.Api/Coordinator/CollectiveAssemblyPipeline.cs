@@ -417,7 +417,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             {
                 MergeOutcomeKind.Merged => CollectiveMergeResult.Merged(outcome.CommitHash),
                 MergeOutcomeKind.Conflict => CollectiveMergeResult.Conflict(outcome.ConflictingFiles ?? [], outcome.Reason),
-                MergeOutcomeKind.Blocked => CollectiveMergeResult.Failed(outcome.Reason ?? "blocked"),
+                MergeOutcomeKind.Blocked => CollectiveMergeResult.Failed(outcome.Reason ?? "blocked", outcome.ConflictingFiles),
                 _ => CollectiveMergeResult.Failed("unexpected_merge_outcome"),
             };
         }
