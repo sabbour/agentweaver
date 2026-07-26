@@ -129,4 +129,24 @@ describe('TaskCard workflow override', () => {
     expect(activeWorkflow.textContent).toContain('Generic Workflow');
     expect(activeWorkflow.textContent).toContain('Active');
   });
+
+  it('shows dependency-gated ready tasks as waiting on prerequisites instead of pickup-ready', () => {
+    render(
+      <Wrapper>
+        <TaskCard
+          card={{ ...card, is_blocked: true, is_ready_to_start: false, blocked_reason: 'Waiting for 1 prerequisite task to merge.' }}
+          columnId="ready"
+          projectId="proj-1"
+          onMutated={vi.fn()}
+          onDragStartTask={vi.fn()}
+          onDragEndTask={vi.fn()}
+          isDragging={false}
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('Blocked')).toBeTruthy();
+    expect(screen.getByText('Waiting on prerequisites')).toBeTruthy();
+    expect(screen.queryByText('Ready for pickup')).toBeNull();
+  });
 });

@@ -124,6 +124,34 @@ describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
     expect(screen.getByRole('button', { name: /Jump to Needs attention \/ review: 0 items need attention/i })).toBeTruthy();
   });
 
+  it('distinguishes pickup-ready and dependency-blocked tasks in the Ready column summary', async () => {
+    const board = makeBoard({
+      columns: [
+        { id: 'backlog', kind: 'intake', label: 'Backlog', cards: [] },
+        {
+          id: 'ready',
+          kind: 'intake',
+          label: 'Ready',
+          cards: [
+            { kind: 'task', task_id: 'ready-1', title: 'Pickup-ready task', description: null, state: 'ready', order_key: 'a', captured_by: 'bob', created_at: '2026-01-01T00:02:00Z', is_ready_to_start: true },
+            { kind: 'task', task_id: 'ready-2', title: 'Blocked task', description: null, state: 'ready', order_key: 'b', captured_by: 'bob', created_at: '2026-01-01T00:03:00Z', is_blocked: true, is_ready_to_start: false, blocked_reason: 'Waiting for 1 prerequisite task to merge.' },
+          ],
+        },
+        { id: 'problems', kind: 'workflow', label: 'Problems', cards: [] },
+        { id: 'human-review', kind: 'workflow', label: 'Human Review', cards: [] },
+        { id: 'active', kind: 'workflow', label: 'Active', cards: [] },
+        { id: 'done', kind: 'workflow', label: 'Done', cards: [] },
+      ],
+    });
+    getBoardMock().mockResolvedValue(board);
+
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    const ready = await screen.findByTestId('column-ready');
+    expect(within(ready).getByText('1 task queued · 1 blocked')).toBeTruthy();
+    expect(within(ready).getByText('Waiting on prerequisites')).toBeTruthy();
+  });
+
   it('places an active run-backed card in the Active fixed column (FR-016)', async () => {
     getBoardMock().mockResolvedValue(makeBoard());
     render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
