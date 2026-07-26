@@ -572,7 +572,7 @@ Seen on run `f9e7867c-48f7-40af-8236-5cd0c9f9e53f` (project `blueprint-demo-live
 - date: 2026-07-25
 - category: bug
 - surface: all
-- status: open (operational workaround only)
+- status: fixed (see #527 fix entry below, WorktreeManager auto-commit-before-merge-safety-check)
 
 Seen on runs `f9e7867c` and `3a4f3eeb` (blueprint-demo-live projects): after Build & Test passes and human review is approved, merge fails with `assembly_merge_failed`: "the working tree cannot be safely reconciled with the merge result because uncommitted content diverges from the merge result and cannot be safely reconciled." Root cause (confirmed via `kubectl exec` into the live `agentweaver-worker` pod, inspecting `/workspace/{projectId}/`): the demo's own "cast a Squad team" step legitimately commits `.squad/` state files (`decisions.md`, `agents/*/history.md`, `identity/now.md`, or lighter scaffold like `.gitignore`/`.agentweaver/settings.yml`/`.gitattributes`) as TRACKED git content in the target repo. When the later bug-fix subtask's own sandboxed coding agent runs inside that same repo, it discovers these same Squad conventions and — following the "mutable state is written via runtime tools, not git commits" pattern — writes new decision/history entries directly to those already-tracked files WITHOUT committing. This leaves the worktree dirty in a way `WorktreeManager.cs`'s `IsWorkingTreeReconcilable` correctly refuses to Hard-Reset over (by design, to never silently discard content), so the merge-safety check blocks.
 
@@ -734,3 +734,44 @@ Conclusion: not a defect, no code change made for this sub-issue of #523. If a f
 report shows the scribe recording incorrect/stale data (e.g. claiming success after a
 failure, rather than just running after one), re-open as a distinct bug against the
 scribe's data source, not its firing order.
+
+---
+
+## Fixed: coordinator.assembly_merge_failed on dirty-uncommitted .squad/ bookkeeping content, and conflictingFiles growing across retries (#527)
+
+- date: 2026-07-26
+- category: bug
+- surface: all
+- status: fixed
+
+Root cause confirmed exactly as hypothesized in the 2026-07-25 open entry above: the demo's own 'cast a Squad team' step commits .squad/ state files as tracked git content, and a later subtask's own sandboxed coding agent appends new decision/history entries directly to those already-tracked files without committing, leaving the checked-out originating-branch working tree dirty. WorktreeManager.IsWorkingTreeReconcilable correctly refuses to Hard-Reset over that content (by design, to never silently discard it), so assembly_merge_failed fires even though every subtask was approved. The reported conflictingFiles list growing across retries (from just .gitignore to also include .squad/agents/mcgonagall/history.md, .squad/decisions.md, .squad/identity/now.md) is explained by the same sandboxed agent re-running inside the still-dirty worktree on each retry and appending further uncommitted writes, since no reset/cleanup step ran between attempts. Fix implemented (option (a) from the prior writeup, chosen over (b) as more robust/lower-risk since it protects against ANY uncommitted-but-legitimate dirty content regardless of source): WorktreeManager.MergeCheckedOut now calls a new TryAutoCommitDirtyTrackedContent helper immediately before the merge-safety check, which stages and commits only already-tracked, modified/type-changed working-tree paths (deliberately excluding deleted/renamed paths, which continue through the existing #348/#427 stale-index Hard-Reset-restore path unchanged) as an ordinary extra commit, then recomputes the merge base. This also fixes the retry-compounding sub-issue as a side effect: every merge attempt now sweeps whatever is currently dirty rather than accumulating it, so repeated retries can no longer grow the conflict set. A genuine same-file textual collision between the auto-committed content and the child branch's own edit still correctly fails the merge (MergeOutcomeKind.Conflict, terminal, human-resolvable) -- auto-committing never hides or discards a real conflict. Added regression tests in ReviewEndpointHybridMergeTests.cs: HM-15 reproduces the exact .squad/* bookkeeping scenario end-to-end at the HTTP endpoint; HM-16 simulates two successive coordinator merge attempts with accumulating dirty content between them, proving retries no longer compound into failure; HM-2b and HM-4d prove genuine same-file conflicts still correctly block. See PR fixing GitHub issue #527.
+
+---
+
+## Preview-runner credential Key Vault secret create fails 409 ObjectIsDeletedButRecoverable on retry (related to #527, tracked as #533)
+
+- date: 2026-07-26
+- category: bug
+- surface: all
+- status: open
+
+Live evidence from staging run aa8cbfa4-8c83-4fe5-a79f-1670c2e179d3 (project e7503a9f), captured while it was also hitting the #527 assembly_merge_failed loop: at 07:29:56 KubernetesSandboxExecutor failed to persist the preview-runner secret with Azure.RequestFailedException creating Key Vault secret ghtok-preview-runner-cred-...-c832cc9dd5b3: 409 Conflict, ObjectIsDeletedButRecoverable. Root cause: PreviewRunnerCredential.SecretKey(runId) derives a deterministic KV secret name per run id; KeyVaultSecretStore.DeleteSecretAsync only soft-deletes (StartDeleteSecretAsync, never purges), so a subsequent mint attempt for the SAME run id (e.g. a retried preview pod launch) collides with the still-recoverable prior secret under KV soft-delete retention. Same theme as #527: retries do not clean up or reuse prior-attempt state, so successive attempts collide with leftovers from the previous one -- but a fully independent code path (Key Vault secret lifecycle, not git worktree/merge safety), so it is NOT fixed by the #527/#532 WorktreeManager auto-commit fix. Currently non-fatal: MintPreviewRunnerCredentialAsync already catches the persist failure as best-effort and falls back to in-memory-only credential delivery, so it does not block the run outright, but silently degrades cross-replica preview reconcile on every retry and will keep recurring for the same run id until the underlying KV hygiene gap is fixed. Filed as GitHub issue #533 with three candidate fixes (recover-before-set, purge-on-delete, or non-deterministic per-attempt naming) -- deferred, not yet implemented.
+
+---
+
+## start_preview 403s: IsOwnerOrServiceCaller never recognized the hardcoded agentweaver-internal identity
+
+- date: 2026-07-26
+- category: bug
+- surface: api
+- status: fixed
+
+POST /api/runs/{runId}/sandbox/preview (the agent-initiated start_preview tool callback) returned HTTP 403 for the run's own agent in every real deployment. EndpointHelpers.IsOwnerOrServiceCaller authorized the service-key caller only by comparing CallerContext.User against the configured Auth:User setting, which no deployment manifest sets (only Auth:ApiKey is injected -- see k8s/base/api-deployment.yaml:109). The shared internal API key actually resolves to the hardcoded ProjectAuthorization.InternalServiceUser (agentweaver-internal) identity via GitHubTokenAuthMiddleware's internal-key path (ApiKeyAuthMiddleware.cs ~line 220), which the check never recognized, so it always returned false and the endpoint 403'd. Tests never caught this because AgentweaverWebApplicationFactory uses Testing:BypassGitHubTokenAuth, a different code path that never reaches the agentweaver-internal literal. Fixed by delegating IsOwnerOrServiceCaller to ProjectAuthorization.IsInternalServiceCaller, which already checks both the hardcoded identity and the configured Auth:User fallback (used elsewhere for memory/decision/casting callbacks). Fixed in issue #529 / PR fix/start-preview-403. A DIFFERENT generic Tool execution failed failure mode (bad apiBaseUrl / transport exception) is a separate, still-unconfirmed hypothesis -- do not conflate the two: an explicit HTTP 403 means the request reached agentweaver-api and got a real authorization rejection, not a connection failure.
+## AgentHost pods had zero App Insights wiring for tool-call failures
+
+- date: 2026-07-26
+- category: bug
+- surface: all
+- status: fixed
+
+AgentHost pods are ephemeral and recycled shortly after a run completes, so transient tool-call failures (e.g. start_preview 403, or an unhandled-exception generic 'Tool execution failed') were impossible to investigate after the fact -- kubectl logs on the specific pod came back empty because it no longer existed. Root cause: PreviewPublishTool.Build (packages/Agentweaver.AgentRuntime/PreviewPublishTool.cs), which builds the start_preview tool, never called ILogger on its failure paths, even though AgentHost's process already has Application Insights/OpenTelemetry wired (apps/Agentweaver.AgentHost/AzureMonitorBootstrap.cs). Fixed (issue #528) by threading context.Logger from PreviewRunnerToolProvider into PreviewPublishTool.Build, logging a structured warning/error on non-success HTTP response or caught exception (tool name, run id, port, status code, response body), and redacting anything token/secret-shaped (Bearer/ghp_/gho_/ghu_/ghr_/JWT-shaped strings/Authorization header values) via Agentweaver.SandboxExec.SandboxOutputRedactor before it reaches the log sink.

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.11.5
+
+### Patch Changes
+
+- 9ffe0e0: Fix `coordinator.assembly_merge_failed` ("the working tree cannot be safely reconciled
+  with the merge result because uncommitted content diverges") firing after an already
+  fully-approved coordinator run's human review, when a subtask's own sandboxed coding
+  agent appends new entries directly to already-tracked Squad bookkeeping files (for
+  example `.squad/decisions.md`, `.squad/agents/*/history.md`) without committing them.
+  `WorktreeManager` now auto-commits dirty content on already-tracked, modified paths in
+  the checked-out originating-branch working tree immediately before computing merge
+  safety, so this uncommitted-but-legitimate content becomes an ordinary extra parent
+  commit instead of blocking the merge. This also fixes the reported symptom where the
+  `conflictingFiles` list grew across repeated retries: every merge attempt now sweeps
+  whatever is currently dirty, so retries can no longer compound into an ever-larger,
+  unresolvable conflict set. A genuine textual collision between the auto-committed
+  content and the child branch's own change to the same file still correctly fails the
+  merge for human resolution — auto-committing never hides a real conflict.
+- 6f299ae: Log durable, redacted telemetry for `start_preview` tool-call failures in
+  AgentHost. AgentHost sandbox pods are ephemeral and recycled shortly after a
+  run completes, so a non-success HTTP response (e.g. a 403) or an unhandled
+  exception from the `start_preview` tool's callback previously left no
+  durable evidence to investigate after the fact. `PreviewPublishTool` now
+  logs a structured event (tool name, run id, port, HTTP status code,
+  redacted+truncated response body or exception message) via the existing
+  `SandboxToolContext.Logger`, which already flows through to Application
+  Insights wherever `APPLICATIONINSIGHTS_CONNECTION_STRING` is configured.
+  Anything token/secret-shaped is redacted via
+  `Agentweaver.SandboxExec.SandboxOutputRedactor` before being logged.
+- 47d7496: Fix `start_preview` (agent-initiated preview registration) returning HTTP 403
+  for the run's own agent in every real deployment: `IsOwnerOrServiceCaller`
+  only recognized the internal service caller via a configured `Auth:User`
+  setting that no deployment ever sets (only `Auth:ApiKey` is injected). The
+  shared service key actually resolves to the hardcoded
+  `agentweaver-internal` identity, which is now checked directly, matching the
+  authorization already used for memory/decision/casting callbacks.
+
 ## 0.11.4
 
 ### Patch Changes
