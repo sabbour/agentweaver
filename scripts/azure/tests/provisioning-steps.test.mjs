@@ -23,7 +23,7 @@ const CFG = Object.freeze({
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
   ACR_LOGIN_SERVER: "agentweaverregistry.azurecr.io",
-  KEYVAULT_NAME: "agentweaver-kv",
+  KEYVAULT_NAME: "test-kv-fixture",
   TENANT_ID: "66666666-7777-8888-9999-000000000000",
   IDENTITY_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
 });
@@ -172,14 +172,14 @@ test("15-setup-identity: setSecretWithRetry retries on RBAC-propagation Forbidde
   });
   const log = noopLog();
   const sleep = async () => {};
-  await setupIdentity.setSecretWithRetry("agentweaver-kv", "github-client-id", "value", { exec, log, sleep, maxAttempts: 5 });
+  await setupIdentity.setSecretWithRetry("test-kv-fixture", "github-client-id", "value", { exec, log, sleep, maxAttempts: 5 });
   assert.equal(attempts, 3);
 });
 
 test("15-setup-identity: setSecretWithRetry throws immediately on a non-RBAC failure", async () => {
   const exec = fakeExec({ captureImpl: () => ({ stdout: "", stderr: "vault not found", code: 1 }) });
   const log = noopLog();
-  await assert.rejects(() => setupIdentity.setSecretWithRetry("agentweaver-kv", "github-client-id", "value", { exec, log, sleep: async () => {} }));
+  await assert.rejects(() => setupIdentity.setSecretWithRetry("test-kv-fixture", "github-client-id", "value", { exec, log, sleep: async () => {} }));
 });
 
 test("15-setup-identity: run() skips all federated credentials when they already exist", async () => {

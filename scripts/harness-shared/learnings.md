@@ -588,3 +588,14 @@ This is inherent to the demo's recursive "Squad builds using Squad" premise, not
 - status: open
 
 After staging redeploy to commit 6d7d9aa8 (PR #513 reorder fix for WorkPlans.Status/InReview vs durable review-gate row), fresh project blueprint-demo-live-232803 (95174ba2-affc-4329-b020-eb357da6282c) and fresh coordinator run b552be51-602d-4095-9073-1cb0ca04507e still failed at the FIRST Build & Test / preview-required assembly pass with build_test_infra_agenthost_configure_failed before any human-review gate appeared. Path reached: subtasks 42/43/44 all assemble_ready, RAI green at 2026-07-25T23:44:12Z, build-test gate requested, preview required (llm_unavailable_default_required), then AgentHost /configure failed at 2026-07-25T23:44:30.3814169Z. This means the deployed reorder fix did not eliminate all configure-race/failure cases; the earlier post-review re-arm race may be fixed, but an initial build-test configure failure still reproduces on fresh projects.
+
+---
+
+## Azure KEYVAULT_NAME hardcoded default silently corrupted GitHub OAuth Key Vault references
+
+- date: 2026-07-26
+- category: bug
+- surface: all
+- status: fixed
+
+Azure deploy tooling (scripts/azure/variables.mjs) hardcoded KEYVAULT_NAME's DEFAULTS entry to the generic name 'agentweaver-kv', which was NEVER a real Key Vault in the affected subscription (az keyvault show --name agentweaver-kv -> 'not found'). Any deploy invocation (azure:deploy-from-local, azure:deploy-from-release) where an operator forgot to pass KEYVAULT_NAME silently fell back to this bogus default and rendered the agentweaver-runtime-config ConfigMap (KEYVAULT_NAME, AGENTHOST_KEYVAULT_URI, TOKEN_STORE_KEYVAULT_URI) plus the agentweaver-secrets/agentweaver-user-tokens SecretProviderClass keyvaultName fields against it. Two silent-corruption modes were observed live in one incident: (1) literal bogus default 'agentweaver-kv' -> loud DNS failure ('Name or service not known (agentweaver-kv.vault.azure.net:443)'), users cannot log in; (2) a manually-typed override with transposed letters ('akwvkv' instead of the real 'agwvkv') that happened to be a REAL but wrong, stale vault already present in the subscription -> failed SILENTLY with wrong GitHub OAuth client id/secret instead of erroring at all -- this mode is worse because it looks like a normal login failure, not an infra problem. Fix: KEYVAULT_NAME now has NO default in variables.mjs (resolveVariables() throws MissingRequiredVariableError if unset), and steps/30-deploy.mjs verifies az keyvault show succeeds for the resolved name BEFORE rendering/applying any manifest -- this catches mode (2) as well as mode (1), since a nonexistent OR wrong-but-real vault both fail the existence probe against the caller's actual resource group context. See scripts/azure/params.example.json and scripts/azure/tests/deploy-apply.test.mjs for the corresponding safeguards/tests.

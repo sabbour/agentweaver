@@ -1,9 +1,16 @@
 // variables.mjs -- Shared Azure configuration resolution.
 //
 // Infrastructure defaults remain aligned with the legacy variable scripts,
-// except image identity is deliberately command-driven:
-//   - Every input has an env-var override with a hardcoded default (see
+// except image identity and KEYVAULT_NAME are deliberately NOT
+// command-driven-by-hardcoded-default:
+//   - Most inputs have an env-var override with a hardcoded default (see
 //     DEFAULTS below), exactly matching `${VAR:-default}` in the bash script.
+//   - KEYVAULT_NAME is the one deliberate exception: it has NO hardcoded
+//     default (see resolveKeyvaultName() below) -- a wrong-but-plausible
+//     name here doesn't just fail to find a resource, it silently redirects
+//     rendered Key Vault references (and the GitHub OAuth secret lookups
+//     that flow from them) at the wrong vault. Every caller MUST supply it
+//     explicitly (env var, params file, or provision-infra's prompt).
 //   - TENANT_ID, IDENTITY_CLIENT_ID, APPINSIGHTS_WORKSPACE_ID are resolved
 //     LIVE from `az` only if not already supplied via env, and failures are
 //     swallowed to '' (the bash script's `... || true` tolerance) rather than
@@ -39,7 +46,14 @@ export const DEFAULTS = Object.freeze({
   CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
-  KEYVAULT_NAME: "agentweaver-kv",
+  // Deliberately NO default here (see resolveKeyvaultName() below): unlike
+  // the other resource names, a wrong-but-plausible Key Vault name doesn't
+  // just fail to find a resource -- it silently redirects the rendered
+  // ConfigMap/SecretProviderClass Key Vault references (and the GitHub OAuth
+  // secret lookups that flow from them) at a DIFFERENT vault, which can fail
+  // silently instead of loudly. Incident: a generic "agentweaver-kv" default
+  // here was never a real vault in any provisioned subscription; see
+  // scripts/harness-shared/learnings.md for the full writeup.
   NAMESPACE: "agentweaver",
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
@@ -51,6 +65,30 @@ const SHORT_SHA_RE = /^[0-9a-f]{7,40}$/;
 const SEMVER_TAG_RE = /^v\d+\.\d+\.\d+/;
 
 export class InvalidImageTagError extends Error {}
+
+/** Thrown when a variable with no safe generic default (e.g. KEYVAULT_NAME) is unresolved. */
+export class MissingRequiredVariableError extends Error {}
+
+/**
+ * Resolves KEYVAULT_NAME from an explicit env override ONLY -- there is no
+ * hardcoded fallback (see the DEFAULTS comment above for why). Fails fast
+ * with an actionable message instead of silently deploying against a
+ * plausible-but-wrong vault name.
+ * @param {Record<string,string>} env
+ * @returns {string}
+ */
+export function resolveKeyvaultName(env) {
+  const name = env.KEYVAULT_NAME;
+  if (!name) {
+    throw new MissingRequiredVariableError(
+      "KEYVAULT_NAME is not set and there is no default -- it must be the name of the Key Vault already " +
+        "provisioned for this environment. Set the KEYVAULT_NAME environment variable (or pass it via your " +
+        "params file / the provision-infra flow) to the real vault name, e.g.: " +
+        "`az keyvault list --resource-group <RESOURCE_GROUP> --query \"[].name\" -o tsv`.",
+    );
+  }
+  return name;
+}
 
 /**
  * Validates an image tag exactly like `_validate_image_tag` in 00-variables.sh:
@@ -133,7 +171,7 @@ export async function resolveVariables(options = {}) {
   const KATA_POOL_NAME = pick("KATA_POOL_NAME");
   const APP_POOL_NAME = pick("APP_POOL_NAME");
 
-  const KEYVAULT_NAME = env.KEYVAULT_NAME || DEFAULTS.KEYVAULT_NAME;
+  const KEYVAULT_NAME = resolveKeyvaultName(env);
   const AGENTHOST_KEYVAULT_URI =
     env.AGENTHOST_KEYVAULT_URI || `https://${KEYVAULT_NAME}.vault.azure.net/`;
 
