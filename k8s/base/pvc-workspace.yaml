@@ -7,10 +7,16 @@
 # (/workspace/.home → token store, checkpoints). Claim teardown does not sanitize it.
 #
 # Why full isolation is NOT fixed in this PR (deliberate, tracked as follow-up):
-#   * Per-run dynamic PVCs (spec.volumeClaimTemplates) CANNOT be used: the agent-sandbox
+#   * Per-run dynamic PVCs (spec.volumeClaimTemplates) CANNOT be used yet: the agent-sandbox
 #     v0.5.0 controller bypasses warm-pool adoption whenever spec.volumeClaimTemplates (or
 #     spec.env) is present (see KubernetesSandboxExecutor), which would break the warm-pool
-#     pre-warming the run-launch critical path depends on.
+#     pre-warming the run-launch critical path depends on. #487 bumped the controller to
+#     v0.5.3; per the re-assessment on #481, the v0.5.1/v0.5.2/v0.5.3 release notes do NOT
+#     explicitly document a fix for this specific bypass (the closest related changes are
+#     v0.5.2's expanded warm-pool *staleness detection* for VolumeClaimTemplates and v0.5.3's
+#     single-reconcile-pass adoption efficiency work — neither is a documented fix for the
+#     bypass itself). This blocker is therefore treated as UNCONFIRMED, not lifted, until it
+#     is empirically re-verified against v0.5.3 in a non-prod cluster.
 #   * "Per-directory access controls" are ineffective here: this Azure Files SMB share mounts
 #     with a fixed uid=1000/gid=1000 and file_mode=0644/dir_mode=0755 for ALL pods
 #     (storageclass-workspace.yaml), so unix permissions cannot separate same-uid workloads.

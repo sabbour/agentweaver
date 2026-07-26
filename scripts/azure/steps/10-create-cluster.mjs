@@ -8,7 +8,7 @@
 //
 // cfg is the resolved variables.mjs output: RESOURCE_GROUP, CLUSTER_NAME,
 // ACR_NAME, LOCATION, KATA_POOL_NAME, APP_POOL_NAME, ACR_LOGIN_SERVER.
-// Optional overrides: SANDBOX_CONTROLLER_VERSION (default 'v0.5.0').
+// Optional overrides: SANDBOX_CONTROLLER_VERSION (default 'v0.5.3').
 
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
@@ -81,10 +81,15 @@ export async function sandboxCrdInstalled({ exec = execDefault } = {}) {
 export async function run(cfg, opts = {}) {
   const { exec = execDefault, log = logDefault } = opts;
 
-  const sandboxControllerVersion = cfg.SANDBOX_CONTROLLER_VERSION || "v0.5.0";
+  const sandboxControllerVersion = cfg.SANDBOX_CONTROLLER_VERSION || "v0.5.3";
+  // #487: v0.5.2 renamed the core install asset from manifest.yaml to sandbox.yaml
+  // (agent-sandbox #1012) to make room for the new all-in-one sandbox-with-extensions.yaml
+  // asset. manifest.yaml no longer exists on the v0.5.3 release (404), so the default here
+  // must track the new name. SANDBOX_CONTROLLER_MANIFEST_URL remains available as an escape
+  // hatch for anyone pinning an older SANDBOX_CONTROLLER_VERSION that still ships manifest.yaml.
   const manifestUrl =
     cfg.SANDBOX_CONTROLLER_MANIFEST_URL ||
-    `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${sandboxControllerVersion}/manifest.yaml`;
+    `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${sandboxControllerVersion}/sandbox.yaml`;
   const extensionsUrl = `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${sandboxControllerVersion}/extensions.yaml`;
 
   log.info("");

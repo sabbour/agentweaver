@@ -36,7 +36,10 @@ shows how to run individual steps, including `gen-a2a-mtls-certs`.
 5. Agent turns run over A2A on port `8088`.
 6. Releasing the claim deletes the used pod; the warm pool replenishes it.
 
-Per-run context is not injected through `SandboxClaim.spec.env`; doing so bypasses warm-pool adoption in controller v0.5.0. Static config lives in the template and `configmap-agenthost.yaml`.
+Per-run context is not injected through `SandboxClaim.spec.env`; as of controller **v0.5.3** the
+warm-pool-adoption-bypass behavior tied to `spec.env`/`spec.volumeClaimTemplates` has not been
+confirmed fixed upstream (see the blocker analysis on #481) — static config stays in the template
+and `configmap-agenthost.yaml` until that is verified.
 
 ## Required configuration
 
