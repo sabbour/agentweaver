@@ -463,9 +463,22 @@ On staging build f2e7983, a coordinator run spawned by board autopilot from a Re
 - date: 2026-07-25
 - category: bug
 - surface: ui
-- status: open
+- status: fixed
 
 On staging build f2e7983, direct bug-fix run `c6a6eb31-00dc-4898-aac3-e41964cfe3da` confirmed successfully with independent task promotion left OFF, persisted work plan 12, and drove three child subtasks (`7ab82034-20fd-4fb6-917f-f09ec32d473d`, `70d26d58-74f1-4dbd-b1fa-4351a3fa5cba`, `9c1e6e4d-ca5a-4cb9-8d79-1fba9bed167d`) all the way to `assemble_ready`. RAI then passed green, preview applicability reported `preview_required`, and assembly immediately failed at the Build & Test gate with `build_test_infra_agenthost_configure_failed`: `AgentHost /configure for run 'c6a6eb31-00dc-4898-aac3-e41964cfe3da' failed: HTTP 500`. No preview or review surface followed, so this is now the hard blocker after child execution completes.
+
+**Root cause identified (2026-07-25, commit 06007b71) — cross-pod assembly-lease race via `CoordinatorReconciler`'s `in_review` orphan re-arm.** Reproduced again on run `d2ad3035-afef-4e74-93e9-a7c45bfb60ee` (work plan 15) with full kubectl log evidence from `deploy/agentweaver-worker` and `deploy/agentweaver-api`:
+
+1. `20:07:22` — worker pod's `CoordinatorReconciler.SweepAsync` logs `"re-arming orphaned coordinator assembly for run d2ad3035... (status was in_review)"`. Per the `InReview` case in `SweepAsync` (`CoordinatorReconciler.cs` ~line 182-205), this only fires when BOTH `HasPendingReviewGateAsync` returns false AND `IsAssemblyActive(plan)` (an in-memory, per-pod-only fast path) returns false on the sweeping pod.
+2. With auto-approve enabled (as in this demo), the review gate the api pod armed can be resolved almost instantly — there is a narrow window where `WorkPlans.Status` is still `in_review` in the DB but the gate's "pending" row has already been cleared by the owning pod (api), and the owning pod hasn't yet advanced `Status` off `in_review`. A worker-pod sweep landing in that window sees "no pending gate" + "not active in MY process memory" (true regardless of api's real in-process state, since `IsAssemblyActive` is per-pod) and concludes — incorrectly — that the run is orphaned.
+3. `20:07:46`-`20:07:49` — worker's re-armed assembly loop starts `KubernetesSandboxExecutor`, finds the AgentHost `SandboxClaim` for this run already exists (created/owned by the api pod's still-live assembly), deletes and recreates it, binds it to a new pod, and begins an in-flight `/configure` call.
+4. `20:07:52` — the worker's OWN assembly-lease heartbeat (`AssemblyHeartbeatTickAsync`) ticks and discovers the api pod actually owns `WorkPlans.CoordinatorPodId` for this plan (logged as `"Assembly lease for plan 15 is owned by peer pod agentweaver-api... stopping assembly heartbeat"`). Note: this ONLY stops the heartbeat — it does NOT cancel the already-running `RunAssemblyCoreAsync`/sandbox-executor work on the worker pod, so the worker's in-flight configure call and the collision it caused are not aborted.
+5. `20:07:54` — the sandbox claim/AgentHost pod (the one the worker's in-flight `/configure` call is targeting) gets deleted/released — likely by the TRUE owner (api pod) continuing its own legitimate lifecycle and tearing down what it (correctly) still believes is its own claim, unaware the worker pod had just deleted-and-recreated it out from under it.
+6. `20:07:56` — the worker's in-flight `/configure` call surfaces as `AgentHostConfigureException: HTTP 500` (pod deleted mid-request), non-retryable, failing the whole assembly.
+
+This is a genuine, timing-dependent multi-pod race (not deterministic — it requires the reconciler's sweep to land in the narrow post-auto-approve gate-clear window), distinct from the already-fixed `#239` stale-lease issue the reconciler was built to guard against. Root cause is in `CoordinatorReconciler.HasPendingReviewGateAsync`'s interaction with the timing of the owning pod's gate-clear vs. status-transition writes — NOT yet fixed. Workaround: none identified yet other than retrying (the window is narrow, so most attempts do not hit it). Do not attempt a rushed fix to this cross-pod reconciliation path without careful review — getting it wrong risks reintroducing the original stuck-forever-in-review bug (#239) this reconciler exists to prevent.
+
+**Fixed (2026-07-25):** the true root cause was even more precise than the narrative above — `CoordinatorAssemblyService`'s human-review gate handling flipped `WorkPlans.Status` to `WorkPlanStatus.InReview` via `SetStatusAndStageAsync` BEFORE calling `CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync` to create the durable `AssemblyReviews` row (the upsert ran last, after graph-emission and an event emit). This left a genuine window — not merely "gate resolved but status not yet advanced" but "status already `InReview`, review row not yet written at all" — where `CoordinatorReconciler.HasPendingReviewGateAsync` (the authoritative cross-pod signal `SweepAsync`'s `InReview` case relies on) returns false, so a peer pod's sweep concludes the run is orphaned and re-arms assembly. This reproduced 3 times total on staging (runs `d2ad3035`, and again right at the review-gate transition on a retry that had otherwise reached `awaiting_review` cleanly), which is what proved the window wasn't as rare/narrow as first assumed. Fix: swapped the order in `CoordinatorAssemblyService.cs` so `UpsertReviewRequestAsync` now runs BEFORE `SetStatusAndStageAsync(..., WorkPlanStatus.InReview, ...)` — any sweep observing `InReview` now always also observes the pending row, closing the window entirely. `UpsertReviewRequestAsync` has no dependency on `WorkPlans.Status` so reordering is safe. Added a deterministic regression test (`RunAssembly_ReviewGate_NeverExposesInReviewStatusBeforeReviewRowExists` in `CoordinatorAssemblyServiceTests.cs`) that polls the DB concurrently with the gate opening and fails if `InReview` is ever observed with no backing review row — this is a true invariant post-fix (not just "less likely"), since the two sequential awaited DB writes are strictly ordered. Existing 73-test suite for this class still passes unchanged.
 
 ---
 
@@ -507,3 +520,71 @@ During demo-recording runs, /api/runs/... /work-plan and /events routes intermit
 Root cause: in GitHubOrgAuthorizationService.ResolveSingleOrgAsync (apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs), when the primary AUTHENTICATED private-members check returns a SAML-enforcement 403 (CheckResult.OrgAccessNotGranted), the code correctly falls back to an UNAUTHENTICATED public_members check. That fallback call is itself subject to GitHub's 60/hr-per-IP unauthenticated rate limit (shared across the whole cluster's egress NAT IP). CheckEndpointAsync already classifies a rate-limited response as CheckResult.Inconclusive, but ResolveSingleOrgAsync never inspected the public fallback's result for Inconclusive -- it only special-cased publicResult == CheckResult.Member, and otherwise fell through to branch on the stale primary orgResult alone. A rate-limited (thus inconclusive) public-fallback check was silently conflated with "definitively not a public member," so whenever the primary check had also been a SAML 403, the aggregate result came back as the actionable-looking "authorize SSO" denial (OrgAuthResult.OrgAccessNotGranted) instead of a retryable Inconclusive -- even though the membership genuinely was public and only the fallback lookup itself had transiently hit the unauthenticated rate limit.
 
 Fix: ResolveSingleOrgAsync now checks publicResult == CheckResult.Inconclusive before falling through to the orgResult-based branches, returning the same "transient, not yet a member" tuple used for primary-check Inconclusive so the caller retries instead of hard-denying. Added a regression test (CheckMembershipAsync_Inconclusive_WhenPrivateSamlForbiddenAndPublicFallbackRateLimited in tests/Agentweaver.Tests/Projects/GitHubOrgAuthorizationServiceTests.cs) simulating a SAML-403 private check plus a rate-limited (403 + X-RateLimit-Remaining: 0) public fallback, asserting the aggregate result is Inconclusive.
+
+---
+
+## Seeded blueprint-demo run can fail before fix stage with a2a_transport_interrupted
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging build 06007b71, blueprint-demo run 7ba969e8-ad68-41e9-b3de-ebe71d1924d1 against https://github.com/sabbour/agentweaver-demo-dryrun got past outcome confirm and work-plan persistence after the org-membership fix, but never reached the intended CSS-fix/build-test path. Work plan 14 created only two planning subtasks. Child subtask 21 (
+
+---
+
+## Blueprint-demo seeded repo still reproduces Build & Test AgentHost /configure HTTP 500 after assembly restart
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+Fresh blueprint-demo run d2ad3035-afef-4e74-93e9-a7c45bfb60ee (work plan 15) on staging drove all three bug-fix subtasks to assemble_ready by 2026-07-25T20:05:02Z, then reached coordinator.children_complete and assembly. RAI passed green at 2026-07-25T20:06:10Z. The first preview applicability pass then skipped preview as not applicable (state=preview_skipped_not_applicable, reason=llm_docs_or_non_runtime) and Build & Test completed/approved at 2026-07-25T20:07:19Z. Immediately afterward the coordinator restarted assembly, emitted a human-review request, flipped preview applicability to preview_required at 2026-07-25T20:07:40Z, bound assembly pod agentweaver-agent-host-zwvh9, and then failed at 2026-07-25T20:07:56.2285446Z with build_test_infra_agenthost_configure_failed: AgentHost /configure for run 'd2ad3035-afef-4e74-93e9-a7c45bfb60ee' failed: HTTP 500. No review/merge/recordable preview surface followed.
+
+---
+
+## Fresh seeded bug-fix project still fails preview heuristics and merge after Build & Test passes
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+Fresh project b3608f95-e4f9-4fcf-93bb-5245e1f69ed9 (blueprint-demo-live-2325) cloned the seeded repo correctly (index.html, styles.css, package.json, test.js present). First coordinator run b875731d-7c48-4619-bb3d-21edd71a06b1 reproduced the narrow AgentHost configure race at assembly Build & Test (build_test_infra_agenthost_configure_failed). Immediate retry f9e7867c-48f7-40af-8236-5cd0c9f9e53f progressed farther: subtask 37 stalled twice and was redispatched twice before third child 6f952975-f3b5-4259-b76b-ab172b004a55 reached assemble_ready; subtask 38 then reached assemble_ready; RAI passed green; Build & Test completed successfully; preview was REQUIRED but failed with sandbox.preview_failed / 'Could not determine how to run the app from the worktree (Phase-1 heuristics)' even though the repo is a runnable static site with package.json/build.js. Human review approval then succeeded, but merge still failed on this truly fresh project with assembly_merge_failed: 'the working tree cannot be safely reconciled with the merge result because uncommitted content diverges from the merge result and cannot be safely reconciled; commit, stash, or discard the local changes and retry.' This disproves the earlier assumption that merge failure was only reused-project contamination and introduces a new preview-heuristics blocker on the seeded demo app.
+
+---
+
+## Preview heuristics fail to detect a runnable static site (index.html + package.json + build.js)
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+Seen on run `f9e7867c-48f7-40af-8236-5cd0c9f9e53f` (project `blueprint-demo-live-2325`) and again on later blueprint-demo runs: even though preview applicability correctly returns `preview_required` for the seeded static-site repo (`index.html`, `styles.css`, `package.json`, `build.js`, `test.js`), the actual preview launch fails with `sandbox.preview_failed`: "Could not determine how to run the app from the worktree (Phase-1 heuristics)." Not yet root-caused in code (deferred — non-blocking, since review/merge can still proceed without a working preview). Likely candidate: the Phase-1 run-command heuristics don't recognize a plain `build.js`-based static site (no `npm start`/`dev` script, no framework marker file) as a runnable app. Needs investigation if preview becomes required for the recording.
+
+---
+
+## `.squad/` state files tracked by the demo's own Squad-cast step get mutated-uncommitted by the bug-fix subtask, causing assembly_merge_failed
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open (operational workaround only)
+
+Seen on runs `f9e7867c` and `3a4f3eeb` (blueprint-demo-live projects): after Build & Test passes and human review is approved, merge fails with `assembly_merge_failed`: "the working tree cannot be safely reconciled with the merge result because uncommitted content diverges from the merge result and cannot be safely reconciled." Root cause (confirmed via `kubectl exec` into the live `agentweaver-worker` pod, inspecting `/workspace/{projectId}/`): the demo's own "cast a Squad team" step legitimately commits `.squad/` state files (`decisions.md`, `agents/*/history.md`, `identity/now.md`, or lighter scaffold like `.gitignore`/`.agentweaver/settings.yml`/`.gitattributes`) as TRACKED git content in the target repo. When the later bug-fix subtask's own sandboxed coding agent runs inside that same repo, it discovers these same Squad conventions and — following the "mutable state is written via runtime tools, not git commits" pattern — writes new decision/history entries directly to those already-tracked files WITHOUT committing. This leaves the worktree dirty in a way `WorktreeManager.cs`'s `IsWorkingTreeReconcilable` correctly refuses to Hard-Reset over (by design, to never silently discard content), so the merge-safety check blocks.
+
+This is inherent to the demo's recursive "Squad builds using Squad" premise, not a simple product bug — a real fix needs either (a) auto-committing dirty leftover subtask-worktree content before computing merge safety, or (b) constraining the sandboxed coding agent to always commit its own `.squad/` writes. Both are non-trivial, higher-risk changes to safety-critical merge code, deferred for now. **Operational workaround used successfully**: `kubectl exec` into `agentweaver-worker`, `cd /workspace/{projectId}`, `git add -A && git commit` to clean the dirty tracked state BEFORE the merge step runs. Watch for this proactively (poll `git status --porcelain` on the active project workspace) as soon as the run reaches `assemble_ready`/RAI-passed, ideally before the review gate even opens, to avoid extra round-trips.
+
+---
+
+## PR #513 did not eliminate initial Build & Test AgentHost configure 500 on fresh seeded project
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+After staging redeploy to commit 6d7d9aa8 (PR #513 reorder fix for WorkPlans.Status/InReview vs durable review-gate row), fresh project blueprint-demo-live-232803 (95174ba2-affc-4329-b020-eb357da6282c) and fresh coordinator run b552be51-602d-4095-9073-1cb0ca04507e still failed at the FIRST Build & Test / preview-required assembly pass with build_test_infra_agenthost_configure_failed before any human-review gate appeared. Path reached: subtasks 42/43/44 all assemble_ready, RAI green at 2026-07-25T23:44:12Z, build-test gate requested, preview required (llm_unavailable_default_required), then AgentHost /configure failed at 2026-07-25T23:44:30.3814169Z. This means the deployed reorder fix did not eliminate all configure-race/failure cases; the earlier post-review re-arm race may be fixed, but an initial build-test configure failure still reproduces on fresh projects.

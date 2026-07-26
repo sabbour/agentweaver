@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.11.3
+
+### Patch Changes
+
+- bc50c1c: Clarify the board's Ready column so dependency-blocked tasks no longer appear as pickup-ready queued work.
+- 1cd2078: Surface unhandled exceptions from the AgentHost `/configure` endpoint instead of
+  letting them escape as an opaque, empty-body HTTP 500. The endpoint now logs the
+  real exception (still attributable to the specific run/pod before it recycles) and
+  returns a structured `agenthost_configure_unexpected_exception` JSON body, making the
+  recurring `agenthost_configure_failed` failure diagnosable.
+- 6d7d9aa: Fix a cross-pod race that could cause assembly to fail with
+  `agenthost_configure_failed` right as a run entered human review. The
+  work plan's status was flipped to `InReview` before the durable
+  `AssemblyReviews` row backing that gate was persisted, leaving a short
+  window where a peer pod's reconciler sweep could observe `InReview` with
+  no pending review row, conclude the run was orphaned, and re-arm
+  assembly — colliding with the still-live owner on the same AgentHost
+  claim mid-`/configure`. The review row is now persisted before the
+  status flip, closing the window.
+- 27ea216: Fix `start_preview` (and other `IAgentRuntimeToolProvider`-built tools) failing with
+  an opaque "Tool execution failed" on warm-pool AgentHost pods. The per-turn API
+  base URL/key resolved by `CopilotAIAgent.BuildSessionConfigTools` was never
+  forwarded to tool providers, so `PreviewRunnerToolProvider` always fell back to the
+  unreachable `http://localhost:5000` default (#335 P1 follow-up).
+
 ## 0.11.2
 
 ### Patch Changes

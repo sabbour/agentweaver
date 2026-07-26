@@ -1924,8 +1924,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
         if (toolProviders is not null)
         {
+            // #335 P1 (start_preview gap): providers like PreviewRunnerToolProvider previously only
+            // saw the immutable, image-baked context (no ApiBaseUrl/ApiKey on warm pods), so their
+            // API-calling tools fell back to an unreachable http://localhost:5000 and threw an
+            // uncaught transport exception — surfaced to the model as an opaque "Tool execution
+            // failed". Thread the same per-turn apiBaseUrl/apiKey already resolved for
+            // AgentweaverApiTools above into the context every provider builds against.
+            var providerContext = context with { ApiBaseUrl = apiBaseUrl, ApiKey = apiKey };
             foreach (var provider in toolProviders)
-                tools.AddRange(provider.BuildTools(context));
+                tools.AddRange(provider.BuildTools(providerContext));
         }
 
         return tools;

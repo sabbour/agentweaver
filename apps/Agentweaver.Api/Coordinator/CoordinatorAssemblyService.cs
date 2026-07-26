@@ -1173,6 +1173,23 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (gate.GateKind == "human-review")
             {
                 // ── ONE human review gate (D5) ───────────────────────────────────────────────────
+                // Persist the DURABLE review-gate row BEFORE flipping WorkPlans.Status to InReview
+                // (cross-pod race fix). CoordinatorReconciler.HasPendingReviewGateAsync is the
+                // authoritative "is a human decision genuinely pending" signal used to decide whether
+                // an in_review plan is a live gate or an orphan to re-arm. Doing this the other way
+                // around (status first, review row last — the original ordering) opens a window where
+                // a peer pod's sweep can observe Status == InReview with NO review row yet, wrongly
+                // conclude the run is orphaned, and re-arm assembly on top of the still-live owner —
+                // colliding on the same AgentHost claim/pod mid in-flight /configure call. Persisting
+                // the row first closes that window: any sweep that can see InReview can also see the
+                // pending row, so it never misclassifies a freshly-opened gate as orphaned.
+                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+                    _scopeFactory,
+                    context.CoordinatorRunId,
+                    context.SubmittingUser,
+                    integrationBranch,
+                    aggregateTreeHash,
+                    ct).ConfigureAwait(false);
                 await _assemblyStore.SetStatusAndStageAsync(
                     workPlanId, WorkPlanStatus.InReview, gate.StageId, ct).ConfigureAwait(false);
                 await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
@@ -1186,13 +1203,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     gateKind = gate.GateKind,
                     hasChanges = integration.HasChanges,
                 });
-                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-                    _scopeFactory,
-                    context.CoordinatorRunId,
-                    context.SubmittingUser,
-                    integrationBranch,
-                    aggregateTreeHash,
-                    ct).ConfigureAwait(false);
 
                 var decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
                 if (decision is null)

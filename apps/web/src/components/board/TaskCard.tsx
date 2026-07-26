@@ -138,7 +138,11 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
   const [workflows, setWorkflows] = useState<WorkflowSummaryDto[] | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const queueLabel = card.state === 'ready' ? 'Ready for pickup' : 'Backlog intake';
+  const queueLabel = card.state === 'ready'
+    ? card.is_ready_to_start === false
+      ? 'Waiting on prerequisites'
+      : 'Ready for pickup'
+    : 'Backlog intake';
   const capturedAt = new Date(card.created_at).toLocaleDateString();
   const cardClassName = styles.card;
 

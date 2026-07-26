@@ -47,4 +47,14 @@ public sealed record SandboxToolContext(
     /// commit candidate. Shell tools may use it for ephemeral artifacts; file tools remain rooted at
     /// <see cref="SandboxRoot"/>.
     /// </summary>
-    string? ScratchDirectory = null);
+    string? ScratchDirectory = null,
+    /// <summary>
+    /// Per-turn Agentweaver API base URL (worker-tier), delivered via <c>AgentSetupParams</c> (#335 P1)
+    /// since warm AgentHost pods boot with no static <c>AgentHost__ApiBaseUrl</c>. Threaded into
+    /// <see cref="IAgentRuntimeToolProvider"/> implementations (e.g. the preview-publish tool) so they
+    /// target the real API instead of falling back to an unreachable <c>http://localhost:5000</c>.
+    /// Null/empty when not yet delivered (pre-first-turn) or on the direct/env-var launch path.
+    /// </summary>
+    string? ApiBaseUrl = null,
+    /// <summary>Per-turn Agentweaver API key paired with <see cref="ApiBaseUrl"/>. See its remarks.</summary>
+    string? ApiKey = null);
