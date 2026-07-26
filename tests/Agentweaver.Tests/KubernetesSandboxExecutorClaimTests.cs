@@ -49,10 +49,12 @@ public sealed class KubernetesSandboxExecutorClaimTests
     private static KubernetesSandboxExecutor NewExecutor(
         FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver,
         IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
-        IPodNameRegistry? podRegistry = null) =>
+        IPodNameRegistry? podRegistry = null, IGitHubTokenStore? tokenStore = null,
+        IGitHubAccessTokenProvider? accessTokenProvider = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
-            httpClientFactory: httpClientFactory, runOptions: runOptions);
+            httpClientFactory: httpClientFactory, runOptions: runOptions, tokenStore: tokenStore,
+            accessTokenProvider: accessTokenProvider);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -62,6 +64,37 @@ public sealed class KubernetesSandboxExecutorClaimTests
             Task.FromResult(_user);
         public Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<string?>(null);
+    }
+
+    // Issue #523: a raw (non-refreshing) IGitHubTokenStore that always reports the same stored
+    // entry regardless of how long it has been held — this is the shape that let a stale/expired
+    // access token be handed to a newly-launched AgentHost pod when nothing routed the read through
+    // GetValidAccessTokenAsync.
+    private sealed class StubGitHubTokenStore : IGitHubTokenStore
+    {
+        private readonly GitHubTokenEntry _entry;
+        public StubGitHubTokenStore(GitHubTokenEntry entry) => _entry = entry;
+        public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult(_entry);
+        public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult<GitHubToken?>(null);
+        public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) =>
+            Task.CompletedTask;
+        public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult<GitHubIdentity?>(null);
+        public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    // Issue #523: stubs the refresh-aware accessor (GitHubTokenRefreshService in production) so a
+    // test can simulate "the stored token was near-expiry and got transparently rotated" without a
+    // real GitHub refresh round-trip.
+    private sealed class StubGitHubAccessTokenProvider : IGitHubAccessTokenProvider
+    {
+        private readonly string? _validToken;
+        public StubGitHubAccessTokenProvider(string? validToken) => _validToken = validToken;
+        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult(_validToken);
     }
 
     // Records the /configure POST so the warm-pool deferred-config contract can be asserted.
@@ -295,6 +328,78 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("kvUserSecretName").GetString().Should()
             .StartWith("ghtok-user--",
                 "the pod must fetch ONLY the run owner's KV secret (base32-encoded user id)");
+    }
+
+    // Issue #523: a Build & Test gate can launch its AgentHost pod for the first time (a fresh,
+    // never-before-/configure'd warm pod) many minutes after the run's earlier subtask stages —
+    // long enough for the submitting user's Copilot-entitled OAuth token to cross its expiry skew
+    // window. Reading the raw stored entry (as ResolveGitHubAccessTokenAsync previously did) could
+    // hand that stale token to the pod, which trusts a pre-resolved token unconditionally and
+    // never re-validates it — producing GitHubCopilotUnauthorizedException at /configure. This test
+    // asserts the executor now prefers the refresh-aware IGitHubAccessTokenProvider over the raw
+    // token store, so a near-expiry token is rotated before ever reaching the pod.
+    [Fact]
+    public async Task LaunchAgentHostPod_configure_prefers_refreshed_token_over_stale_stored_token()
+    {
+        const string runId = "run-claim-refresh";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var staleTokenStore = new StubGitHubTokenStore(
+            new GitHubTokenEntry(GitHubTokenStatus.SignedIn, "stale-near-expiry-token"));
+        var accessTokenProvider = new StubGitHubAccessTokenProvider("freshly-rotated-token");
+
+        var executor = NewExecutor(
+            handler, new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            tokenStore: staleTokenStore,
+            accessTokenProvider: accessTokenProvider);
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("freshly-rotated-token",
+            "the refresh-aware provider must be consulted (and win) over the raw, non-refreshing token " +
+            "store read so a newly-launched pod never receives a stale/near-expiry access token");
+    }
+
+    // Regression safety net: when no refresh-aware provider is wired (e.g. an older DI graph or a
+    // narrower test), the executor must still fall back to the raw token-store read exactly as
+    // before — the fix must be additive, never regressing the pre-#523 fallback behavior.
+    [Fact]
+    public async Task LaunchAgentHostPod_configure_falls_back_to_raw_token_store_without_access_token_provider()
+    {
+        const string runId = "run-claim-fallback";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var tokenStore = new StubGitHubTokenStore(
+            new GitHubTokenEntry(GitHubTokenStatus.SignedIn, "raw-store-token"));
+
+        var executor = NewExecutor(
+            handler, new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            tokenStore: tokenStore,
+            accessTokenProvider: null);
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("raw-store-token");
     }
 
     [Fact]
