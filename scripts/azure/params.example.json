@@ -14,12 +14,22 @@
 // prompt for that field; it is accepted here only for fully unattended CI use
 // against disposable/test environments.
 {
-  // Azure resource names (all optional -- fall back to variables.mjs's DEFAULTS).
+  // Azure resource names (all optional -- fall back to variables.mjs's DEFAULTS --
+  // EXCEPT KEYVAULT_NAME, see below).
   "RESOURCE_GROUP": "agentweaver-rg",
   "CLUSTER_NAME": "agentweaver-aks",
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
-  "KEYVAULT_NAME": "agentweaver-kv",
+
+  // Optional for `provision-infra` (defaults to a suggested name it will create if missing).
+  // REQUIRED for deploy commands (deploy-from-local/deploy-from-release/deploy-from-commit/verify):
+  // no default -- must be the name of the Key Vault ALREADY provisioned for this environment.
+  // There is deliberately no generic fallback here: a wrong-but-plausible name silently redirects
+  // the rendered ConfigMap/SecretProviderClass Key Vault references (and the GitHub OAuth secret
+  // lookups that flow from them) at the wrong vault instead of failing loudly. Look yours up with
+  // `az keyvault list --resource-group <RESOURCE_GROUP> --query "[].name" -o tsv`.
+  "KEYVAULT_NAME": "REPLACE_WITH_YOUR_PROVISIONED_KEYVAULT_NAME",
+
   "NAMESPACE": "agentweaver",
 
   // Required for AKS deploy mode (no default; must come from a flag, env var,

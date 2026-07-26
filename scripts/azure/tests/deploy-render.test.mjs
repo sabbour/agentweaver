@@ -42,8 +42,8 @@ const VARS = {
   AGENTHOST_IMAGE_TAG: "v0.9.71-agenthost",
   IDENTITY_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
   AGENTHOST_IDENTITY_CLIENT_ID: "99999999-8888-7777-6666-555555555555",
-  KEYVAULT_NAME: "agentweaver-kv",
-  AGENTHOST_KEYVAULT_URI: "https://agentweaver-kv.vault.azure.net/",
+  KEYVAULT_NAME: "test-kv-fixture",
+  AGENTHOST_KEYVAULT_URI: "https://test-kv-fixture.vault.azure.net/",
   TENANT_ID: "66666666-7777-8888-9999-000000000000",
   PREVIEW_HOSTNAME: "*.abc123def456.westus2.staging.aksapp.io",
   PREVIEW_TLS_SECRET: "agentweaver-tls",
@@ -82,8 +82,8 @@ test("buildRuntimeConfigLiterals() composites full URLs from HOST and passes thr
     literals.GITHUB_CALLBACK_URL,
     "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/callback",
   );
-  assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://agentweaver-kv.vault.azure.net");
-  assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://agentweaver-kv.vault.azure.net/");
+  assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
+  assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net/");
   assert.equal(literals.IDENTITY_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
   assert.equal(literals.AGENTHOST_IDENTITY_CLIENT_ID, "99999999-8888-7777-6666-555555555555");
   assert.equal(literals.APPINSIGHTS_WORKSPACE_ID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
@@ -132,7 +132,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /hostname: agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io/);
   assert.match(builtYaml, /hostname: '\*\.abc123def456\.westus2\.staging\.aksapp\.io'/);
   assert.match(builtYaml, /clientID: 11111111-2222-3333-4444-555555555555/);
-  assert.match(builtYaml, /keyvaultName: agentweaver-kv/);
+  assert.match(builtYaml, /keyvaultName: test-kv-fixture/);
   assert.match(builtYaml, /tenantId: 66666666-7777-8888-9999-000000000000/);
   assert.match(builtYaml, /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/);
   assert.match(builtYaml, /azure\.workload\.identity\/tenant-id: 66666666-7777-8888-9999-000000000000/);
