@@ -284,6 +284,29 @@ app.MapPost("/configure", async (HttpContext ctx) =>
                 ? StatusCodes.Status507InsufficientStorage
                 : StatusCodes.Status409Conflict);
     }
+    catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+    {
+        throw;
+    }
+    catch (Exception ex)
+    {
+        // Any exception here that is NOT an AgentHostConfigurationException previously escaped this
+        // handler uncaught, producing ASP.NET Core's default empty-body HTTP 500 in Production — an
+        // opaque failure the caller (KubernetesSandboxExecutor.CallAgentHostConfigureAsync) could only
+        // report as "agenthost_configure_failed ... HTTP 500 " with no detail, and whose root cause
+        // was lost the moment the warm pod got recycled. Log the real exception here — where it is
+        // still attributable to this specific pod/run — and surface a structured, typed reason so a
+        // recurrence is diagnosable from the caller's log line alone, without needing to catch a
+        // short-lived pod's logs before the warm pool recycles it.
+        var logger = ctx.RequestServices.GetRequiredService<ILogger<AgentHostRuntimeState>>();
+        logger.LogError(
+            ex,
+            "AgentHost /configure: unexpected exception during ConfigureAsync for run {RunId} (ready={Ready})",
+            configuration.RunId, startup.IsReady);
+        return Results.Json(
+            new { error = "agenthost_configure_unexpected_exception", message = $"{ex.GetType().Name}: {ex.Message}" },
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
 
     return Results.Ok(new
     {
