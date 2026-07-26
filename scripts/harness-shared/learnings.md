@@ -734,3 +734,14 @@ Conclusion: not a defect, no code change made for this sub-issue of #523. If a f
 report shows the scribe recording incorrect/stale data (e.g. claiming success after a
 failure, rather than just running after one), re-open as a distinct bug against the
 scribe's data source, not its firing order.
+
+---
+
+## start_preview 403s: IsOwnerOrServiceCaller never recognized the hardcoded agentweaver-internal identity
+
+- date: 2026-07-26
+- category: bug
+- surface: api
+- status: fixed
+
+POST /api/runs/{runId}/sandbox/preview (the agent-initiated start_preview tool callback) returned HTTP 403 for the run's own agent in every real deployment. EndpointHelpers.IsOwnerOrServiceCaller authorized the service-key caller only by comparing CallerContext.User against the configured Auth:User setting, which no deployment manifest sets (only Auth:ApiKey is injected -- see k8s/base/api-deployment.yaml:109). The shared internal API key actually resolves to the hardcoded ProjectAuthorization.InternalServiceUser (agentweaver-internal) identity via GitHubTokenAuthMiddleware's internal-key path (ApiKeyAuthMiddleware.cs ~line 220), which the check never recognized, so it always returned false and the endpoint 403'd. Tests never caught this because AgentweaverWebApplicationFactory uses Testing:BypassGitHubTokenAuth, a different code path that never reaches the agentweaver-internal literal. Fixed by delegating IsOwnerOrServiceCaller to ProjectAuthorization.IsInternalServiceCaller, which already checks both the hardcoded identity and the configured Auth:User fallback (used elsewhere for memory/decision/casting callbacks). Fixed in issue #529 / PR fix/start-preview-403. A DIFFERENT generic Tool execution failed failure mode (bad apiBaseUrl / transport exception) is a separate, still-unconfirmed hypothesis -- do not conflate the two: an explicit HTTP 403 means the request reached agentweaver-api and got a real authorization rejection, not a connection failure.
