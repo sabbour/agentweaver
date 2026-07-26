@@ -1957,6 +1957,30 @@ public sealed class WorktreeManager
         Commit? mergeBase,
         string originatingBranch)
     {
+        // (d-0) Issue #527: auto-commit any dirty, already-tracked, modified/type-changed
+        // content in the checked-out originating branch's working tree BEFORE computing
+        // merge safety. This is common and legitimate: a project's own "cast a Squad team"
+        // step commits `.squad/` bookkeeping files as tracked content, and a later
+        // subtask's sandboxed coding agent then appends new entries directly to those
+        // already-tracked files without committing (following the "mutable state is
+        // written via runtime tools, not git commits" convention). That leaves the
+        // checked-out working tree dirty in a way IsWorkingTreeMergeSafe/
+        // IsWorkingTreeReconcilable correctly refuse to discard — even though every
+        // subtask was already approved — so the otherwise-green merge gets blocked with
+        // assembly_merge_failed. Turning that uncommitted-but-legitimate content into an
+        // ordinary extra commit here removes the friction without weakening the safety
+        // guarantee: a commit never discards content (unlike a Hard Reset), so this is
+        // strictly safer than the prior behavior of blocking indefinitely. It also fixes
+        // the reported "conflictingFiles grows across retries" symptom as a side effect:
+        // every merge attempt now sweeps whatever is currently dirty, so repeated
+        // retries can no longer accumulate an ever-larger conflict set.
+        if (TryAutoCommitDirtyTrackedContent(repo, originatingBranch, out var updatedOrigin) &&
+            updatedOrigin is not null)
+        {
+            origin = updatedOrigin;
+            mergeBase = repo.ObjectDatabase.FindMergeBase(origin.Tip, worktree.Tip);
+        }
+
         // (d-1) Full clean-check before any mutation.
         if (!IsWorkingTreeMergeSafe(repo, origin.Tip, worktree.Tip.Tree, out var blockReason))
         {
@@ -2115,6 +2139,87 @@ public sealed class WorktreeManager
         repo.Reset(ResetMode.Hard, resultCommit);
         var newHeadSha = repo.Head.Tip.Sha;
         return MergeOutcome.Merged(newHeadSha, "working-tree-reconciled", prevSha, newHeadSha, wasFastForward);
+    }
+
+    /// <summary>
+    /// Issue #527: auto-commits any dirty, already-tracked, modified/type-changed content
+    /// in the checked-out originating branch's working tree, as an ordinary extra commit,
+    /// so it no longer blocks the subsequent merge-safety check.
+    ///
+    /// Only <see cref="FileStatus.ModifiedInIndex"/>, <see cref="FileStatus.TypeChangeInIndex"/>,
+    /// <see cref="FileStatus.ModifiedInWorkdir"/>, and <see cref="FileStatus.TypeChangeInWorkdir"/>
+    /// paths are staged and committed. Deleted/staged-deleted and renamed paths are
+    /// deliberately EXCLUDED and left untouched: those are the stale-index shape from
+    /// #348/#427 (a tracked path whose only "change" is a stale/missing index entry for
+    /// content the merge result already produces correctly), which the existing
+    /// <see cref="ReconcileDirtyCheckedOutMerge"/>/<see cref="IsWorkingTreeReconcilable"/>
+    /// Hard-Reset-restore path is specifically designed to safely recover. Auto-committing
+    /// a deletion here would instead turn it into a real, permanent deletion — destroying
+    /// content that #348 was built to protect. New/untracked paths are also excluded: they
+    /// are not tracked content at all, so committing them is out of scope for this fix and
+    /// is left to the existing untracked-collision handling in
+    /// <see cref="IsWorkingTreeMergeSafe"/>/<see cref="IsWorkingTreeReconcilable"/>.
+    ///
+    /// Returns false (no-op) when a sequencer operation is in progress or the index has
+    /// conflicted entries — those must be resolved by a human, not auto-committed — or
+    /// when there is nothing in the auto-commit mask to stage. On success, returns true
+    /// and the newly-advanced <see cref="Branch"/> reference for <paramref name="branchName"/>
+    /// via <paramref name="updatedBranch"/> (the caller must use this instead of any
+    /// previously-held <see cref="Branch"/> instance, which becomes stale after the commit).
+    /// </summary>
+    private bool TryAutoCommitDirtyTrackedContent(
+        Repository repo,
+        string branchName,
+        out Branch? updatedBranch)
+    {
+        updatedBranch = null;
+
+        var gitDir = repo.Info.Path;
+        var sequencerFiles = new[] { "MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG" };
+        var sequencerDirs  = new[] { "rebase-merge", "rebase-apply" };
+        if (sequencerFiles.Any(file => File.Exists(Path.Combine(gitDir, file))) ||
+            sequencerDirs.Any(dir => Directory.Exists(Path.Combine(gitDir, dir))))
+        {
+            return false;
+        }
+
+        var status = repo.RetrieveStatus(new StatusOptions
+        {
+            IncludeUntracked     = true,
+            IncludeIgnored       = false,
+            RecurseUntrackedDirs = true,
+            RecurseIgnoredDirs   = false,
+        });
+
+        if (status.Any(e => (e.State & FileStatus.Conflicted) != 0))
+        {
+            return false;
+        }
+
+        const FileStatus trackedDirtyMask =
+            FileStatus.ModifiedInIndex | FileStatus.TypeChangeInIndex |
+            FileStatus.ModifiedInWorkdir | FileStatus.TypeChangeInWorkdir;
+
+        var pathsToStage = status
+            .Where(e => (e.State & trackedDirtyMask) != 0)
+            .Select(e => e.FilePath)
+            .ToList();
+
+        if (pathsToStage.Count == 0)
+        {
+            return false;
+        }
+
+        Commands.Stage(repo, pathsToStage);
+
+        var signature = WithTimestamp();
+        repo.Commit(
+            "assembly: auto-commit uncommitted tracked working-tree changes before merge (#527)",
+            signature,
+            signature);
+
+        updatedBranch = repo.Branches[branchName];
+        return updatedBranch is not null;
     }
 
     /// <summary>

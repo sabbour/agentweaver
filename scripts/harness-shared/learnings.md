@@ -572,7 +572,7 @@ Seen on run `f9e7867c-48f7-40af-8236-5cd0c9f9e53f` (project `blueprint-demo-live
 - date: 2026-07-25
 - category: bug
 - surface: all
-- status: open (operational workaround only)
+- status: fixed (see #527 fix entry below, WorktreeManager auto-commit-before-merge-safety-check)
 
 Seen on runs `f9e7867c` and `3a4f3eeb` (blueprint-demo-live projects): after Build & Test passes and human review is approved, merge fails with `assembly_merge_failed`: "the working tree cannot be safely reconciled with the merge result because uncommitted content diverges from the merge result and cannot be safely reconciled." Root cause (confirmed via `kubectl exec` into the live `agentweaver-worker` pod, inspecting `/workspace/{projectId}/`): the demo's own "cast a Squad team" step legitimately commits `.squad/` state files (`decisions.md`, `agents/*/history.md`, `identity/now.md`, or lighter scaffold like `.gitignore`/`.agentweaver/settings.yml`/`.gitattributes`) as TRACKED git content in the target repo. When the later bug-fix subtask's own sandboxed coding agent runs inside that same repo, it discovers these same Squad conventions and — following the "mutable state is written via runtime tools, not git commits" pattern — writes new decision/history entries directly to those already-tracked files WITHOUT committing. This leaves the worktree dirty in a way `WorktreeManager.cs`'s `IsWorkingTreeReconcilable` correctly refuses to Hard-Reset over (by design, to never silently discard content), so the merge-safety check blocks.
 
@@ -734,3 +734,14 @@ Conclusion: not a defect, no code change made for this sub-issue of #523. If a f
 report shows the scribe recording incorrect/stale data (e.g. claiming success after a
 failure, rather than just running after one), re-open as a distinct bug against the
 scribe's data source, not its firing order.
+
+---
+
+## Fixed: coordinator.assembly_merge_failed on dirty-uncommitted .squad/ bookkeeping content, and conflictingFiles growing across retries (#527)
+
+- date: 2026-07-26
+- category: bug
+- surface: all
+- status: fixed
+
+Root cause confirmed exactly as hypothesized in the 2026-07-25 open entry above: the demo's own 'cast a Squad team' step commits .squad/ state files as tracked git content, and a later subtask's own sandboxed coding agent appends new decision/history entries directly to those already-tracked files without committing, leaving the checked-out originating-branch working tree dirty. WorktreeManager.IsWorkingTreeReconcilable correctly refuses to Hard-Reset over that content (by design, to never silently discard it), so assembly_merge_failed fires even though every subtask was approved. The reported conflictingFiles list growing across retries (from just .gitignore to also include .squad/agents/mcgonagall/history.md, .squad/decisions.md, .squad/identity/now.md) is explained by the same sandboxed agent re-running inside the still-dirty worktree on each retry and appending further uncommitted writes, since no reset/cleanup step ran between attempts. Fix implemented (option (a) from the prior writeup, chosen over (b) as more robust/lower-risk since it protects against ANY uncommitted-but-legitimate dirty content regardless of source): WorktreeManager.MergeCheckedOut now calls a new TryAutoCommitDirtyTrackedContent helper immediately before the merge-safety check, which stages and commits only already-tracked, modified/type-changed working-tree paths (deliberately excluding deleted/renamed paths, which continue through the existing #348/#427 stale-index Hard-Reset-restore path unchanged) as an ordinary extra commit, then recomputes the merge base. This also fixes the retry-compounding sub-issue as a side effect: every merge attempt now sweeps whatever is currently dirty rather than accumulating it, so repeated retries can no longer grow the conflict set. A genuine same-file textual collision between the auto-committed content and the child branch's own edit still correctly fails the merge (MergeOutcomeKind.Conflict, terminal, human-resolvable) -- auto-committing never hides or discards a real conflict. Added regression tests in ReviewEndpointHybridMergeTests.cs: HM-15 reproduces the exact .squad/* bookkeeping scenario end-to-end at the HTTP endpoint; HM-16 simulates two successive coordinator merge attempts with accumulating dirty content between them, proving retries no longer compound into failure; HM-2b and HM-4d prove genuine same-file conflicts still correctly block. See PR fixing GitHub issue #527.
