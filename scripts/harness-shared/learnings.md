@@ -599,3 +599,14 @@ After staging redeploy to commit 6d7d9aa8 (PR #513 reorder fix for WorkPlans.Sta
 - status: fixed
 
 Azure deploy tooling (scripts/azure/variables.mjs) hardcoded KEYVAULT_NAME's DEFAULTS entry to the generic name 'agentweaver-kv', which was NEVER a real Key Vault in the affected subscription (az keyvault show --name agentweaver-kv -> 'not found'). Any deploy invocation (azure:deploy-from-local, azure:deploy-from-release) where an operator forgot to pass KEYVAULT_NAME silently fell back to this bogus default and rendered the agentweaver-runtime-config ConfigMap (KEYVAULT_NAME, AGENTHOST_KEYVAULT_URI, TOKEN_STORE_KEYVAULT_URI) plus the agentweaver-secrets/agentweaver-user-tokens SecretProviderClass keyvaultName fields against it. Two silent-corruption modes were observed live in one incident: (1) literal bogus default 'agentweaver-kv' -> loud DNS failure ('Name or service not known (agentweaver-kv.vault.azure.net:443)'), users cannot log in; (2) a manually-typed override with transposed letters ('akwvkv' instead of the real 'agwvkv') that happened to be a REAL but wrong, stale vault already present in the subscription -> failed SILENTLY with wrong GitHub OAuth client id/secret instead of erroring at all -- this mode is worse because it looks like a normal login failure, not an infra problem. Fix: KEYVAULT_NAME now has NO default in variables.mjs (resolveVariables() throws MissingRequiredVariableError if unset), and steps/30-deploy.mjs verifies az keyvault show succeeds for the resolved name BEFORE rendering/applying any manifest -- this catches mode (2) as well as mode (1), since a nonexistent OR wrong-but-real vault both fail the existence probe against the caller's actual resource group context. See scripts/azure/params.example.json and scripts/azure/tests/deploy-apply.test.mjs for the corresponding safeguards/tests.
+
+---
+
+## UI harness accepts empty Playwright storageState as valid auth
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+Verified on 2026-07-25 during the staging demo dry-run against https://agentweaver.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io. scripts/ui-harness/.auth/staging.storageState.json existed but contained cookies=[] and origins=[]. scripts/ui-harness/lib/auth.mjs loadStorageState() accepted that file because it only checks Array.isArray, so tools.mjs init/capture proceeded instead of exiting AUTH_EXPIRED. The first capture on '/' then produced only a progressbar DOM snapshot, which is a confusing false start for a non-interactive run that should have stopped immediately for human login. Treat empty storageState as expired (or add an authenticated-session probe before action commands) so harness runs fail fast instead of pretending auth is reusable.
