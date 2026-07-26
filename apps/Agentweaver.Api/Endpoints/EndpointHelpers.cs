@@ -237,21 +237,29 @@ internal static async Task ReleaseAgentHostPodSafeAsync(
 /// <summary>
 /// Authorizes either a human OWNER of the run (<see cref="IsOwner"/>) OR the run's own agent
 /// callback channel, which authenticates with the shared service API key and therefore resolves
-/// to the configured <c>Auth:User</c> identity (not the human owner). The agent-callback write
+/// to <see cref="Agentweaver.Api.Security.ProjectAuthorization.InternalServiceUser"/> (the
+/// hardcoded internal-key identity — see <c>GitHubTokenAuthMiddleware</c>'s internal-key path) or,
+/// if configured, the <c>Auth:User</c> identity — never the human owner. The agent-callback write
 /// endpoints (memory/decision/backlog) rely on the global auth middleware only; this helper lets
 /// the run's own agent reach a run-scoped action (e.g. <c>start_preview</c>) without weakening
 /// security: the runId is server-bound in the tool closure, so a service-identity caller can only
 /// act on the run the agent is actually executing, never another user's run via a different runId.
+///
+/// SECURITY/BUGFIX (issue #529): this previously compared <c>caller.User</c> only against the
+/// configured <c>Auth:User</c> setting, which no deployment sets (only <c>Auth:ApiKey</c> is
+/// injected — see k8s/base/api-deployment.yaml), so this check always failed for the run's own
+/// agent and <c>start_preview</c> 403'd in every real environment. Delegating to
+/// <see cref="Agentweaver.Api.Security.ProjectAuthorization.IsInternalServiceCaller"/> (already
+/// used by the memory/decision/casting project-ownership gate) recognizes the actual hardcoded
+/// identity the middleware assigns, matching how the internal service caller is authorized
+/// elsewhere in the API.
 /// </summary>
 internal static bool IsOwnerOrServiceCaller(HttpContext context, Run run, IConfiguration configuration)
 {
     if (IsOwner(context, run)) return true;
 
-    var serviceUser = configuration["Auth:User"];
-    if (string.IsNullOrEmpty(serviceUser)) return false;
-
     var caller = ApiKeyAuthMiddleware.GetCaller(context);
-    return string.Equals(caller.User, serviceUser, StringComparison.Ordinal);
+    return Agentweaver.Api.Security.ProjectAuthorization.IsInternalServiceCaller(caller, configuration);
 }
 
 internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)

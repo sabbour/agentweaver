@@ -228,10 +228,13 @@ sequenceDiagram
 1. **The tool POSTs** `{ target_port }` to `POST /api/runs/{runId}/sandbox/preview`
    ([`SandboxEndpoints.cs:57`](#source)) and returns the response `preview_url` back to the agent.
 2. **Authorization** accepts the run's owner **or** the run's own agent callback. The agent callback
-   authenticates with the shared service key, which resolves to the configured `Auth:User` identity (not the
-   human owner), so the human-oriented `IsOwner` check would block it; `IsOwnerOrServiceCaller`
-   ([`EndpointHelpers.cs:40`](#source)) admits that service identity **without** weakening security — the
-   server-bound `runId` means a service caller can only ever act on the run its agent is executing.
+   authenticates with the shared service key, which resolves to the hardcoded internal-service identity
+   (`ProjectAuthorization.InternalServiceUser` = `"agentweaver-internal"`) or, if configured, the `Auth:User`
+   identity — not the human owner — so the human-oriented `IsOwner` check would block it; `IsOwnerOrServiceCaller`
+   ([`EndpointHelpers.cs:40`](#source)) delegates to `ProjectAuthorization.IsInternalServiceCaller` to admit that
+   service identity **without** weakening security — the server-bound `runId` means a service caller can only
+   ever act on the run its agent is executing. (Issue #529: this previously checked only the configured
+   `Auth:User` value, which no deployment sets, so `start_preview` 403'd for every agent callback in production.)
 3. **The HITL gate** `AgentPreviewGate.RequestApprovalAsync` ([`AgentPreviewGate.cs:85`](#source)) is the
    human-in-the-loop seam. It reuses the same `IToolApprovalGate` primitive as `web_fetch`: it emits a
    `tool.approval_required` card ([`AgentPreviewGate.cs:103`](#source)) and suspends until an operator grants
