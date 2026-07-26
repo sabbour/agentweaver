@@ -2,7 +2,9 @@ using System.ComponentModel;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agentweaver.SandboxExec;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.AgentRuntime;
 
@@ -31,8 +33,16 @@ public static class PreviewPublishTool
     /// <param name="apiKey">Bearer token for API authentication; may be null for unauthenticated local dev.</param>
     /// <param name="runId">The run ID this preview belongs to.</param>
     /// <param name="httpClientOverride">Optional pre-configured HttpClient (for testing). If null a new client is created from <paramref name="apiBaseUrl"/>/<paramref name="apiKey"/>.</param>
+    /// <param name="logger">
+    /// Optional logger used to record structured, durable telemetry when the tool call fails (non-success
+    /// HTTP response or a caught exception from the underlying request). AgentHost pods are ephemeral and
+    /// recycled shortly after a run completes, so without this the only evidence of a failure is whatever
+    /// the agent happened to print during its turn (see GitHub issue #528). Response bodies and exception
+    /// messages are redacted via <see cref="SandboxOutputRedactor"/> and truncated before logging.
+    /// </param>
     public static AIFunction Build(
-        string apiBaseUrl, string? apiKey, string runId, HttpClient? httpClientOverride = null)
+        string apiBaseUrl, string? apiKey, string runId, HttpClient? httpClientOverride = null,
+        ILogger? logger = null)
     {
         var http = httpClientOverride ?? CreateHttpClient(apiBaseUrl, apiKey);
 
@@ -41,10 +51,23 @@ public static class PreviewPublishTool
                 [Description("The port your web server is listening on inside the sandbox, e.g. 3000")] int port,
                 CancellationToken ct = default) =>
             {
-                var response = await http.PostAsJsonAsync(
-                    $"api/runs/{runId}/sandbox/preview",
-                    new { target_port = port },
-                    ct).ConfigureAwait(false);
+                HttpResponseMessage response;
+                try
+                {
+                    response = await http.PostAsJsonAsync(
+                        $"api/runs/{runId}/sandbox/preview",
+                        new { target_port = port },
+                        ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    var redactedMessage = Redact(ex.Message);
+                    logger?.LogError(
+                        ex,
+                        "Tool call failed: tool={ToolName} runId={RunId} port={Port} exception={ExceptionMessage}",
+                        "start_preview", runId, port, redactedMessage);
+                    return $"start_preview failed: {redactedMessage}";
+                }
 
                 var body = string.Empty;
                 try { body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
@@ -64,11 +87,33 @@ public static class PreviewPublishTool
                     return body;
                 }
 
+                var redactedBody = Redact(body);
+                logger?.LogWarning(
+                    "Tool call failed: tool={ToolName} runId={RunId} port={Port} statusCode={StatusCode} response={ResponseBody}",
+                    "start_preview", runId, port, (int)response.StatusCode, redactedBody);
+
                 return $"start_preview failed: HTTP {(int)response.StatusCode} — {body}";
             },
             "start_preview",
             "Expose a web server you started in the sandbox (e.g. on port 3000) so the user can preview it. " +
             "Returns the public preview URL once approved.");
+    }
+
+    // Truncated to keep the durable telemetry sink (App Insights trace/exception payload) reasonably
+    // sized — full bodies aren't needed to root-cause a failure and larger payloads cost more to ingest.
+    private const int MaxLoggedBodyLength = 1000;
+
+    /// <summary>
+    /// Redacts anything that looks like a credential/token/secret and truncates before the value is
+    /// handed to <see cref="ILogger"/>. The tool's return value to the model is intentionally NOT
+    /// redacted (the agent needs the real error to react to) — only what gets logged is scrubbed.
+    /// </summary>
+    private static string Redact(string text)
+    {
+        var redacted = SandboxOutputRedactor.Default.Redact(text);
+        return redacted.Length > MaxLoggedBodyLength
+            ? redacted[..MaxLoggedBodyLength] + "...[truncated]"
+            : redacted;
     }
 
     private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)
