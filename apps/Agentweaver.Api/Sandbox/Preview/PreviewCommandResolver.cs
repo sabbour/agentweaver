@@ -141,10 +141,10 @@ public sealed class PreviewCommandResolver
             // 5. Single Python entrypoint.
             if (File.Exists(Path.Combine(dir, "app.py")))
                 return new PreviewCommandResolution(
-                    true, "python app.py --host 0.0.0.0", dir, "python-app", BindUncertain: true);
+                    true, "python3 app.py --host 0.0.0.0", dir, "python-app", BindUncertain: true);
             if (File.Exists(Path.Combine(dir, "main.py")))
                 return new PreviewCommandResolution(
-                    true, "python main.py --host 0.0.0.0", dir, "python-main", BindUncertain: true);
+                    true, "python3 main.py --host 0.0.0.0", dir, "python-main", BindUncertain: true);
 
             // 6. Single Go entrypoint.
             if (File.Exists(Path.Combine(dir, "main.go")))
