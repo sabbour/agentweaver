@@ -1,11 +1,13 @@
 using System.Net;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentTools;
 using Agentweaver.SandboxExec;
 using Agentweaver.SandboxFs;
 using Agentweaver.AgentRuntime;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Sandbox;
 
@@ -119,6 +121,60 @@ public sealed class StartPreviewToolTests
             new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 })))?.ToString() ?? "";
         result.Should().Contain("start_preview failed:");
         result.Should().Contain("403");
+    }
+
+    [Fact]
+    public async Task StartPreview_OnFailure_LogsStructuredFailureEvent()
+    {
+        // GitHub issue #528: AgentHost pods are recycled shortly after a run completes, so a failed
+        // tool call must leave a durable, queryable telemetry trail — this asserts the structured
+        // fields (tool name, run id, port, status code) actually get logged, not just returned to
+        // the model.
+        var handler = new CapturingHandler(HttpStatusCode.Forbidden,
+            """{"error":"Preview approval was denied or timed out."}""");
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
+        var logger = new CapturingLogger();
+
+        var tool = PreviewPublishTool.Build("http://localhost", null, RunId, http, logger: logger);
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 }));
+
+        logger.HasEntryMatching(LogLevel.Warning, "start_preview").Should().BeTrue(
+            because: "a non-success HTTP response must produce a durable log entry naming the tool");
+        logger.HasEntryContaining(RunId).Should().BeTrue(
+            because: "the run id is required to correlate the failure back to a specific run");
+        logger.HasEntryContaining("port=3000").Should().BeTrue(
+            because: "the target port is required context to root-cause a start_preview failure");
+        logger.HasEntryContaining("statusCode=403").Should().BeTrue(
+            because: "the HTTP status code is required to distinguish e.g. 403 (denied) from 5xx (server error)");
+    }
+
+    [Fact]
+    public async Task StartPreview_OnFailure_DoesNotLogSensitiveDataFromResponseBodyOrApiKey()
+    {
+        // Regression test: the response body may echo back sensitive values (a leaked token, an
+        // Authorization header, etc.) — none of that may reach the durable telemetry sink. Also
+        // assert the apiKey used to call the API is never logged, even though it's never part of
+        // the response body in this scenario (it's carried as a request header only).
+        const string fakeGitHubToken = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        const string fakeApiKey = "super-secret-api-key-do-not-log";
+        var handler = new CapturingHandler(HttpStatusCode.Forbidden,
+            $$"""{"error":"denied","Authorization":"Bearer {{fakeGitHubToken}}","token":"{{fakeGitHubToken}}"}""");
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
+        var logger = new CapturingLogger();
+
+        var tool = PreviewPublishTool.Build("http://localhost", fakeApiKey, RunId, http, logger: logger);
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 }));
+
+        logger.Entries.Should().NotBeEmpty();
+        foreach (var entry in logger.Entries)
+        {
+            entry.Message.Should().NotContain(fakeGitHubToken,
+                because: "GitHub tokens echoed in a response body must be redacted before logging");
+            entry.Message.Should().NotContain(fakeApiKey,
+                because: "the apiKey used to authenticate to the API must never be logged");
+            entry.Message.Should().NotContain("Bearer " + fakeGitHubToken,
+                because: "Authorization header-shaped values must be redacted before logging");
+        }
     }
 }
 

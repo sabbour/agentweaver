@@ -191,7 +191,7 @@ internal sealed class PreviewRunnerToolProvider(
                     ? "http://localhost:5000"
                     : options.ApiBaseUrl!;
             var apiKey = string.IsNullOrWhiteSpace(context.ApiKey) ? options.ApiKey : context.ApiKey;
-            yield return PreviewPublishTool.Build(apiBaseUrl, apiKey, context.RunId);
+            yield return PreviewPublishTool.Build(apiBaseUrl, apiKey, context.RunId, logger: context.Logger);
         }
     }
 }
