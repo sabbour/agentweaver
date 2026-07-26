@@ -74,6 +74,15 @@ import * as genA2aMtlsCertsDefault from "./steps/gen-a2a-mtls-certs.mjs";
 import * as deployStepDefault from "./steps/30-deploy.mjs";
 import * as verifyStepDefault from "./steps/40-verify.mjs";
 
+// Suggested Key Vault name for a FRESH provisioning run only -- unlike the
+// deploy-only path (variables.mjs's resolveKeyvaultName(), which has NO
+// default), provisioning always creates whatever vault name is given here,
+// so a generic suggestion carries none of the "silently connects to the
+// wrong existing vault" risk that motivated removing the deploy-time
+// default. Still fully editable (interactive prompt) or overridable
+// (--keyvault-name flag / KEYVAULT_NAME env / params file).
+const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
+
 /**
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
  * Recognizes: --skip-postgres, --skip-oauth-key, --image-tag <tag>
@@ -235,7 +244,7 @@ function buildSchema({ prompt, az }) {
     CLUSTER_NAME: { default: DEFAULTS.CLUSTER_NAME },
     ACR_NAME: { default: DEFAULTS.ACR_NAME },
     LOCATION: { default: DEFAULTS.LOCATION },
-    KEYVAULT_NAME: { default: DEFAULTS.KEYVAULT_NAME },
+    KEYVAULT_NAME: { default: PROVISION_KEYVAULT_NAME_SUGGESTION },
     NAMESPACE: { default: DEFAULTS.NAMESPACE },
     GITHUB_CLIENT_ID: {
       required: true,
@@ -335,7 +344,7 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   // --- Resource names (prefilled, editable) ---------------------------------
   collected.CLUSTER_NAME = await prompt.text("AKS cluster name", { default: DEFAULTS.CLUSTER_NAME });
   collected.ACR_NAME = await prompt.text("ACR name", { default: DEFAULTS.ACR_NAME });
-  collected.KEYVAULT_NAME = await prompt.text("Key Vault name", { default: DEFAULTS.KEYVAULT_NAME });
+  collected.KEYVAULT_NAME = await prompt.text("Key Vault name", { default: PROVISION_KEYVAULT_NAME_SUGGESTION });
 
   // --- GitHub OAuth credentials ---------------------------------------------
   log.info("");
