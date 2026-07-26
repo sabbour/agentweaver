@@ -2162,7 +2162,26 @@ public sealed class WorktreeManager
                 continue; // Identical content — safe; the reset changes nothing here.
             }
 
-            // The path is either absent from the result tree or its content diverges —
+            // A Hard Reset only writes to or deletes a path when that path is either
+            // referenced by the result tree (it gets overwritten with the target
+            // content) or currently tracked in the index (a tracked path the result
+            // tree drops gets deleted). An UNTRACKED path that the result tree does not
+            // reference is never touched by the reset — its content cannot be lost — so
+            // it is always safe to leave in place. This is the documented contract
+            // above and matches IsWorkingTreeMergeSafe, which likewise ignores
+            // non-colliding untracked files. Without this, harmless untracked build
+            // artifacts left by a kept-alive preview (e.g. node_modules/ in a demo app
+            // with no .gitignore) would spuriously block an otherwise-reconcilable
+            // merge (#427).
+            var referencedByResult = resultEntry is not null;
+            var trackedInIndex = repo.Index[path] is not null;
+            if (!referencedByResult && !trackedInIndex)
+            {
+                continue; // Untracked and non-colliding — the reset leaves it untouched.
+            }
+
+            // The path is referenced by the result tree with diverging content, or is a
+            // tracked path whose current content diverges from the merge result —
             // reconciling would silently discard content that exists nowhere else.
             blockReason = "uncommitted content diverges from the merge result and cannot be safely reconciled";
             return false;

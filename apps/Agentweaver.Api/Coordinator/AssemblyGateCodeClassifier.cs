@@ -37,7 +37,8 @@ public interface IAssemblyGateCodeClassifier
 /// </summary>
 public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
 {
-    internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(8);
+    internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(30);
+    internal const int MaxClassificationAttempts = 2;
 
     private const string ClassifierCharter =
         "You are deciding whether a software-delivery subtask produces buildable or testable code. " +
@@ -82,19 +83,45 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
                 throw new InvalidOperationException(
                     "Assembly-gate code classification requires a user Copilot token scope.");
 
-            var result = await RunWithTimeoutAsync(
-                token => RunModelTurnAsync(scope, BuildPrompt(context), token),
-                ClassificationTimeout,
-                ct,
-                onTimeout: () => _logger.LogWarning(
-                    "Assembly-gate code classification for run {RunId} timed out; retaining Build & Test.",
-                    context.RunId)).ConfigureAwait(false);
+            bool? result = null;
+            for (var attempt = 1; attempt <= MaxClassificationAttempts; attempt++)
+            {
+                try
+                {
+                    result = await RunWithTimeoutAsync(
+                        token => RunModelTurnAsync(scope, BuildPrompt(context), token),
+                        ClassificationTimeout,
+                        ct,
+                        onTimeout: () => _logger.LogWarning(
+                            "Assembly-gate code classification for run {RunId} timed out on attempt {Attempt}/{MaxAttempts}.",
+                            context.RunId, attempt, MaxClassificationAttempts)).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (attempt < MaxClassificationAttempts)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Assembly-gate code classification for run {RunId} failed on attempt {Attempt}/{MaxAttempts}; retrying once.",
+                        context.RunId, attempt, MaxClassificationAttempts);
+                    continue;
+                }
+
+                if (result is not null)
+                    break;
+            }
 
             _logger.LogInformation(
                 "Assembly-gate code classification for run {RunId}: {Decision}",
                 context.RunId,
                 result?.ToString() ?? "unparseable/timed-out");
             return result;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -144,6 +171,8 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
                     Content = ClassifierCharter,
                 },
                 Tools = [],
+                AvailableTools = [],
+                OnPermissionRequest = CopilotWorkflowSelectionModel.RejectAllToolPermissionHandler,
                 Model = _modelId,
                 EnableConfigDiscovery = false,
                 Streaming = true,

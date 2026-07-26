@@ -7,11 +7,14 @@ import {
   resolveVariables,
   deriveImageTag,
   validateImageTag,
+  resolveKeyvaultName,
   InvalidImageTagError,
+  MissingRequiredVariableError,
   DEFAULTS,
 } from "../variables.mjs";
 
 const FAKE_REPO_ROOT = "C:\\fake\\repo";
+const TEST_KEYVAULT_NAME = "test-kv-fixture";
 
 test("validateImageTag: rejects 'latest' and 'latest-release'", () => {
   assert.throws(() => validateImageTag("latest", "IMAGE_TAG"), InvalidImageTagError);
@@ -75,9 +78,31 @@ test("deriveImageTag: rejects IMAGE_TAG='latest' supplied explicitly via env", a
   );
 });
 
+test("resolveKeyvaultName: throws MissingRequiredVariableError when unset (no generic default)", () => {
+  assert.throws(() => resolveKeyvaultName({}), MissingRequiredVariableError);
+  assert.throws(() => resolveKeyvaultName({ KEYVAULT_NAME: "" }), MissingRequiredVariableError);
+});
+
+test("resolveKeyvaultName: returns the explicit env override verbatim", () => {
+  assert.equal(resolveKeyvaultName({ KEYVAULT_NAME: "my-real-vault" }), "my-real-vault");
+});
+
+test("resolveVariables: throws MissingRequiredVariableError when KEYVAULT_NAME is unset (fail-fast, no bogus default)", async () => {
+  await assert.rejects(
+    () =>
+      resolveVariables({
+        env: {},
+        repoRoot: FAKE_REPO_ROOT,
+        resolveLive: false,
+        gitShortSha: async () => "deadbee",
+      }),
+    MissingRequiredVariableError,
+  );
+});
+
 test("resolveVariables: applies env-var defaults matching 00-variables.sh", async () => {
   const vars = await resolveVariables({
-    env: {},
+    env: { KEYVAULT_NAME: TEST_KEYVAULT_NAME },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
     gitShortSha: async () => "deadbee",
@@ -86,14 +111,26 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.CLUSTER_NAME, DEFAULTS.CLUSTER_NAME);
   assert.equal(vars.ACR_NAME, DEFAULTS.ACR_NAME);
   assert.equal(vars.LOCATION, DEFAULTS.LOCATION);
-  assert.equal(vars.KEYVAULT_NAME, DEFAULTS.KEYVAULT_NAME);
+  assert.equal(vars.KEYVAULT_NAME, TEST_KEYVAULT_NAME, "KEYVAULT_NAME has no generic default -- must come from env");
   assert.equal(vars.NAMESPACE, DEFAULTS.NAMESPACE);
   assert.equal(vars.KATA_POOL_NAME, DEFAULTS.KATA_POOL_NAME);
   assert.equal(vars.APP_POOL_NAME, DEFAULTS.APP_POOL_NAME);
   assert.equal(vars.ACR_LOGIN_SERVER, `${DEFAULTS.ACR_NAME}.azurecr.io`);
-  assert.equal(vars.AGENTHOST_KEYVAULT_URI, `https://${DEFAULTS.KEYVAULT_NAME}.vault.azure.net/`);
+  assert.equal(vars.AGENTHOST_KEYVAULT_URI, `https://${TEST_KEYVAULT_NAME}.vault.azure.net/`);
   assert.equal(vars.IMAGE_TAG, "deadbee");
   assert.equal(vars.AGENTHOST_IMAGE_TAG, "deadbee", "AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG");
+  assert.equal(vars.GITHUB_ALLOWED_ORG, DEFAULTS.GITHUB_ALLOWED_ORG, "defaults to microsoft");
+  assert.equal(vars.GITHUB_ALLOWED_ORG, "microsoft");
+});
+
+test("resolveVariables: GITHUB_ALLOWED_ORG env override beats the microsoft default", async () => {
+  const vars = await resolveVariables({
+    env: { GITHUB_ALLOWED_ORG: "microsoft,contoso", KEYVAULT_NAME: TEST_KEYVAULT_NAME },
+    repoRoot: FAKE_REPO_ROOT,
+    resolveLive: false,
+    gitShortSha: async () => "deadbee",
+  });
+  assert.equal(vars.GITHUB_ALLOWED_ORG, "microsoft,contoso");
 });
 
 test("resolveVariables: env overrides beat defaults for every field", async () => {
@@ -138,7 +175,7 @@ test("resolveVariables: resolveLive=false skips az entirely (no Azure needed for
     },
   };
   const vars = await resolveVariables({
-    env: {},
+    env: { KEYVAULT_NAME: TEST_KEYVAULT_NAME },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
     az,
@@ -146,6 +183,7 @@ test("resolveVariables: resolveLive=false skips az entirely (no Azure needed for
   });
   assert.equal(vars.TENANT_ID, "");
   assert.equal(vars.IDENTITY_CLIENT_ID, "");
+  assert.equal(vars.AGENTHOST_IDENTITY_CLIENT_ID, "");
   assert.equal(vars.APPINSIGHTS_WORKSPACE_ID, "");
 });
 
@@ -158,7 +196,7 @@ test("resolveVariables: resolveLive=true calls stubbed az helpers with the right
     },
     getIdentityClientId: async (rg, name) => {
       calls.push(["identity", rg, name]);
-      return "client-abc";
+      return name === "agentweaver-agenthost-identity" ? "agenthost-client-abc" : "client-abc";
     },
     getLogAnalyticsWorkspaceCustomerId: async (rg, name) => {
       calls.push(["workspace", rg, name]);
@@ -166,7 +204,7 @@ test("resolveVariables: resolveLive=true calls stubbed az helpers with the right
     },
   };
   const vars = await resolveVariables({
-    env: { RESOURCE_GROUP: "my-rg" },
+    env: { RESOURCE_GROUP: "my-rg", KEYVAULT_NAME: TEST_KEYVAULT_NAME },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: true,
     az,
@@ -174,10 +212,12 @@ test("resolveVariables: resolveLive=true calls stubbed az helpers with the right
   });
   assert.equal(vars.TENANT_ID, "tenant-123");
   assert.equal(vars.IDENTITY_CLIENT_ID, "client-abc");
+  assert.equal(vars.AGENTHOST_IDENTITY_CLIENT_ID, "agenthost-client-abc");
   assert.equal(vars.APPINSIGHTS_WORKSPACE_ID, "workspace-xyz");
   assert.deepEqual(calls, [
     "tenant",
     ["identity", "my-rg", "agentweaver-api-identity"],
+    ["identity", "my-rg", "agentweaver-agenthost-identity"],
     ["workspace", "my-rg", "agentweaver-logs"],
   ]);
 });
@@ -198,7 +238,9 @@ test("resolveVariables: env-supplied live fields short-circuit az (lazy resoluti
     env: {
       TENANT_ID: "env-tenant",
       IDENTITY_CLIENT_ID: "env-client",
+      AGENTHOST_IDENTITY_CLIENT_ID: "env-agenthost-client",
       APPINSIGHTS_WORKSPACE_ID: "env-workspace",
+      KEYVAULT_NAME: TEST_KEYVAULT_NAME,
     },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: true,
@@ -207,6 +249,7 @@ test("resolveVariables: env-supplied live fields short-circuit az (lazy resoluti
   });
   assert.equal(vars.TENANT_ID, "env-tenant");
   assert.equal(vars.IDENTITY_CLIENT_ID, "env-client");
+  assert.equal(vars.AGENTHOST_IDENTITY_CLIENT_ID, "env-agenthost-client");
   assert.equal(vars.APPINSIGHTS_WORKSPACE_ID, "env-workspace");
 });
 
@@ -214,7 +257,7 @@ test("resolveVariables: AGENTHOST_IMAGE_TAG explicit override is validated indep
   await assert.rejects(
     () =>
       resolveVariables({
-        env: { IMAGE_TAG: "v1.0.0", AGENTHOST_IMAGE_TAG: "latest" },
+        env: { IMAGE_TAG: "v1.0.0", AGENTHOST_IMAGE_TAG: "latest", KEYVAULT_NAME: TEST_KEYVAULT_NAME },
         repoRoot: FAKE_REPO_ROOT,
         resolveLive: false,
         gitShortSha: async () => "deadbee",

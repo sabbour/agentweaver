@@ -41,6 +41,42 @@ internal static bool IsOwner(HttpContext context, Run run) =>
 /// child run knows the request_id. This is the server-side, definitive owning-run resolution that
 /// makes tool approval robust regardless of which run id the client targets (recurrence of #196).
 /// </summary>
+/// <summary>
+/// Synthetic run-id suffixes used to key approval-gate context for coordinator-phase LLM turns
+/// (drafting, decomposing, orchestrating) that run under the coordinator's OWN run id rather than
+/// a persisted child subtask run — see <c>CopilotCoordinatorSpecDrafter</c> (SetupAsync runId:
+/// <c>input.RunId + "-coordinator-draft"</c>) and <c>IRunAgentHostContextResolver</c>'s matching
+/// list. These ids never exist as RunStore rows, so the child-subtask fan-out below can never find
+/// them; they must be checked directly against the posted (parent) run id first.
+/// </summary>
+private static readonly string[] CoordinatorPhaseSuffixes =
+[
+    "-coordinator-draft",
+    "-coordinator-decompose",
+    "-coordinator-orchestrate",
+];
+
+/// <summary>
+/// True when <paramref name="candidateRunId"/> is a synthetic coordinator-phase approval-gate key
+/// (<paramref name="postedRunId"/> + one of <see cref="CoordinatorPhaseSuffixes"/>) rather than a
+/// real, independently-persisted run id. <see cref="ResolveApprovalOwningRunIdAsync"/> can return
+/// such a synthetic id to key the approval-gate lookup, but it is NOT a row in the run store — it
+/// must never be passed to <c>RunId.Parse</c>. Callers should treat it as referring to the SAME
+/// underlying run as <paramref name="postedRunId"/> for ownership/status/RunId-parsing purposes,
+/// while still using the synthetic id (unchanged) as the approval-gate lookup key.
+/// </summary>
+internal static bool IsCoordinatorPhaseSuffixedId(string candidateRunId, string postedRunId)
+{
+    foreach (var suffix in CoordinatorPhaseSuffixes)
+    {
+        if (candidateRunId.Length == postedRunId.Length + suffix.Length
+            && candidateRunId.StartsWith(postedRunId, StringComparison.Ordinal)
+            && candidateRunId.EndsWith(suffix, StringComparison.Ordinal))
+            return true;
+    }
+    return false;
+}
+
 internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
     string postedRunId,
     Run postedRun,
@@ -52,6 +88,13 @@ internal static async Task<string?> ResolveApprovalOwningRunIdAsync(
 {
     if (gate.GetRequestState(postedRunId, requestId) != ToolApprovalRequestState.Unknown)
         return postedRunId;
+
+    foreach (var suffix in CoordinatorPhaseSuffixes)
+    {
+        var suffixedRunId = postedRunId + suffix;
+        if (gate.GetRequestState(suffixedRunId, requestId) != ToolApprovalRequestState.Unknown)
+            return suffixedRunId;
+    }
 
     // Only a coordinator/parent run (ParentRunId == null && AgentName == "Coordinator") fans out to
     // child subtask runs; a plain run or a child never owns another run's approval requests.

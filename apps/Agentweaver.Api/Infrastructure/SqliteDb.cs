@@ -130,6 +130,9 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN blueprint_generation_model TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN workflow_generation_model TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN outcome_spec_generation_model TEXT;", ct);
+        // The secret itself lives in ISecretStore (Key Vault in production); this nullable value is
+        // its per-project lookup key. Existing projects have no configured webhook until rotated.
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN webhook_secret TEXT;", ct);
 
         // Off-board archiving for runs/backlog tasks. NULL means active/non-archived, preserving all
         // existing rows. Archived Ready tasks are excluded from heartbeat pickup and board queries.
@@ -232,6 +235,28 @@ public sealed class SqliteDb
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_project_name ON skills (project_id, name COLLATE NOCASE);", ct);
         await TryAlterAsync(connection,
             "CREATE INDEX IF NOT EXISTS idx_skill_assignments_agent ON skill_assignments (project_id, agent_name);", ct);
+
+        // Project-scoped, user-added skill marketplace sources (step-1b: "add a marketplace by GitHub
+        // repo URL"). Unlike the image-baked config sources, these are added at runtime and persist per
+        // project. subpath is nullable — when blank the catalog indexer auto-detects the layout.
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS skill_marketplace_sources (
+                source_id      TEXT PRIMARY KEY,
+                project_id     TEXT NOT NULL,
+                name           TEXT NOT NULL,
+                repository     TEXT NOT NULL,
+                branch         TEXT,
+                subpath        TEXT,
+                parse_strategy TEXT,
+                enabled        INTEGER NOT NULL DEFAULT 1,
+                created_at     TEXT NOT NULL,
+                updated_at     TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
+            );
+            """, ct);
+        await TryAlterAsync(connection,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_marketplace_sources_project_name ON skill_marketplace_sources (project_id, name COLLATE NOCASE);", ct);
 
         // Owner-private immutable Blueprint package library. Package payloads, raw manifests and
         // descriptive acquisition records share the same owner/package/version key; stores write
@@ -584,6 +609,7 @@ public sealed class SqliteDb
             state                   TEXT NOT NULL DEFAULT 'active',
             created_at              TEXT NOT NULL,
             updated_at              TEXT NOT NULL,
+            webhook_secret          TEXT,
             team_revision           INTEGER NOT NULL DEFAULT 0
         );
 

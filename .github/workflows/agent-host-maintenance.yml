@@ -25,6 +25,8 @@ on:
 permissions:
   contents: read
   security-events: write   # for uploading Trivy SARIF results
+  id-token: write          # for actions/attest-build-provenance (Sigstore/OIDC)
+  attestations: write      # for actions/attest-build-provenance
 
 env:
   ACR: agentweaverregistry.azurecr.io
@@ -69,15 +71,39 @@ jobs:
             GIT_SHA=${{ github.sha }}
 
       # ── Trivy CVE scan ────────────────────────────────────────────────────────
-      - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
+      # Pinned to the full commit SHA for v0.36.0 (not the mutable 'master' branch)
+      # so a compromised/altered upstream action can't silently change scan
+      # behavior. v0.36.0 is the first clean release tag after the March 2026
+      # trivy-action supply-chain incident (CVE-2026-33634); update this pin
+      # deliberately via a reviewed PR, not Dependabot auto-merge.
+      #
+      # Trivy's SARIF format + exit-code combination has a known bug where
+      # .trivyignore entries are not reliably honored before the exit-code
+      # check runs (https://github.com/aquasecurity/trivy/discussions/9487),
+      # so the actual HIGH/CRITICAL gate is enforced here via `format: table`
+      # (exit-code 1). The SARIF step below is upload-only (exit-code 0) and
+      # never gates the build — it exists purely to populate the Security tab.
+      - name: Run Trivy vulnerability scan (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"          # Fail the build on HIGH/CRITICAL CVEs
+          ignore-unfixed: true    # Only flag CVEs that have a fix available
+          trivyignores: apps/Agentweaver.AgentHost/.trivyignore
+
+      - name: Run Trivy vulnerability scan (SARIF for Security tab)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
           format: sarif
           output: trivy-results.sarif
           severity: HIGH,CRITICAL
-          exit-code: "1"          # Fail the build on HIGH/CRITICAL CVEs
-          ignore-unfixed: true    # Only flag CVEs that have a fix available
+          exit-code: "0"          # Non-gating - the table step above is the real gate
+          ignore-unfixed: true
+          trivyignores: apps/Agentweaver.AgentHost/.trivyignore
 
       - name: Upload Trivy SARIF to GitHub Security tab
         if: always()              # Upload even on scan failure so results are visible
@@ -98,6 +124,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Push to ACR
+        id: push
         if: >
           github.event_name == 'schedule' ||
           (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
@@ -106,15 +133,39 @@ jobs:
           az acr login --name agentweaverregistry
           docker tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
             ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
-          docker push ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          PUSH_OUTPUT=$(docker push ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }})
+          echo "${PUSH_OUTPUT}"
+          DIGEST=$(echo "${PUSH_OUTPUT}" | grep -oP 'digest:\s*\Ksha256:[a-f0-9]+')
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::could not parse pushed image digest from docker push output"
+            exit 1
+          fi
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
           # Also update the 'patched' rolling tag so clusters can reference a known-good base
           docker tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
             ${{ env.ACR }}/${{ env.IMAGE }}:patched
           docker push ${{ env.ACR }}/${{ env.IMAGE }}:patched
 
-          echo "✅ Pushed ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}"
+          echo "✅ Pushed ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} (${DIGEST})"
           echo "✅ Updated rolling tag: ${{ env.ACR }}/${{ env.IMAGE }}:patched"
+
+      # ── Build provenance attestation ─────────────────────────────────────────
+      # 'prov-<sha>' (and 'patched') are ordinary, mutable ACR tags on their own:
+      # anyone with registry write access could re-point them at a different
+      # digest later, with no cryptographic binding back to *this* verified
+      # GitHub Actions run. This generates a Sigstore-backed SLSA provenance
+      # attestation for the exact digest just pushed, and stores it alongside
+      # the image in ACR (OCI referrers) so it can be verified independently
+      # of tag mutability (e.g. `gh attestation verify oci://... --owner ...`).
+      # Pinned to the full commit SHA for v4.1.1, not a floating major-version tag.
+      - name: Attest build provenance
+        if: steps.push.outcome == 'success'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.ACR }}/${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
       - name: Summary
         if: always()

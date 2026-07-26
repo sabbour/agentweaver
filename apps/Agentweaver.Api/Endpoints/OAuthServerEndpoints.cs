@@ -159,7 +159,11 @@ public static class OAuthServerEndpoints
                 if (error is not null)
                     return BadOAuthRequest(error.Error, error.ErrorDescription);
 
-                var org = config["Auth:GitHub:AllowedOrg"]?.Trim();
+                // The org claim is informational and must be one of the allowed orgs so the
+                // GitHubOrgAuthorizationMiddleware fast-path accepts the minted token. Membership was
+                // already verified upstream; with a multi-org allowlist we stamp the FIRST allowed org
+                // (deterministic, and always in the allowed list) — preserving single-org behavior.
+                var org = GitHubOrgList.Parse(config["Auth:GitHub:AllowedOrg"]).FirstOrDefault();
                 var clientId = form["client_id"].ToString();
 
                 var accessToken = tokenService.CreateAccessToken(
@@ -182,6 +186,86 @@ public static class OAuthServerEndpoints
 
             if (string.Equals(grantType, "refresh_token", StringComparison.Ordinal))
             {
+                // Re-validate org membership BEFORE consuming the presented refresh token. The check is
+                // done on a non-consuming PEEK so a fail-closed denial does not rotate the token — a
+                // rotate-then-deny would leave the client holding a now-consumed token and trip reuse
+                // detection (revoking the whole chain) on its next attempt.
+                var peek = await refreshStore.PeekAsync(
+                    form["refresh_token"], form["client_id"], ct: ctx.RequestAborted).ConfigureAwait(false);
+
+                if (peek.Error is not null)
+                    return BadOAuthRequest(peek.Error, peek.ErrorDescription ?? "Refresh failed.");
+
+                var peeked = peek.Grant!;
+
+                // T4: re-validate org membership on refresh so revoked org access propagates within one
+                // access-token lifetime. FAIL CLOSED (Seraph findings-api-data Alert 3 / findings-auth
+                // Alert 4): if the brokered GitHub token is missing/expired, or the membership check is
+                // INCONCLUSIVE (GitHub unreachable / rate-limited / token unauthorized), we DENY the
+                // refresh and require re-authentication rather than falling back to the issuance-time
+                // org claim. A revoked/removed member must not keep minting access tokens for up to the
+                // 90-day refresh window by simply letting their GitHub token lapse. A definitive
+                // non-membership additionally revokes the whole refresh chain.
+                if (orgAuth.IsConfigured)
+                {
+                    var gitHubToken = await gitHubTokens
+                        .GetValidAccessTokenAsync(GitHubTokenScope.ForUser(peeked.GithubLogin), ctx.RequestAborted)
+                        .ConfigureAwait(false);
+
+                    if (string.IsNullOrWhiteSpace(gitHubToken))
+                    {
+                        logger.LogWarning(
+                            "Refused refresh for {Login}: no valid GitHub token available to re-verify org " +
+                            "membership (token revoked/expired). Failing closed; re-authentication required.",
+                            peeked.GithubLogin);
+                        return Results.Json(
+                            new
+                            {
+                                error = "invalid_grant",
+                                error_description =
+                                    "Org membership could not be re-verified (GitHub authorization is no longer " +
+                                    "valid). Please sign in again.",
+                            },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
+
+                    var membership = await orgAuth
+                        .CheckMembershipAsync(gitHubToken, peeked.GithubLogin, ctx.RequestAborted)
+                        .ConfigureAwait(false);
+
+                    if (membership is OrgAuthResult.Denied or OrgAuthResult.OrgAccessNotGranted)
+                    {
+                        await refreshStore.RevokeAsync(form["refresh_token"], ctx.RequestAborted).ConfigureAwait(false);
+                        logger.LogWarning(
+                            "Refused refresh for {Login}: org membership re-check returned {Result}. " +
+                            "Refresh chain revoked.",
+                            peeked.GithubLogin, membership);
+                        return Results.Json(
+                            new { error = "access_denied", error_description = "Org membership is no longer valid." },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
+
+                    if (membership == OrgAuthResult.Inconclusive)
+                    {
+                        // FAIL CLOSED on an inconclusive re-check. We do NOT consume/revoke the token so
+                        // the client can retry once GitHub is reachable / after re-authenticating; we
+                        // simply refuse to mint a new access token on an unverifiable membership.
+                        logger.LogWarning(
+                            "Refused refresh for {Login}: org membership re-check was INCONCLUSIVE " +
+                            "(GitHub unreachable / rate-limited / token unauthorized). Failing closed.",
+                            peeked.GithubLogin);
+                        return Results.Json(
+                            new
+                            {
+                                error = "invalid_grant",
+                                error_description =
+                                    "Org membership could not be re-verified at this time. Please retry or sign in again.",
+                            },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
+                }
+
+                // Membership confirmed (or org enforcement not configured) — consume the token atomically.
                 var rotation = await refreshStore.RotateAsync(
                     form["refresh_token"], form["client_id"], ctx.RequestAborted).ConfigureAwait(false);
 
@@ -189,44 +273,6 @@ public static class OAuthServerEndpoints
                     return BadOAuthRequest(rotation.Error, rotation.ErrorDescription ?? "Refresh failed.");
 
                 var grant = rotation.Grant!;
-
-                // T4: re-validate org membership on refresh so revoked org access propagates within
-                // one access-token lifetime. Best-effort: if the brokered GitHub token is unavailable
-                // or the check is INCONCLUSIVE (the brokered token has expired / GitHub is unreachable)
-                // we fall back to the org captured at issuance rather than hard-denying — otherwise a
-                // private-org member would be locked out every ~8h when GitHub's user token expires
-                // (Seraph T4–T7 review, Fix 2). Only a DEFINITIVE non-membership revokes + denies.
-                if (orgAuth.IsConfigured)
-                {
-                    var gitHubToken = await gitHubTokens
-                        .GetValidAccessTokenAsync(GitHubTokenScope.ForUser(grant.GithubLogin), ctx.RequestAborted)
-                        .ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(gitHubToken))
-                    {
-                        var membership = await orgAuth
-                            .CheckMembershipAsync(gitHubToken, grant.GithubLogin, ctx.RequestAborted)
-                            .ConfigureAwait(false);
-
-                        if (membership is OrgAuthResult.Denied or OrgAuthResult.OrgAccessNotGranted)
-                        {
-                            await refreshStore.RevokeAsync(form["refresh_token"], ctx.RequestAborted).ConfigureAwait(false);
-                            logger.LogWarning(
-                                "Refused refresh for {Login}: org membership re-check returned {Result}.",
-                                grant.GithubLogin, membership);
-                            return Results.Json(
-                                new { error = "access_denied", error_description = "Org membership is no longer valid." },
-                                statusCode: StatusCodes.Status403Forbidden);
-                        }
-
-                        if (membership == OrgAuthResult.Inconclusive)
-                        {
-                            logger.LogInformation(
-                                "Org re-check inconclusive for {Login} on refresh (brokered GitHub token " +
-                                "likely expired); falling back to the issuance-time org claim '{Org}'.",
-                                grant.GithubLogin, grant.Org);
-                        }
-                    }
-                }
 
                 var accessToken = tokenService.CreateAccessToken(
                     issuer, audience, grant.Subject, grant.GithubLogin, grant.Org);

@@ -6,6 +6,111 @@ title: MCP CLI operator guide
 
 Use this guide when driving Agentweaver from Copilot CLI, Claude Desktop, or another MCP client.
 
+## Connecting a client
+
+The hosted MCP endpoint is `https://<your-agentweaver-host>/mcp`. In the web app,
+open **Account settings → MCP clients** to copy the URL and a client-specific configuration.
+
+The MCP server accepts the same bearer-token model as Agentweaver's web/API session.
+Agentweaver intentionally does not render the browser session token in the UI. Use an
+existing GitHub bearer token instead—for example, obtain the token used by GitHub CLI
+with `gh auth token`—or let a client that supports MCP OAuth complete its interactive
+sign-in flow. Set it in your client environment as `AGENTWEAVER_TOKEN`; do not commit it
+to a configuration file.
+
+### Local (stdio)
+
+For a locally launched server (`dotnet run --project apps/Agentweaver.Mcp -- --stdio`, which is what
+Copilot CLI does via the workspace `.mcp.json`), there is no interactive OAuth handshake and no
+inbound HTTP request to carry your identity. Provide your **own** per-user token so the backend
+attributes calls to you and enforces project ownership:
+
+```jsonc
+{
+  "mcpServers": {
+    "agentweaver": {
+      "command": "dotnet",
+      "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
+      "env": {
+        "AGENTWEAVER_API_URL": "http://localhost:5000",
+        // Your own bearer — e.g. `gh auth token`. Do NOT use the shared internal service key.
+        "AGENTWEAVER_TOKEN": "${input:agentweaver-token}"
+      }
+    }
+  }
+}
+```
+
+::: danger Never configure `AGENTWEAVER_API_KEY` on a stdio client
+`AGENTWEAVER_API_KEY` is the internal service-to-service credential. The API maps it to the
+`agentweaver-internal` identity, which is **exempt from project-ownership checks**, so a stdio
+client holding it could read or mutate *any* project regardless of ownership (issue #474). Use your
+personal `AGENTWEAVER_TOKEN` instead. If a stdio server starts with only `AGENTWEAVER_API_KEY` set,
+it refuses to start and logs an error to stderr. To force the insecure fallback for legitimate
+service-to-service use cases, you must explicitly set `AGENTWEAVER_ALLOW_SHARED_KEY=true`.
+:::
+
+### Claude Desktop
+
+Add this to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "agentweaver": {
+      "url": "https://<your-agentweaver-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AGENTWEAVER_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### VS Code
+
+Add this to your `mcp.json`:
+
+```json
+{
+  "servers": {
+    "agentweaver": {
+      "type": "http",
+      "url": "https://<your-agentweaver-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:agentweaver-token}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "agentweaver-token",
+      "type": "promptString",
+      "description": "Your existing Agentweaver/GitHub bearer token",
+      "password": true
+    }
+  ]
+}
+```
+
+### GitHub Copilot CLI
+
+Add this to `.copilot/mcp-config.json` (or `~/.copilot/mcp-config.json`):
+
+```json
+{
+  "mcpServers": {
+    "agentweaver": {
+      "type": "http",
+      "url": "https://<your-agentweaver-host>/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AGENTWEAVER_TOKEN}"
+      }
+    }
+  }
+}
+```
+
 ## Auth-first
 
 Before repo-backed or run-backed work, verify auth:

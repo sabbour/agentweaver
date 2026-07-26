@@ -446,6 +446,9 @@ public sealed class SqliteToPostgresMigrator
         var teamRevision = await HasColumnAsync(conn, "projects", "team_revision", ct)
             ? "team_revision"
             : "0 AS team_revision";
+        var webhookSecret = await HasColumnAsync(conn, "projects", "webhook_secret", ct)
+            ? "webhook_secret"
+            : "NULL AS webhook_secret";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -458,7 +461,7 @@ public sealed class SqliteToPostgresMigrator
                    default_workflow_id, active_review_policy_name, sandbox_profile,
                    source_blueprint_id, source_blueprint_type,
                    blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-                   allowed_workflow_ids, {teamRevision}
+                   allowed_workflow_ids, {webhookSecret}, {teamRevision}
               FROM projects;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -491,7 +494,8 @@ public sealed class SqliteToPostgresMigrator
                 WorkflowGenerationModel = reader.IsDBNull(22) ? null : reader.GetString(22),
                 OutcomeSpecGenerationModel = reader.IsDBNull(23) ? null : reader.GetString(23),
                 AllowedWorkflowIds = reader.IsDBNull(24) ? null : reader.GetString(24),
-                TeamRevision = reader.GetInt64(25),
+                WebhookSecret = reader.IsDBNull(25) ? null : reader.GetString(25),
+                TeamRevision = reader.GetInt64(26),
             });
         }
         return results;

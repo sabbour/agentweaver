@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vitepress'
 import './custom.css'
 import WorkflowProof from './components/WorkflowProof.vue'
+import CopyButton from './components/CopyButton.vue'
 
 const BOUND_ATTR = 'data-lightbox-bound'
 
@@ -63,6 +64,7 @@ export default {
   extends: DefaultTheme,
   enhanceApp({ app }) {
     app.component('WorkflowProof', WorkflowProof)
+    app.component('CopyButton', CopyButton)
   },
   setup() {
     if (import.meta.env.SSR || typeof window === 'undefined') return

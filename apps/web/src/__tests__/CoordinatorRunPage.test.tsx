@@ -3,7 +3,7 @@ import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
-import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
+import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DESCRIPTOR_DELEGATED, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
@@ -300,6 +300,48 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(text).toContain('RAI Review');
     expect(text).toContain('Human Review');
     expect(within(inspector).getByTestId('topology-toolbar')).toBeTruthy();
+  });
+
+  it('renders skipped assembly stages as "Delegated to backlog" on a delegated run (not Pending forever)', async () => {
+    // A fully-promoted run: every story became an independent Board task, so the coordinator run is
+    // terminal (delegated_to_backlog) and RAI / Human Review / Merge / Scribe are intentionally
+    // skipped. They must render as a terminal "Delegated to backlog" state, never Pending forever.
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR_DELEGATED);
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'completed',
+      coordinator_status: 'delegated',
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    // All four skipped assembly stages read "Delegated to backlog" in the run tree.
+    await screen.findByRole('treeitem', { name: /Select RAI Review: Delegated to backlog/i }, { timeout: 4000 });
+    expect(screen.getByRole('treeitem', { name: /Select Human Review: Delegated to backlog/i })).toBeTruthy();
+    expect(screen.getByRole('treeitem', { name: /Select Merge: Delegated to backlog/i })).toBeTruthy();
+    expect(screen.getByRole('treeitem', { name: /Select Scribe: Delegated to backlog/i })).toBeTruthy();
+
+    // None of the assembly stages linger as Pending.
+    expect(screen.queryByRole('treeitem', { name: /Select Human Review: Pending/i })).toBeNull();
+    expect(screen.queryByRole('treeitem', { name: /Select Scribe: Pending/i })).toBeNull();
+  });
+
+  it('drives the delegated state from coordinator_status even without a per-node server marker', async () => {
+    // Server-marker path is covered above; this pins the frontend fallback: when the descriptor
+    // nodes are plain "planned" (no status) but coordinator_status is "delegated", the assembly
+    // stages still terminalize as "Delegated to backlog".
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DESCRIPTOR);
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'completed',
+      coordinator_status: 'delegated',
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await screen.findByRole('treeitem', { name: /Select Human Review: Delegated to backlog/i }, { timeout: 4000 });
+    expect(screen.getByRole('treeitem', { name: /Select Scribe: Delegated to backlog/i })).toBeTruthy();
+    expect(screen.queryByRole('treeitem', { name: /Select Merge: Pending/i })).toBeNull();
   });
 
   it('renders planned assembly nodes with "Planned" badge (visually distinct)', async () => {

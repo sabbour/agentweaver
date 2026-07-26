@@ -91,22 +91,47 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Unrestricted outbound egress (all destinations, all ports) except IMDS/cloud metadata.
+    # Public HTTPS egress (port 443 only), with cluster/private/link-local ranges denied.
     #
-    # Research/coding agents running in the sandbox need arbitrary outbound network access
-    # (package registries, APIs, git over various ports, RFC1918/VNet resources, etc.), so this
-    # is intentionally an allow-all-destinations rule rather than a domain/IP allowlist.
+    # HARDENING (security: sandbox egress containment): this rule previously allowed
+    # 0.0.0.0/0 on EVERY port, excluding only 169.254.0.0/16. Because Kubernetes/Cilium
+    # NetworkPolicies are additive (union), that effectively made the sandbox egress an
+    # allow-all and overrode the tighter agenthost-egress-allowlist. A compromised sandbox
+    # could exfiltrate over arbitrary ports and reach cluster Services, nodes, and
+    # RFC1918/VNet resources. This rule is now aligned with the proven, live-validated
+    # public-HTTPS rule in networkpolicy-agenthost-egress.yaml (agenthost-egress-allowlist):
     #
-    # Why not Cilium toFQDNs: these pods run as kata VMs (Pod Sandboxing). Cilium intercepts
-    # DNS for FQDN policy on the HOST kernel via eBPF; the kata guest kernel's DNS queries
-    # never traverse those host hooks, so the FQDN->IP map never builds and listed hostnames
-    # are still blocked. Only IP-based rules are enforced for kata pods (at the virtual NIC).
+    #   * Only TCP/443 is permitted outbound (GitHub API, Copilot API, npm/PyPI/NuGet and
+    #     other package registries, Azure Key Vault / Entra ID all use HTTPS). Registries and
+    #     git-over-HTTPS do not need non-443 ports; git+ssh (22) is intentionally not opened.
+    #   * RFC1918 (10/8, 172.16/12, 192.168/16), CGNAT/link-local (169.254/16), and the IPv6
+    #     ULA/link-local ranges are excluded to block lateral movement to in-cluster
+    #     Services/ClusterIPs, nodes, VNet resources, and IMDS (169.254.169.254) SSRF.
     #
-    # The only remaining block is 169.254.0.0/16 (link-local) to prevent access to the
-    # cloud-metadata/IMDS endpoint (169.254.169.254) and theft of the node's managed-identity
-    # token via SSRF. kube-dns remains explicitly allowed by the DNS rule above.
+    # East-west access to the in-cluster API/MCP ClusterIPs (which live in 10.0.0.0/8 and are
+    # therefore excluded here) is authorized separately and correctly by the identity-based
+    # (podSelector) rules in networkpolicy-agenthost-egress.yaml — a CIDR allow never matches
+    # Cilium pod identities anyway, so removing the 10/8 hole does not affect API/MCP reach.
+    #
+    # Why not Cilium toFQDNs for a domain allowlist: these pods run as kata VMs (Pod
+    # Sandboxing). Cilium intercepts DNS for FQDN policy on the HOST kernel via eBPF; the kata
+    # guest kernel's DNS queries never traverse those host hooks, so the FQDN->IP map never
+    # builds and listed hostnames are still blocked. Only IP-based rules are enforced for kata
+    # pods (at the virtual NIC), so an IP-CIDR allow scoped to 443 is the enforceable control.
+    # kube-dns remains explicitly allowed by the DNS rule above.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
               - 169.254.0.0/16
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - fc00::/7
+              - fe80::/10
+      ports:
+        - protocol: TCP
+          port: 443

@@ -41,7 +41,10 @@ public interface IStoryIndependenceClassifier
 
 public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
 {
-    internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(8);
+    // Keep the outer classifier deadline aligned with AgentRuntime's established 30-second
+    // default operation window instead of pre-empting otherwise healthy Copilot turns at 8 seconds.
+    internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(30);
+    internal const int MaxClassificationAttempts = 2;
 
     private const string ClassifierCharter =
         "You are deciding whether a dependency-connected group of stories from a PRD decomposition " +
@@ -88,19 +91,38 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
                     "Story-independence classification requires a user Copilot token scope; installation scope is not permitted.");
 
             var prompt = BuildPrompt(context);
-            var result = await RunWithTimeoutAsync(
+            var result = await RunWithRetryAsync(
                 token => RunModelTurnAsync(scope, prompt, token),
                 ClassificationTimeout,
+                MaxClassificationAttempts,
                 ct,
-                onTimeout: () => _logger.LogWarning(
-                    "Story-independence classification for run {RunId} timed out; failing closed to inline.",
-                    context.RunId)).ConfigureAwait(false);
+                onTimeout: attempt => _logger.LogWarning(
+                    "Story-independence classification for run {RunId} timed out on attempt {Attempt}/{MaxAttempts}.",
+                    context.RunId,
+                    attempt,
+                    MaxClassificationAttempts),
+                onRetryableError: (ex, attempt) => _logger.LogWarning(
+                    ex,
+                    "Story-independence classification for run {RunId} failed on attempt {Attempt}/{MaxAttempts}; retrying once.",
+                    context.RunId,
+                    attempt,
+                    MaxClassificationAttempts)).ConfigureAwait(false);
 
             _logger.LogInformation(
                 "Story-independence classification for run {RunId}: {Decision}",
                 context.RunId,
                 result?.IsIndependentDeliverable.ToString() ?? "unparseable/timed-out");
+            if (result is null)
+            {
+                _logger.LogWarning(
+                    "Story-independence classification for run {RunId} exhausted its bounded attempts; failing closed to inline.",
+                    context.RunId);
+            }
             return result;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -130,6 +152,47 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
         }
     }
 
+    internal static async Task<StoryIndependenceClassificationResult?> RunWithRetryAsync(
+        Func<CancellationToken, Task<string?>> modelTurn,
+        TimeSpan timeout,
+        int maxAttempts,
+        CancellationToken ct,
+        Action<int>? onTimeout = null,
+        Action<Exception, int>? onRetryableError = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var timedOut = false;
+            try
+            {
+                var result = await RunWithTimeoutAsync(
+                    modelTurn,
+                    timeout,
+                    ct,
+                    onTimeout: () =>
+                    {
+                        timedOut = true;
+                        onTimeout?.Invoke(attempt);
+                    }).ConfigureAwait(false);
+
+                if (result is not null || !timedOut || attempt == maxAttempts)
+                    return result;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (attempt < maxAttempts)
+            {
+                onRetryableError?.Invoke(ex, attempt);
+            }
+        }
+
+        return null;
+    }
+
     private async Task<string?> RunModelTurnAsync(
         GitHubTokenScope scope,
         string prompt,
@@ -150,6 +213,8 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
                     Content = ClassifierCharter,
                 },
                 Tools = [],
+                AvailableTools = [],
+                OnPermissionRequest = CopilotWorkflowSelectionModel.RejectAllToolPermissionHandler,
                 Model = _modelId,
                 EnableConfigDiscovery = false,
                 Streaming = true,

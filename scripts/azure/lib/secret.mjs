@@ -6,6 +6,9 @@
 // this toolchain MUST run text through redact()/redactArgs() before it is
 // written anywhere (stdout, files, error messages).
 
+import fs from "node:fs";
+import path from "node:path";
+
 const REDACTED = "***REDACTED***";
 
 // value -> label (label is only used for internal bookkeeping/debug; the
@@ -69,3 +72,41 @@ export function redactArgs(args) {
 }
 
 export const REDACTED_MARKER = REDACTED;
+
+/**
+ * Writes `value` to a private (0600 where the platform supports it), unique
+ * scratch file under `scratchDir` and invokes `callback(filePath)`, always
+ * deleting the file afterwards -- even if `callback` throws. Use this instead
+ * of passing a secret value as a CLI argument: argv is visible to any
+ * co-resident process/user via `ps`/`/proc/<pid>/cmdline` for the whole
+ * lifetime of the command, whereas a file path is not sensitive and the file
+ * itself is removed as soon as the command that reads it exits. Mirrors the
+ * pattern already used for the RSA signing key in
+ * steps/16-provision-oauth-signing-key.mjs.
+ *
+ * @template T
+ * @param {string} scratchDir
+ * @param {string} filenamePrefix
+ * @param {string} value
+ * @param {(filePath: string) => Promise<T> | T} callback
+ * @param {{ fsImpl?: typeof fs }} [opts]
+ * @returns {Promise<T>}
+ */
+export async function withSecretFile(scratchDir, filenamePrefix, value, callback, { fsImpl = fs } = {}) {
+  fsImpl.mkdirSync(scratchDir, { recursive: true });
+  const filePath = path.join(scratchDir, `${filenamePrefix}-${process.pid}-${Date.now()}.tmp`);
+  fsImpl.writeFileSync(filePath, value, { mode: 0o600 });
+  try {
+    // Best-effort: writeFileSync's mode is umask-subject on POSIX, so set it
+    // explicitly too. No-op (and harmless) on Windows, which doesn't support
+    // POSIX file mode bits.
+    fsImpl.chmodSync(filePath, 0o600);
+  } catch {
+    // Ignore -- not fatal if chmod isn't supported (e.g. some Windows setups).
+  }
+  try {
+    return await callback(filePath);
+  } finally {
+    fsImpl.rmSync(filePath, { force: true });
+  }
+}

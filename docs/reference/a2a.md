@@ -134,7 +134,7 @@ A `kube-exec-stdio` channel exists for its own per-command purposes and remains 
 | `Sandbox:AgentHost:A2APath` | `/a2a/agent` *(default)* | Base A2A path; routes are `{path}/v1/message:stream` and `{path}/v1/card`. Must match the pod's `AgentHost:A2APath`. |
 | Runtime turn token | generated per run | 256-bit random bearer required on `POST …/v1/message:stream`; delivered to the claimed warm pod by `POST /configure` and stored worker-side in `IAgentHostTurnTokenRegistry`. Empty is local/test only. |
 | `AgentHost:CardBearerToken` | token / empty | Bearer required on `…/v1/card` (H3); empty disables the gate (dev/test only). |
-| `AgentHost:KeyVaultUri` | URI / empty | Enables warm-pool runtime fetch of the configured user token from Key Vault via workload identity. |
+| `AgentHost:KeyVaultUri` | URI / empty | Names the vault for the legacy runtime-fetch fallback; under the KV-less sandbox identity (issue #471) this fails closed and the run owner's token arrives via the brokered `gitHubAccessToken` in `/configure`. |
 | `AgentHost:KvTokenMountPath` | path / empty | Local CSI-mounted token path; superseded by `AgentHost:KeyVaultUri` in AKS. |
 | `AgentHost:UseSharedTokenStore` | `true` / `false` *(default)* | Local compatibility only. Production AKS stores per-user GitHub tokens in Key Vault and does not mirror them to the shared workspace PVC. |
 

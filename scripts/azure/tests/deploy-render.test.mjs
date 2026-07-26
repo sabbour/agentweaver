@@ -41,8 +41,9 @@ const VARS = {
   IMAGE_TAG: "v0.9.71",
   AGENTHOST_IMAGE_TAG: "v0.9.71-agenthost",
   IDENTITY_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
-  KEYVAULT_NAME: "agentweaver-kv",
-  AGENTHOST_KEYVAULT_URI: "https://agentweaver-kv.vault.azure.net/",
+  AGENTHOST_IDENTITY_CLIENT_ID: "99999999-8888-7777-6666-555555555555",
+  KEYVAULT_NAME: "test-kv-fixture",
+  AGENTHOST_KEYVAULT_URI: "https://test-kv-fixture.vault.azure.net/",
   TENANT_ID: "66666666-7777-8888-9999-000000000000",
   PREVIEW_HOSTNAME: "*.abc123def456.westus2.staging.aksapp.io",
   PREVIEW_TLS_SECRET: "agentweaver-tls",
@@ -81,10 +82,22 @@ test("buildRuntimeConfigLiterals() composites full URLs from HOST and passes thr
     literals.GITHUB_CALLBACK_URL,
     "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/callback",
   );
-  assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://agentweaver-kv.vault.azure.net");
-  assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://agentweaver-kv.vault.azure.net/");
+  assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
+  assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net/");
+  assert.equal(literals.IDENTITY_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
+  assert.equal(literals.AGENTHOST_IDENTITY_CLIENT_ID, "99999999-8888-7777-6666-555555555555");
   assert.equal(literals.APPINSIGHTS_WORKSPACE_ID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
   assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
+});
+
+test("buildRuntimeConfigLiterals() passes GITHUB_ALLOWED_ORG through, defaulting to microsoft", () => {
+  // Config-driven, non-committed value: falls back to the committed default when unset...
+  assert.equal(buildRuntimeConfigLiterals(VARS).GITHUB_ALLOWED_ORG, "microsoft");
+  // ...and passes a supplied (possibly multi-org) value through verbatim.
+  assert.equal(
+    buildRuntimeConfigLiterals({ ...VARS, GITHUB_ALLOWED_ORG: "microsoft,contoso" }).GITHUB_ALLOWED_ORG,
+    "microsoft,contoso",
+  );
 });
 
 test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
@@ -97,6 +110,7 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.match(rewritten, /- "HOST=agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io"/);
   assert.match(rewritten, /- "PREVIEW_HOSTNAME=\*\.abc123def456\.westus2\.staging\.aksapp\.io"/);
   assert.match(rewritten, /- "IDENTITY_CLIENT_ID=11111111-2222-3333-4444-555555555555"/);
+  assert.match(rewritten, /- "AGENTHOST_IDENTITY_CLIENT_ID=99999999-8888-7777-6666-555555555555"/);
   assert.match(rewritten, /- "TENANT_ID=66666666-7777-8888-9999-000000000000"/);
   // Untouched structural content (resources:/replacements: blocks) should survive verbatim.
   assert.match(rewritten, /resources:\s*\n\s*- \.\.\/\.\.\/base/);
@@ -118,7 +132,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /hostname: agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io/);
   assert.match(builtYaml, /hostname: '\*\.abc123def456\.westus2\.staging\.aksapp\.io'/);
   assert.match(builtYaml, /clientID: 11111111-2222-3333-4444-555555555555/);
-  assert.match(builtYaml, /keyvaultName: agentweaver-kv/);
+  assert.match(builtYaml, /keyvaultName: test-kv-fixture/);
   assert.match(builtYaml, /tenantId: 66666666-7777-8888-9999-000000000000/);
   assert.match(builtYaml, /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/);
   assert.match(builtYaml, /azure\.workload\.identity\/tenant-id: 66666666-7777-8888-9999-000000000000/);
@@ -126,6 +140,26 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.doesNotMatch(builtYaml, /example\.com/);
 
   const docs = parseBuiltDocs(builtYaml);
+  // issue #471: the AgentHost ServiceAccount must be wired to the DEDICATED KV-less identity, while
+  // the API/MCP ServiceAccounts keep the KV-privileged API identity.
+  const agentHostSaManifest = manifestForFilename(docs, "serviceaccount-agenthost.yaml");
+  assert.match(
+    agentHostSaManifest,
+    /azure\.workload\.identity\/client-id: 99999999-8888-7777-6666-555555555555/,
+    "agent-host ServiceAccount must use the dedicated AGENTHOST_IDENTITY_CLIENT_ID",
+  );
+  assert.doesNotMatch(
+    agentHostSaManifest,
+    /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/,
+    "agent-host ServiceAccount must NOT use the KV-privileged API identity",
+  );
+  const apiSaManifest = manifestForFilename(docs, "serviceaccount-api.yaml");
+  assert.match(
+    apiSaManifest,
+    /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/,
+    "api ServiceAccount must keep the API identity",
+  );
+
   // Every FILE_RESOURCES entry must resolve to a real document in the build
   // -- proves no resource was lost in the base/overlay restructuring.
   for (const [filename, wanted] of Object.entries(FILE_RESOURCES)) {

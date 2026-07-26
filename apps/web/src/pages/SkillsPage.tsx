@@ -128,6 +128,8 @@ const useStyles = makeStyles({
   },
   defaultsMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
   hiddenInput: { display: 'none' },
+  sourceRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  sourceFormRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
 function formatApiError(err: unknown): string {
@@ -135,7 +137,22 @@ function formatApiError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Friendlier messages for the add-marketplace-source form's known failure modes (400/409/422),
+// falling back to the generic API error formatting for anything else.
+function formatAddSourceError(err: unknown): string {
+  if (err instanceof ApiError) {
+    const payloadError = (err.payload && typeof err.payload === 'object' && 'error' in err.payload)
+      ? String((err.payload as { error?: unknown }).error ?? '')
+      : '';
+    if (err.status === 409) return payloadError || 'A marketplace source with that name already exists.';
+    if (err.status === 422) return payloadError || 'That repository is not public or is unavailable right now.';
+    if (err.status === 400) return payloadError || 'Enter a valid GitHub repository URL or owner/repo.';
+  }
+  return formatApiError(err);
+}
+
 const FALLBACK_DEFAULTS_BLUEPRINT_ID = 'blueprint-software-development';
+const MARKETPLACE_PAGE_SIZE = 25;
 
 function structuredBlockedPreview(err: unknown): BlueprintSkillDefaultsPreviewResponse | null {
   if (err instanceof ApiError
@@ -247,7 +264,17 @@ export function SkillsPage() {
   const [marketplaces, setMarketplaces] = useState<SkillMarketplaceDto[]>([]);
   const [selectedMarketplace, setSelectedMarketplace] = useState<string | null>(null);
   const [marketplaceCandidates, setMarketplaceCandidates] = useState<SkillCandidateDto[] | null>(null);
+  const [marketplaceError, setMarketplaceError] = useState<string | null>(null);
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
+  const [marketplacePage, setMarketplacePage] = useState(1);
+  const [marketplaceTotal, setMarketplaceTotal] = useState(0);
+  const [marketplaceHasMore, setMarketplaceHasMore] = useState(false);
+  const [newSourceRepo, setNewSourceRepo] = useState('');
+  const [newSourceName, setNewSourceName] = useState('');
+  const [newSourceBranch, setNewSourceBranch] = useState('');
+  const [newSourceSubpath, setNewSourceSubpath] = useState('');
+  const [newSourceParseStrategy, setNewSourceParseStrategy] = useState<'auto' | 'skillmd' | 'llm'>('auto');
+  const [sourceAddError, setSourceAddError] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState('');
   const [candidates, setCandidates] = useState<SkillCandidateDto[] | null>(null);
   const [selectedLocations, setSelectedLocations] = useState<Set<string>>(new Set());
@@ -548,33 +575,84 @@ export function SkillsPage() {
     }
   };
 
-  const browseMarketplace = async (marketplace: string, query = '') => {
+  const browseMarketplace = async (marketplace: string, query = '', page = 1, append = false) => {
     if (!projectId) return;
-    setBusy('marketplace-browse');
+    setBusy(append ? 'marketplace-more' : 'marketplace-browse');
     setMutationError(null);
+    setMarketplaceError(null);
     try {
-      const result = await apiClient.browseSkillMarketplace(projectId, marketplace, query || undefined);
+      const result = await apiClient.browseSkillMarketplace(projectId, marketplace, query || undefined, page, MARKETPLACE_PAGE_SIZE);
       setSelectedMarketplace(result.marketplace);
-      setMarketplaceCandidates(result.candidates);
-      setSelectedLocations(new Set());
-    } catch (err) { setMutationError(formatApiError(err)); } finally { setBusy(null); }
+      setMarketplacePage(result.page);
+      setMarketplaceTotal(result.total);
+      setMarketplaceHasMore(result.has_more);
+      setMarketplaceCandidates((previous) => (append && previous ? [...previous, ...result.candidates] : result.candidates));
+      if (!append) setSelectedLocations(new Set());
+    } catch (err) { setMarketplaceError(formatApiError(err)); } finally { setBusy(null); }
+  };
+
+  const refreshMarketplaces = async () => {
+    if (!projectId) return;
+    try { setMarketplaces(await apiClient.listSkillMarketplaces(projectId)); } catch (err) { setMarketplaceError(formatApiError(err)); }
   };
 
   const openMarketplace = async () => {
     setMarketplaceOpen(true);
     setMarketplaceCandidates(null);
-    try { setMarketplaces(await apiClient.listSkillMarketplaces()); } catch (err) { setMutationError(formatApiError(err)); }
+    setMarketplaceError(null);
+    setMarketplacePage(1);
+    setMarketplaceTotal(0);
+    setMarketplaceHasMore(false);
+    setSourceAddError(null);
+    await refreshMarketplaces();
+  };
+
+  const addMarketplaceSource = async () => {
+    if (!projectId || !newSourceRepo.trim()) return;
+    setBusy('marketplace-add-source');
+    setSourceAddError(null);
+    try {
+      const added = await apiClient.addSkillMarketplaceSource(projectId, {
+        repository: newSourceRepo.trim(),
+        name: newSourceName.trim() || undefined,
+        branch: newSourceBranch.trim() || undefined,
+        subpath: newSourceSubpath.trim() || undefined,
+        parseStrategy: newSourceParseStrategy,
+      });
+      setNewSourceRepo('');
+      setNewSourceName('');
+      setNewSourceBranch('');
+      setNewSourceSubpath('');
+      setNewSourceParseStrategy('auto');
+      await refreshMarketplaces();
+      void browseMarketplace(added.name);
+    } catch (err) { setSourceAddError(formatAddSourceError(err)); } finally { setBusy(null); }
+  };
+
+  const removeMarketplaceSource = async (name: string) => {
+    if (!projectId) return;
+    setBusy(`marketplace-remove-${name}`);
+    setMarketplaceError(null);
+    try {
+      await apiClient.removeSkillMarketplaceSource(projectId, name);
+      if (selectedMarketplace === name) {
+        setSelectedMarketplace(null);
+        setMarketplaceCandidates(null);
+      }
+      await refreshMarketplaces();
+    } catch (err) { setMarketplaceError(formatApiError(err)); } finally { setBusy(null); }
   };
 
   const importMarketplace = async () => {
     if (!projectId || !selectedMarketplace || selectedLocations.size === 0) return;
     setBusy('marketplace-import');
+    setMarketplaceError(null);
     try {
       const result = await apiClient.importMarketplaceSkills(projectId, selectedMarketplace, Array.from(selectedLocations));
       setNotice({ projectId, message: `Marketplace import: ${summarizeAcquisition(result)}` });
       setMarketplaceOpen(false);
       reload();
-    } catch (err) { setMutationError(formatApiError(err)); } finally { setBusy(null); }
+    } catch (err) { setMarketplaceError(formatApiError(err)); } finally { setBusy(null); }
   };
 
   const onImport = async () => {
@@ -1055,11 +1133,68 @@ export function SkillsPage() {
 
       {/* Import dialog */}
       <Dialog open={marketplaceOpen} onOpenChange={(_, d) => setMarketplaceOpen(d.open)}>
-        <DialogSurface><DialogBody><DialogTitle>Browse curated marketplaces</DialogTitle><DialogContent className={styles.formGrid}>
-          <Text>Browse administrator-curated sources and import selected skills into this catalog.</Text>
-          <div className={styles.actions}>{marketplaces.map((marketplace) => <Button key={marketplace.name} appearance={selectedMarketplace === marketplace.name ? 'primary' : 'secondary'} disabled={isBusy} onClick={() => void browseMarketplace(marketplace.name, marketplaceQuery)}>{marketplace.name}</Button>)}</div>
+        <DialogSurface><DialogBody><DialogTitle>Browse skill marketplaces</DialogTitle><DialogContent className={styles.formGrid}>
+          <Text>Browse curated sources or a source you've added, then import selected skills into this catalog.</Text>
+          <Field label="Add a source by GitHub URL" hint="Paste a repo URL (or owner/repo). Layout is auto-detected unless you set a subpath.">
+            <Input
+              value={newSourceRepo}
+              placeholder="https://github.com/org/skills-repo"
+              onChange={(_, data) => setNewSourceRepo(data.value)}
+              disabled={isBusy}
+            />
+          </Field>
+          <div className={styles.sourceFormRow}>
+            <Field label="Name (optional)"><Input value={newSourceName} onChange={(_, data) => setNewSourceName(data.value)} disabled={isBusy} /></Field>
+            <Field label="Branch (optional)"><Input value={newSourceBranch} onChange={(_, data) => setNewSourceBranch(data.value)} disabled={isBusy} /></Field>
+            <Field label="Subpath (optional)"><Input value={newSourceSubpath} onChange={(_, data) => setNewSourceSubpath(data.value)} disabled={isBusy} /></Field>
+          </div>
+          <Field label="Parse strategy">
+            <div className={styles.actions}>
+              {(['auto', 'skillmd', 'llm'] as const).map((strategy) => (
+                <Button
+                  key={strategy}
+                  appearance={newSourceParseStrategy === strategy ? 'primary' : 'secondary'}
+                  disabled={isBusy}
+                  onClick={() => setNewSourceParseStrategy(strategy)}
+                >
+                  {strategy}
+                </Button>
+              ))}
+            </div>
+          </Field>
+          {sourceAddError && <MessageBar intent="error"><MessageBarBody>{sourceAddError}</MessageBarBody></MessageBar>}
+          <Button appearance="secondary" disabled={isBusy || !newSourceRepo.trim()} onClick={() => void addMarketplaceSource()}>
+            {busy === 'marketplace-add-source' ? 'Adding source…' : 'Add source'}
+          </Button>
+          <div className={styles.actions}>
+            {marketplaces.map((marketplace) => (
+              <div key={marketplace.name} className={styles.sourceRow}>
+                <Button
+                  appearance={selectedMarketplace === marketplace.name ? 'primary' : 'secondary'}
+                  disabled={isBusy}
+                  onClick={() => void browseMarketplace(marketplace.name, marketplaceQuery)}
+                >
+                  {marketplace.name}
+                </Button>
+                {marketplace.project_source && (
+                  <Button
+                    appearance="subtle"
+                    icon={<Delete24Regular />}
+                    aria-label={`Remove ${marketplace.name}`}
+                    disabled={isBusy}
+                    onClick={() => void removeMarketplaceSource(marketplace.name)}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
           {selectedMarketplace && <Field label="Search this marketplace"><Input value={marketplaceQuery} onChange={(_, data) => setMarketplaceQuery(data.value)} onKeyDown={(event) => { if (event.key === 'Enter') void browseMarketplace(selectedMarketplace, marketplaceQuery); }} /></Field>}
-          {marketplaceCandidates?.map((candidate) => <div key={candidate.location} className={styles.candidate}><Checkbox label={candidate.name ?? candidate.location} checked={selectedLocations.has(candidate.location)} disabled={!candidate.valid || isBusy} onChange={(_, data) => setSelectedLocations((previous) => { const next = new Set(previous); if (data.checked) next.add(candidate.location); else next.delete(candidate.location); return next; })} />{candidate.description && <Text className={styles.itemMeta}>{candidate.description}</Text>}</div>)}
+          {marketplaceError && <MessageBar intent="error"><MessageBarBody>{marketplaceError}</MessageBarBody></MessageBar>}
+          {busy === 'marketplace-browse' && <LoadingState rows={3} />}
+          {busy !== 'marketplace-browse' && !marketplaceError && selectedMarketplace && marketplaceCandidates?.length === 0 && <Text className={styles.itemMeta}>No skills matched. Try a different search or marketplace.</Text>}
+          {busy !== 'marketplace-browse' && marketplaceCandidates?.map((candidate) => <div key={candidate.location} className={styles.candidate}><Checkbox label={candidate.name ?? candidate.location} checked={selectedLocations.has(candidate.location)} disabled={!candidate.valid || isBusy} onChange={(_, data) => setSelectedLocations((previous) => { const next = new Set(previous); if (data.checked) next.add(candidate.location); else next.delete(candidate.location); return next; })} />{candidate.description && <Text className={styles.itemMeta}>{candidate.description}</Text>}</div>)}
+          {busy !== 'marketplace-browse' && selectedMarketplace && marketplaceCandidates && marketplaceCandidates.length > 0 && <Text className={styles.itemMeta}>Showing {marketplaceCandidates.length} of {marketplaceTotal}</Text>}
+          {selectedMarketplace && marketplaceHasMore && <Button appearance="secondary" disabled={isBusy} onClick={() => void browseMarketplace(selectedMarketplace, marketplaceQuery, marketplacePage + 1, true)}>{busy === 'marketplace-more' ? 'Loading...' : 'Load more'}</Button>}
         </DialogContent><DialogActions><Button appearance="secondary" disabled={isBusy || !selectedMarketplace} onClick={() => selectedMarketplace && void browseMarketplace(selectedMarketplace, marketplaceQuery)}>Search</Button><Button appearance="primary" disabled={isBusy || selectedLocations.size === 0} onClick={() => void importMarketplace()}>{busy === 'marketplace-import' ? 'Importing...' : 'Import selected'}</Button></DialogActions></DialogBody></DialogSurface>
       </Dialog>
 

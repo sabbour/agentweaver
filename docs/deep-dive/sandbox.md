@@ -206,7 +206,7 @@ The "Sandbox controller" above is the upstream [`kubernetes-sigs/agent-sandbox`]
 - **MXC** (`Sabbour.Mxc.Sdk` / `wxc-exec.exe`) is the **local-host** command isolation runtime behind the Windows `processcontainer`, WSL, and Linux `lxc-exec` executors. It runs on a developer or non-cluster host and has no Kubernetes presence.
 - The **agent-sandbox controller** is the **in-cluster** runtime that turns a `SandboxClaim` into a bound, Kata-isolated pod. `KubernetesSandboxExecutor` talks only to this controller's CRDs; no MXC binary exists in the cluster.
 
-Agentweaver installs the controller and its three CRDs (API group `extensions.agents.x-k8s.io`) in `scripts/azure/steps/10-create-cluster.mjs` (install default `SANDBOX_CONTROLLER_VERSION=v0.4.6` — production clusters run **agent-sandbox v0.5.0**). The installed controller serves both `v1beta1` (the **storage** version) and the deprecated-but-served `v1alpha1`; `KubernetesSandboxExecutor` targets **`v1beta1`** ([`SandboxClaimConventions.cs:23`](#source)):
+Agentweaver installs the controller and its three CRDs (API group `extensions.agents.x-k8s.io`) in `scripts/azure/steps/10-create-cluster.mjs` (install default `SANDBOX_CONTROLLER_VERSION=v0.5.3` — production clusters run **agent-sandbox v0.5.3**, #487). The installed controller serves both `v1beta1` (the **storage** version) and the deprecated-but-served `v1alpha1`; `KubernetesSandboxExecutor` targets **`v1beta1`** ([`SandboxClaimConventions.cs:23`](#source)):
 
 - **`SandboxTemplate`** (`k8s/base/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) defines the live AgentHost pod shape: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, A2A listener port `8088`, and workload identity.
 - **`SandboxWarmPool`** keeps AgentHost pods pre-built from that template so claims bind without a cold pod start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env.
@@ -249,7 +249,7 @@ Per-run values are delivered by `POST /configure` after the claim binds:
 
 `AgentHostRuntimeState.TryConfigure(...)` stores the runtime values exactly once with `Interlocked.CompareExchange`; a second configure attempt returns `409`. `AgentHostStartupService.ConfigureAsync` uses `workingDirectory` to override the static `AgentHost__WorkingDirectory` env default before it calls `SetupAsync`. That keeps the pod's current file-tool root identical to `Run.WorktreePath`, which is the path the run's system prompt names, so sibling agents can hand files across decomposition, synthesis, and assembly stages without writing to divergent directories. `/configure` cannot be protected by the turn token because it delivers that token, so the guard is the NetworkPolicy that restricts AgentHost port `8088` to API/worker pods. The turn endpoint itself still requires `Authorization: Bearer ...` and reads the expected token from runtime state.
 
-The previous run-scoped CSI path is gone: the executor no longer creates per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. Instead `KeyVaultUserTokenProvider` fetches only the configured user's Key Vault secret via workload identity and caches it for the pod lifetime.
+The previous run-scoped CSI path is gone: the executor no longer creates per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. Instead the API resolves the run owner's token and brokers it to the pod in `/configure` (`gitHubAccessToken`); `KeyVaultUserTokenProvider` prefers that brokered token and caches it for the pod lifetime. The sandbox identity has no Key Vault access (issue #471), so the residual direct-fetch fallback fails closed.
 
 Where this lives:
 
@@ -265,7 +265,7 @@ Where this lives:
 
 ## Production pod isolation and hardening
 
-The AgentHost sandbox pod contains the runtime needed for live agent turns, but it is not privileged and should receive only the scoped identity needed to fetch the run owner token.
+The AgentHost sandbox pod contains the runtime needed for live agent turns, but it is not privileged. Because it executes untrusted shell/tool code, it runs as a dedicated managed identity with **no Key Vault role assignments** (issue #471); the run owner's token is brokered to it per-run by the API rather than fetched directly from the vault.
 
 The production template applies several important constraints:
 

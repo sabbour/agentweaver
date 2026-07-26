@@ -26,6 +26,18 @@ namespace: agentweaver
 resources:
   - ../../base
 
+# Production security hardening patches (applied on top of the PoC-safe base).
+#   * patch-agenthost-mtls.yaml — enable AgentHost A2A mutual TLS so /configure
+#     credentials are encrypted + the caller is authenticated (security Alert 5).
+#     Requires the a2a-tls / a2a-client-tls secrets to be provisioned first
+#     (gen-a2a-mtls-certs.sh); see that file's header.
+#   * patch-agenthost-mtls-client.yaml — matching client-side flip: api/worker must use
+#     Sandbox__AgentHost__RequireMtls=true too, or they call the now-HTTPS-only AgentHost
+#     listener over plain http and every readiness check/A2A call fails deterministically.
+patches:
+  - path: patch-agenthost-mtls.yaml
+  - path: patch-agenthost-mtls-client.yaml
+
 # Image tag / registry injection — replaces the old envsubst ACR_LOGIN_SERVER /
 # IMAGE_TAG / AGENTHOST_IMAGE_TAG substitution. `name` matches the base
 # manifests' placeholder image exactly; `newName`/`newTag` are rewritten per
@@ -68,12 +80,14 @@ configMapGenerator:
       - "HOST=agentweaver.example.com"
       - "PREVIEW_HOSTNAME=*.example.com"
       - "IDENTITY_CLIENT_ID=changeme"
+      - "AGENTHOST_IDENTITY_CLIENT_ID=changeme"
       - "KEYVAULT_NAME=changeme"
       - "TENANT_ID=changeme"
       - "OAUTH_ISSUER=https://agentweaver.example.com"
       - "OAUTH_AUDIENCE=https://agentweaver.example.com/mcp"
       - "GITHUB_CALLBACK_URL=https://agentweaver.example.com/auth/github/callback"
       - "GITHUB_FRONTEND_URL=https://agentweaver.example.com/"
+      - "GITHUB_ALLOWED_ORG=microsoft"
       - "TOKEN_STORE_KEYVAULT_URI=https://changeme.vault.azure.net"
       - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="
@@ -113,8 +127,27 @@ replacements:
           kind: SecretProviderClass
         fieldPaths:
           - spec.parameters.clientID
+      # The API and MCP ServiceAccounts share the Key-Vault-privileged API identity (both legitimately
+      # reach Key Vault). The AgentHost ServiceAccount is deliberately EXCLUDED here (issue #471) and
+      # wired to its own KV-less identity by the AGENTHOST_IDENTITY_CLIENT_ID replacement below.
       - select:
           kind: ServiceAccount
+        reject:
+          - kind: ServiceAccount
+            name: agentweaver-agent-host
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.AGENTHOST_IDENTITY_CLIENT_ID
+    targets:
+      # Dedicated least-privilege AgentHost identity (issue #471): NO Key Vault roles. The sandbox
+      # cannot exchange its workload-identity token for a vault token; the run owner's GitHub token is
+      # brokered per-run via the API /configure call instead.
+      - select:
+          kind: ServiceAccount
+          name: agentweaver-agent-host
         fieldPaths:
           - metadata.annotations.[azure.workload.identity/client-id]
   - source:

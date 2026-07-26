@@ -105,7 +105,53 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
-    // 5a. Team configured + team membership confirmed (200) → Allowed.
+    // 4b. A SAML-enforcement 403 on the AUTHENTICATED private-members endpoint falls back to the
+    //     UNAUTHENTICATED public-members endpoint. A publicized org member is therefore admitted even
+    //     when their token is not (yet) SAML-SSO-authorized (the identity is the SSO-authenticated
+    //     GitHub login and the org tie is confirmed via public membership). This intentionally relaxes
+    //     the former PR #464 hard-deny, which blocked legitimate public members after OAuth-app rotation.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Allows_WhenPrivateSamlForbiddenButPublicMember()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            if (IsPrivateMembers(req)) return HttpStatusCode.Forbidden;   // 403 SAML SSO enforcement
+            if (IsPublicMembers(req))  return HttpStatusCode.NoContent;   // publicized member
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler);
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed,
+            "a SAML-enforcement 403 on the private endpoint now falls back to public membership, which confirms the member");
+        handler.RequestUris.Should().Contain(uri =>
+            uri.AbsolutePath.Contains("/public_members/", StringComparison.Ordinal),
+            "the public-membership fallback must run after a SAML 403 on the private endpoint");
+    }
+
+    // ---------------------------------------------------------------------
+    // 4c. A SAML-enforcement 403 on the private endpoint AND not a public member either → the actionable
+    //     SAML-enforced signal (OrgAccessNotGranted) is preserved so the user is told to authorize SSO,
+    //     rather than a dead-end plain denial.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_ReturnsOrgAccessNotGranted_WhenPrivateSamlForbiddenAndNotPublicMember()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            if (IsPrivateMembers(req)) return HttpStatusCode.Forbidden;   // 403 SAML SSO enforcement
+            if (IsPublicMembers(req))  return HttpStatusCode.NotFound;    // not a public member
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler);
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
+            "a SAML 403 with no confirming public membership should still surface the 'authorize SSO' signal");
+    }
     // ---------------------------------------------------------------------
     [Fact]
     public async Task CheckMembershipAsync_Allows_WhenOrgAndTeamMembershipConfirmed()
@@ -168,6 +214,142 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
+    // 7. GitHubOrgList.Parse: comma + semicolon + whitespace + case-insensitive dedupe,
+    //    order preserved; empty/whitespace => empty list (fail-closed).
+    // ---------------------------------------------------------------------
+    [Fact]
+    public void GitHubOrgList_Parse_SplitsTrimsDedupesPreservingOrder()
+    {
+        GitHubOrgList.Parse("microsoft, contoso ; microsoft ;Contoso, azure ")
+            .Should().Equal("microsoft", "contoso", "azure");
+
+        GitHubOrgList.Parse("microsoft").Should().Equal("microsoft");
+        GitHubOrgList.Parse("").Should().BeEmpty();
+        GitHubOrgList.Parse("   ").Should().BeEmpty();
+        GitHubOrgList.Parse(null).Should().BeEmpty();
+        GitHubOrgList.Parse(" , ; ,").Should().BeEmpty();
+    }
+
+    // ---------------------------------------------------------------------
+    // 8. Member of the SECOND allowed org only (private 204 for contoso) => Allowed.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Allows_WhenMemberOfSecondOrgOnly()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            req.RequestUri!.AbsolutePath == "/orgs/contoso/members/octocat"
+                ? HttpStatusCode.NoContent
+                : HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed);
+        // The first org (microsoft) is checked and definitively not-a-member before contoso confirms.
+        handler.RequestUris.Should().Contain(uri => uri.AbsolutePath == "/orgs/microsoft/members/octocat");
+        handler.RequestUris.Should().Contain(uri => uri.AbsolutePath == "/orgs/contoso/members/octocat");
+    }
+
+    // ---------------------------------------------------------------------
+    // 9. Member of NEITHER org, all checks definitive (404 everywhere) => Denied.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Denies_WhenMemberOfNeitherOrg_AllDefinitive()
+    {
+        var handler = new RoutingHttpMessageHandler(_ => HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Denied);
+    }
+
+    // ---------------------------------------------------------------------
+    // 10. Member of neither, but ONE org's primary authenticated check is inconclusive
+    //     (401 on the private endpoint + public 404) => Inconclusive, not a hard Denied.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Inconclusive_WhenOnePrimaryCheckIsInconclusive()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            // microsoft: definitive not-a-member. contoso: private 401 (token expired) → inconclusive,
+            // public 404 → cannot confirm. No org confirms, but one primary check was inconclusive.
+            if (req.RequestUri!.AbsolutePath == "/orgs/contoso/members/octocat")
+                return HttpStatusCode.Unauthorized;
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Inconclusive);
+    }
+
+    // ---------------------------------------------------------------------
+    // 11. Multi-org SAML: org A (microsoft) enforces SAML SSO (private 403) and the caller is not a
+    //     public member of microsoft either (public 404), and is definitively not a member of org B
+    //     (contoso, 404 everywhere) => OrgAccessNotGranted. SAML-enforcement precedence beats a plain
+    //     Denied. The microsoft public_members fallback IS attempted (and fails), preserving the
+    //     actionable "authorize SSO" signal.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_ReturnsOrgAccessNotGranted_WhenFirstOrgSamlEnforcedAndNotMemberOfSecond()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            // microsoft: private 403 (SAML SSO enforcement). contoso: definitive not-a-member (404).
+            if (req.RequestUri!.AbsolutePath == "/orgs/microsoft/members/octocat")
+                return HttpStatusCode.Forbidden;
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
+            "a SAML-enforced org takes precedence over a plain not-a-member denial from another allowed org");
+        handler.RequestUris.Should().Contain(uri =>
+            uri.AbsolutePath == "/orgs/microsoft/public_members/octocat",
+            "the public-membership fallback is attempted for the SAML-enforced org before preserving the SSO signal");
+    }
+
+    // ---------------------------------------------------------------------
+    // 12. BUG FIX regression: the private endpoint returns a SAML-enforcement 403, and the
+    //     UNAUTHENTICATED public_members fallback itself gets rate-limited (403 with
+    //     X-RateLimit-Remaining: 0) rather than giving a definitive answer. This must NOT be
+    //     reported as "confirmed not a public member, SAML enforced" (OrgAccessNotGranted) — that
+    //     conflates "couldn't verify" with "verified not a member" and produces a hard, misleading
+    //     403 for what is really a transient rate-limit blip. It must surface as Inconclusive so the
+    //     caller retries instead of hard-denying/erroring out a possibly-already-public member.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Inconclusive_WhenPrivateSamlForbiddenAndPublicFallbackRateLimited()
+    {
+        var handler = new HeaderAwareRoutingHttpMessageHandler(req =>
+        {
+            if (IsPrivateMembers(req))
+                return new HttpResponseMessage(HttpStatusCode.Forbidden); // SAML SSO enforcement
+
+            if (IsPublicMembers(req))
+            {
+                var rateLimited = new HttpResponseMessage(HttpStatusCode.Forbidden);
+                rateLimited.Headers.Add("X-RateLimit-Remaining", "0");
+                return rateLimited;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+        var service = BuildService(handler);
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Inconclusive,
+            "a rate-limited public-membership fallback must not be conflated with a confirmed " +
+            "not-a-public-member answer — it must surface as a retryable transient failure");
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
@@ -181,11 +363,12 @@ public sealed class GitHubOrgAuthorizationServiceTests
         req.RequestUri!.AbsolutePath.Contains("/teams/", StringComparison.Ordinal) &&
         req.RequestUri!.AbsolutePath.Contains("/memberships/", StringComparison.Ordinal);
 
-    private static GitHubOrgAuthorizationService BuildService(HttpMessageHandler handler, string? allowedTeam = null)
+    private static GitHubOrgAuthorizationService BuildService(
+        HttpMessageHandler handler, string? allowedTeam = null, string allowedOrg = "microsoft")
     {
         var settings = new Dictionary<string, string?>
         {
-            ["Auth:GitHub:AllowedOrg"] = "microsoft",
+            ["Auth:GitHub:AllowedOrg"] = allowedOrg,
         };
         if (allowedTeam is not null)
             settings["Auth:GitHub:AllowedTeam"] = allowedTeam;
@@ -230,5 +413,22 @@ public sealed class GitHubOrgAuthorizationServiceTests
         public SingleClientHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
 
         public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    }
+
+    /// <summary>
+    /// Like <see cref="RoutingHttpMessageHandler"/> but lets the router return a full
+    /// <see cref="HttpResponseMessage"/> (with headers) so tests can simulate rate-limit
+    /// signals such as <c>X-RateLimit-Remaining: 0</c> or <c>Retry-After</c>.
+    /// </summary>
+    private sealed class HeaderAwareRoutingHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _router;
+
+        public HeaderAwareRoutingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> router) =>
+            _router = router;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) => Task.FromResult(_router(request));
     }
 }

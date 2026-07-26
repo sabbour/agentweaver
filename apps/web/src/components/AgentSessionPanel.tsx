@@ -1454,6 +1454,8 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
     }
     case 'coordinator.work_plan': {
       const subtasksCount = readArray(p, ['subtasks', 'tasks'])?.length;
+      const warning = readArray(p, ['warnings'])?.map(String)[0];
+      if (warning) return `Coordinator created a work plan with a warning: ${warning}`;
       return subtasksCount != null ? `Coordinator created a work plan with ${subtasksCount} subtasks.` : 'Coordinator created a work plan.';
     }
     case 'coordinator.steering': {

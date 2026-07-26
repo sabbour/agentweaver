@@ -1,7 +1,10 @@
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Notifications;
 
@@ -30,15 +33,21 @@ public sealed class NotificationsService
     private readonly IRunStore _runStore;
     private readonly IProjectStore _projectStore;
     private readonly PendingToolApprovalRunsQuery _pendingApprovalQuery;
+    private readonly IBacklogTaskStore _backlogStore;
+    private readonly MemoryDbContext _db;
 
     public NotificationsService(
         IRunStore runStore,
         IProjectStore projectStore,
-        PendingToolApprovalRunsQuery pendingApprovalQuery)
+        PendingToolApprovalRunsQuery pendingApprovalQuery,
+        IBacklogTaskStore backlogStore,
+        MemoryDbContext db)
     {
         _runStore = runStore;
         _projectStore = projectStore;
         _pendingApprovalQuery = pendingApprovalQuery;
+        _backlogStore = backlogStore;
+        _db = db;
     }
 
     public async Task<NotificationsResponseDto> GetPendingAsync(CallerContext caller, CancellationToken ct = default)
@@ -68,19 +77,127 @@ public sealed class NotificationsService
             .GetPendingApprovalDetailsAsync(ownedInProgress.Select(run => run.Id.ToString()).ToList(), ct)
             .ConfigureAwait(false);
 
+        var promoted = await BuildBacklogPromotedNotificationsAsync(ownedProjectNames, ct).ConfigureAwait(false);
+
         var notifications = ownedAwaitingReview
             .Select(run => ToHumanReviewNotification(run, ownedProjectNames))
             .Concat(ownedInProgress
                 .Where(run => pendingApprovals.ContainsKey(run.Id.ToString()))
                 .Select(run => ToToolApprovalNotification(run, pendingApprovals[run.Id.ToString()], ownedProjectNames)))
+            .Concat(promoted)
             .OrderByDescending(notification => notification.CreatedUtc)
             .ToList();
+
+        var dismissedIds = await _db.DismissedNotifications
+            .Where(dismissal => dismissal.User == caller.User)
+            .Select(dismissal => dismissal.NotificationId)
+            .ToHashSetAsync(ct)
+            .ConfigureAwait(false);
 
         return new NotificationsResponseDto
         {
             GeneratedUtc = DateTimeOffset.UtcNow,
-            Notifications = notifications,
+            Notifications = notifications.Where(notification => !dismissedIds.Contains(notification.Id)).ToList(),
         };
+    }
+
+    public async Task DismissAsync(CallerContext caller, string notificationId, CancellationToken ct = default)
+    {
+        if (await _db.DismissedNotifications.FindAsync([caller.User, notificationId], ct).ConfigureAwait(false) is not null)
+            return;
+
+        _db.DismissedNotifications.Add(new DismissedNotification
+        {
+            User = caller.User,
+            NotificationId = notificationId,
+            DismissedAt = DateTimeOffset.UtcNow,
+        });
+        await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Recency window for the "N subtasks created" backlog-promotion notice. A delegated coordinator
+    /// run is terminal (all stories promoted to the Board), so unlike Human Review / Tool Approval
+    /// there is no naturally-bounded pending signal — a time window keeps the derived notice from
+    /// resurfacing every old delegated run forever. Dismissals remain durable via
+    /// <see cref="DismissedNotification"/>.
+    /// </summary>
+    private static readonly TimeSpan BacklogPromotedWindow = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Derives "N subtasks created" notifications from durable state (issue: delegated-run Board
+    /// notification). When a coordinator run finalizes as <see cref="WorkPlanStatus.Delegated"/> —
+    /// every story promoted to an independent Board task, 0 inline subtasks — surface a notice that
+    /// deep-links to the project Board. The count comes from the promoted backlog tasks stamped with
+    /// the originating run id (<c>ParentPrdRunId</c>), read through the provider-agnostic
+    /// <see cref="IBacklogTaskStore"/> (the backlog table is SQLite-raw / Postgres-EF depending on
+    /// the provider, so we never touch <c>MemoryDbContext.BacklogTasks</c> directly here). This
+    /// reuses the existing poll-derived notification subsystem instead of an event-written store.
+    /// </summary>
+    private async Task<List<NotificationDto>> BuildBacklogPromotedNotificationsAsync(
+        IReadOnlyDictionary<string, string> ownedProjectNames,
+        CancellationToken ct)
+    {
+        if (ownedProjectNames.Count == 0)
+            return new List<NotificationDto>();
+
+        var cutoff = DateTimeOffset.UtcNow - BacklogPromotedWindow;
+
+        // Only the Status predicate is evaluated in the database (SQLite can't translate the
+        // DateTimeOffset comparison + owned-project membership together); delegated plans are rare,
+        // so the recency + ownership filters run client-side. WorkPlans is a memory.db entity mapped
+        // under both providers, so this query is provider-agnostic.
+        var delegatedPlans = (await _db.WorkPlans
+            .Where(plan => plan.Status == WorkPlanStatus.Delegated)
+            .Select(plan => new { plan.CoordinatorRunId, plan.ProjectId, plan.UpdatedAt })
+            .ToListAsync(ct)
+            .ConfigureAwait(false))
+            .Where(plan => plan.UpdatedAt >= cutoff && ownedProjectNames.ContainsKey(plan.ProjectId))
+            .ToList();
+
+        if (delegatedPlans.Count == 0)
+            return new List<NotificationDto>();
+
+        var notifications = new List<NotificationDto>();
+
+        // Group by project so we read each project's backlog once, then count promoted tasks per
+        // originating run id via the store's durable ParentPrdRunId stamp.
+        foreach (var projectGroup in delegatedPlans.GroupBy(plan => plan.ProjectId, StringComparer.Ordinal))
+        {
+            if (!ProjectId.TryParse(projectGroup.Key, out var projectId))
+                continue;
+
+            var runIdsForProject = projectGroup
+                .Select(plan => plan.CoordinatorRunId)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var promotedCounts = (await _backlogStore.ListByProjectAsync(projectId, ct).ConfigureAwait(false))
+                .Where(task => task.ArchivedAt is null
+                    && task.ParentPrdRunId is not null
+                    && runIdsForProject.Contains(task.ParentPrdRunId.ToString()!))
+                .GroupBy(task => task.ParentPrdRunId!.ToString()!, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+            foreach (var plan in projectGroup)
+            {
+                if (!promotedCounts.TryGetValue(plan.CoordinatorRunId, out var count) || count <= 0)
+                    continue; // no tasks actually landed on the Board — nothing to announce (defensive)
+
+                notifications.Add(new NotificationDto
+                {
+                    Id = $"backlog_promoted:{plan.CoordinatorRunId}",
+                    Type = "backlog_promoted",
+                    RunId = plan.CoordinatorRunId,
+                    ProjectId = plan.ProjectId,
+                    ProjectName = ownedProjectNames.GetValueOrDefault(plan.ProjectId, "Unknown project"),
+                    Title = count == 1 ? "1 subtask created" : $"{count} subtasks created",
+                    CreatedUtc = plan.UpdatedAt,
+                    CtaPath = $"/projects/{plan.ProjectId}/board",
+                });
+            }
+        }
+
+        return notifications;
     }
 
     private static NotificationDto ToHumanReviewNotification(
@@ -108,6 +225,7 @@ public sealed class NotificationsService
             CtaPath = $"/projects/{projectId}/orchestrations/{deepLinkRunId}",
         };
     }
+
 
     private static NotificationDto ToToolApprovalNotification(
         Run run,
@@ -143,4 +261,3 @@ public sealed class NotificationsService
         return value.Length <= max ? value : value[..max].TrimEnd() + "\u2026";
     }
 }
-

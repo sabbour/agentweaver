@@ -1,0 +1,64 @@
+# Production overlay patch — enable AgentHost A2A mTLS (security: Alert 5).
+#
+# The base agenthost-config ConfigMap ships a PoC-safe posture with mTLS DISABLED
+# (RequireMtls=false, RequireClientCertificate=false, SkipTlsHostnameVerification=true) so a
+# bare cluster without provisioned certificates can still boot. In that posture the
+# unauthenticated /configure endpoint — which carries the run owner's GitHub access token, the
+# turn bearer token, and preview credentials — crosses the pod network over PLAIN HTTP on
+# :8088. This overlay patch restores the production posture: mutual TLS with a required client
+# certificate and hostname verification, so those credentials are encrypted in transit and the
+# /configure caller is cryptographically authenticated at the transport layer.
+#
+# PREREQUISITE (operational, gated outside this manifest): the mTLS material must be
+# provisioned before this posture is deployed —
+#   * Secret agentweaver-a2a-server-tls  (server cert + key + ca.crt) mounted into the
+#     agent-host pod at /mnt/a2a-tls (sandbox-template-agenthost.yaml, currently optional).
+#   * Secret agentweaver-a2a-client-tls  (worker/API client cert) mounted at
+#     /mnt/a2a-client-tls (api-deployment.yaml / worker-deployment.yaml).
+# Generate both with scripts' gen-a2a-mtls-certs.sh. If the server secret is absent when this
+# posture is active the agent-host Kestrel A2A listener fails to bind (fail-closed), which is
+# the intended safe failure mode. Making the a2a-tls secret mount mandatory
+# (optional: false) and wiring SPIFFE/SPIRE-issued, short-lived certs is tracked as
+# follow-up architectural work.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agenthost-config
+  namespace: agentweaver
+data:
+  appsettings.k8s.json: |
+    {
+      "Kestrel": {
+        "Endpoints": {
+          "A2A": {
+            "Url": "https://0.0.0.0:8088",
+            "Certificate": {
+              "Path": "/mnt/a2a-tls/tls.crt",
+              "KeyPath": "/mnt/a2a-tls/tls.key"
+            }
+          }
+        },
+        "Limits": {
+          "MaxConcurrentConnections": 50,
+          "MaxConcurrentUpgradedConnections": 50,
+          "MaxRequestBodySize": 10485760,
+          "KeepAliveTimeout": "00:02:00",
+          "RequestHeadersTimeout": "00:00:30"
+        }
+      },
+      "AgentHost": {
+        "RequireMtls": true,
+        "Port": 8088,
+        "A2APath": "/a2a/agent",
+        "ServerCertificatePath": "/mnt/a2a-tls/tls.crt",
+        "ServerCertificateKeyPath": "/mnt/a2a-tls/tls.key",
+        "ClientCACertPath": "/mnt/a2a-tls/ca.crt",
+        "HeartbeatIntervalSeconds": 15,
+        "Security": {
+          "GateCardEndpoint": true,
+          "RequireClientCertificate": true,
+          "ClientCertSubjectCN": "agentweaver-worker",
+          "SkipTlsHostnameVerification": false
+        }
+      }
+    }

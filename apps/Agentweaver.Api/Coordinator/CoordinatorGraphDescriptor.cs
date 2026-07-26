@@ -201,6 +201,12 @@ public static class CoordinatorGraphDescriptor
         // AssemblyStage to "scribe", but never-run gates must remain planned.
         var stageOrd = AssemblyProjectionOrdinal(workPlanStatus, assemblyStage, assemblyTerminalStage, gates);
         string Kind(int nodeStageOrd) => stageOrd >= nodeStageOrd ? "live" : "planned";
+        // When a plan is delegated to the backlog (all stories promoted to the Board, 0 inline
+        // subtasks), the coordinator run is terminal by design and the collective-assembly stages
+        // (RAI / Human Review / Merge / Scribe) are intentionally skipped — they never run. Mark
+        // those nodes with the authoritative "delegated" status here (single source of truth) so the
+        // run tree renders them as a terminal "Delegated to backlog" state instead of Pending forever.
+        var delegated = string.Equals(workPlanStatus, WorkPlanStatus.Delegated, StringComparison.Ordinal);
         for (var i = 0; i < gates.Count; i++)
         {
             var gate = gates[i];
@@ -212,7 +218,7 @@ public static class CoordinatorGraphDescriptor
                 Kind(i + 1),
                 gate.GateKind == "rai" ? "agent" : "gate",
                 ChildGraphRef: null,
-                Status: isTerminalStage ? workPlanStatus : null,
+                Status: isTerminalStage ? workPlanStatus : (delegated ? WorkPlanStatus.Delegated : null),
                 StatusReason: isTerminalStage ? assemblyStatusReason : null,
                 TerminalStage: isTerminalStage ? assemblyTerminalStage : null));
         }
@@ -224,7 +230,7 @@ public static class CoordinatorGraphDescriptor
             Kind(gates.Count + 1),
             "action",
             ChildGraphRef: null,
-            Status: mergeTerminal ? workPlanStatus : null,
+            Status: mergeTerminal ? workPlanStatus : (delegated ? WorkPlanStatus.Delegated : null),
             StatusReason: mergeTerminal ? assemblyStatusReason : null,
             TerminalStage: mergeTerminal ? assemblyTerminalStage : null));
         var scribeTerminal = IsTerminalStage(AssemblyStage.Scribe);
@@ -236,7 +242,7 @@ public static class CoordinatorGraphDescriptor
             "agent",
             ChildGraphRef: null,
             Model: coordinatorModel,
-            Status: scribeTerminal ? workPlanStatus : null,
+            Status: scribeTerminal ? workPlanStatus : (delegated ? WorkPlanStatus.Delegated : null),
             StatusReason: scribeTerminal ? assemblyStatusReason : null,
             TerminalStage: scribeTerminal ? assemblyTerminalStage : null));
 

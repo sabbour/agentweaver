@@ -4,6 +4,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
+    <!-- Supply-chain hardening: commit a packages.lock.json per project and make CI restores
+         fail (rather than silently resolve a newer package version) if a dependency version
+         would change without a corresponding lock-file update. Without this, a floating
+         version range (e.g. "1.*") or even an exact version pin can still resolve to a
+         different, newer build on NuGet.org between two otherwise-identical container builds,
+         since NuGet doesn't re-verify a previously-resolved version by default. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
     <!-- GitHub.Copilot.SDK downloads a native Copilot CLI binary via MSBuild targets and registers
          it as a ContentWithTargetPath item. Every project in the dependency graph that imports the
          SDK targets (AgentRuntime, API) registers its own copy, causing NETSDK1152 (duplicate

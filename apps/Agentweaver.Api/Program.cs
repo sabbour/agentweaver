@@ -180,6 +180,8 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IStoryIndependenceClas
     Agentweaver.Api.Coordinator.CopilotStoryIndependenceClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IAssemblyGateCodeClassifier,
     Agentweaver.Api.Coordinator.CopilotAssemblyGateCodeClassifier>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IPreviewClassifier,
+    Agentweaver.Api.Coordinator.CopilotPreviewClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
@@ -366,9 +368,31 @@ builder.Services.AddSingleton<ProjectService>();
     }
 }
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillParser>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IGitHubSkillTreeClient, Agentweaver.Api.Skills.GitHubSkillTreeClient>();
 builder.Services.Configure<Agentweaver.Api.Skills.SkillMarketplaceOptions>(builder.Configuration.GetSection("SkillMarketplaces"));
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillCatalogService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillMarketplaceRegistry>();
+// Project-scoped, user-added marketplace sources (step-1b). Provider-aware, mirroring the skill store.
+{
+    var _srcProvider = builder.Configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+    if (_srcProvider is "postgres" or "postgresql")
+    {
+        builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.Ef.EfProjectMarketplaceSourceStore>();
+        builder.Services.AddSingleton<Agentweaver.Domain.Skills.IProjectMarketplaceSourceStore>(
+            sp => sp.GetRequiredService<Agentweaver.Api.Infrastructure.Ef.EfProjectMarketplaceSourceStore>());
+    }
+    else
+    {
+        builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.SqliteProjectMarketplaceSourceStore>();
+        builder.Services.AddSingleton<Agentweaver.Domain.Skills.IProjectMarketplaceSourceStore>(
+            sp => sp.GetRequiredService<Agentweaver.Api.Infrastructure.SqliteProjectMarketplaceSourceStore>());
+    }
+}
+// Catalog indexer + cache + tool-less LLM classifier for auto-detected (URL) marketplace sources.
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogCache, Agentweaver.Api.Skills.MarketplaceCatalogCache>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogClassifier, Agentweaver.Api.Skills.CopilotMarketplaceCatalogClassifier>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogIndexer, Agentweaver.Api.Skills.MarketplaceCatalogIndexer>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceSourceService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
@@ -387,9 +411,6 @@ builder.Services.AddSingleton<Agentweaver.Api.Blueprints.CatalogConformanceSnaps
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
 // GitHub webhook receiver (issue #53 follow-up): the real external event source wired to the event
-// trigger mechanism above. See Webhooks/GitHubWebhookOptions.cs — secret is config-only, never hardcoded.
-builder.Services.Configure<Agentweaver.Api.Webhooks.GitHubWebhookOptions>(
-    builder.Configuration.GetSection(Agentweaver.Api.Webhooks.GitHubWebhookOptions.SectionName));
 builder.Services.AddHostedService<Agentweaver.Api.Workflows.WorkflowScheduleTriggerService>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
@@ -496,12 +517,14 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             : TimeSpan.FromMinutes(2);
 
     // Finite client for AgentHost control-plane calls (preview runner, readiness, approvals).
-    // When RequireMtls=true (production, H1), attach the client-certificate handler here so the
-    // worker presents its workload-bound cert on every pod connection (wiring owned by Link via
-    // a mounted secret — left as the documented hook). When RequireMtls=false (PoC), no client
-    // cert is configured and the worker connects over plain http.
+    // When RequireMtls=true (production, H1), AgentHostMtlsClientHandler attaches the worker's
+    // client certificate and validates the pod's server certificate against the pinned CA
+    // (ignoring hostname — pod IPs are ephemeral/per-run and can't be enumerated in the cert's
+    // SAN list in advance). When RequireMtls=false (PoC), no client cert is configured and the
+    // worker connects over plain http.
     builder.Services.AddHttpClient("a2a-sandbox-pod")
         .ConfigureHttpClient(c => c.Timeout = agentHostHttpTimeout)
+        .ConfigurePrimaryHttpMessageHandler(() => AgentHostMtlsClientHandler.Create(sandboxAgentOptions))
         // Defense-in-depth for the A2A cold-start race: retry ONLY connection-refused (the AgentHost
         // Kestrel listener has not bound :8088 yet). See ConnectRefusedRetryHandler.
         .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
@@ -511,6 +534,7 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
     // linked worker-side total/read-idle deadlines, so a dead pod cannot fall through to the 4h watch loop.
     builder.Services.AddHttpClient(RemoteAgentProxy.StreamingHttpClientName)
         .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan)
+        .ConfigurePrimaryHttpMessageHandler(() => AgentHostMtlsClientHandler.Create(sandboxAgentOptions))
         .AddHttpMessageHandler(sp => new ConnectRefusedRetryHandler(
             logger: sp.GetRequiredService<ILoggerFactory>().CreateLogger<ConnectRefusedRetryHandler>()));
     builder.Services.Configure<RemoteAgentProxyOptions>(

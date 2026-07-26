@@ -89,8 +89,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     internal const string AssemblyScribeSubtaskId = "assembly-scribe";
     internal const int DefaultFinalScribeMaxConcurrency = 2;
     internal const int DefaultFinalScribeMaxAttempts = 3;
+    internal const double DefaultFinalScribeTimeoutSeconds = 120;
     private const string FinalScribeMaxConcurrencyConfigurationKey = "Coordinator:FinalScribeMaxConcurrency";
     private const string FinalScribeMaxAttemptsConfigurationKey = "Coordinator:FinalScribeMaxAttempts";
+    private const string FinalScribeTimeoutConfigurationKey = "Coordinator:FinalScribeTimeoutSeconds";
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly CoordinatorAssemblyStore _assemblyStore;
@@ -120,6 +122,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly TimeSpan _assemblyLeaseStaleTtl;
     private readonly SemaphoreSlim _finalScribeConcurrency;
     private readonly int _finalScribeMaxAttempts;
+    private readonly TimeSpan _finalScribeTimeout;
+    private readonly IPreviewClassifier? _previewClassifier;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _finalScribeAdmissions = new();
@@ -145,7 +149,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         Preview.PreviewStep? previewStep = null,
         WorktreeManager? worktreeManager = null,
         IntegrationBuildLock? integrationBuildLock = null,
-        IRunEventStream? eventStream = null)
+        IRunEventStream? eventStream = null,
+        IPreviewClassifier? previewClassifier = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -155,6 +160,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _scopeFactory = scopeFactory;
         _serviceProvider = serviceProvider;
         _eventStream = eventStream;
+        _previewClassifier = previewClassifier;
         _projectStore = projectStore;
         _workflowRegistry = workflowRegistry;
         _podRegistry = podRegistry;
@@ -199,6 +205,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             finalScribeMaxConcurrency,
             finalScribeMaxConcurrency);
         _finalScribeMaxAttempts = GetFinalScribeMaxAttempts(configuration);
+        var finalScribeTimeoutSeconds = configuration?.GetValue(
+            FinalScribeTimeoutConfigurationKey,
+            DefaultFinalScribeTimeoutSeconds) ?? DefaultFinalScribeTimeoutSeconds;
+        _finalScribeTimeout = TimeSpan.FromSeconds(Math.Max(0.1, finalScribeTimeoutSeconds));
     }
 
     /// <summary>The integration branch name (D1) derived from the coordinator run id.</summary>
@@ -996,6 +1006,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         workPlanId,
                         aggregateTreeHash,
                         aggregateDiff,
+                        context.SubmittingUser,
+                        context.ProjectId?.Value.ToString(),
                         ct).ConfigureAwait(false);
 
                     buildTest = await _pipeline.RunBuildTestAsync(
@@ -1052,7 +1064,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 var approved = buildTest.Approved;
                 if (previewOutcome.Kind == PreviewOutcomeKind.Failed
                     && buildTest.RequestChanges
-                    && IsPreviewOnlyFeedback(buildTest.Feedback))
+                    && await IsPreviewOnlyFeedbackAsync(context, buildTest.Feedback, ct).ConfigureAwait(false))
                 {
                     requestChanges = false;
                     approved = true;
@@ -1161,6 +1173,23 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (gate.GateKind == "human-review")
             {
                 // ── ONE human review gate (D5) ───────────────────────────────────────────────────
+                // Persist the DURABLE review-gate row BEFORE flipping WorkPlans.Status to InReview
+                // (cross-pod race fix). CoordinatorReconciler.HasPendingReviewGateAsync is the
+                // authoritative "is a human decision genuinely pending" signal used to decide whether
+                // an in_review plan is a live gate or an orphan to re-arm. Doing this the other way
+                // around (status first, review row last — the original ordering) opens a window where
+                // a peer pod's sweep can observe Status == InReview with NO review row yet, wrongly
+                // conclude the run is orphaned, and re-arm assembly on top of the still-live owner —
+                // colliding on the same AgentHost claim/pod mid in-flight /configure call. Persisting
+                // the row first closes that window: any sweep that can see InReview can also see the
+                // pending row, so it never misclassifies a freshly-opened gate as orphaned.
+                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+                    _scopeFactory,
+                    context.CoordinatorRunId,
+                    context.SubmittingUser,
+                    integrationBranch,
+                    aggregateTreeHash,
+                    ct).ConfigureAwait(false);
                 await _assemblyStore.SetStatusAndStageAsync(
                     workPlanId, WorkPlanStatus.InReview, gate.StageId, ct).ConfigureAwait(false);
                 await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
@@ -1174,13 +1203,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     gateKind = gate.GateKind,
                     hasChanges = integration.HasChanges,
                 });
-                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-                    _scopeFactory,
-                    context.CoordinatorRunId,
-                    context.SubmittingUser,
-                    integrationBranch,
-                    aggregateTreeHash,
-                    ct).ConfigureAwait(false);
 
                 var decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
                 if (decision is null)
@@ -1723,59 +1745,83 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         string? mergeResult,
         CancellationToken ct)
     {
-        await _assemblyStore.SetStageAsync(workPlanId, AssemblyStage.Scribe, ct).ConfigureAwait(false);
-        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeStarted, new { workPlanId });
-
-        var coordinatorRun = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
-        if (coordinatorRun is null)
-            return;
-
-        var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
-            coordinatorRun,
-            terminalStatus,
-            mergeResult,
-            ct).ConfigureAwait(false);
-        if (!shouldExecute || scribeRun is null)
-        {
-            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
-            return;
-        }
-
-        var scribeSucceeded = true;
         try
         {
-            await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
-                context.CoordinatorRunId,
-                context.ProjectId?.Value.ToString(),
-                AgentName: "coordinator",
-                SubmittingUser: coordinatorRun.SubmittingUser,
-                context.RepositoryPath,
-                ModelSource.GitHubCopilot.ToString(),
-                ModelId: coordinatorRun.ModelId,
-                RunStartedAt: coordinatorRun.StartedAt,
-                TerminalStatus: terminalStatus,
-                MergeResult: mergeResult), ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            scribeSucceeded = false;
-            _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
-                context.CoordinatorRunId);
-            Emit(context.CoordinatorRunId, "run.scribe_failed", new
-            {
-                workPlanId,
-                reason = ex.Message,
-            });
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ex.Message, ct).ConfigureAwait(false);
-        }
+            await _assemblyStore.SetStageAsync(workPlanId, AssemblyStage.Scribe, ct).ConfigureAwait(false);
+            await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeStarted, new { workPlanId });
 
-        if (scribeSucceeded)
-        {
+            var coordinatorRun = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+            if (coordinatorRun is null)
+                return;
+
+            var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
+                coordinatorRun,
+                terminalStatus,
+                mergeResult,
+                ct).ConfigureAwait(false);
+            if (!shouldExecute || scribeRun is null)
+            {
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+                return;
+            }
+
+            var scribeSucceeded = true;
+            string? failureReason = null;
+            using var scribeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            scribeCts.CancelAfter(_finalScribeTimeout);
+            try
+            {
+                await _pipeline.RunScribeAsync(new CollectiveScribeRequest(
+                    context.CoordinatorRunId,
+                    context.ProjectId?.Value.ToString(),
+                    AgentName: "coordinator",
+                    SubmittingUser: coordinatorRun.SubmittingUser,
+                    context.RepositoryPath,
+                    ModelSource.GitHubCopilot.ToString(),
+                    ModelId: coordinatorRun.ModelId,
+                    RunStartedAt: coordinatorRun.StartedAt,
+                    TerminalStatus: terminalStatus,
+                    MergeResult: mergeResult), scribeCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && scribeCts.IsCancellationRequested)
+            {
+                scribeSucceeded = false;
+                failureReason = $"Scribe pass timed out after {_finalScribeTimeout.TotalSeconds:0.###} seconds.";
+                _logger.LogWarning(ex,
+                    "Collective assembly: scribe pass timed out for run {RunId} after {TimeoutSeconds}s (non-fatal)",
+                    context.CoordinatorRunId, _finalScribeTimeout.TotalSeconds);
+            }
+            catch (Exception ex)
+            {
+                scribeSucceeded = false;
+                failureReason = ex.Message;
+                _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
+                    context.CoordinatorRunId);
+            }
+
+            if (!scribeSucceeded)
+            {
+                Emit(context.CoordinatorRunId, "run.scribe_failed", new
+                {
+                    workPlanId,
+                    reason = failureReason,
+                });
+                await _runStore.TrySetTerminalStatusAsync(
+                    scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, failureReason, ct).ConfigureAwait(false);
+                return;
+            }
+
             await _runStore.TrySetTerminalStatusAsync(
                 scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, terminalStatus, ct).ConfigureAwait(false);
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
+        }
+        finally
+        {
+            // The coordinator Scribe uses the same per-run A2A pod as the assembly gates. Keep that
+            // pod alive through the bounded Scribe turn, then release it and the detached worktree.
+            await CleanupAssemblyBuildTestResourcesAsync(
+                context.CoordinatorRunId, context.RepositoryPath, CancellationToken.None).ConfigureAwait(false);
         }
     }
 
@@ -3743,24 +3789,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
     /// list and run detail surface why assembly ended (instead of leaving the run InProgress, which a
     /// later restart would sweep to a bare "Failed"). A no-op when the run row is absent or already
-    /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>).
+    /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>). Resource
+    /// cleanup is intentionally deferred to <see cref="RunCoordinatorScribeAsync"/> so the shared
+    /// per-run AgentHost pod remains available for the final A2A Scribe turn.
     /// </summary>
     private async Task TerminalizeCoordinatorRunAsync(
         string coordinatorRunId, RunStatus status, string result, CancellationToken ct)
     {
-        string? repositoryPath = null;
         if (RunId.TryParse(coordinatorRunId, out var id))
         {
-            var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
-            repositoryPath = run?.RepositoryPath;
             await _runStore.TrySetTerminalStatusAsync(id, status, DateTimeOffset.UtcNow, result, ct)
                 .ConfigureAwait(false);
         }
-
-        // CRITICAL (orphan cleanup): when assembly blocks/fails (e.g. ineligible_subtasks, rai_blocked,
-        // review_timeout) the coordinator run terminates but its AgentHost pod (2 CPU / 4 Gi) would
-        // otherwise keep running and eventually exhaust the namespace CPU quota. Release it best-effort.
-        await CleanupAssemblyBuildTestResourcesAsync(coordinatorRunId, repositoryPath, ct).ConfigureAwait(false);
     }
 
     private async Task MarkCoordinatorAwaitingReviewAsync(string coordinatorRunId, CancellationToken ct)
@@ -3840,12 +3880,33 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         int workPlanId,
         string treeHash,
         string aggregateDiff,
+        string submittingUser,
+        string? projectId,
         CancellationToken ct)
     {
         if (FindLatestPreviewState(coordinatorRunId, workPlanId, treeHash).Kind is not PreviewOutcomeKind.None)
             return;
 
-        var applicability = InferPreviewApplicability(aggregateDiff);
+        // Model failures deliberately fail safe to requiring a preview; never silently skip an
+        // applicable live-preview gate because classification infrastructure is unavailable.
+        bool? required = null;
+        if (_previewClassifier is not null)
+        {
+            try
+            {
+                required = await _previewClassifier.ClassifyApplicabilityAsync(
+                    new PreviewApplicabilityClassificationContext(coordinatorRunId, projectId, submittingUser, aggregateDiff), ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Preview applicability classification failed for run {RunId}; requiring preview.", coordinatorRunId);
+            }
+        }
+        var applicability = required is false
+            ? (Required: false, Reason: "llm_docs_or_non_runtime", Evidence: Array.Empty<string>() as IReadOnlyList<string>)
+            : (Required: true, Reason: required is null ? "llm_unavailable_default_required" : "llm_preview_required", Evidence: Array.Empty<string>() as IReadOnlyList<string>);
+
         Emit(coordinatorRunId, EventTypes.WorkflowStep, new
         {
             step = "preview",
@@ -3879,6 +3940,33 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         await PersistRunEventsSnapshotAsync(coordinatorRunId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsPreviewOnlyFeedbackAsync(
+        CoordinatorDispatchContext context,
+        string? feedback,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(feedback) || _previewClassifier is null)
+            return false;
+
+        // A null/error result deliberately preserves request-changes: no real build/test feedback
+        // may be dismissed as preview-only because the model call degraded.
+        try
+        {
+            return await _previewClassifier.ClassifyPreviewOnlyFeedbackAsync(
+                new PreviewFeedbackClassificationContext(
+                    context.CoordinatorRunId,
+                    context.ProjectId?.Value.ToString(),
+                    context.SubmittingUser,
+                    feedback),
+                ct).ConfigureAwait(false) is true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Preview-only feedback classification failed for run {RunId}; preserving feedback.", context.CoordinatorRunId);
+            return false;
+        }
     }
 
     private async Task<PreviewOutcomeState> EnsureFinalPreviewOutcomeBeforeApprovalAsync(
@@ -4000,67 +4088,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         try { return node.GetValue<string>(); }
         catch { return null; }
     }
-
-    private static (bool Required, string Reason, IReadOnlyList<string> Evidence) InferPreviewApplicability(string aggregateDiff)
-    {
-        var changedFiles = ExtractDiffFiles(aggregateDiff);
-        if (changedFiles.Count > 0
-            && changedFiles.All(IsDocumentationOnlyPath))
-            return (false, "docs_only", changedFiles);
-
-        var previewEvidence = changedFiles
-            .Where(path => path.EndsWith("package.json", StringComparison.OrdinalIgnoreCase)
-                || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
-                || path.Contains("server", StringComparison.OrdinalIgnoreCase)
-                || path.Contains("controller", StringComparison.OrdinalIgnoreCase)
-                || path.Contains("app", StringComparison.OrdinalIgnoreCase)
-                || path.Contains("vite", StringComparison.OrdinalIgnoreCase)
-                || path.Contains("next", StringComparison.OrdinalIgnoreCase))
-            .Take(8)
-            .ToArray();
-
-        return previewEvidence.Length > 0
-            ? (true, "server_files_changed", previewEvidence)
-            : (true, "ambiguous_default_required", changedFiles.Take(8).ToArray());
-    }
-
-    private static IReadOnlyList<string> ExtractDiffFiles(string aggregateDiff)
-    {
-        if (string.IsNullOrWhiteSpace(aggregateDiff))
-            return [];
-
-        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var line in aggregateDiff.Split('\n'))
-        {
-            var trimmed = line.Trim();
-            if (!trimmed.StartsWith("diff --git ", StringComparison.Ordinal))
-                continue;
-
-            var parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 4)
-            {
-                var file = parts[3].StartsWith("b/", StringComparison.Ordinal) ? parts[3][2..] : parts[3];
-                files.Add(file.Replace('/', Path.DirectorySeparatorChar));
-            }
-        }
-
-        return files.ToArray();
-    }
-
-    private static bool IsDocumentationOnlyPath(string path) =>
-        path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-        || path.EndsWith(".mdx", StringComparison.OrdinalIgnoreCase)
-        || path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)
-        || path.EndsWith(".adoc", StringComparison.OrdinalIgnoreCase)
-        || path.Contains($"{Path.DirectorySeparatorChar}docs{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWith($"docs{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsPreviewOnlyFeedback(string? feedback) =>
-        !string.IsNullOrWhiteSpace(feedback)
-        && feedback.Contains("preview", StringComparison.OrdinalIgnoreCase)
-        && !feedback.Contains("test", StringComparison.OrdinalIgnoreCase)
-        && !feedback.Contains("build", StringComparison.OrdinalIgnoreCase)
-        && !feedback.Contains("compile", StringComparison.OrdinalIgnoreCase);
 
     private void Emit(string coordinatorRunId, string eventType, object payload) =>
         _streamStore.Get(coordinatorRunId)?.RecordNext(eventType, StampTimestamp(payload));

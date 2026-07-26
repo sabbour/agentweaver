@@ -1,4 +1,5 @@
 ﻿import { apiClient } from '../api/apiClient';
+import { resolvePublicApiOrigin } from '../config';
 import { ApiError } from '../api/client';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
@@ -33,7 +34,7 @@ import {
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
-type SectionId = 'general' | 'repository' | 'sandbox' | 'danger';
+type SectionId = 'general' | 'repository' | 'webhooks' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
@@ -71,6 +72,12 @@ const SECTIONS: SectionDef[] = [
     icon: <Branch24Regular />,
   },
   {
+    id: 'webhooks',
+    label: 'Webhooks',
+    description: 'Configure GitHub event delivery for this project.',
+    icon: <Settings24Regular />,
+  },
+  {
     id: 'sandbox',
     label: 'Sandbox policy',
     description: 'Control how agent commands execute and what they may reach.',
@@ -86,7 +93,7 @@ const SECTIONS: SectionDef[] = [
 ];
 
 function isSectionId(value: string | null): value is SectionId {
-  return value === 'general' || value === 'repository' || value === 'sandbox' || value === 'danger';
+  return value === 'general' || value === 'repository' || value === 'webhooks' || value === 'sandbox' || value === 'danger';
 }
 
 const useStyles = makeStyles({
@@ -271,6 +278,12 @@ export function ProjectSettingsPage() {
   const [sandboxSaveSuccess, setSandboxSaveSuccess] = useState(false);
   const sandboxLoading = project !== null && !sandboxFetched;
 
+  // A webhook secret is deliberately only retained in this component after its rotation response.
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [rotatingWebhookSecret, setRotatingWebhookSecret] = useState(false);
+  const [webhookError, setWebhookError] = useState<string | null>(null);
+  const [copiedWebhookValue, setCopiedWebhookValue] = useState<'url' | 'secret' | null>(null);
+
   const formatError = (err: unknown): string =>
     err instanceof ApiError
       ? `API error ${err.status}: ${err.body}`
@@ -433,6 +446,32 @@ export function ProjectSettingsPage() {
       setDeleteError(formatError(err));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const webhookUrl = `${resolvePublicApiOrigin()}/api/projects/${encodeURIComponent(projectId ?? '')}/webhooks/github`;
+
+  const copyWebhookValue = async (value: string, kind: 'url' | 'secret') => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedWebhookValue(kind);
+    } catch {
+      setWebhookError('Could not copy to the clipboard. Copy the value manually.');
+    }
+  };
+
+  const handleRotateWebhookSecret = async () => {
+    if (!projectId) return;
+    setRotatingWebhookSecret(true);
+    setWebhookError(null);
+    setCopiedWebhookValue(null);
+    try {
+      const result = await apiClient.rotateProjectWebhookSecret(projectId);
+      setWebhookSecret(result.secret);
+    } catch (err) {
+      setWebhookError(formatError(err));
+    } finally {
+      setRotatingWebhookSecret(false);
     }
   };
 
@@ -653,6 +692,58 @@ export function ProjectSettingsPage() {
                     selectSection('general');
                   }}
                 />
+              </div>
+            )}
+
+            {activeSection === 'webhooks' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>GitHub webhook</TitleText>
+                  <Body as="p" tone="muted">
+                    In GitHub, open your repository’s Settings, then Webhooks, and add this payload URL.
+                    Set the content type to <strong>application/json</strong>.
+                  </Body>
+                  <Field label="Payload URL">
+                    <Input value={webhookUrl} readOnly />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button appearance="secondary" onClick={() => void copyWebhookValue(webhookUrl, 'url')}>
+                      {copiedWebhookValue === 'url' ? 'Copied URL' : 'Copy URL'}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className={styles.subBlock}>
+                  <TitleText>Webhook secret</TitleText>
+                  <Body as="p" tone="muted">
+                    Generate a unique secret for GitHub to sign deliveries. Rotating it immediately
+                    invalidates the previous secret.
+                  </Body>
+                  <div className={styles.formActions}>
+                    <Button appearance="primary" disabled={rotatingWebhookSecret} onClick={() => void handleRotateWebhookSecret()}>
+                      {rotatingWebhookSecret ? 'Generating' : webhookSecret ? 'Rotate secret' : 'Generate secret'}
+                    </Button>
+                    {rotatingWebhookSecret && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {webhookSecret && (
+                    <>
+                      <MessageBar intent="warning">
+                        <MessageBarBody>Copy this secret now. You won’t be able to see it again.</MessageBarBody>
+                      </MessageBar>
+                      <Field label="Secret">
+                        <Input value={webhookSecret} readOnly type="text" />
+                      </Field>
+                      <div className={styles.formActions}>
+                        <Button appearance="secondary" onClick={() => void copyWebhookValue(webhookSecret, 'secret')}>
+                          {copiedWebhookValue === 'secret' ? 'Copied secret' : 'Copy secret'}
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                  {webhookError && (
+                    <MessageBar intent="error"><MessageBarBody>{webhookError}</MessageBarBody></MessageBar>
+                  )}
+                </div>
               </div>
             )}
 

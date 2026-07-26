@@ -36,7 +36,10 @@ shows how to run individual steps, including `gen-a2a-mtls-certs`.
 5. Agent turns run over A2A on port `8088`.
 6. Releasing the claim deletes the used pod; the warm pool replenishes it.
 
-Per-run context is not injected through `SandboxClaim.spec.env`; doing so bypasses warm-pool adoption in controller v0.5.0. Static config lives in the template and `configmap-agenthost.yaml`.
+Per-run context is not injected through `SandboxClaim.spec.env`; as of controller **v0.5.3** the
+warm-pool-adoption-bypass behavior tied to `spec.env`/`spec.volumeClaimTemplates` has not been
+confirmed fixed upstream (see the blocker analysis on #481) — static config stays in the template
+and `configmap-agenthost.yaml` until that is verified.
 
 ## Required configuration
 
@@ -78,4 +81,4 @@ sandboxwarmpool.extensions.agents.x-k8s.io/agentweaver-agent-host
 | Pods stay Pending | `kubectl get runtimeclass`, `kubectl describe node`, and `katapool` capacity |
 | Image pull failure | image tag matches `AGENTHOST_IMAGE_TAG` and ACR is attached to AKS |
 | `/configure` or A2A fails | NetworkPolicies allow API/worker to AgentHost TCP `8088`; run `npm run azure:verify` |
-| Token fetch fails | service account `agentweaver-agent-host` has workload identity federation and Key Vault access |
+| Token delivery fails | service account `agentweaver-agent-host` has workload identity federation to the dedicated `agentweaver-agenthost-identity`; the run owner's GitHub token is brokered by the API in `/configure` (`gitHubAccessToken`) — the sandbox identity has no Key Vault access (issue #471) |

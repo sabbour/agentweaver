@@ -51,6 +51,7 @@ public sealed class CoordinatorWorkflowFactory
         IWorkflowAgentFactory agentFactory,
         ICoordinatorSpecDrafter drafter,
         IStoryIndependenceClassifier storyIndependenceClassifier,
+        IAssemblyGateCodeClassifier assemblyGateCodeClassifier,
         RunStreamStore streamStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
@@ -79,6 +80,7 @@ public sealed class CoordinatorWorkflowFactory
             scopeFactory,
             loggerFactory,
             storyIndependenceClassifier,
+            assemblyGateCodeClassifier,
             configuration["Providers:GitHubCopilot:Model"] ?? CoordinatorModelDefaults.DefaultCopilotModel,
             configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000",
             configuration["Auth:ApiKey"]

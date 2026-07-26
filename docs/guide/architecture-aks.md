@@ -125,7 +125,7 @@ Gateway pods are identified by `gateway.networking.k8s.io/gateway-name: agentwea
 Sandbox pods (`k8s/base/networkpolicy-sandbox.yaml` plus `k8s/base/networkpolicy-agenthost.yaml`) have a deny-by-default posture with one turn-path exception:
 - **Ingress deny-all by default** — command execution still uses pod-exec through the kube-apiserver.
 - **A2A ingress exception** — `allow-worker-to-agenthost-a2a` opens only TCP `8088` from worker/API pods to AgentHost pods. `POST /configure` is intentionally not protected by the turn bearer token because it delivers that token; NetworkPolicy is the guard. `POST /a2a/agent/v1/message:stream` still requires `Authorization: Bearer {per-run token}`, delivered by `/configure` and unique per run.
-- **Egress allow-list** — DNS (`kube-dns`) + HTTPS on port 443 to the GitHub IP range `140.82.112.0/20` only. The cluster-internal pod and service CIDRs are not in the allow-list, so sandbox pods cannot reach API or other workload pods via the network.
+- **Egress allow-list** — DNS (`kube-dns`) + public HTTPS on port 443 for package registries and GitHub/Copilot/Azure APIs. Broad cluster-internal (RFC1918) egress stays denied, so ordinary sandbox pods cannot reach arbitrary workload pods. **AgentHost** pods are the one exception: `agenthost-egress-allowlist` (`k8s/base/networkpolicy-agenthost-egress.yaml`) adds narrow, identity-based (`podSelector`) egress to `agentweaver-api` and `agentweaver-mcp` on TCP `8080` so native agent tools and the operator-assistant MCP can reach those two services east-west. These must be `podSelector` rules, not CIDR/`ipBlock` rules: under Cilium an in-cluster ClusterIP resolves to the destination pod's security identity, and a CIDR allow (even `0.0.0.0/0`) matches only the "world" entity, never a cluster-managed pod identity — so a CIDR rule silently black-holes API/MCP traffic (#424).
 
 The FQDN-based `CiliumNetworkPolicy` in `k8s/base/cilium-network-policy-sandbox.yaml` further narrows sandbox internet egress to specific hostnames: `api.github.com`, `registry.npmjs.org` (and `*.npmjs.org`), and Azure AI service domains. This policy requires `--network-dataplane cilium --enable-acns` at cluster creation and must be applied alongside `networkpolicy-sandbox.yaml`.
 
@@ -144,7 +144,7 @@ See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
 
 ### Secrets management
 
-Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are fetched at `/configure` time by the pod itself using workload identity and the configured Key Vault URI. There are no static credentials in any manifest.
+Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are resolved on the API side and brokered to the sandbox pod in the one-time `/configure` call (`gitHubAccessToken`), because the sandbox identity has no Key Vault access (issue #471). There are no static credentials in any manifest.
 
 ![Secrets management: Managed Identity, ServiceAccount, ServiceAccount, AKS OIDC Issuer, AKS OIDC Issuer, Azure Key Vault, SecretProviderClass, Per-user GitHub token secret, API Pod, Warm AgentHost Pod, MCP Pod](../diagrams/guide-architecture-aks-fig5.png)
 
@@ -153,7 +153,7 @@ Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
-The API's `ServiceAccount` (`agentweaver-api`) is annotated with a managed identity client ID and federated to a user-assigned managed identity through the cluster's OIDC issuer. The `agentweaver-agent-host` ServiceAccount shares the same managed identity (`agentweaver-api-identity`) via a second federated credential (`agentweaver-agenthost-fedcred`), allowing warm AgentHost pods to call Key Vault directly with workload identity.
+The API's and worker's `ServiceAccount`s (`agentweaver-api`, `agentweaver-worker`) are federated to the shared, Key-Vault-privileged user-assigned `agentweaver-api-identity` through the cluster's OIDC issuer (`agentweaver-api-fedcred` and `agentweaver-worker-fedcred` respectively). The worker has its own Kubernetes RBAC identity and receives only sandbox lifecycle and legacy exec permissions; it does not inherit the API's preview-management permissions. The `agentweaver-agent-host` ServiceAccount is federated to a **separate, dedicated managed identity (`agentweaver-agenthost-identity`) that has no Key Vault role assignments** (issue #471) via its own federated credential (`agentweaver-agenthost-fedcred`). Because the sandbox runs untrusted shell/tool code, it must not be able to read Key Vault; the run owner's GitHub token is instead brokered per-run by the API in the `/configure` call.
 
 One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
 

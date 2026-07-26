@@ -1,4 +1,5 @@
-﻿import { apiClient } from '../api/apiClient';
+import { apiClient } from '../api/apiClient';
+import { MCP_URL } from '../config';
 import { ApiError } from '../api/client';
 import {
   Button,
@@ -114,8 +115,22 @@ export function SettingsPage() {
     <PageContainer width="readable">
       <PageHeader
         title="Settings"
-        description="System-level configuration for local repository policy."
+        description="Manage your MCP connection and local repository sandbox policy."
       />
+
+      <PageSection
+        title="MCP clients"
+        description="Connect an external MCP client to Agentweaver. This connection is associated with your signed-in account, not a single project."
+      >
+        <div className={styles.section}>
+          <Field
+            label="MCP server URL"
+            hint="Use this URL in your MCP client configuration."
+          >
+            <Input value={MCP_URL} readOnly />
+          </Field>
+        </div>
+      </PageSection>
 
       <PageSection
         title="Sandbox policy"

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Agentweaver.SandboxFs;
 
 namespace Agentweaver.SandboxExec;
 
@@ -31,6 +32,20 @@ public sealed class PassthroughExecutor : ISandboxExecutor
         SandboxCommand command, CancellationToken ct = default)
     {
         _logger?.LogDebug("PassthroughExecutor: running command length={Length}", command.CommandLine.Length);
+
+        // #476 — PassthroughExecutor provides NO mount isolation (it is the Kata-mode executor and
+        // relies on the pod's VM boundary), so it must consume the per-run filesystem policy itself:
+        // reject absolute paths embedded in the command text that reach into the shared /workspace
+        // PVC outside this run's own roots. Without this, a command whose declared working directory
+        // stays inside the run's tree can still `cat /workspace/<other-project>/secrets` across runs.
+        var (guardAllowed, guardReason) = SharedWorkspacePathGuard.Inspect(
+            command.CommandLine, BuildAllowedRoots(command));
+        if (!guardAllowed)
+        {
+            _logger?.LogWarning("PassthroughExecutor: rejected command by shared-mount guard: {Reason}", guardReason);
+            return new SandboxExecResult(
+                126, "", $"Command rejected: {guardReason}", TimedOut: false, OutputTruncated: false);
+        }
 
         Process? proc = null;
         try
@@ -108,6 +123,16 @@ public sealed class PassthroughExecutor : ISandboxExecutor
             foreach (var line in result.Stderr.Split('\n'))
                 yield return new SandboxOutputChunk(SandboxOutputStream.Stderr, line);
         yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, result.ExitCode.ToString());
+    }
+
+    private static IReadOnlyList<string> BuildAllowedRoots(SandboxCommand command)
+    {
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(command.WorkingDirectory))
+            roots.Add(command.WorkingDirectory);
+        roots.AddRange(command.FilesystemPolicy.ReadWritePaths);
+        roots.AddRange(command.FilesystemPolicy.ReadOnlyPaths);
+        return roots;
     }
 
     private static async Task<(string Output, bool Truncated)> ReadBoundedAsync(

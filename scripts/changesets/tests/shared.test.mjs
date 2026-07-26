@@ -11,6 +11,7 @@ import {
   validateReleasePreparation,
   validateReleasePreparationFiles,
   validateSyncBranch,
+  getUnexpectedIgnoredFiles,
 } from "../shared.mjs";
 
 test("version mirrors require VERSION, package.json, and lockfile to match", () => {
@@ -31,6 +32,19 @@ test("extractChangelogSection returns only the requested version section", () =>
 
   assert.equal(extractChangelogSection(text, "0.9.71"), "## 0.9.71\n\n- New note");
   assert.throws(() => extractChangelogSection(text, "0.9.72"), /no section/);
+});
+
+test("extractChangelogSection accepts bracketed and v-prefixed heading forms", () => {
+  const text =
+    "# Changelog\n\n## [v0.9.70] - 2026-07-16\n\nsome text\n\n## [v0.9.69]\n\nolder text\n";
+
+  assert.equal(
+    extractChangelogSection(text, "0.9.70"),
+    "## [v0.9.70] - 2026-07-16\n\nsome text",
+  );
+  assert.equal(extractChangelogSection("## v0.9.70\n\nplain v-prefixed", "0.9.70"), "## v0.9.70\n\nplain v-prefixed");
+  assert.equal(extractChangelogSection("## [0.9.70]\n\nbracketed", "0.9.70"), "## [0.9.70]\n\nbracketed");
+  assert.equal(extractChangelogSection("## 0.9.70\n\nbare", "0.9.70"), "## 0.9.70\n\nbare");
 });
 
 test("release branch parser accepts only release/vX.Y.Z", () => {
@@ -103,4 +117,85 @@ test("dev sync validates branch and prepared release metadata", () => {
   assert.doesNotThrow(() => validateReleasePreparationFiles("abc123", files));
   assert.throws(() => validateReleasePreparationFiles("abc123", files.filter((file) => file !== "VERSION")), /missing VERSION/);
   assert.throws(() => validateReleasePreparationFiles("abc123", files.slice(0, 4)), /does not consume changesets/);
+});
+
+test("getUnexpectedIgnoredFiles allows standard build/dep/output roots, flags unexpected paths", () => {
+  // `git status --porcelain --ignored=matching` COLLAPSES a wholly-ignored directory to a
+  // single trailing-slash entry (e.g. `!! node_modules/`) and never lists its contents, so
+  // flagging that root protects nothing while blocking every real release. Policy: allow the
+  // standard dependency/build/output roots that always exist in a dev checkout, but still
+  // flag ignored files in UNEXPECTED locations (repo root, tracked source trees, unknown dirs).
+  const stdout = [
+    // Editor / local-tooling (allowed).
+    "!! .squad/",
+    "!! .idea/",
+    "!! .vscode/",
+    "!! .vs/",
+    "!! .security/",
+    "!! .impeccable/",
+    "!! .env",
+    "!! .env.local",
+    "!! apps/web/.env",
+    "!! apps/Agentweaver.Api/appsettings.Development.json",
+    "!! npm-debug.log",
+    "!! scripts/azure/params.test.json",
+    "!! scripts/azure/steps/.rendered/",
+    "!! scripts/azure/tests/.scratch-123",
+    "!! test.user",
+    // Standard collapsed dependency/build/output roots (allowed).
+    "!! node_modules/",
+    "!! dist/",
+    "!! apps/web/dist/",
+    "!! docs/node_modules/",
+    "!! apps/web/.vite/",
+    "!! tests/Agentweaver.Tests/TestResults/",
+    "!! tests/e2e/playwright-report/",
+    "!! tests/e2e/test-results/",
+    "!! docs/diagram-renderer/public/specs/",
+    // Harness run-artifact dirs enumerate individual files (they keep a tracked .gitignore).
+    "!! scripts/api-harness/findings/run-2026.json",
+    "!! scripts/api-harness/transcripts/live.jsonl",
+    "!! scripts/mcp-harness/dispatch/jordan.md",
+    "!! scripts/ui-harness/sessions/",
+    // Genuinely UNEXPECTED ignored paths (must still be flagged).
+    "!! malicious.js",
+    "!! src/malicious.js",
+    "!! weird-ignored-dir/"
+  ].join("\n");
+  const unexpected = getUnexpectedIgnoredFiles(stdout);
+  assert.deepEqual(unexpected, ["malicious.js", "src/malicious.js", "weird-ignored-dir/"]);
+});
+
+test("getUnexpectedIgnoredFiles allows nested package build artifacts", () => {
+  // An optional leading path prefix lets the standard roots match under any package, so a
+  // nested build/output directory (git-collapsed) is treated the same as the repo-root one.
+  const stdout = [
+    "!! packages/Agentweaver.Domain/obj/",
+    "!! packages/Agentweaver.AgentRuntime/bin/",
+    "!! packages/Agentweaver.SandboxExec/bin/Debug/",
+    "!! packages/Agentweaver.SandboxExec/bin/Release/",
+    "!! apps/Agentweaver.Api/obj/"
+  ].join("\n");
+  assert.deepEqual(getUnexpectedIgnoredFiles(stdout), []);
+});
+
+test("getUnexpectedIgnoredFiles flags planted files outside recognized roots", () => {
+  // Defense that still matters: an ignored file at the repo root or inside a tracked source
+  // tree, and an unknown ignored directory, must be surfaced for a human to investigate.
+  // A named file git somehow enumerates directly inside a collapsed root (dir patterns are
+  // anchored to the trailing slash) is also still flagged.
+  const stdout = [
+    "!! evil.env.js",
+    "!! src/backdoor.ts",
+    "!! apps/Agentweaver.Api/Program.injected.cs",
+    "!! totally-unknown-dir/",
+    "!! node_modules/.hook/malicious.js"
+  ].join("\n");
+  assert.deepEqual(getUnexpectedIgnoredFiles(stdout), [
+    "evil.env.js",
+    "src/backdoor.ts",
+    "apps/Agentweaver.Api/Program.injected.cs",
+    "totally-unknown-dir/",
+    "node_modules/.hook/malicious.js"
+  ]);
 });

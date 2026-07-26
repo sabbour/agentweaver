@@ -409,3 +409,193 @@ Root cause: `A2ATurnBridgeAgent` (DelegatingAIAgent wrapping the singleton `Copi
 Discovered while re-verifying the PR #376 SetupAsync fix (see entry above) against a fresh staging redeploy of commit `4f57729b861f`. With the original bare `Received: None` bug confirmed fixed, Operator Assistant first turns still fail 100% (3/3 runs), now with a different, structured error: `agenthost_unavailable` / `ProviderUnavailable` / "Initialization timed out". Root cause confirmed via direct `kubectl exec ... curl` from a live AgentHost pod to the in-cluster MCP service: both the DNS name (`agentweaver-mcp`) and the ClusterIP (`10.0.215.29:8080`) time out at the TCP layer (curl exit 28) -- `AgentweaverMcpToolProvider.ConnectAsync` -> `McpClient.ConnectAsync` blocks for ~60s before failing. Two NetworkPolicies selecting agent-host pods (`agenthost-egress-allowlist`, `agentweaver-agent-host-network-policy`) explicitly exclude `10.0.0.0/8` (which contains the MCP ClusterIP) from egress. A third, more permissive policy (`sandbox-egress-allowlist`) also selects the same pods but does not appear to actually permit the traffic in practice -- the precedence/interaction between these 3 overlapping NetworkPolicies is unclear and needs investigation. Net effect: Operator Assistant is completely non-functional end-to-end on staging, purely due to this network policy gap (unrelated to PR #376's session-creation fix, which is independently confirmed working). Example failing run ids: `0c3dd3bc-1ee7-4c6e-9ead-67ea51312d7e`, `4338a887-c072-47f9-a98f-e9d6f6d88d48`, `820aaff3-20fa-46ba-a783-8726fe0d4f5d`. Evidence: `scripts/api-harness/verdicts/agenthost-fix-validation-evidence.json`, `scripts/api-harness/verdicts/agenthost-fix-validation-verdict.json`.
 
 Fixed in PR #381 (`k8s/base/networkpolicy-agenthost-egress.yaml`): added an explicit, tightly-scoped egress rule in `agenthost-egress-allowlist` allowing AgentHost pods to reach `app: agentweaver-mcp` on TCP 8080 (not a blanket `10.0.0.0/8` allow -- kept scoped to the actual MCP pod selector, matching this repo's existing narrow-scoping convention). `sandbox-egress-allowlist` alone was confirmed insufficient under the live kata/ACNS enforcement path even though it looked broader on paper. **Re-verified independently live** on the redeployed staging environment: a fresh `POST /api/assistant/runs` call got a real `201` response with a genuine tool call (`tools_invoked:["project_list"]`) and a correct assistant reply listing the user's actual project -- not just a curl-level TCP check.
+
+---
+
+## Staging Operator Assistant: AgentHost pod fails /healthz readiness within 90s (new failure mode, blocks PR #467 tool-approval verification)
+
+- date: 2026-07-25
+- category: bug
+- surface: api
+- status: open
+
+Discovered 2026-07-25 during post-security-hardening-batch regression hunt (PRs #460-485 merged 2026-07-23). 3 independent POST /api/assistant/runs attempts against staging all failed with HTTP 503 agenthost_unavailable/ProviderUnavailable after ~90s: 'AgentHost pod ... did not become ready at http://<pod-ip>:8088/healthz within 90s; failing the launch.' Confirmed on 2 distinct pods (agentweaver-agent-host-vdfjz, agentweaver-agent-host-4hthh, different IPs) ruling out a single-node flake. Event streams show run.started -> agent.message -> sandbox.execution_pod.bound -> run.error with zero tool.call/tool_approval events ever emitted -- the pipeline never reaches PR #467's fail-closed tool-approval gating logic, so that specific security regression question is CANNOT_DETERMINE, not pass/fail. This is a NEW failure mode, distinct from the previously-fixed #376 (session-creation SetupAsync bug) and #381 (NetworkPolicy egress gap) -- both of those are believed already fixed; this is a fresh /healthz readiness timeout. Also observed two run-bookkeeping inconsistencies: GET /api/runs/{id} reports status=in_progress (ended_at/result null) despite a terminal run.error event, and a subsequent POST /api/assistant/runs returned 201 with a run_id that turned out to be a stale reused run (identical events, no new activity) rather than a fresh run. Example run ids: ef478f66-66d1-4995-a6ce-59f5876e18ed, 9a792528-7538-4d72-aeec-2618ae03cdbc. Evidence: scripts/api-harness/transcripts/oracle-operator-20260725T033449.jsonl, scripts/api-harness/verdicts/oracle-operator-verdict.json.
+
+Root-caused to a code/manifest gap in PR #463: the production mTLS overlay (`k8s/overlays/production/patch-agenthost-mtls.yaml`) set `AgentHost:RequireMtls=true`, which disables the plain-HTTP Kestrel fallback bind in `apps/Agentweaver.AgentHost/Program.cs`, but no `Kestrel:Endpoints:A2A` config was ever added to bind the secure listener using the mounted server cert -- so Kestrel bound zero endpoints and silently fell back to `ASPNETCORE_HTTP_PORTS` (8080), leaving nothing listening on 8088. Verified via `kubectl exec` that `curl 127.0.0.1:8088` from inside the pod itself returns instant connection-refused (rules out NetworkPolicy, which would time out/drop silently instead). Certs were correctly generated and mounted (not an install-crash). Filed as issue #499, fixed in PR #500 (adds `Kestrel:Endpoints:A2A` wiring plus CA-pinned `ClientCertificateMode.RequireCertificate` validation, security-reviewed by Seraph).
+
+---
+
+## Run pages 403 after Outcome confirm when org membership cannot be re-verified
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging v0.11.1, a browser session can still load /projects and render authenticated chrome, but after confirming an orchestration outcome plan the run routes can flip to Permission required with GET /runs failed (403). The API error body is: 'Could not verify membership of the required GitHub organization. Ensure your org membership is set to Public in GitHub org settings (the private membership endpoint is blocked by SAML SSO enforcement).' In the 2026-07-25 blueprint-demo dry-run, parent run b42fa206-a0cf-4884-ab57-574371baf89f reached awaiting_confirmation, revise took ~18s, confirm returned 200, then the run page blocked and the child run 660a35bd-e5a1-4e54-8c52-39cede8b7815 could not be opened due to this 403. This is distinct from the earlier AgentHost mTLS launch failure: the child run was dispatched, but UI/API access to run details failed on org-membership re-verification.
+
+---
+
+## Staging AgentHost readiness: api/worker client mTLS flag mismatched vs AgentHost server (fixed)
+
+- date: 2026-07-25
+- category: bug
+- surface: api
+- status: fixed
+
+Follow-on to #499/#500: patch-agenthost-mtls.yaml correctly flips the AgentHost pod's own Kestrel A2A listener to https-only mTLS (RequireMtls=true), but never flipped the matching client-side Sandbox__AgentHost__RequireMtls env var on api-deployment.yaml/worker-deployment.yaml, which still defaulted to the PoC 'false' value from k8s/base. Left mismatched, api/worker build plain http:// AgentHost readiness-probe/A2A URLs against a TLS-only listener, so every readiness check's connection got dropped mid-handshake (HttpIOException: response ended prematurely) -- a deterministic mismatch, not transient flakiness, once the mTLS overlay patch was applied. Confirmed via kubectl: agenthost-config configmap on the pod showed RequireMtls:true/https://0.0.0.0:8088, while both agentweaver-api replicas and the worker replica showed Sandbox__AgentHost__RequireMtls=false. The client cert secret (agentweaver-a2a-client-tls) was already provisioned and mounted, so no cert work was needed -- just the env var. Immediate unblock applied live via kubectl set env on staging; permanent fix added as k8s/overlays/production/patch-agenthost-mtls-client.yaml (new patch flipping both Deployments' env var to true), wired into kustomization.yaml patches list. Verified the built manifest via kubectl kustomize k8s/overlays/production shows RequireMtls=true for both api and worker containers after the fix.
+
+---
+
+## Backlog pickup run can stall in outcome-plan drafting
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging build f2e7983, a coordinator run spawned by board autopilot from a Ready backlog task (`ea20292c-e034-4f2d-94a8-2e53a0415eee` in project `e93c3b6d-5501-4b6f-85ac-5d14bb65c612`) remained stuck in `coordinator_status=drafting` for more than 6 minutes. Persisted state never advanced past three events (`run.options_set`, `coordinator.started`, `coordinator.outcome_spec.drafting`); `/api/runs/{id}/outcome-spec` stayed `status=drafting` with empty `desiredOutcome`/`scope`/`assumptions`, and no work plan or approval surfaced. This is distinct from direct orchestrations in the same project, which continued to draft/confirm normally.
+
+---
+
+## Assembly build-test can fail at AgentHost configure after all subtasks finish
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: fixed
+
+On staging build f2e7983, direct bug-fix run `c6a6eb31-00dc-4898-aac3-e41964cfe3da` confirmed successfully with independent task promotion left OFF, persisted work plan 12, and drove three child subtasks (`7ab82034-20fd-4fb6-917f-f09ec32d473d`, `70d26d58-74f1-4dbd-b1fa-4351a3fa5cba`, `9c1e6e4d-ca5a-4cb9-8d79-1fba9bed167d`) all the way to `assemble_ready`. RAI then passed green, preview applicability reported `preview_required`, and assembly immediately failed at the Build & Test gate with `build_test_infra_agenthost_configure_failed`: `AgentHost /configure for run 'c6a6eb31-00dc-4898-aac3-e41964cfe3da' failed: HTTP 500`. No preview or review surface followed, so this is now the hard blocker after child execution completes.
+
+**Root cause identified (2026-07-25, commit 06007b71) — cross-pod assembly-lease race via `CoordinatorReconciler`'s `in_review` orphan re-arm.** Reproduced again on run `d2ad3035-afef-4e74-93e9-a7c45bfb60ee` (work plan 15) with full kubectl log evidence from `deploy/agentweaver-worker` and `deploy/agentweaver-api`:
+
+1. `20:07:22` — worker pod's `CoordinatorReconciler.SweepAsync` logs `"re-arming orphaned coordinator assembly for run d2ad3035... (status was in_review)"`. Per the `InReview` case in `SweepAsync` (`CoordinatorReconciler.cs` ~line 182-205), this only fires when BOTH `HasPendingReviewGateAsync` returns false AND `IsAssemblyActive(plan)` (an in-memory, per-pod-only fast path) returns false on the sweeping pod.
+2. With auto-approve enabled (as in this demo), the review gate the api pod armed can be resolved almost instantly — there is a narrow window where `WorkPlans.Status` is still `in_review` in the DB but the gate's "pending" row has already been cleared by the owning pod (api), and the owning pod hasn't yet advanced `Status` off `in_review`. A worker-pod sweep landing in that window sees "no pending gate" + "not active in MY process memory" (true regardless of api's real in-process state, since `IsAssemblyActive` is per-pod) and concludes — incorrectly — that the run is orphaned.
+3. `20:07:46`-`20:07:49` — worker's re-armed assembly loop starts `KubernetesSandboxExecutor`, finds the AgentHost `SandboxClaim` for this run already exists (created/owned by the api pod's still-live assembly), deletes and recreates it, binds it to a new pod, and begins an in-flight `/configure` call.
+4. `20:07:52` — the worker's OWN assembly-lease heartbeat (`AssemblyHeartbeatTickAsync`) ticks and discovers the api pod actually owns `WorkPlans.CoordinatorPodId` for this plan (logged as `"Assembly lease for plan 15 is owned by peer pod agentweaver-api... stopping assembly heartbeat"`). Note: this ONLY stops the heartbeat — it does NOT cancel the already-running `RunAssemblyCoreAsync`/sandbox-executor work on the worker pod, so the worker's in-flight configure call and the collision it caused are not aborted.
+5. `20:07:54` — the sandbox claim/AgentHost pod (the one the worker's in-flight `/configure` call is targeting) gets deleted/released — likely by the TRUE owner (api pod) continuing its own legitimate lifecycle and tearing down what it (correctly) still believes is its own claim, unaware the worker pod had just deleted-and-recreated it out from under it.
+6. `20:07:56` — the worker's in-flight `/configure` call surfaces as `AgentHostConfigureException: HTTP 500` (pod deleted mid-request), non-retryable, failing the whole assembly.
+
+This is a genuine, timing-dependent multi-pod race (not deterministic — it requires the reconciler's sweep to land in the narrow post-auto-approve gate-clear window), distinct from the already-fixed `#239` stale-lease issue the reconciler was built to guard against. Root cause is in `CoordinatorReconciler.HasPendingReviewGateAsync`'s interaction with the timing of the owning pod's gate-clear vs. status-transition writes — NOT yet fixed. Workaround: none identified yet other than retrying (the window is narrow, so most attempts do not hit it). Do not attempt a rushed fix to this cross-pod reconciliation path without careful review — getting it wrong risks reintroducing the original stuck-forever-in-review bug (#239) this reconciler exists to prevent.
+
+**Fixed (2026-07-25):** the true root cause was even more precise than the narrative above — `CoordinatorAssemblyService`'s human-review gate handling flipped `WorkPlans.Status` to `WorkPlanStatus.InReview` via `SetStatusAndStageAsync` BEFORE calling `CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync` to create the durable `AssemblyReviews` row (the upsert ran last, after graph-emission and an event emit). This left a genuine window — not merely "gate resolved but status not yet advanced" but "status already `InReview`, review row not yet written at all" — where `CoordinatorReconciler.HasPendingReviewGateAsync` (the authoritative cross-pod signal `SweepAsync`'s `InReview` case relies on) returns false, so a peer pod's sweep concludes the run is orphaned and re-arms assembly. This reproduced 3 times total on staging (runs `d2ad3035`, and again right at the review-gate transition on a retry that had otherwise reached `awaiting_review` cleanly), which is what proved the window wasn't as rare/narrow as first assumed. Fix: swapped the order in `CoordinatorAssemblyService.cs` so `UpsertReviewRequestAsync` now runs BEFORE `SetStatusAndStageAsync(..., WorkPlanStatus.InReview, ...)` — any sweep observing `InReview` now always also observes the pending row, closing the window entirely. `UpsertReviewRequestAsync` has no dependency on `WorkPlans.Status` so reordering is safe. Added a deterministic regression test (`RunAssembly_ReviewGate_NeverExposesInReviewStatusBeforeReviewRowExists` in `CoordinatorAssemblyServiceTests.cs`) that polls the DB concurrently with the gate opening and fails if `InReview` is ever observed with no backing review row — this is a true invariant post-fix (not just "less likely"), since the two sequential awaited DB writes are strictly ordered. Existing 73-test suite for this class still passes unchanged.
+
+---
+
+## Fresh bug-fix coordinator web_fetch approvals now fail with generic 500
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: fixed
+
+On staging build f2e7983, two fresh direct bug-fix runs that otherwise had the correct issue URL blocked during coordinator grounding on the first `web_fetch https://github.com/sabbour/agentweaver-demo-dryrun/issues/1` approval. Run `db469dc6-7dda-4464-8521-c0048a4e7398` requested approval at `2026-07-25T15:37:01.3414140+00:00`; manual POST to `/api/runs/{id}/tool-approvals` returned `500 {"error":"An unexpected error occurred."}` and the run remained stuck in `coordinator_status=drafting` with repeating `tool.approval_pending`. A second fresh project/run (`c04b41ee-c8d1-4654-b111-02a9620e4841`) reproduced the same failure even when `auto_approve_tools=true` was enabled immediately after run creation: approval required at `2026-07-25T15:41:56.5762430+00:00`, and repeated manual approve still returned the same generic 500 (captured again at `2026-07-25T15:43:54.054Z`). This regresses the earlier coordinator-approval-path fix and currently blocks reaching outcome confirmation, decompose, and the later Build & Test repro path.
+
+Root-caused via kubectl API-pod logs at the exact 500 timestamps: `System.FormatException: Guid should contain 32 digits...` at `RunId.Parse` inside `RunEndpoints.cs`'s `/tool-approvals`/`/tool-denials` handlers. `EndpointHelpers.ResolveApprovalOwningRunIdAsync` can legitimately return a synthetic coordinator-phase key (e.g. `{runId}-coordinator-draft`) used only to key the approval-gate lookup for coordinator-phase LLM turns — not a real run-store row — but both endpoints unconditionally called `RunId.Parse(targetRunId)` whenever `targetRunId != id`, crashing on this synthetic (non-GUID) string. Fixed by adding `EndpointHelpers.IsCoordinatorPhaseSuffixedId(candidateRunId, postedRunId)` so callers can distinguish "same run, different gate-lookup key" from "genuinely different child run requiring `RunId.Parse`". Regression test added (`Approve_CoordinatorPhaseApproval_DoesNotCrash_AndResolvesToCoordinatorRun`), verified to fail pre-fix/pass post-fix. Fixed in PR #506, deployed to staging.
+
+---
+
+## Fresh bug-fix run now approves correctly but build-test rejects docs-only repo
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: fixed
+
+On staging build 43632442177b with api scaled to 1 replica, fresh run 7d3f8d19-2494-492d-9e79-b912a1199ca7 in fresh project 17124a09-4eeb-4602-a6b3-61677b12a93c proved the coordinator approval fix: the first coordinator-draft web_fetch https://github.com/sabbour/agentweaver-demo-dryrun/issues/1 approval succeeded with HTTP 200 at 2026-07-25T18:41:24.239Z instead of failing. The run then reached outcome confirmation, persisted work plan 13, dispatched/ran children, and reached assembly Build & Test. But Build & Test did not reproduce the earlier AgentHost /configure failure; instead it revised at 2026-07-25T18:49:44.8970787+00:00 with feedback that the repository contains no source code, package manifests, build config, or tests -- only .squad/, .agentweaver/, and docs/bugfix/issue-1-triage.md. Preview was skipped as not applicable (llm_docs_or_non_runtime), and the coordinator redispatched subtasks 18/19/20 rather than reaching preview/review/merge. This blocks the intended recording path because the seeded repo no longer presents a runnable bug-fix target.
+
+Root cause: sabbour/agentweaver-demo-dryrun was genuinely empty (gh api repos/.../contents returned "This repository is empty", gh repo view showed isEmpty: true, no default branch) -- a pre-existing gap in demo environment setup, not a code bug. Fixed by seeding a minimal, dependency-free static web app (index.html/styles.css/package.json/build.js/test.js) with an intentional, verified-reproducing CSS bug matching issue #1 (banner absolutely positioned at 96px base height; tablet-breakpoint main margin-top drops to 64px, less than the banner's realistic ~140px wrapped height on narrow tablet widths) and pushing it to main. test.js was verified locally to fail pre-fix with a clear message and pass once the CSS margin is corrected, giving Build & Test something genuine to catch.
+
+---
+
+## Org-membership check flip-flops between 200 and 403 across adjacent polls even when membership is public
+
+- date: 2026-07-25
+- category: bug
+- surface: api
+- status: fixed
+
+During demo-recording runs, /api/runs/... /work-plan and /events routes intermittently returned 403 "Could not verify membership of the required GitHub organization. Ensure your org membership is set to Public..." (OrgAuthResult.OrgAccessNotGranted) even though the caller's microsoft org membership was confirmed already-public (gh api orgs/microsoft/public_members/<login> returns 204). The same login/org combination alternated between success and this 403 across polls seconds apart in the same session.
+
+Root cause: in GitHubOrgAuthorizationService.ResolveSingleOrgAsync (apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationService.cs), when the primary AUTHENTICATED private-members check returns a SAML-enforcement 403 (CheckResult.OrgAccessNotGranted), the code correctly falls back to an UNAUTHENTICATED public_members check. That fallback call is itself subject to GitHub's 60/hr-per-IP unauthenticated rate limit (shared across the whole cluster's egress NAT IP). CheckEndpointAsync already classifies a rate-limited response as CheckResult.Inconclusive, but ResolveSingleOrgAsync never inspected the public fallback's result for Inconclusive -- it only special-cased publicResult == CheckResult.Member, and otherwise fell through to branch on the stale primary orgResult alone. A rate-limited (thus inconclusive) public-fallback check was silently conflated with "definitively not a public member," so whenever the primary check had also been a SAML 403, the aggregate result came back as the actionable-looking "authorize SSO" denial (OrgAuthResult.OrgAccessNotGranted) instead of a retryable Inconclusive -- even though the membership genuinely was public and only the fallback lookup itself had transiently hit the unauthenticated rate limit.
+
+Fix: ResolveSingleOrgAsync now checks publicResult == CheckResult.Inconclusive before falling through to the orgResult-based branches, returning the same "transient, not yet a member" tuple used for primary-check Inconclusive so the caller retries instead of hard-denying. Added a regression test (CheckMembershipAsync_Inconclusive_WhenPrivateSamlForbiddenAndPublicFallbackRateLimited in tests/Agentweaver.Tests/Projects/GitHubOrgAuthorizationServiceTests.cs) simulating a SAML-403 private check plus a rate-limited (403 + X-RateLimit-Remaining: 0) public fallback, asserting the aggregate result is Inconclusive.
+
+---
+
+## Seeded blueprint-demo run can fail before fix stage with a2a_transport_interrupted
+
+- date: 2026-07-25
+- category: bug
+- surface: ui
+- status: open
+
+On staging build 06007b71, blueprint-demo run 7ba969e8-ad68-41e9-b3de-ebe71d1924d1 against https://github.com/sabbour/agentweaver-demo-dryrun got past outcome confirm and work-plan persistence after the org-membership fix, but never reached the intended CSS-fix/build-test path. Work plan 14 created only two planning subtasks. Child subtask 21 (
+
+---
+
+## Blueprint-demo seeded repo still reproduces Build & Test AgentHost /configure HTTP 500 after assembly restart
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+Fresh blueprint-demo run d2ad3035-afef-4e74-93e9-a7c45bfb60ee (work plan 15) on staging drove all three bug-fix subtasks to assemble_ready by 2026-07-25T20:05:02Z, then reached coordinator.children_complete and assembly. RAI passed green at 2026-07-25T20:06:10Z. The first preview applicability pass then skipped preview as not applicable (state=preview_skipped_not_applicable, reason=llm_docs_or_non_runtime) and Build & Test completed/approved at 2026-07-25T20:07:19Z. Immediately afterward the coordinator restarted assembly, emitted a human-review request, flipped preview applicability to preview_required at 2026-07-25T20:07:40Z, bound assembly pod agentweaver-agent-host-zwvh9, and then failed at 2026-07-25T20:07:56.2285446Z with build_test_infra_agenthost_configure_failed: AgentHost /configure for run 'd2ad3035-afef-4e74-93e9-a7c45bfb60ee' failed: HTTP 500. No review/merge/recordable preview surface followed.
+
+---
+
+## Fresh seeded bug-fix project still fails preview heuristics and merge after Build & Test passes
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+Fresh project b3608f95-e4f9-4fcf-93bb-5245e1f69ed9 (blueprint-demo-live-2325) cloned the seeded repo correctly (index.html, styles.css, package.json, test.js present). First coordinator run b875731d-7c48-4619-bb3d-21edd71a06b1 reproduced the narrow AgentHost configure race at assembly Build & Test (build_test_infra_agenthost_configure_failed). Immediate retry f9e7867c-48f7-40af-8236-5cd0c9f9e53f progressed farther: subtask 37 stalled twice and was redispatched twice before third child 6f952975-f3b5-4259-b76b-ab172b004a55 reached assemble_ready; subtask 38 then reached assemble_ready; RAI passed green; Build & Test completed successfully; preview was REQUIRED but failed with sandbox.preview_failed / 'Could not determine how to run the app from the worktree (Phase-1 heuristics)' even though the repo is a runnable static site with package.json/build.js. Human review approval then succeeded, but merge still failed on this truly fresh project with assembly_merge_failed: 'the working tree cannot be safely reconciled with the merge result because uncommitted content diverges from the merge result and cannot be safely reconciled; commit, stash, or discard the local changes and retry.' This disproves the earlier assumption that merge failure was only reused-project contamination and introduces a new preview-heuristics blocker on the seeded demo app.
+
+---
+
+## Preview heuristics fail to detect a runnable static site (index.html + package.json + build.js)
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+Seen on run `f9e7867c-48f7-40af-8236-5cd0c9f9e53f` (project `blueprint-demo-live-2325`) and again on later blueprint-demo runs: even though preview applicability correctly returns `preview_required` for the seeded static-site repo (`index.html`, `styles.css`, `package.json`, `build.js`, `test.js`), the actual preview launch fails with `sandbox.preview_failed`: "Could not determine how to run the app from the worktree (Phase-1 heuristics)." Not yet root-caused in code (deferred — non-blocking, since review/merge can still proceed without a working preview). Likely candidate: the Phase-1 run-command heuristics don't recognize a plain `build.js`-based static site (no `npm start`/`dev` script, no framework marker file) as a runnable app. Needs investigation if preview becomes required for the recording.
+
+---
+
+## `.squad/` state files tracked by the demo's own Squad-cast step get mutated-uncommitted by the bug-fix subtask, causing assembly_merge_failed
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open (operational workaround only)
+
+Seen on runs `f9e7867c` and `3a4f3eeb` (blueprint-demo-live projects): after Build & Test passes and human review is approved, merge fails with `assembly_merge_failed`: "the working tree cannot be safely reconciled with the merge result because uncommitted content diverges from the merge result and cannot be safely reconciled." Root cause (confirmed via `kubectl exec` into the live `agentweaver-worker` pod, inspecting `/workspace/{projectId}/`): the demo's own "cast a Squad team" step legitimately commits `.squad/` state files (`decisions.md`, `agents/*/history.md`, `identity/now.md`, or lighter scaffold like `.gitignore`/`.agentweaver/settings.yml`/`.gitattributes`) as TRACKED git content in the target repo. When the later bug-fix subtask's own sandboxed coding agent runs inside that same repo, it discovers these same Squad conventions and — following the "mutable state is written via runtime tools, not git commits" pattern — writes new decision/history entries directly to those already-tracked files WITHOUT committing. This leaves the worktree dirty in a way `WorktreeManager.cs`'s `IsWorkingTreeReconcilable` correctly refuses to Hard-Reset over (by design, to never silently discard content), so the merge-safety check blocks.
+
+This is inherent to the demo's recursive "Squad builds using Squad" premise, not a simple product bug — a real fix needs either (a) auto-committing dirty leftover subtask-worktree content before computing merge safety, or (b) constraining the sandboxed coding agent to always commit its own `.squad/` writes. Both are non-trivial, higher-risk changes to safety-critical merge code, deferred for now. **Operational workaround used successfully**: `kubectl exec` into `agentweaver-worker`, `cd /workspace/{projectId}`, `git add -A && git commit` to clean the dirty tracked state BEFORE the merge step runs. Watch for this proactively (poll `git status --porcelain` on the active project workspace) as soon as the run reaches `assemble_ready`/RAI-passed, ideally before the review gate even opens, to avoid extra round-trips.
+
+---
+
+## PR #513 did not eliminate initial Build & Test AgentHost configure 500 on fresh seeded project
+
+- date: 2026-07-25
+- category: bug
+- surface: all
+- status: open
+
+After staging redeploy to commit 6d7d9aa8 (PR #513 reorder fix for WorkPlans.Status/InReview vs durable review-gate row), fresh project blueprint-demo-live-232803 (95174ba2-affc-4329-b020-eb357da6282c) and fresh coordinator run b552be51-602d-4095-9073-1cb0ca04507e still failed at the FIRST Build & Test / preview-required assembly pass with build_test_infra_agenthost_configure_failed before any human-review gate appeared. Path reached: subtasks 42/43/44 all assemble_ready, RAI green at 2026-07-25T23:44:12Z, build-test gate requested, preview required (llm_unavailable_default_required), then AgentHost /configure failed at 2026-07-25T23:44:30.3814169Z. This means the deployed reorder fix did not eliminate all configure-race/failure cases; the earlier post-review re-arm race may be fixed, but an initial build-test configure failure still reproduces on fresh projects.
+
+---
+
+## Azure KEYVAULT_NAME hardcoded default silently corrupted GitHub OAuth Key Vault references
+
+- date: 2026-07-26
+- category: bug
+- surface: all
+- status: fixed
+
+Azure deploy tooling (scripts/azure/variables.mjs) hardcoded KEYVAULT_NAME's DEFAULTS entry to the generic name 'agentweaver-kv', which was NEVER a real Key Vault in the affected subscription (az keyvault show --name agentweaver-kv -> 'not found'). Any deploy invocation (azure:deploy-from-local, azure:deploy-from-release) where an operator forgot to pass KEYVAULT_NAME silently fell back to this bogus default and rendered the agentweaver-runtime-config ConfigMap (KEYVAULT_NAME, AGENTHOST_KEYVAULT_URI, TOKEN_STORE_KEYVAULT_URI) plus the agentweaver-secrets/agentweaver-user-tokens SecretProviderClass keyvaultName fields against it. Two silent-corruption modes were observed live in one incident: (1) literal bogus default 'agentweaver-kv' -> loud DNS failure ('Name or service not known (agentweaver-kv.vault.azure.net:443)'), users cannot log in; (2) a manually-typed override with transposed letters ('akwvkv' instead of the real 'agwvkv') that happened to be a REAL but wrong, stale vault already present in the subscription -> failed SILENTLY with wrong GitHub OAuth client id/secret instead of erroring at all -- this mode is worse because it looks like a normal login failure, not an infra problem. Fix: KEYVAULT_NAME now has NO default in variables.mjs (resolveVariables() throws MissingRequiredVariableError if unset), and steps/30-deploy.mjs verifies az keyvault show succeeds for the resolved name BEFORE rendering/applying any manifest -- this catches mode (2) as well as mode (1), since a nonexistent OR wrong-but-real vault both fail the existence probe against the caller's actual resource group context. See scripts/azure/params.example.json and scripts/azure/tests/deploy-apply.test.mjs for the corresponding safeguards/tests.

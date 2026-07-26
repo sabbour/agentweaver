@@ -1,5 +1,6 @@
 import { Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
+  Board24Regular,
   PersonQuestionMark24Regular,
   QuestionCircle24Regular,
   WrenchScrewdriver24Regular,
@@ -16,6 +17,7 @@ import type { NotificationDto } from '../../api/types';
 const TYPE_BADGES: Record<string, { icon: ReactElement; label: string }> = {
   human_review: { icon: <PersonQuestionMark24Regular />, label: 'Human Review' },
   tool_approval: { icon: <WrenchScrewdriver24Regular />, label: 'Tool Approval' },
+  backlog_promoted: { icon: <Board24Regular />, label: 'Board' },
 };
 
 const FALLBACK_BADGE = { icon: <QuestionCircle24Regular />, label: 'Action Needed' };

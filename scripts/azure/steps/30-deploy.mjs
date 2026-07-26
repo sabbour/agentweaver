@@ -13,6 +13,15 @@
 //   - 40-verify.sh/.ps1 is a separate script/phase, not called from here
 //     either (30-deploy.sh only *mentions* it in the final "next step" text).
 //
+// SAFETY NET (added post-incident, see scripts/harness-shared/learnings.md):
+// run() verifies `az keyvault show --name <KEYVAULT_NAME>` succeeds BEFORE
+// rendering/applying any manifests, in addition to the pre-existing
+// non-empty check. KEYVAULT_NAME has no hardcoded default in variables.mjs
+// (see that module's resolveKeyvaultName()) precisely because a wrong-but-
+// real vault name (e.g. a typo landing on an existing, unrelated vault)
+// fails SILENTLY downstream -- wrong GitHub OAuth secrets instead of a
+// clean error -- unless this existence check catches it first.
+//
 // cfg is the resolved variables/config object produced by variables.mjs's
 // resolveVariables(): RESOURCE_GROUP, CLUSTER_NAME, ACR_NAME, LOCATION,
 // NAMESPACE, KATA_POOL_NAME, APP_POOL_NAME, IMAGE_TAG, AGENTHOST_IMAGE_TAG,
@@ -44,10 +53,13 @@ export const DEFAULT_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 // ordering/grouping without needing a live kubectl.
 export const IDENTITY_RBAC_QUOTA_PVC_MANIFESTS = [
   "serviceaccount-api.yaml",
+  "serviceaccount-worker.yaml",
   "serviceaccount-agenthost.yaml",
+  "serviceaccount-mcp.yaml",
   // (kubectl wait on serviceaccount/agentweaver-api happens between these two groups -- see run())
   "secret-provider-class.yaml",
   "rbac-api.yaml",
+  "vap-sandbox-exec.yaml",
   "quota.yaml",
   "storageclass-workspace.yaml",
   "pvc-data.yaml",
@@ -192,6 +204,24 @@ export async function run(cfg, opts = {}) {
       throw new Error(`The following required variables are not set:\n  ${missing.join("\n  ")}`);
     }
 
+    // Live existence check: KEYVAULT_NAME being non-empty only proves an
+    // override was supplied, not that it names a real vault -- a typo (e.g.
+    // transposed letters) can land on a DIFFERENT, real-but-wrong vault and
+    // fail silently with wrong secrets instead of erroring loudly. Fail fast,
+    // BEFORE rendering/applying any manifests, if the named vault does not
+    // actually exist in the active subscription. See
+    // scripts/harness-shared/learnings.md for the incident this guards
+    // against.
+    const kvExists = await az.keyvaultExists(cfg.KEYVAULT_NAME);
+    if (!kvExists) {
+      throw new Error(
+        `KEYVAULT_NAME='${cfg.KEYVAULT_NAME}' was not found in the active Azure subscription ` +
+          "(checked via `az keyvault show --name`). Verify the name against your provisioned infrastructure " +
+          "(e.g. `az keyvault list --resource-group <RESOURCE_GROUP> --query \"[].name\" -o tsv`) and retry -- " +
+          "refusing to render/apply manifests against a nonexistent or mistyped vault.",
+      );
+    }
+
     // Derive compound variables from primitives so templates can reference them directly.
     const AGENTHOST_KEYVAULT_URI = cfg.AGENTHOST_KEYVAULT_URI || `https://${cfg.KEYVAULT_NAME}.vault.azure.net/`;
 
@@ -305,7 +335,9 @@ export async function run(cfg, opts = {}) {
     log.info("");
     log.info("Applying identity, secrets, RBAC, quotas, and PVCs...");
     await applyRendered("serviceaccount-api.yaml");
+    await applyRendered("serviceaccount-worker.yaml");
     await applyRendered("serviceaccount-agenthost.yaml");
+    await applyRendered("serviceaccount-mcp.yaml");
     await execRun("kubectl", [
       "wait",
       `--for=jsonpath={.metadata.annotations.azure\\.workload\\.identity/client-id}=${cfg.IDENTITY_CLIENT_ID}`,
@@ -319,7 +351,7 @@ export async function run(cfg, opts = {}) {
       "  [note] secret-provider-class.yaml is static only: agentweaver-user-tokens contains ghtok-installation; " +
         "per-run user-token SPCs are created/deleted by the API at AgentHost launch/release.",
     );
-    for (const fname of IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(3)) {
+    for (const fname of IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(5)) {
       await applyRendered(fname);
     }
 

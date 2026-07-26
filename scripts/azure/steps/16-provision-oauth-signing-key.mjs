@@ -18,6 +18,7 @@ import path from "node:path";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
+import * as secretDefault from "../lib/secret.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
 
 export const SIGNING_KEY_SECRET_NAME = "mcp-oauth-signing-key";
@@ -41,7 +42,7 @@ export async function existingSecretValue(keyvaultName, name, { exec = execDefau
  * @param {object} [opts] Injectable collaborators, primarily for testing.
  */
 export async function run(cfg, opts = {}) {
-  const { exec = execDefault, log = logDefault, fs: fsImpl = fs, repoRoot = DEFAULT_REPO_ROOT } = opts;
+  const { exec = execDefault, log = logDefault, fs: fsImpl = fs, repoRoot = DEFAULT_REPO_ROOT, secret = secretDefault } = opts;
 
   log.info("");
   log.section("MCP OAuth signing key provisioning");
@@ -103,21 +104,24 @@ export async function run(cfg, opts = {}) {
   } else {
     log.info("  Generating 32-byte random hex key...");
     const generatedApiKey = randomBytes(32).toString("hex");
-    await exec.capture("az", [
-      "keyvault",
-      "secret",
-      "set",
-      "--vault-name",
-      cfg.KEYVAULT_NAME,
-      "--name",
-      API_KEY_SECRET_NAME,
-      "--value",
-      generatedApiKey,
-      "--content-type",
-      "text/plain",
-      "--output",
-      "none",
-    ]);
+    const apiKeyScratchDir = cfg.AGENTWEAVER_TMP_DIR || path.join(repoRoot, ".agentweaver", "tmp");
+    await secret.withSecretFile(apiKeyScratchDir, "mcp-api-key", generatedApiKey, (filePath) =>
+      exec.capture("az", [
+        "keyvault",
+        "secret",
+        "set",
+        "--vault-name",
+        cfg.KEYVAULT_NAME,
+        "--name",
+        API_KEY_SECRET_NAME,
+        "--file",
+        filePath,
+        "--content-type",
+        "text/plain",
+        "--output",
+        "none",
+      ]),
+    );
     log.ok(`Secret '${API_KEY_SECRET_NAME}' created successfully.`);
   }
 

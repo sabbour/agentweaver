@@ -14,6 +14,12 @@ public sealed record Project
     public required DateTimeOffset UpdatedAt { get; init; }
 
     /// <summary>
+    /// Reference to this project's GitHub webhook secret in the configured secret store. The secret
+    /// value is never included in normal project responses and is only returned when rotated.
+    /// </summary>
+    public string? WebhookSecret { get; init; }
+
+    /// <summary>
     /// Persisted monotonic revision for confirmed-team/configuration state. Team writers advance it
     /// under the project mutation gate; defaults apply transactionally verifies the previewed value.
     /// </summary>

@@ -1,0 +1,40 @@
+# Production overlay patch — flip the API/worker AgentHost *client* posture to match
+# patch-agenthost-mtls.yaml's server-side posture.
+#
+# patch-agenthost-mtls.yaml switches the AgentHost pod's own Kestrel A2A listener to
+# HTTPS-only mTLS (RequireMtls=true), but never flipped the matching client-side
+# Sandbox__AgentHost__RequireMtls env var on api-deployment.yaml / worker-deployment.yaml
+# (both still default to the PoC "false" value from k8s/base). Left unpatched, the API/worker
+# build plain-http:// AgentHost URLs (readiness probe + A2A calls) against a TLS-only listener,
+# so every readiness check gets its connection dropped mid-handshake
+# (HttpIOException: response ended prematurely) — a deterministic, always-fails mismatch, not
+# transient flakiness. The client cert material (agentweaver-a2a-client-tls) is already
+# provisioned and mounted by the base manifests, so this patch only needs to flip the one
+# env var to actually use it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweaver-api
+  namespace: agentweaver
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: Sandbox__AgentHost__RequireMtls
+              value: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweaver-worker
+  namespace: agentweaver
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          env:
+            - name: Sandbox__AgentHost__RequireMtls
+              value: "true"

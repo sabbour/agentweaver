@@ -49,6 +49,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private readonly CoordinatorSteeringWaitRegistry _steeringWaits = new();
     private readonly ConfigurableRotationSelector _rotation = new();
     private readonly FakeChildRevisionHandoff _handoff;
+    private readonly FakePreviewClassifier _previewClassifier = new();
     private readonly CoordinatorAssemblyService _sut;
     private readonly CoordinatorSteeringService _steering;
 
@@ -112,7 +113,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             _provider,
             new TestHostApplicationLifetime(),
             NullLogger<CoordinatorAssemblyService>.Instance,
-            steeringWaits: _steeringWaits);
+            steeringWaits: _steeringWaits,
+            previewClassifier: _previewClassifier);
         _steering = new CoordinatorSteeringService(
             _streamStore,
             new RunWorkflowRegistry(),
@@ -1613,6 +1615,64 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Should().Be(RunStatus.Completed);
     }
 
+    /// <summary>
+    /// Cross-pod reconciler race regression: <c>WorkPlans.Status</c> must never be observable as
+    /// <see cref="WorkPlanStatus.InReview"/> before the durable <c>AssemblyReviews</c> row backing that
+    /// gate exists. A peer pod's <c>CoordinatorReconciler</c> sweep treats "status InReview + no pending
+    /// review row" as an orphan and re-arms assembly, colliding with the still-live owner on the same
+    /// AgentHost claim mid-<c>/configure</c>. This polls the DB tightly, from a separate task, concurrently
+    /// with the gate opening, and fails if it EVER observes the status flipped with no backing row —
+    /// proving the write order (review row persisted before the status update) closes the window.
+    /// </summary>
+    [Fact]
+    public async Task RunAssembly_ReviewGate_NeverExposesInReviewStatusBeforeReviewRowExists()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        using var pollCts = new CancellationTokenSource();
+        var sawUnbackedInReview = false;
+        var pollTask = Task.Run(async () =>
+        {
+            while (!pollCts.IsCancellationRequested)
+            {
+                using var scope = _provider.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var status = await db.WorkPlans.AsNoTracking()
+                    .Where(w => w.Id == workPlanId)
+                    .Select(w => w.Status)
+                    .FirstOrDefaultAsync(pollCts.Token);
+                if (status == WorkPlanStatus.InReview)
+                {
+                    var hasRow = await db.AssemblyReviews.AsNoTracking()
+                        .AnyAsync(r => r.CoordinatorRunId == coordinatorRunId, pollCts.Token);
+                    if (!hasRow)
+                    {
+                        sawUnbackedInReview = true;
+                        return;
+                    }
+                }
+                await Task.Delay(1, pollCts.Token);
+            }
+        }, pollCts.Token);
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        pollCts.Cancel();
+        try { await pollTask; } catch (OperationCanceledException) { }
+
+        sawUnbackedInReview.Should().BeFalse(
+            "the review row must be persisted BEFORE WorkPlans.Status flips to InReview, so no peer-pod " +
+            "reconciler sweep can ever observe InReview with no backing review row and wrongly re-arm assembly");
+
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"));
+        await run;
+    }
+
     // ── #226: a human /steer at the LIVE assembly review gate must DRAIN (not queue into the void) ──
 
     /// <summary>
@@ -2064,6 +2124,91 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _dispatch.StartDispatchCalls.Should().BeEmpty("preview failure must not use the reset and redispatch route");
         EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewApproved);
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyChangesRequested);
+    }
+
+    [Fact]
+    public async Task PreviewApplicability_DocsOnlyClassification_SkipsPreview()
+    {
+        const string diff = "diff --git a/docs/guide.md b/docs/guide.md\n+documentation\n";
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => false;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "docs-tree", diff);
+
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_skipped_not_applicable");
+        _previewClassifier.LastApplicabilityContext!.AggregateDiff.Should().Be(diff);
+    }
+
+    [Fact]
+    public async Task PreviewApplicability_ServerCodeClassification_RequiresPreview()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => true;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(
+            coordinatorRunId, workPlanId, "server-tree", "diff --git a/src/OrdersApi.cs b/src/OrdersApi.cs\n+endpoint\n");
+
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+    }
+
+    [Fact]
+    public async Task PreviewApplicability_AmbiguousDiff_UsesClassifierDecision()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => true;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(
+            coordinatorRunId, workPlanId, "ambiguous-tree", "diff --git a/renamed/item b/renamed/item\n+change\n");
+
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+    }
+
+    [Fact]
+    public async Task PreviewApplicability_UnavailableOrFailingClassifier_RequiresPreview()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _previewClassifier.ApplicabilityOverride = _ => null;
+
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "timeout-tree", "diff --git a/a b/a");
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+
+        _previewClassifier.ApplicabilityOverride = null;
+        _previewClassifier.ApplicabilityException = new TimeoutException();
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "error-tree", "diff --git a/b b/b");
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+    }
+
+    [Fact]
+    public async Task PreviewOnlyFeedback_UsesClassifierForPreviewBuildAndMixedFeedback()
+    {
+        _previewClassifier.FeedbackOverride = context => context.Feedback switch
+        {
+            "Preview link was unavailable." => true,
+            _ => false,
+        };
+
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview link was unavailable.")).Should().BeTrue();
+        (await InvokeIsPreviewOnlyFeedbackAsync("The build fails before the preview starts.")).Should().BeFalse();
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview is broken and the test suite fails.")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PreviewOnlyFeedback_UnavailableOrFailingClassifier_PreservesFeedback()
+    {
+        _previewClassifier.FeedbackOverride = _ => null;
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview link was unavailable.")).Should().BeFalse();
+
+        _previewClassifier.FeedbackOverride = null;
+        _previewClassifier.FeedbackException = new TimeoutException();
+        (await InvokeIsPreviewOnlyFeedbackAsync("Preview link was unavailable.")).Should().BeFalse();
     }
 
     [Fact]
@@ -2544,6 +2689,89 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_MergeFailed_KeepsAgentHostAliveUntilScribeCompletes()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.MergeOverride = CollectiveMergeResult.Failed("merge_error");
+
+        var podAvailable = true;
+        var order = new List<string>();
+        _pipeline.OnScribe = (_, _) =>
+        {
+            order.Add("scribe");
+            if (!podAvailable)
+                throw new HttpRequestException("Connection refused (10.0.0.42:8088)");
+            return Task.CompletedTask;
+        };
+        _pipeline.OnCleanupBuildTestResources = () =>
+        {
+            order.Add("cleanup");
+            podAvailable = false;
+        };
+
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        order.Should().Equal("scribe", "cleanup");
+        EventTypes_(coordinatorRunId).Should().NotContain("run.scribe_failed");
+        _pipeline.Scribes.Should().Be(1);
+        _pipeline.CleanupBuildTestResourcesCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RunAssembly_ScribeTimeout_ReleasesAgentHostAndDoesNotWedgeCompletion()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.OnScribe = async (_, ct) => await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Coordinator:FinalScribeTimeoutSeconds"] = "0.1",
+            })
+            .Build();
+        var sut = new CoordinatorAssemblyService(
+            _runStore,
+            _streamStore,
+            _assemblyStore,
+            _reviewGate,
+            _pipeline,
+            _scopeFactory,
+            _provider,
+            new TestHostApplicationLifetime(),
+            NullLogger<CoordinatorAssemblyService>.Instance,
+            configuration,
+            steeringWaits: _steeringWaits,
+            previewClassifier: _previewClassifier);
+
+        var run = sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice"))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await run;
+
+        EventTypes_(coordinatorRunId).Should().Contain("run.scribe_failed");
+        _pipeline.CleanupBuildTestResourcesCalls.Should().Be(1);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
+            .Should().Be(RunStatus.Completed);
+    }
+
+    [Fact]
     public async Task RunAssembly_UnexpectedFault_FailsRunWithReason_AndEmitsAssemblyFailed()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -2888,6 +3116,20 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await task.ConfigureAwait(false);
     }
 
+    private string PreviewApplicabilityState(string coordinatorRunId) =>
+        JsonSerializer.SerializeToNode(_streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Last(e => e.Type == EventTypes.SandboxPreviewApplicability).Payload)!
+            .AsObject()["state"]!.GetValue<string>();
+
+    private async Task<bool> InvokeIsPreviewOnlyFeedbackAsync(string feedback)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "IsPreviewOnlyFeedbackAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull();
+        return await (Task<bool>)method!.Invoke(_sut, [Context(RunId.New().ToString()), feedback, CancellationToken.None])!;
+    }
+
     private async Task InvokeEnsurePreviewApplicabilityRecordedAsync(
         string coordinatorRunId,
         int workPlanId,
@@ -2906,6 +3148,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             workPlanId,
             treeHash,
             aggregateDiff,
+            "alice",
+            null,
             ct,
         ])!;
         await task.ConfigureAwait(false);
@@ -3447,6 +3691,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public CollectiveGateDecision? BuildTestDecision;
         public CollectiveRaiResult? RaiResult;
         public Action<CollectiveBuildTestRequest>? OnBuildTest;
+        public Action? OnCleanupBuildTestResources;
+        public Func<CollectiveScribeRequest, CancellationToken, Task>? OnScribe;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
         public CollectiveMergeResult? MergeOverride;
@@ -3498,6 +3744,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             CancellationToken ct = default)
         {
             CleanupBuildTestResourcesCalls++;
+            OnCleanupBuildTestResources?.Invoke();
             return Task.CompletedTask;
         }
 
@@ -3526,7 +3773,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)
         {
             Scribes++;
-            return Task.CompletedTask;
+            return OnScribe?.Invoke(request, ct) ?? Task.CompletedTask;
         }
     }
 

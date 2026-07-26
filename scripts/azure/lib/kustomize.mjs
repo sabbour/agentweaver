@@ -56,7 +56,9 @@ export const FILE_RESOURCES = Object.freeze({
   "namespace.yaml": [{ kind: "Namespace", name: "agentweaver" }],
   "_agentweaver-runtime-config.yaml": [{ kind: "ConfigMap", name: "agentweaver-runtime-config" }],
   "serviceaccount-api.yaml": [{ kind: "ServiceAccount", name: "agentweaver-api" }],
+  "serviceaccount-worker.yaml": [{ kind: "ServiceAccount", name: "agentweaver-worker" }],
   "serviceaccount-agenthost.yaml": [{ kind: "ServiceAccount", name: "agentweaver-agent-host" }],
+  "serviceaccount-mcp.yaml": [{ kind: "ServiceAccount", name: "agentweaver-mcp" }],
   "secret-provider-class.yaml": [
     { kind: "SecretProviderClass", name: "agentweaver-secrets" },
     { kind: "SecretProviderClass", name: "agentweaver-user-tokens" },
@@ -64,6 +66,12 @@ export const FILE_RESOURCES = Object.freeze({
   "rbac-api.yaml": [
     { kind: "Role", name: "agentweaver-api-sandbox" },
     { kind: "RoleBinding", name: "agentweaver-api-sandbox" },
+    { kind: "Role", name: "agentweaver-worker-sandbox" },
+    { kind: "RoleBinding", name: "agentweaver-worker-sandbox" },
+  ],
+  "vap-sandbox-exec.yaml": [
+    { kind: "ValidatingAdmissionPolicy", name: "sandbox-exec-only" },
+    { kind: "ValidatingAdmissionPolicyBinding", name: "sandbox-exec-only-binding" },
   ],
   "quota.yaml": [
     { kind: "ResourceQuota", name: "agentweaver-quota" },
@@ -150,12 +158,14 @@ export function buildRuntimeConfigLiterals(vars) {
     HOST: host,
     PREVIEW_HOSTNAME: str(vars.PREVIEW_HOSTNAME),
     IDENTITY_CLIENT_ID: str(vars.IDENTITY_CLIENT_ID),
+    AGENTHOST_IDENTITY_CLIENT_ID: str(vars.AGENTHOST_IDENTITY_CLIENT_ID),
     KEYVAULT_NAME: str(vars.KEYVAULT_NAME),
     TENANT_ID: str(vars.TENANT_ID),
     OAUTH_ISSUER: host ? `https://${host}` : "",
     OAUTH_AUDIENCE: host ? `https://${host}/mcp` : "",
     GITHUB_CALLBACK_URL: host ? `https://${host}/auth/github/callback` : "",
     GITHUB_FRONTEND_URL: host ? `https://${host}/` : "",
+    GITHUB_ALLOWED_ORG: str(vars.GITHUB_ALLOWED_ORG) || "microsoft",
     TOKEN_STORE_KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
     AGENTHOST_KEYVAULT_URI: str(vars.AGENTHOST_KEYVAULT_URI),
     APPINSIGHTS_WORKSPACE_ID: str(vars.APPINSIGHTS_WORKSPACE_ID),

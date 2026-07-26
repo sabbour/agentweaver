@@ -195,6 +195,10 @@ export interface Project {
   allowed_workflow_ids?: string[] | null;
 }
 
+export interface WebhookSecretRotationResponse {
+  secret: string;
+}
+
 export interface Blueprint {
   id: string;
   name: string;
@@ -678,6 +682,7 @@ export interface WorkPlanSubtask {
 export interface CoordinatorWorkPlan {
   workPlanId: string;
   status: string;
+  warnings?: string[];
   subtasks: WorkPlanSubtask[];
 }
 
@@ -1216,6 +1221,16 @@ export interface WorkflowSummaryDto {
   error: string | null;
   is_built_in: boolean;
   is_default: boolean;
+  trigger?: WorkflowTriggerDto | null;
+}
+
+export interface WorkflowTriggerDto {
+  type: 'schedule' | 'event';
+  interval?: 'daily' | 'weekly' | 'monthly' | null;
+  day_of_week?: string | null;
+  day_of_month?: number | null;
+  time_of_day?: string | null;
+  event_name?: string | null;
 }
 
 // Response body for GET/POST the project's workflows list.
@@ -1585,8 +1600,28 @@ export interface SkillImportPreviewResponse {
   candidates: SkillCandidateDto[];
 }
 
-export interface SkillMarketplaceDto { name: string; repository: string; subpath?: string | null; layout_note?: string | null; }
-export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; }
+export interface SkillMarketplaceDto {
+  name: string;
+  repository: string;
+  branch?: string | null;
+  subpath?: string | null;
+  layout_note?: string | null;
+  // Present on entries from GET /projects/{id}/skill-marketplaces (project-scoped list).
+  auto_detect?: boolean;
+  parse_strategy?: string | null;
+  // true = a user-added URL source for this project; false/absent = a built-in config source.
+  project_source?: boolean;
+}
+export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; total: number; page: number; page_size: number; has_more: boolean; }
+
+// POST /api/projects/{id}/skill-marketplaces/sources — add a marketplace source by GitHub URL or owner/repo.
+export interface AddSkillMarketplaceSourceRequest {
+  repository: string;
+  name?: string;
+  branch?: string;
+  subpath?: string;
+  parseStrategy?: 'auto' | 'skillmd' | 'llm';
+}
 
 export interface CreateSkillRequest {
   name: string;

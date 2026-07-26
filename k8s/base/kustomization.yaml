@@ -19,9 +19,12 @@ namespace: agentweaver
 resources:
   - namespace.yaml
   - serviceaccount-api.yaml
+  - serviceaccount-worker.yaml
   - serviceaccount-agenthost.yaml
+  - serviceaccount-mcp.yaml
   - secret-provider-class.yaml
   - rbac-api.yaml
+  - vap-sandbox-exec.yaml
   - quota.yaml
   - storageclass-workspace.yaml
   - pvc-data.yaml

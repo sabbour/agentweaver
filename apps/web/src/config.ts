@@ -25,11 +25,31 @@ function resolveApiUrl(): string {
 }
 
 export const API_URL = resolveApiUrl();
+
+// External integrations need an absolute URL. When API_URL is the deployed same-origin sentinel
+// (""), use the browser origin rather than producing a relative path.
+export function resolvePublicApiOrigin(apiUrl = API_URL): string {
+  return (apiUrl || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+}
+
+export const MCP_URL = `${resolvePublicApiOrigin()}/mcp`;
 export const GITHUB_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/github/authorize`;
 
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';
 export const SESSION_LOGIN_STORAGE_KEY = 'agentweaver.sessionLogin';
 
+// SECURITY (accepted residual risk, tracked separately — do not duplicate this token
+// anywhere else, e.g. localStorage or a cookie, without updating this note): the
+// session token is stored in sessionStorage and is therefore readable by any
+// same-origin script. There is no confirmed XSS sink in this app today (LLM/tool
+// output is escaped/sanitized — see .security findings-frontend-web.md, Alert 1),
+// but this remains a JS-readable secret and would become higher severity the moment
+// an XSS vector is introduced elsewhere. Full remediation (migrating to a
+// short-lived HttpOnly/Secure/SameSite session cookie, which also requires adding
+// CSRF protection since cookies are attached automatically) is a larger auth-flow
+// change tracked as a follow-up, not attempted in this pass. In the meantime, the
+// CSP `script-src 'self'` (no `unsafe-inline`/`unsafe-eval`) added alongside this
+// comment narrows the practical avenues for third-party script injection.
 export function getSessionToken(): string | null {
   try {
     return sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);

@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Caching.Memory;
@@ -145,7 +146,8 @@ public sealed class GitHubTokenAuthMiddleware
             || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
             // GitHub webhook receiver (issue #53 follow-up): GitHub's delivery carries no Agentweaver
             // bearer token. Its own HMAC-SHA256 signature check (GitHubWebhookEndpoints) is the auth.
-            || context.Request.Path.StartsWithSegments("/api/webhooks/github", StringComparison.OrdinalIgnoreCase))
+            || (context.Request.Path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
+                && context.Request.Path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true))
         {
             await _next(context).ConfigureAwait(false);
             return;
@@ -207,7 +209,11 @@ public sealed class GitHubTokenAuthMiddleware
         var internalKey = _configuration["Auth:ApiKey"];
         if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
         {
-            var allowedOrg = _configuration["Auth:GitHub:AllowedOrg"]?.Trim();
+            // With a multi-org allowlist, synthesize the caller against the FIRST allowed org
+            // (deterministic) via the shared parser so the downstream org middleware fast-path passes.
+            // When unconfigured (empty list) leave Org null — fail-closed behavior is unchanged.
+            var allowedOrgs = GitHubOrgList.Parse(_configuration["Auth:GitHub:AllowedOrg"]);
+            var allowedOrg = allowedOrgs.Count > 0 ? allowedOrgs[0] : null;
             context.Items[CallerItemKey] = new CallerContext
             {
                 User = "agentweaver-internal",

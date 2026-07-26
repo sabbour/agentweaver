@@ -504,6 +504,25 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("DecisionInbox");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.DismissedNotification", b =>
+                {
+                    b.Property<string>("User")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("user");
+
+                    b.Property<string>("NotificationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("notification_id");
+
+                    b.Property<DateTimeOffset>("DismissedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("dismissed_at");
+
+                    b.HasKey("User", "NotificationId");
+
+                    b.ToTable("dismissed_notifications", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.IntegrationBuildLockRecord", b =>
                 {
                     b.Property<string>("ProjectId")
@@ -531,12 +550,12 @@ namespace Agentweaver.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("AllowTaskPromotion")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Assumptions")
                         .IsRequired()
                         .HasColumnType("TEXT");
-
-                    b.Property<bool>("AllowTaskPromotion")
-                        .HasColumnType("INTEGER");
 
                     b.Property<string>("ClarifyingQuestions")
                         .HasColumnType("TEXT");
@@ -750,14 +769,14 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("IsolationStrategy")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
                     b.Property<int>("InfrastructureRetryCount")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTimeOffset?>("InfrastructureRetryEligibleAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IsolationStrategy")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("LastResetAttempt")

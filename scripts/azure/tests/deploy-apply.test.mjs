@@ -32,6 +32,8 @@ import {
 } from "../steps/30-deploy.mjs";
 import * as execDefault from "../lib/exec.mjs";
 
+const TEST_KEYVAULT_NAME = "test-kv-fixture";
+
 const CFG = {
   RESOURCE_GROUP: "agentweaver-rg",
   CLUSTER_NAME: "agentweaver-aks",
@@ -43,14 +45,14 @@ const CFG = {
   IMAGE_TAG: "v0.9.71",
   AGENTHOST_IMAGE_TAG: "v0.9.71-agenthost",
   ACR_LOGIN_SERVER: "agentweaverregistry.azurecr.io",
-  KEYVAULT_NAME: "agentweaver-kv",
-  AGENTHOST_KEYVAULT_URI: "https://agentweaver-kv.vault.azure.net/",
+  KEYVAULT_NAME: TEST_KEYVAULT_NAME,
+  AGENTHOST_KEYVAULT_URI: `https://${TEST_KEYVAULT_NAME}.vault.azure.net/`,
   TENANT_ID: "66666666-7777-8888-9999-000000000000",
   IDENTITY_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
   APPINSIGHTS_WORKSPACE_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 };
 
-function makeFakes({ hasSandboxCrd = true, workerRolloutFails = false, ddcExists = true } = {}) {
+function makeFakes({ hasSandboxCrd = true, workerRolloutFails = false, ddcExists = true, keyvaultFound = true } = {}) {
   const calls = [];
   const writtenFiles = new Map();
 
@@ -114,6 +116,7 @@ function makeFakes({ hasSandboxCrd = true, workerRolloutFails = false, ddcExists
 
   const az = {
     getLogAnalyticsWorkspaceCustomerId: async () => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    keyvaultExists: async () => keyvaultFound,
   };
 
   return { calls, writtenFiles, execRun, execCapture, log, az, fsImpl };
@@ -133,9 +136,11 @@ test("run(): applies manifests in the exact order groups (CRD present)", async (
   const expectedOrder = [
     "namespace.yaml",
     "serviceaccount-api.yaml",
+    "serviceaccount-worker.yaml",
     "serviceaccount-agenthost.yaml",
+    "serviceaccount-mcp.yaml",
     "secret-provider-class.yaml",
-    ...IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(3),
+    ...IDENTITY_RBAC_QUOTA_PVC_MANIFESTS.slice(5),
     ...NETWORK_POLICY_MANIFESTS,
     ...SERVICES_GATEWAY_ROUTE_MANIFESTS.map((f) => f.replace(/^_/, "")),
     ...SANDBOX_MANIFESTS,
@@ -200,6 +205,17 @@ test("run(): throws when IDENTITY_CLIENT_ID/KEYVAULT_NAME/TENANT_ID are missing 
     () => run(badCfg, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT }),
     /IDENTITY_CLIENT_ID[\s\S]*KEYVAULT_NAME[\s\S]*TENANT_ID/,
   );
+});
+
+test("run(): throws loudly (before applying any manifest) when KEYVAULT_NAME does not exist in the subscription -- catches typo'd-but-real vault names", async () => {
+  const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes({ keyvaultFound: false });
+  const typoCfg = { ...CFG, KEYVAULT_NAME: "akwvkv" };
+  await assert.rejects(
+    () => run(typoCfg, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT }),
+    /KEYVAULT_NAME='akwvkv' was not found/,
+  );
+  const applied = appliedFilenames(calls);
+  assert.equal(applied.length, 0, "must not apply any manifest before the Key Vault existence check passes");
 });
 
 test("run(): applied manifests carry real kustomize-resolved values, not the committed overlay's placeholders", async () => {

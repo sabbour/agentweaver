@@ -1,52 +1,658 @@
 # Changelog
 
+## 0.11.3
+
+### Patch Changes
+
+- bc50c1c: Clarify the board's Ready column so dependency-blocked tasks no longer appear as pickup-ready queued work.
+- 1cd2078: Surface unhandled exceptions from the AgentHost `/configure` endpoint instead of
+  letting them escape as an opaque, empty-body HTTP 500. The endpoint now logs the
+  real exception (still attributable to the specific run/pod before it recycles) and
+  returns a structured `agenthost_configure_unexpected_exception` JSON body, making the
+  recurring `agenthost_configure_failed` failure diagnosable.
+- 6d7d9aa: Fix a cross-pod race that could cause assembly to fail with
+  `agenthost_configure_failed` right as a run entered human review. The
+  work plan's status was flipped to `InReview` before the durable
+  `AssemblyReviews` row backing that gate was persisted, leaving a short
+  window where a peer pod's reconciler sweep could observe `InReview` with
+  no pending review row, conclude the run was orphaned, and re-arm
+  assembly — colliding with the still-live owner on the same AgentHost
+  claim mid-`/configure`. The review row is now persisted before the
+  status flip, closing the window.
+- 27ea216: Fix `start_preview` (and other `IAgentRuntimeToolProvider`-built tools) failing with
+  an opaque "Tool execution failed" on warm-pool AgentHost pods. The per-turn API
+  base URL/key resolved by `CopilotAIAgent.BuildSessionConfigTools` was never
+  forwarded to tool providers, so `PreviewRunnerToolProvider` always fell back to the
+  unreachable `http://localhost:5000` default (#335 P1 follow-up).
+
+## 0.11.2
+
+### Patch Changes
+
+- 0c2debd: Fix AgentHost client mTLS: `agentweaver-api` and `agentweaver-worker` now present a
+  client certificate and validate AgentHost's server certificate against the pinned CA
+  when calling the AgentHost A2A endpoint over HTTPS, and their
+  `Sandbox__AgentHost__RequireMtls` setting is kept in sync with AgentHost's own Kestrel
+  mTLS listener via a dedicated overlay patch, so a redeploy can no longer silently
+  revert the client side to plain HTTP while the server side still requires mTLS.
+- 866ec1f: Fix a Postgres foreign-key violation that could silently drop a whole decomposed
+  work plan. `BacklogPromotionService` now saves task rows in their own
+  `SaveChangesAsync` call before adding and saving their dependency rows, so EF
+  Core/Npgsql's batched insert ordering can no longer race the dependency rows
+  ahead of the tasks they reference (`FK_backlog_task_dependencies_backlog_tasks_depends_on_task_id`).
+- 6843b4a: Fail fast when the UI harness reuses an empty Playwright storage state so staging dry-runs report AUTH_EXPIRED instead of proceeding with a broken session.
+- dd9f01f: Fix tool-approval "AgentHost approval endpoint is unreachable" (503) during the
+  coordinator draft/decompose/orchestrate phases. `ResolveApprovalOwningRunIdAsync` did
+  not know about the synthetic `-coordinator-draft`/`-coordinator-decompose`/
+  `-coordinator-orchestrate` run-id suffixes used to key approval-gate context for those
+  LLM turns, so an operator's "Allow once" click on a grounding tool call (e.g.
+  `web_fetch`) raised during outcome-spec drafting always failed with `no_context`.
+- ca08eb0: Fix AgentHost mTLS startup so loading the mounted CA certificate no longer
+  attempts to parse a private key from the public-only `ca.crt` PEM.
+- dd9f01f: Fix a 500 error when approving or denying the very first tool call of a run
+  (e.g. a `web_fetch` during coordinator spec drafting). The approval-gate
+  owning-run resolution could return a synthetic coordinator-phase key (e.g.
+  `{runId}-coordinator-draft`) that is not a real run id, which then crashed in
+  `RunId.Parse`. That synthetic key is now recognized and treated as the posted
+  coordinator run for ownership/status checks, while still using it to look up
+  the approval-gate request.
+- fcdfcc4: Fix UI harness auth replay for staging: Agentweaver's session token lives in
+  `sessionStorage`, which Playwright's `context.storageState()` does not capture
+  (only cookies and `localStorage` are persisted). Headless dry-runs replaying a
+  saved storage state always landed back on the GitHub sign-in page even with a
+  freshly captured, non-empty state. The `login` command now also captures a
+  companion `sessionStorage` seed file, and headless sessions re-hydrate it via
+  `context.addInitScript` before any page script runs.
+- 06007b7: Fix a bug where GitHub org-membership checks could intermittently return a
+  hard "authorize SSO" 403 (`OrgAuthResult.OrgAccessNotGranted`) even for
+  callers whose org membership is genuinely public. When the primary
+  authenticated membership check hit SAML-enforcement (403), the fallback
+  unauthenticated `public_members` check's own rate-limit responses were
+  silently treated as a confirmed "not a public member" instead of a
+  retryable inconclusive result. The fallback's rate-limited/inconclusive
+  result is now correctly surfaced as `Inconclusive` so the caller retries
+  instead of hard-denying access.
+- 0b544d1: Restore the production AgentHost A2A listener so hardened deployments bind the
+  expected mTLS endpoint on port 8088 and reject clients whose certificates are
+  not signed by the mounted Agentweaver CA.
+
+## 0.11.1
+
+### Patch Changes
+
+- 6843b4a: Fail fast when the UI harness reuses an empty Playwright storage state so staging dry-runs report AUTH_EXPIRED instead of proceeding with a broken session.
+- ca08eb0: Fix AgentHost mTLS startup so loading the mounted CA certificate no longer
+  attempts to parse a private key from the public-only `ca.crt` PEM.
+- fcdfcc4: Fix UI harness auth replay for staging: Agentweaver's session token lives in
+  `sessionStorage`, which Playwright's `context.storageState()` does not capture
+  (only cookies and `localStorage` are persisted). Headless dry-runs replaying a
+  saved storage state always landed back on the GitHub sign-in page even with a
+  freshly captured, non-empty state. The `login` command now also captures a
+  companion `sessionStorage` seed file, and headless sessions re-hydrate it via
+  `context.addInitScript` before any page script runs.
+- 0b544d1: Restore the production AgentHost A2A listener so hardened deployments bind the
+  expected mTLS endpoint on port 8088 and reject clients whose certificates are
+  not signed by the mounted Agentweaver CA.
+- f241d0c: Fix notification requests failing on PostgreSQL deployments after a
+  notification is dismissed.
+
+## 0.11.0
+
+### Minor Changes
+
+- 9e55ed8: Add LLM-assisted skill marketplace catalog parsing (step-1b): a project can now add a curated marketplace source by GitHub repo URL. A new catalog indexer auto-detects skills from the repo tree (deterministic `SKILL.md` heuristic with a bounded, fail-closed Copilot classifier fallback), caches the parsed index per repo revision, and paginates browse from it (anonymous-first, page-lazy descriptions). Project sources are persisted per project (SQLite + Postgres) with add/list/remove endpoints; existing config marketplaces are unchanged.
+- a5925f5: Fixed a High-severity security-assessment finding: stdio MCP clients (e.g. the
+  CLI, editor integrations) previously authenticated backend calls with the
+  shared `AGENTWEAVER_API_KEY`, which the API maps to the trusted
+  `agentweaver-internal` identity and exempts from project-ownership checks —
+  letting any stdio client reach every project on the backend, not just the
+  operator's own.
+
+  Stdio clients should now set `AGENTWEAVER_TOKEN` to a per-user bearer token
+  (an Agentweaver-minted OAuth access token, or a GitHub token such as `gh auth
+token`) so the backend attributes calls to the real user and enforces
+  project ownership. Credential precedence is: inbound per-request token (HTTP
+  transports) → `AGENTWEAVER_TOKEN` → `AGENTWEAVER_API_KEY` (last-resort
+  fallback).
+
+  **Breaking change for stdio deployments still relying on the shared key**:
+  if `AGENTWEAVER_TOKEN` is not set and `AGENTWEAVER_API_KEY` is, the MCP
+  server now refuses to start in stdio mode by default. Set
+  `AGENTWEAVER_ALLOW_SHARED_KEY=true` to explicitly opt back into the
+  insecure fallback (e.g. for first-party service-to-service callers that
+  intentionally use the shared identity). See `docs/guide/mcp-cli.md` for
+  migration guidance.
+
+### Patch Changes
+
+- 01d6699: Fixed a Critical security-assessment finding: AgentHost sandbox pods (which
+  execute untrusted agent/tool shell commands) previously federated to the same
+  Key Vault identity as the API (`agentweaver-api-identity`), granted Key Vault
+  Secrets User/Officer roles. Untrusted code running in a sandbox could exchange
+  its projected workload-identity token for a Key Vault access token and read
+  every user's secrets.
+
+  AgentHost now federates to a dedicated, least-privilege managed identity
+  (`agentweaver-agenthost-identity`) with no Key Vault role assignments. This is
+  a functional no-op for legitimate use: the run owner's GitHub token is already
+  brokered per-run by the API through the `/configure` call rather than fetched
+  directly from Key Vault by the sandbox. Deploying this change to an existing
+  cluster also removes the legacy `agentweaver-agenthost-fedcred` federated
+  credential from the API identity so older deployments can't retain the
+  vault-privileged mapping.
+
+- faaff4c: Render fully-promoted ("delegated to backlog") coordinator runs as complete instead of
+  leaving RAI, Human Review, Merge, and Scribe stuck as "Pending forever", and notify the
+  user when subtasks are promoted to the Board.
+
+  - The coordinator graph descriptor now marks the skipped assembly stages of a delegated
+    run with an authoritative `delegated` status (single source of truth); the run tree and
+    workflow graph render those nodes as a terminal "Delegated to backlog" state and the
+    coordinator/work-plan nodes as Completed.
+  - A poll-derived "N subtasks created" notification (linking to the project Board) is
+    emitted for delegated runs, reusing the existing notification center with board-specific
+    toast/badge copy.
+
+- 6681a50: Enforce the per-run filesystem policy at the Kata command boundary (security, #476):
+
+  - **Cross-run workspace escape**: every Kata AgentHost pod mounts the _shared_ RWX
+    `/workspace` PVC, and the Kata-mode `PassthroughExecutor` previously ignored the per-run
+    filesystem policy entirely. A prompt-injected command could keep its declared working
+    directory inside its own tree yet read/write a sibling project via an absolute path
+    (`cat /workspace/<other-project>/secrets`, `git -C /workspace/<other-project> …`).
+  - **New guard**: `SharedWorkspacePathGuard` scans a command's _text_ for absolute paths
+    that resolve under a protected shared-mount root (default `/workspace`, override via
+    `AGENTWEAVER_PROTECTED_SHARED_ROOTS`) but outside the run's own allowed roots, and rejects
+    them before the shell starts. It is wired into both `ShellCommandValidator` (the
+    `run_command` tool) and `PassthroughExecutor` (the executor boundary, consuming
+    `SandboxCommand.FilesystemPolicy`), collapsing `.`/`..` traversal and handling quoting,
+    `--flag=` assignment, and colon path-lists.
+
+  This is defense-in-depth, not a substitute for true per-run volume isolation (the shared
+  RWX PVC follow-up remains tracked architectural work); a command-text filter cannot catch
+  every obfuscation, but it closes the direct cross-project read/write path described in #476.
+
+- 9b43fdb: Fix the "Browse curated marketplaces" dialog freezing when selecting a source: browsing a marketplace now fetches only the source's subtree via the GitHub Trees API (bounded by a hard timeout) instead of a full, untimed repository clone, so failures surface as a clear error and a loading state is shown while browsing. Browsing also now falls back to an anonymous request when a user's token is refused with any non-success status (public marketplaces in SAML-enforced orgs such as `microsoft/skills`, whose Trees API returns 403 and whose raw blobs return 404 for an un-SSO'd token, no longer come back empty). Browse is now a paginated index: it enumerates every candidate skill + location from the Git Trees metadata (one call, zero blob downloads), then fetches each `SKILL.md` frontmatter definition ONLY for the requested page (default 25, cap 50) — concurrently and anonymously (curated marketplaces are public, so browse attaches no user token, avoiding a slow token round-trip) — so even large marketplaces like `github/awesome-copilot` (~400 skills) return one fully-described page in a few seconds; a skill's full content is downloaded only at import time. Browse's throwaway placeholder tree is written to local ephemeral scratch instead of the data directory, which in production is a CIFS/Azure Files SMB mount whose per-file latency made browsing large marketplaces take tens of seconds. The browse request accepts `page`/`pageSize` and the response returns `total`, `page`, `page_size`, and `has_more`; the Skills page wires this to a "Load more" control. Skill descriptions written as YAML block scalars (`description: |` / `>`) are parsed correctly. The "Azure Skills" marketplace subpath is also corrected to a plugin path that actually exists (`.github/plugins/azure-sdk-dotnet/skills`).
+- 3d2fbc9: Simplify the Account settings MCP clients section to show only the MCP server URL, removing the per-client (Claude Desktop, VS Code, GitHub Copilot CLI) config snippets and copy buttons. Update the page description to cover both the MCP connection and the repository sandbox policy.
+- de4b433: Fixed the release preparation ignored-file guard so it no longer rejects standard dependency/build/output directories (node_modules, dist, bin, obj, test output, harness artifacts), which had made `release:prepare`/`release:publish` unrunnable from a normal checkout, while still flagging unexpected ignored files in source/config locations.
+- 45f2d3e: Added a copy-to-clipboard button to the install/quick-start command blocks on the documentation landing page.
+- ecc5a8f: GitHub org allowlist now accepts multiple orgs via config
+  (`Auth:GitHub:AllowedOrg` / `GITHUB_ALLOWED_ORG`).
+
+  The GitHub organization authorization gate previously enforced membership of a
+  single, exact-match org. It now parses `Auth:GitHub:AllowedOrg` as a delimited
+  LIST (split on `,` and `;`, trimmed, empty entries dropped, de-duplicated
+  case-insensitively, order preserved) and authorizes a caller who is a member of
+  **any** listed org. For each allowed org the existing two-step check is applied
+  verbatim (authenticated `/orgs/{org}/members/{login}`, then the unauthenticated
+  `/orgs/{org}/public_members/{login}` SAML fallback). Fail-closed behavior is
+  unchanged: empty/whitespace config yields an empty list and blocks every
+  non-exempt request. When no org confirms membership but at least one org's
+  primary authenticated check was inconclusive (expired token / 5xx / network),
+  the result is `Inconclusive` rather than a hard denial, preserving the
+  refresh-time re-check semantics. The single-org list parser is shared by the
+  authorization service, the org-authorization middleware, and the API-key
+  middleware.
+
+  The value is now config-driven and non-committed: it flows from the deploy-time
+  `GITHUB_ALLOWED_ORG` environment variable through the `agentweaver-runtime-config`
+  ConfigMap into the API and worker deployments (mirroring `GITHUB_CALLBACK_URL`).
+  Committed defaults remain `microsoft`.
+
+- 20f6dea: `azure:provision-infra` interactive installer now supports arrow-key selection (with the numbered prompt as a fallback when raw-mode TTY is unavailable), walks you through creating a GitHub OAuth App (with link and callback-URL guidance) before asking for the client ID/secret, and prompts for the GitHub org(s) allowed to sign in (`GITHUB_ALLOWED_ORG`, also available as `--github-allowed-org`). Prompts now validate and reprompt on invalid input, and az-backed discovery (subscription/resource group/location) degrades to a manual prompt instead of crashing on transient failures.
+- aa6b6ff: Hardened sandbox RBAC (High-severity security-assessment finding): split the
+  combined API/worker sandbox permissions into distinct least-privilege Roles
+  (`agentweaver-api-sandbox`, `agentweaver-worker-sandbox`) each bound to its own
+  ServiceAccount, added a namespace-wide default-deny `NetworkPolicy` with
+  explicit compensating allows for DNS, Postgres, and AgentHost orchestration
+  traffic, and restricted `pods/exec` — which cannot be scoped via RBAC
+  `resourceNames` because sandbox pod names are dynamic — with a
+  `ValidatingAdmissionPolicy` (`k8s/base/vap-sandbox-exec.yaml`) that permits
+  exec only from the `agentweaver-api`/`agentweaver-worker` ServiceAccounts
+  against pods named `agentweaver-agent-host-*`, closing the lateral-movement
+  path where either identity could previously exec into any pod in the
+  namespace (including each other or Postgres).
+- 16dcabd: Hardened the release pipeline (`azure:release-publish`, changeset prepare/sync
+  scripts) to reject untracked AND unexpectedly git-ignored files in the working
+  tree before publishing or syncing a release. Previously the check only ran
+  `git status --porcelain --untracked-files=all`, which does not surface files
+  that match a `.gitignore` pattern — an attacker-planted file under a path like
+  `node_modules/` or `dist/` could have been silently bundled into a release
+  artifact. The check now also flags unexpected ignored files, with a narrow
+  allowlist limited to genuinely safe, never-shipped editor/local-tooling paths
+  (`.vscode/`, `.idea/`, `.squad/`, etc.). Requires running these scripts from a
+  truly clean checkout, per the existing `RELEASING.md` guidance.
+- 0b5374e: Prevent workflow and skill discovery from reading through repository symlinks.
+
+## 0.10.1
+
+### Patch Changes
+
+- b732690: Added a Content-Security-Policy and defense-in-depth security headers
+  (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`) to
+  the `Agentweaver.Web` static host response pipeline, addressing a Low-severity
+  security-assessment finding (missing security headers/CSP). The CSP is
+  same-origin (`default-src 'self'`) with a strict `script-src 'self'` (no
+  `unsafe-inline`/`unsafe-eval`) and `style-src 'self' 'unsafe-inline'` (required
+  by @fluentui/react-components' runtime style injection).
+
+  Also documented the accepted residual risk for the companion Low-severity
+  finding (OAuth session token stored in `sessionStorage`, JS-readable) with a
+  code comment in `apps/web/src/config.ts` — the token is not duplicated across
+  storage locations or logged today, and a full migration to an HttpOnly/Secure
+  session cookie (which also requires adding CSRF protection) is tracked as a
+  separate, larger follow-up rather than attempted in this pass.
+
+- bc99875: Enforce project ownership on all project-scoped memory, decision, session, and casting
+  endpoints. Previously these routes verified only that a project existed, so any
+  authenticated organization member who learned another project's UUID could read or modify
+  its memory, sessions, and decisions or hijack its agent-team casting. Because active
+  decisions are compiled verbatim into future agent system prompts, this also closed a
+  stored cross-project prompt-injection (XPIA) vector. A centralized `ProjectAuthorization`
+  guard now authorizes the caller against the project owner (the trusted internal
+  service identity used for a run's own agent callbacks remains exempt), covering both the
+  direct API and the MCP tools that proxy to these same routes.
+- 73e3026: Harden agent-runtime tool gating against three security-review findings. (1) Native Copilot shell now fails closed for **every** run: the SDK's in-process native shell (which bypasses `ISandboxExecutor`/bubblewrap and was only working-directory-checked) is rejected in both `CopilotAIAgent` and `GitHubCopilotAgentRunner`, and shell is exposed solely through the sandboxed `run_command` tool. (2) The "tool-less" LLM classifiers (`CopilotWorkflowSelectionModel`, `OutcomeSpecReplyClassifier`, `AssemblyGateCodeClassifier`, `StoryIndependenceClassifier`, `PreviewClassifier`) now set `AvailableTools = []` and install a deny-by-default `OnPermissionRequest` handler, since `Tools = []` alone does not disable the SDK's built-in native tools against prompt-injected input. (3) `OperatorToolApprovalPolicy` is now fail-closed: only an explicit allow-list of read/low-consequence tools runs without an operator prompt, so consequential mutators (including `sandbox_policy_set`, `memory_import`, `skill_import`, `skill_assign`, `workflow_save`) and any unrecognized/new MCP tool require approval by default, with a reflection-based coverage test guarding against classification drift.
+- 2289ccf: Bump the vendored `@github/copilot-linux-x64` CLI binary in the AgentHost image from 1.0.67 to 1.0.71-3, self-update npm before installing global tooling, bump `yq` from 4.44.3 to 4.53.3 (dominant source of the remaining HIGH/CRITICAL findings), and add a cache-busting `GH_CLI_CACHE_BUST` ARG to the GitHub CLI apt-install layer so it stops silently reusing a stale, CVE-carrying cached `gh` build across CI runs. Add a narrowly-scoped `.trivyignore` for the handful of CVEs confirmed to have no fix in the newest upstream `yq`/`gh` releases (transitive Go stdlib/grpc-go/x-net/x-text baked into third-party compiled binaries we cannot patch). Also fix the actual Trivy CVE gate in `agent-host-maintenance.yml` to scan with `format: table` instead of `format: sarif` — Trivy has a known bug where `.trivyignore` isn't reliably honored before the exit-code check runs in SARIF mode (aquasecurity/trivy#9487), so the table-format scan is now the real HIGH/CRITICAL gate and the SARIF step is upload-only (non-gating) for the Security tab. Severity/exit-code/ignore-unfixed settings on the gate itself are unchanged, so any CVE not explicitly listed in `.trivyignore` still fails the build.
+- 3b66282: Fix `extractChangelogSection` to accept an optional `v` prefix inside bracketed changelog headings (e.g. `## [v0.9.70]`), so `release:sync-dev`'s pre-flight version check no longer fails on historical hand-authored CHANGELOG.md entries.
+- 52f8818: Harden K8s/Kata sandbox isolation (security):
+
+  - **Sandbox egress**: `sandbox-egress-allowlist` no longer permits `0.0.0.0/0` on
+    all ports. It is now scoped to public TCP/443 only and denies RFC1918, CGNAT/link-local,
+    and IPv6 ULA/link-local ranges — blocking lateral movement to in-cluster
+    Services/nodes/VNet and IMDS SSRF, matching the proven `agenthost-egress-allowlist`.
+  - **Public MCP identity**: the internet-exposed MCP now runs as a dedicated,
+    least-privilege `agentweaver-mcp` ServiceAccount (no binding to the pod-create/exec
+    sandbox Role, default token automount disabled) instead of sharing `agentweaver-api`,
+    removing a namespace privilege-escalation path.
+  - **AgentHost A2A mTLS**: the production overlay enables mutual TLS + hostname
+    verification for the `/configure` credential channel (encrypts the GitHub/turn tokens
+    that previously crossed the pod network over plain HTTP).
+
+  Shared RWX workspace per-run isolation (Alert 2) is documented as follow-up
+  architectural work; the compounding egress and identity controls are hardened here.
+
+- 71a4509: Harden the supply chain across CI, container builds, and provisioning scripts: pin the `agent-host-maintenance` workflow's Trivy scan action to a reviewed full commit SHA (was `@master`) and add a Sigstore-backed build provenance attestation instead of relying solely on a mutable ACR tag; verify checksums for every tool downloaded during Dockerfile builds (Copilot CLI, Node.js, yq) and replace the mutable NodeSource `curl | bash` install with a checksum-verified tarball and exact-pinned npm globals (also bumping pnpm 10.34.5 -> 11.5.3 to close a HIGH CVE, CVE-2026-55697, caught by the Trivy CVE gate); pin previously-floating NuGet package versions and commit `packages.lock.json` for every project, with `RestorePackagesWithLockFile`/`RestoreLockedMode` enabled so CI restores fail loudly instead of silently resolving a new dependency version; and route Key Vault secret writes in the Azure provisioning scripts through short-lived, mode-0600 scratch files (`scripts/azure/lib/secret.mjs`) instead of passing secret values as CLI arguments, closing a `ps`/`/proc` process-listing exposure window.
+- fcb6b3e: Resolve symlinks and reparse points before workspace file-access containment checks so a
+  repository-planted symlink can no longer escape the workspace root. Previously the checks were
+  lexical only (`Path.GetFullPath` + string prefix), which validated the pathname but still
+  followed a symlink on read or write — allowing a malicious repo to disclose or overwrite files
+  outside its worktree (e.g. a mounted secrets store). Workspace read and write endpoints now share
+  a single `WorkspacePathGuard` that resolves the real target and rejects any path landing outside
+  the workspace root.
+- e1600d3: Harden the GitHub webhook trust boundary with regression tests that lock in existing
+  security properties: reject a delivery signed with a different project's secret (proving
+  per-project secret scoping, not a shared global secret), and prove prompt-injection text
+  smuggled in issue/comment payload fields never reaches the fired backlog task. Also correct
+  a stale doc comment that claimed no webhook receiver was wired.
+- 5676f49: Harden GitHub OAuth refresh-token and web sign-in `state` handling (security):
+
+  - **Fail closed on refresh org re-check.** `/oauth/token` refresh now denies (403) when the
+    brokered GitHub token is missing/expired or the org-membership re-check is inconclusive, instead
+    of silently falling back to the issuance-time org claim. A user removed from the required org can
+    no longer keep minting access tokens through the refresh chain by revoking/expiring their GitHub
+    token. The membership check runs on a non-consuming peek, so a transient (inconclusive) denial
+    leaves the refresh token usable once membership can be confirmed again; a definitive
+    non-membership revokes the whole refresh chain.
+  - **Atomic single-use refresh-token consumption.** Refresh rotation now claims the presented token
+    with a single conditional compare-and-swap (`ConsumedAt IS NULL`), so a concurrent replay of the
+    same refresh token can no longer fork two independent live refresh branches; the loser triggers
+    reuse detection and the chain is revoked.
+  - **No SAML bypass via public membership.** A SAML-enforcement (`403`) response on the authenticated
+    private org-membership check is now treated as "SSO required" and is no longer overridden by the
+    unauthenticated public-membership fallback.
+  - **Browser-bound OAuth `state`.** The web sign-in `state` is bound to the initiating browser via a
+    Secure, HttpOnly, SameSite=Lax cookie (double-submit) and validated on callback, mitigating
+    login-CSRF where an attacker grafts their pre-authorized `state`/`code` onto a victim's browser.
+
+## 0.10.0
+
+### Minor Changes
+
+- 6d95e74: Add settings and documentation that provide copyable MCP client configurations for
+  Claude Desktop, VS Code, and GitHub Copilot CLI.
+- f50ce19: Projects with no connected GitHub repository can now create and connect one instead of
+  being stuck. A new "Connect a GitHub repository" flow (Project Settings, and a dismissible
+  banner on the project dashboard) lets you pick an owner (yourself or an org), choose a
+  repo name and visibility, and creates the repo then pushes the project's existing local
+  history to it.
+
+  The push-PR execution step's "no connected repository" case now emits a `skipped` step
+  event (with a message pointing to Project Settings) instead of `failed`, since a missing
+  GitHub connection is not a run failure.
+
+- 5c292e3: Separate repository release publication, published-release deployment, local-checkout deployment, arbitrary-commit deployment, and Azure infrastructure provisioning into explicit commands.
+- 016f97d: Browse curated skill marketplaces and add selected skills to project catalogs.
+- 7662468: Enable MCP persona harness runs to export normalized evidence and a shared Judge prompt
+  for agent-native verdicts, instead of depending on a configured judge subprocess.
+- a61b0c9: Migrate the AKS deployment manifests under `k8s/` from flat, envsubst-rendered YAML to a Kustomize-based `base/` + `overlays/production/` layout.
+
+  `scripts/azure/steps/30-deploy.mjs` now builds the full production overlay via `kubectl kustomize` (kubectl's built-in Kustomize support -- no separate `kustomize` binary required) instead of the old hand-rolled `lib/render.mjs` envsubst renderer, then re-groups the combined build back into the same staged apply order (identity/RBAC/quota/PVCs, network policies, services/gateway/routes, sandbox template, deployments, worker) it has always used. Dynamic values (image tags, the public HOST-derived URLs, workload-identity IDs, Key Vault/Tenant IDs, hostnames) are now injected via Kustomize's `images:` transformer, a `configMapGenerator` (`agentweaver-runtime-config`), and `replacements:` patches instead of textual placeholder substitution.
+
+  Manifests not part of the automated deploy (one-off migration Jobs, example-only Secrets, the app-code `SandboxClaim` template) moved to `k8s/reference/` and are excluded from the Kustomize base. No new tool prerequisite is required: `kubectl apply -k` / `kubectl kustomize` cover this migration's needs.
+
+- 5912d2e: Add project-specific GitHub webhook settings with independently generated, rotatable secrets and workflow event trigger documentation.
+- f50ce19: Wire the existing `open_pull_request` workflow node into the built-in default
+  workflow (`merge` → `push-pr` → `scribe`) and into the `RunWorkflowGraphBinder`
+  so any code-producing workflow with a platform-appended merge/scribe step now
+  publishes or updates a GitHub pull request automatically. `GitHubPullRequestClient`
+  is now idempotent: if GitHub reports the pull request already exists (422), the
+  existing open PR is looked up and returned as success instead of failing the run.
+- 79164db: Made the `Changeset advisory` CI check a required, blocking status check instead
+  of an advisory-only warning: a PR touching release-relevant paths (`apps/`,
+  `packages/`, `scripts/azure/`, `k8s/`) with no changeset and no
+  `changeset:not-required` exemption now fails CI instead of only printing a
+  warning. Test-only diffs under those paths no longer trigger the requirement.
+  Also made every path-scoped CI job (`.NET tests`, `Node toolchain tests`, `Web
+tests`, `Web lint`, `Docs build`) run only when its relevant paths actually
+  changed, skipping unrelated suites (e.g. docs-only PRs no longer run the full
+  .NET/web suites) while always running everything when the CI workflow itself
+  changes.
+- 4a33119: Add structured contributor-authored release notes and a prepared, reviewable release workflow for Agentweaver maintainers.
+- 5192547: Run and schedule project workflows from the workflow library, and duplicate built-in templates into the visual editor.
+
+### Patch Changes
+
+- 47dd188: Add a runnable CLI-to-MCP smoke test that verifies authentication, project setup,
+  run completion, artifact retrieval, and cleanup against local or staging servers.
+- b47bdc5: Add an interactive landing-page preview for declarative workflows, including gates and scheduled runs.
+- 3185e2d: Users can now dismiss individual notifications directly from the notification bell dropdown.
+- 3b77d94: Use Copilot-based semantic classification to decide preview applicability and preserve non-preview review feedback.
+- a8d74d8: Prevent `record_memory` from timing out when project workspace storage is slow by returning
+  after the durable database write and leaving filesystem snapshot generation to the explicit
+  end-of-run memory export.
+- dc54bbb: Fixed a coordinator merge failure that blocked runs whose kept-alive preview left
+  untracked build artifacts (e.g. a `node_modules/` directory in a demo app with no
+  `.gitignore`) in the working tree. When the merge took the working-tree
+  reconciliation path, harmless untracked files that are absent from the merge result
+  tree were incorrectly treated as unreconcilable and failed the merge with
+  "uncommitted content diverges from the merge result". Untracked paths the result
+  tree does not reference are now correctly left untouched (a hard reset never touches
+  them), matching the reconciler's documented contract, while genuinely divergent
+  edits to tracked files still correctly block the merge.
+- 87fb201: Bound xUnit test collection parallelism to two workers and made tool-approval
+  gate terminal-state resolution atomic (guarding replacement cleanup so a
+  gate can't be resolved twice under concurrent access). Also gave
+  approval-expiration tests more scheduler headroom to reduce CI flakiness.
+- bc61049: Fixed the Operator Assistant chat composer losing focus after every send and
+  feeling frozen while a message was in flight. Both were caused by the
+  composer's `disabled` prop being tied to the `busy` send state, which
+  disabled the textarea for the duration of the request — React blurs disabled
+  form elements (stealing focus) and made the whole composer unresponsive even
+  though the send itself is already optimistic (input clears immediately, a
+  pending message bubble shows). The textarea now stays enabled and focused
+  during a send; only the send affordance is gated via `disableSend`, so users
+  can keep typing their next message right away.
+- cec9bfb: Show the complete GitHub Awesome Copilot skill catalog by browsing its `skills` directory instead of scanning only the repository root.
+- f46c163: Fix the built-in "Azure Skills" marketplace subpath so browsing it finds skills. The `microsoft/skills` repo nests `SKILL.md` files one directory deeper (`.github/plugins/azure-skills/skills/<name>/SKILL.md`) than the previously configured subpath.
+- fbe8887: Fix Build & Test gate coordinator behavior (#386, #387). The gate now renders as a `planned` node in
+  the run tree from the start — the `GET /api/runs/{id}/graph` endpoint and the topology-shape
+  `coordinator.graph` emissions resolve the actual assembly gates from the selected workflow instead of
+  falling back to the RAI + Human Review defaults that omitted `build_test` until execution reached it.
+  The coordinator also drops the platform Build & Test gate for non-code-producing work plans (all
+  subtasks are planning-phase deliverables such as research, PRDs, or design docs) so those runs no
+  longer loop indefinitely at a gate that has no code to build or test.
+- 87fb201: Fixed a Coordinator race where a deferred decision applied only on the next
+  heartbeat instead of immediately when the approval gate armed, and switched
+  run-plan tests to poll for the ordered `coordinator.work_plan` stream event
+  rather than treating the earlier database commit as completion.
+- 8304dca: Fixed edge routing in the architecture-diagram renderer so lines no longer
+  overlap each other or cut straight through unrelated node cards. The renderer
+  was drawing every edge as a `getSmoothStepPath` between fixed top/bottom
+  handles, which ignores dagre's own edge routing -- so an edge from one rank to
+  a distant rank sliced right through any card in between, and several
+  near-parallel edges collapsed onto the same path.
+
+  The shared renderer (`docs/diagram-renderer/`) now draws each edge along the
+  poly-line dagre actually routes for it (`dagre` performs real layered edge
+  routing, threading each line through the gaps between ranked nodes), rendered
+  with rounded corners so it still reads like the product's smoothstep edges.
+  Labelled edges hand dagre their footprint up front so it reserves
+  non-overlapping label slots along the route, and the existing label
+  collision-avoidance pass now seeds from those reserved anchors. `nodesep`,
+  `edgesep`, and `ranksep` were widened for extra breathing room. This is a
+  general fix in the pipeline -- every current and future graph-spec benefits,
+  with no per-diagram tuning. The three AKS diagrams were re-rendered.
+
+- 6a2d926: Fix stale `k8s/` manifest paths in `KubernetesRemoteApiManifestTests` after the Kustomize `base`/`overlays` migration (#375). The test helper still pointed at the old flat `k8s/*.yaml` layout and was raising `FileNotFoundException` for every run against `dev`; it now resolves manifests under `k8s/base/`, matching the current directory structure.
+- a1c11f1: Fix `agentweaver-runtime-config` ConfigMap deploying to the wrong Kubernetes namespace (`default` instead of `agentweaver`), which caused `azure:deploy-from-local`/`azure:upgrade` to fail with `CreateContainerConfigError: configmap "agentweaver-runtime-config" not found` on the API, MCP, and worker deployments and the AgentHost SandboxTemplate.
+
+  The production Kustomize overlay (`k8s/overlays/production/kustomization.yaml`) generates this ConfigMap directly via `configMapGenerator`, but had no top-level `namespace:` transformer of its own. `k8s/base/kustomization.yaml`'s `namespace: agentweaver` transformer only applies to resources pulled in via `resources: - ../../base`, not to generators declared in the overlay itself, so the generated ConfigMap silently fell back to whatever namespace `kubectl apply` defaults to. Added `namespace: agentweaver` to the overlay's kustomization.yaml, and a regression test asserting every namespace-scoped resource in the built manifest set carries `namespace: agentweaver`.
+
+  Also fixes a second, pre-existing (not caused by the Kustomize migration) live-deploy blocker discovered during the same `azure:deploy-from-local` validation: AgentHost warm-pool pods crash-looped with `AgentHost:McpEndpoint must be configured` because `AgentHost__McpEndpoint` was never set anywhere (not in the old flat manifests, not in the new Kustomize base) even though `Program.cs` requires it unconditionally at pod startup for every AgentHost pod (not just ones adopted for the operator-assistant purpose, per #346/#347's narrow AgentHost cutover). Added the env var (`http://agentweaver-mcp:8080/mcp`, a constant in-cluster Service URL) to `sandbox-template-agenthost.yaml`, plus the matching ingress `NetworkPolicy` (`allow-agenthost-to-mcp` in `networkpolicy-mcp.yaml`) so the MCP pod actually accepts the connection -- egress from AgentHost pods was already permitted by the existing `sandbox-egress-allowlist`.
+
+- 8725a32: Fix `project_create` MCP tool: the optional `blueprint` argument had no C# default value, so the
+  SDK's reflection-based argument binding treated it as required and rejected any call that omitted
+  it (the normal/documented case) with an opaque "An error occurred invoking 'project_create'." error
+  before the tool body ever ran. `blueprint` now defaults to `null` like the other optional
+  create-project fields.
+- f5df97f: Fix a live-deploy-blocking MCP server startup crash: `project_create`'s optional `blueprint`
+  parameter changed from `JsonElement?` to `string?` (a JSON-encoded string), fixing a regression of
+  the 7605b692/#419 landmine. `Microsoft.Extensions.AI`'s reflection-based schema exporter cannot
+  serialize the default/uninitialized state of a `Nullable<JsonElement>` parameter into the tool's
+  JSON schema, which crashed the whole MCP server at boot (`AIJsonUtilities.CreateFunctionJsonSchema`
+  -> `InvalidOperationException` during `MapMcp`). Using `string?` keeps the parameter optional (so
+  `WithToolsFromAssembly` still binds calls that omit it, without a required-parameter binding
+  rejection) while remaining safely serializable as a schema default. Added a regression test that
+  launches the real compiled Agentweaver.Mcp process and asserts clean startup, since this bug only
+  reproduces with the exact dependency versions Agentweaver.Mcp resolves at runtime.
+- 87fb201: Fix a React ref-write-during-render bug in the landing page workflow demo, and remove the hard dependency on a PATH-available `openssl` binary for RSA key/random-byte generation in the Azure provisioning scripts (now uses Node's built-in `crypto` module).
+- 2867811: Fixed Operator Assistant turns failing 100% of the time on AgentHost pods.
+  `MapA2AHttpJson`'s session store calls `CreateSessionAsync` on every new A2A
+  message regardless of `AgentHostPurpose`, and `A2ATurnBridgeAgent` (a
+  `DelegatingAIAgent`) forwarded this unconditionally to the singleton
+  `CopilotAIAgent`. For the `OperatorAssistant` purpose, `AgentHostStartupService`
+  deliberately never calls `CopilotAIAgent.SetupAsync` (this purpose never drives
+  `CopilotAIAgent` — turns are routed to `IOperatorAssistantAgent` instead), so
+  `CopilotAIAgent.CreateSessionCoreAsync` threw
+  `InvalidOperationException("SetupAsync must be called before
+CreateSessionAsync.")` before the turn ever executed. `A2ATurnBridgeAgent` now
+  overrides session creation to bypass `CopilotAIAgent` for the
+  `OperatorAssistant` purpose, matching how turn execution already routes around
+  it; all other purposes are unaffected.
+- 2776953: Fixed a bug (#388) where a reviewer (Build & Test gate, RAI, rubber-duck, or
+  any steering-driven revision) sending a review/revision request to a target
+  agent WIPED that agent's run-tree message stream instead of appending to it.
+  The shared in-place-resume/revision-injection mechanism (used by
+  `CoordinatorAssemblyService.ExecuteInPlaceSteerAsync`,
+  `CoordinatorDispatchService.TryInjectSteeringRevisionAsync`, and
+  `CoordinatorSteeringService`'s recovery path) removed and recreated the
+  child/coordinator run's `RunStreamStore` entry to clear the completed flag
+  before resuming, which discarded every event recorded before the review.
+  `RunStreamStore`/`RunStreamEntry` now expose a `Reopen()` operation that
+  clears the completed/awaiting-review flags in place while preserving the
+  recorded history, so the new review/revision turn is appended after the
+  target agent's prior messages instead of replacing them.
+- fb95e09: Fix independent task promotion so story components are classified concurrently with a
+  runtime-aligned timeout and one bounded retry. Classification degradation remains
+  fail-closed but is now surfaced on the work-plan timeline instead of silently producing
+  an unexplained empty board.
+- 4f57729: Fix the "Alpha vX.Y.Z" badge (top-left of the app shell) always showing the last `VERSION`-file bump, even when the running deployment was produced by `azure:upgrade`/`azure:deploy-from-local` (which tag images by git SHA and never touch `VERSION`) — making the badge completely uninformative about what's actually running.
+
+  Root cause: `AppVersionProvider` only ever read the static `VERSION` file baked into the image, and while every Dockerfile already declares `ARG IMAGE_TAG`/`ARG GIT_SHA` (passed by `scripts/azure/image-spec.mjs` for every `az acr build`), those were only ever set as OCI `LABEL`s (image metadata), never as container `ENV` vars, so the running .NET process had no way to read them.
+
+  Fixed by:
+
+  - Adding `ENV IMAGE_TAG=${IMAGE_TAG}` / `ENV GIT_SHA=${GIT_SHA}` right after the existing `ARG`/`LABEL` declarations in all four Dockerfiles (API, MCP, web, AgentHost), so the build provenance is readable at runtime via `Environment.GetEnvironmentVariable`.
+  - `AppVersionProvider` now prefers these runtime env vars: when `IMAGE_TAG` looks like a real semver release tag (`^v?\d+\.\d+\.\d+$`), it's a real `azure:release` build and that tag is the authoritative version. Otherwise (local `dotnet run`, or a git-SHA-tagged `azure:upgrade`/`azure:deploy-from-local` build) it falls back to the `VERSION` file for the base semver and surfaces the git SHA separately.
+  - `GET /api/version` now returns `{ version, gitSha, isRelease }` instead of a single opaque string.
+  - The frontend badge now reads: `Alpha v0.9.70` for a real release, `Alpha v0.9.71-dev+a1c11f1` for a SHA-tagged local/upgrade build — clearly distinguishing the two instead of showing the same stale string for both.
+
+- 87fb201: Fixed Web lint and Web test CI breaks introduced after the Changesets
+  integration landed: extracted non-component exports out of
+  `CostChip.tsx`/`BlueprintPicker.tsx`/`LandingWorkflowDemo.tsx` into sibling
+  modules to satisfy `react-refresh/only-export-components`, removed a dead
+  reassignment flagged by `no-useless-assignment`, and fixed a real
+  `CoordinatorRunPage` test flake caused by a missing global `afterEach`
+  cleanup between test files (added `apps/web/src/test/setup.ts` and made
+  dialog-button role queries more resilient to CPU-contention timing).
+- 87fb201: Fix `azure:deploy-from-local` and other provisioning commands failing on Windows when `openssl` isn't on `PATH`: the mTLS certificate generation step now falls back to the `openssl` binary bundled with Git for Windows.
+- d78caed: Fixed the expanded workflow-definition graph so branching and reconverging
+  paths use the same routed staircase layout as coordinator run graphs.
+- bbd4689: Migrated the `docs/deep-dive/*.md` Mermaid **flowcharts** onto the Fluent-styled
+  `@xyflow/react` + `dagre` diagram pipeline (the same one used for the AKS
+  architecture diagrams), so they render as on-brand node/card diagrams with the
+  overlap-free edge routing shipped previously, instead of raw ```mermaid fences.
+
+  Adds a reusable converter (`scripts/docs/mermaid-to-graphspec.mjs`) and a
+  migration CLI (`scripts/docs/migrate-mermaid.mjs`) that lift the semantics the
+  Mermaid sources already carry — `class` category assignments, node shapes, and
+  nested `subgraph` clusters — into graph-spec card icons/badges and groups. 104
+  flowcharts across 36 deep-dive docs were converted to `docs/diagrams/src/*.json`
+  specs and pre-rendered to PNG. Non-flowchart Mermaid (`sequenceDiagram`,
+  `stateDiagram`, `classDiagram`, `erDiagram`) is intentionally left as-is — it is
+  not representable by the node/edge/group graph-spec and keeps rendering via
+  `vitepress-plugin-mermaid` (tracked as follow-up).
+
+- b7eeb61: Migrated the `docs/experience/*.md` Mermaid **flowcharts** onto the Fluent-styled
+  `@xyflow/react` + `dagre` diagram pipeline (Phase 2, Batch B), so they render as
+  on-brand node/card diagrams with the overlap-free edge routing instead of raw
+
+  ```mermaid fences. 18 flowcharts across 14 experience docs were converted to
+  `docs/diagrams/src/*.json` specs and pre-rendered to PNG. Non-flowchart Mermaid
+  (`sequenceDiagram`, `stateDiagram`) is intentionally left as-is and keeps
+  rendering via `vitepress-plugin-mermaid`.
+
+  Hardens the shared converter/CLI in the process:
+
+  * `mermaid-to-graphspec.mjs` no longer splits node labels on `&` when it begins
+    an HTML entity (`&gt;`, `&amp;`, `&#39;`, …); previously a label like
+    `allow replicas &gt; 1` was torn apart and spawned a stray `gt` node.
+  * `migrate-mermaid.mjs` now names specs directory-scoped (`<dir>-<doc>-figN`) so
+    same-named docs in different folders no longer collide on a shared basename
+    (the initial `docs/deep-dive` batch keeps its bare `<doc>-figN` names).
+  ```
+
+- 06fede5: Migrated the Mermaid **flowcharts** in `docs/guide/*.md`, `docs/reference/*.md`
+  and `docs/run-event-stream.md` onto the Fluent-styled `@xyflow/react` + `dagre`
+  diagram pipeline (Phase 2, Batch C), replacing raw ```mermaid fences with
+pre-rendered PNG embeds. 19 flowcharts across those docs were converted to
+`docs/diagrams/src/\*.json`specs and pre-rendered to PNG (the 3 hand-authored
+AKS architecture PNGs already embedded in`docs/guide/architecture-aks.md` are
+untouched). Non-flowchart Mermaid (`sequenceDiagram`) is intentionally left as-is
+and keeps rendering via `vitepress-plugin-mermaid`.
+
+  Fixes `migrate-mermaid.mjs` to compute the diagram embed path relative to each
+  doc's directory, so a doc at the `docs/` root (like `run-event-stream.md`)
+  correctly references `diagrams/…` instead of `../diagrams/…`.
+
+- 8578a4f: Re-rendered the AKS architecture diagrams (README.md's "Block diagram" and
+  architecture-aks.md's "Component diagram", simplified + detailed) as
+  Fluent-styled node/card diagrams instead of generic flowchart output. GitHub's
+  built-in Mermaid renderer was clipping long subgraph/node labels on these
+  diagrams, and a static pre-render was the fix -- but the pre-rendered result
+  (first via `@mermaid-js/mermaid-cli`, then via a plain React Flow SVG export)
+  still looked nothing like the product's own polished, on-brand node/edge
+  diagrams (`apps/web/src/components/CoordinatorTopologyGraph.tsx`).
+
+  Diagrams are now driven by plain JSON graph-specs (`docs/diagrams/src/*.json`)
+  rendered through a small standalone app (`docs/diagram-renderer/`) that mounts
+  a real `@xyflow/react` graph with `dagre` compound-cluster auto-layout and a
+  custom node-card component matching `CoordinatorTopologyGraph`'s Fluent UI v9
+  card styling (rounded card, icon + title + subtitle, pill category badges,
+  tiered group containers) using the app's actual resolved color palette.
+  Playwright captures each diagram as a static PNG
+  (`scripts/docs/capture-diagrams.mjs`). `npm run docs:render-diagrams`
+  regenerates the PNGs from the JSON specs; `npm run docs:check-diagrams` (CI)
+  is now a fast, browser-free drift check comparing each spec's content hash
+  against a committed `.hash.txt`, rather than re-rendering and diffing
+  geometry (which broke across OSes due to host font-metric differences).
+
+- ab6f28b: Remove the "Define your deterministic workflows" panel and its embedded editor
+  demo from the marketing landing page. After several rounds of feedback and
+  rewrites, the panel was decided to be cut rather than iterated on further.
+- 87d3f2d: Remove the redundant "Break into tasks" button and dialog from the Outcome Plan panel. The same decompose-into-backlog-items capability remains available from the Kanban board and Workspace page.
+- 1e07ca0: Removed a redundant clarifying note from the landing page's Deploy to Azure card (already explained in the getting started guide).
+- ffd6b57: Rename the misleading `azure:dev` npm script to `dev:open` (opens a browser after `npm run dev` starts). It made zero Azure calls, so the `azure:` prefix implied a nonexistent cloud dependency.
+- ab0e83f: Tool call arguments in the run timeline now display as labeled fields, with long values expandable independently for easier review.
+- 03c0d1e: Replace the coordinator's keyword and file-extension heuristics for Build & Test gate
+  applicability with a small, tool-less LLM classification that fails safely by retaining
+  the gate when the model is unavailable, times out, or returns an ambiguous response.
+- 6974479: Restore distributed traces and AI usage metrics from pod-per-run AgentHost workers, and add run/parent-run correlation dimensions to lifecycle metrics.
+- 1f5b509: Prevent coordinator learnings from being lost when a terminal run recycles its AgentHost pod
+  before the final Scribe turn. Terminal cleanup now waits for the bounded Scribe pass to finish,
+  then releases the per-run pod and assembly worktree.
+- a178c3f: Fix native agent tool calls (submit_decision, memory, inbox, …) silently timing out (~100s)
+  from inside sandbox agent-host pods on the AKS/Cilium staging cluster.
+
+  Agent-host pods could not reach the in-cluster `agentweaver-api` Service on TCP 8080. Under
+  Cilium, an in-cluster ClusterIP resolves to the destination pod's security identity, and only
+  an identity-based (`podSelector`) egress rule authorizes it — a CIDR `ipBlock` allow (even the
+  `0.0.0.0/0` rule in `sandbox-egress-allowlist`) matches only the "world"/CIDR entity, never a
+  cluster-managed pod identity. The MCP dependency already had such a rule; the API did not.
+
+  `agenthost-egress-allowlist` now adds an explicit, tightly-scoped `podSelector` egress allow
+  from agent-host pods to `agentweaver-api` on TCP 8080 (mirroring the existing MCP rule), so
+  API-backed native tools connect east-west instead of black-holing against the RFC1918 egress
+  exclusions of the SandboxTemplate-owned network policy. RFC1918 egress is not otherwise widened.
+
+- 3464bb5: Shorten the git SHA shown in the version badge to 7 characters, matching the short-SHA convention already used for `IMAGE_TAG` (`AppVersionProvider` now truncates the full `GIT_SHA` env var instead of passing it through as-is).
+- 09a69fc: Fix the live staging Operator Assistant outage where AgentHost pods could not reach the in-cluster
+  MCP service on port 8080 and every first turn timed out with `agenthost_unavailable`.
+
+  `agenthost-egress-allowlist` now includes an explicit, tightly-scoped egress allow from
+  AgentHost pods to `agentweaver-mcp` on TCP 8080, matching the live fix that restored
+  AgentHost -> MCP connectivity without broadening RFC1918 egress.
+
+- 7ca12be: Skip the coordinator Build & Test gate for documentation-only work even when decomposition labels
+  its single subtask as execution work.
+- 4a2bb82: Prevent automatically selected document-only workflows from bypassing Build & Test when decomposition reveals code-producing work, while preserving explicit workflow overrides with a clear warning.
+
 All notable changes to Agentweaver are documented in this file, generated from the repository's git tag/commit history (`v0.7.0` through `v0.9.60`).
 
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries are grouped by release tag (newest first) and bucketed by commit-message prefix (`fix`, `feat`, `refactor`/`chore`, `docs`, `test`); merge commits and routine `chore(squad)` state-sync commits are omitted for readability. Regenerate with `python scripts/gen-changelog.py` if the history needs to be rebuilt.
 
-
 ## [v0.9.70] - 2026-07-16
 
 ### Fixed
+
 - chore(release): rebuild `agentweaver-frontend` image, which had gone stale in staging — the `merge-docs-landing-main` branch (docs landing page redesign, `LandingWorkflowDemo.tsx`) was merged into `main` after the v0.9.69 images were already built/deployed, so the running frontend image no longer matched watched source paths at `HEAD`. No application code changes in this release beyond the image rebuild; v0.9.69's assistant hotfix is unaffected and confirmed still deployed
 
 ## [v0.9.69] - 2026-07-16
 
 ### Fixed
+
 - fix(assistant): revert v0.9.68's `EnableSessionStore`/`InfiniteSessions` re-enable for `OperatorAssistantAgent` — live staging immediately hit `Error: database is locked` on every new operator run. Root cause: `OperatorAssistantAgent.RunTurnAsync` creates a brand-new Copilot SDK session on every single turn (never resumes one), so with the store enabled every turn across every concurrent conversation in the pod hammered the same pod-local SQLite session file. Durable rehydration from persisted `RunEvents` (the other half of the v0.9.68 recall fix) is unaffected and remains correct
 
 ## [v0.9.68] - 2026-07-16
 
 ### Fixed
+
 - fix(assistant): operator assistant conversations can now be resumed after an idle-timeout closure, a pod restart, or a follow-up landing on the other API replica — `AssistantRunService.RunTurnAsync` rehydrates the in-memory run state from durable `RunEvents` on a cache-miss (with ownership/agent-type checks preserved) instead of permanently 404ing, and flips a `Completed` run back to `InProgress` when resumed
 - fix(assistant): re-enable the Copilot SDK's native session store (`EnableSessionStore`, `InfiniteSessions`) for `OperatorAssistantAgent` only — the prior disable was copy-pasted from the one-shot sandboxed agents citing `copilot-sdk#1814`, which is documented as a one-shot/ephemeral-container issue and doesn't apply to the long-lived in-process assistant; sandboxed one-shot agents keep the disable
 
 ### Added
+
 - feat(web): add a delete action to each row on the Sessions page, with a confirm dialog, using the existing generic run-delete endpoint
 
 ## [v0.9.67] - 2026-07-16
 
 ### Fixed
+
 - fix(assistant): root-cause fix for "operator assistant chat frequently terminates mid-turn" — `k8s/api-deployment.yaml` had no `terminationGracePeriodSeconds`/`preStop` hook, so every rolling deploy (multiple/day in this repo) sent SIGTERM and the Generic Host's default 30s `ShutdownTimeout` cancelled `RequestAborted` well before legitimate long assistant turns (60-100+s across multiple MCP tool calls) could finish. Added `terminationGracePeriodSeconds: 120` + a `preStop: sleep 5` hook to the API deployment, and set `ConfigureHostOptions(o => o.ShutdownTimeout = TimeSpan.FromSeconds(100))` in `Program.cs` to pair with it, so in-flight assistant turns now drain instead of being forcibly cancelled during deploys
 
 ## [v0.9.66] - 2026-07-16
 
 ### Added
+
 - feat(web): promote Sessions to a global top-level nav item with its own collapsible section and a New Session button, no longer scoped to a project or gated behind a feature flag; adds the `/sessions` route (#346 follow-up)
 - feat(workflows): wire a real GitHub webhook receiver (`POST /api/webhooks/github`, HMAC-SHA256 signature verified) as the first live external event source for the scheduled/event workflow triggers feature (#53 follow-up)
 - test(aks): add Pester regression coverage for the two release-script bugs found during the v0.9.65 ship — job-state misdetection in image builds and provenance verifier pod-selector scope (#351)
 
 ### Fixed
+
 - fix(api-harness): don't crash schema validation on null `adapterVersion`/`personaCoreVersion` for structural (non-persona) seam scenarios
 
 ### Changed
+
 - chore: retire the dead legacy Console/Operator-dock backend (`ConsoleEndpoints`, `ConsoleTurnService`, `CopilotConsoleFacadeAgent`) — zero live callers remained after #346
 - chore(release): bump version to v0.9.66
-
 
 ## [v0.9.65] - 2026-07-16
 
 ### Fixed
+
 - Fix #350: tear down AgentHost pods on every cancel/fail transition, including watch-loop failures, steering stop, and cancel/delete endpoints
 - Fix #348: reconcile dirty/stale-index checked-out branches after worktree merges instead of surfacing false staged deletions or silently corrupting state
 - Fix #342: make provenance verification tolerate variable live pod counts and exclude Pending/Terminating pods
@@ -56,51 +662,57 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - chore(web): remove the legacy Operator dock and redirect its orphaned route to `/assistant` (#346)
 
 ### Added
+
 - feat(workflows): add the `open_pull_request` workflow node with templated title/body support and draft PR creation (#49)
 - feat(workflows): add `daily`/`weekly`/`monthly` schedule triggers, named events, a scheduler service, and a manual event-fire endpoint (#53)
 - feat(prd): add opt-in PRD story promotion to independent backlog tasks with tracked `BacklogTaskDependency` edges (#285)
 
 ### Changed
-- chore(release): bump version to v0.9.65
 
+- chore(release): bump version to v0.9.65
 
 ## [v0.9.60] - 2026-07-15
 
 ### Fixed
+
 - fix(mcp-harness): pass raw target URL to StreamableHTTPClientTransport, not assertTargetAllowed's void return
 - fix: distinguish team-workspace 404 from project-not-found in MCP error mapping
 - fix(mcp): make team_cast goal/confirm_proposal_id optional in inputSchema (Fixes #344)
 
 ### Changed
-- chore(release): bump version to v0.9.60
 
+- chore(release): bump version to v0.9.60
 
 ## [v0.9.59] - 2026-07-15
 
 ### Fixed
+
 - fix(mcp): emit proper object schema for run_task's `run` property (Fixes #341)
 - fix(aks): don't treat accumulated prov tags on an unchanged digest as ambiguous
 
 ### Changed
-- chore(release): bump version to v0.9.59
 
+- chore(release): bump version to v0.9.59
 
 ## [v0.9.58] - 2026-07-15
 
 ### Fixed
+
 - Fix MCP run-workflow tool schemas and error surfacing
 
 ### Changed
+
 - chore(release): bump version to v0.9.58
 - chore: append MCP stress-test harness learnings
 
 ### Other
-- MCP harness: dynamic persona parity with the API harness
 
+- MCP harness: dynamic persona parity with the API harness
 
 ## [v0.9.57] - 2026-07-15
 
 ### Fixed
+
 - Fix #336: deliver per-turn skills/memory/identity to pod-per-run agents
 - fix(coordinator): bound the reply-classifier model turn and default it to a fast model (#272)
 - fix(skills): make assigned-skill delivery observable in agent system prompt (#336)
@@ -109,31 +721,35 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(coordinator): drain orphaned outcome-spec confirm/revise deferrals (#272)
 
 ### Changed
+
 - chore(release): bump version to v0.9.57
 - chore: persist squad state and harness transcript updates
 - refactor(coordinator): classify outcome-spec chat replies with the LLM, not a regex (#272)
 - chore: persist harness transcripts and squad state updates
 
-
 ## [v0.9.56] - 2026-07-14
 
 ### Fixed
+
 - fix(sandbox): give agents scratch space outside the worktree (#224)
 
 ### Added
+
 - feat(coordinator): allow confirming/revising outcome spec via chat message (#272)
 
 ### Changed
+
 - chore(release): bump version to v0.9.56
 - chore(mcp): harden driver instructions, actionable errors, run_task tool (#128, #129, #130)
 
 ### Other
-- Add agent memory and session list views
 
+- Add agent memory and session list views
 
 ## [v0.9.55] - 2026-07-14
 
 ### Fixed
+
 - fix(preview): register start_preview so observe_bound_port's hint is reachable (#334)
 - fix: collapse chatty timeline micro-steps
 - Fix build-subtask terminal-emission gap: recover verified child work instead of failing (#331)
@@ -144,19 +760,21 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(k8s): route OpenAPI through staging gateway
 
 ### Changed
+
 - chore(release): bump version to v0.9.55
 
 ### Other
+
 - persona-actor: cap response.body at ~1.5KB, move reasoning into thought
 - harness: fix live tail being invisible -- background output must be polled and relayed
 - harness: add timing-only performance summary derived from transcript ts field
 - harness: reformat live tail as parsed TURN/THOUGHT lines, not raw JSONL
 - harness: auto-start a live tail of the transcript for operator visibility
 
-
 ## [v0.9.54] - 2026-07-14
 
 ### Fixed
+
 - fix(orchestration): surface + durably persist assembly_blocked ineligible-subtask detail (#97)
 - fix(notifications): emit reserved tool_approval notification type (#321)
 - fix(#319): add notification type badge to notification center dropdown
@@ -170,6 +788,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(ui-harness): enforce scoped approval execution
 
 ### Added
+
 - feat(api-harness): drop fixed persona scenarios and curated subcommands for a dynamic, curl+OpenAPI-guided driver
 - feat(harness): add persistent learnings + persona catalog memory
 - feat(harness): add selectable orchestration agent
@@ -179,9 +798,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - feat(api-harness): support request-changes gate decisions
 
 ### Changed
+
 - chore(release): bump version to v0.9.54
 
 ### Docs
+
 - docs(mcp-harness): add /mcp endpoint suffix and OAuth token requirement to quickstart
 - docs(harness): add target resolution + usage examples; scribe: merge fleet-mode wave decisions
 - docs(harness): sharpen skill triggers
@@ -189,6 +810,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs(mcp-harness): add Copilot CLI skill
 
 ### Other
+
 - harness: delete orphaned approval-gate library (approvals.mjs/approval-judge.mjs)
 - harness: generalize goal-statement resolution/injection out of persona-core files
 - harness: record learning for drive.mjs deletion pivot
@@ -211,10 +833,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add combined harness launcher skill
 - Migrate persona harness to API harness
 
-
 ## [v0.9.53] - 2026-07-14
 
 ### Fixed
+
 - fix(release): build image when retag source tag is absent from ACR
 - fix(a2a): emit structured terminal on pod turn abort to avoid bare "Received: None" (#267)
 - Fix #240: adopt durably-completed children on coordinator recovery instead of re-running them
@@ -223,13 +845,16 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(tests): derive DataMigratorTests fixture schema from real SqliteDb
 
 ### Added
+
 - feat(harness): add shared judge package
 - feat(personas): add shared persona briefs package
 
 ### Changed
+
 - chore(release): bump version to v0.9.53
 
 ### Docs
+
 - docs(ui-harness): add Evidence integrity & governance to Harness Agent (Seraph 4 & 5)
 - docs(api-harness): clarify Finding 1 scope — allowlist is target-deployment, not in-sandbox action denial
 - docs(mcp-harness): clarify Finding 1 is a host/environment allowlist, not a sandboxed-action denier
@@ -268,34 +893,38 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs: add parallel Playwright UI test harness design spec (#1 UI track)
 
 ### Tests
+
 - test(coordinator): regression coverage for stale ineligible_subtasks redirect re-arm
 
 ### Other
+
 - Preserve established requirements across outcome-spec revisions
 - tank: history entry for persona-harness judge-gated approval driving (#1)
 - persona-harness: drive approval gates via the API after judging (#1)
 
-
 ## [v0.9.52] - 2026-07-14
 
 ### Fixed
+
 - fix: preserve coordinator assembly files after completion
 - fix(release): push tags before GitHub release
 - fix: skip malformed verdict findings
 - fix: judge-automation round 2 - full transcript evidence + verdict schema validation
 
 ### Added
+
 - feat: assemble dynamic persona brief prompts
 
 ### Changed
+
 - chore(release): bump version to v0.9.52
 - chore: ignore .worktrees/ (git worktree checkouts, not repo content)
 - chore(harness): WIP safety checkpoint for persona-harness (untracked -> git-recoverable)
 
-
 ## [v0.9.51] - 2026-07-14
 
 ### Fixed
+
 - fix(ui): declutter Human Review gate, add warning-tinted background
 - fix: v0.9.50-rc1 batch - path-traversal hardening, pagination, notifications, backlog metrics (#261 #108 #312 #313 #208 #247 #200 #310 #302 #246 #282 #311)
 - fix: batch v0.9.49-rc1 candidate - steering scope, assembly recovery, edge occlusion, scratch dirs, approval scoping (#227 #309 #308 #306 #224 #216 #278 #303)
@@ -349,6 +978,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(tests): update 13 failing tests for UI coherence migration
 
 ### Added
+
 - feat: migrate workflow editor/graph components off copilot-fluent-system kit
 - feat: migrate chat/agent thread components off copilot-fluent-system kit
 - feat(board): migrate BOARD cluster off copilot-fluent-system
@@ -361,6 +991,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - feat: agentic progress components and @1js/fluentai copilot wiring
 
 ### Changed
+
 - chore(release): bump version to v0.9.51
 - chore(release): normalize VERSION to strict semver (0.9.50-rc1 -> 0.9.50)
 - chore: bump VERSION to 0.9.45-rc1
@@ -373,6 +1004,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - chore(release): bump VERSION to 0.9.37-rc1
 
 ### Docs
+
 - docs: add hard rule - never approve preview/review gate without live-testing preview URL first
 - docs: update e2e harness plan with v0.9.50-rc1 release milestone
 - docs: add staging environment recovery/recreation authority to E2E plan
@@ -381,11 +1013,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs: explain pod-local write-back and caches (#253, #255)
 
 ### Tests
+
 - test(e2e): make Playwright baseURL overridable via AKS_BASE_URL
 - Test #264 reject wire payload serialization
 - test(#255): restore npm sandbox E2E after Seraph review
 
 ### Other
+
 - Bump version to 0.9.50-rc1
 - Bump version to 0.9.49-rc1
 - Bump version to 0.9.47-rc1
@@ -414,215 +1048,228 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - migrate squad pages to shared UI kit
 - Migrate web app to native FluentUI with Copilot (Day) theme
 
-
 ## [v0.9.35-rc1] - 2026-07-11
 
 ### Fixed
-- Fix #239, #241, #243: coordinator assembly-phase resilience (v0.9.35-rc1)
 
+- Fix #239, #241, #243: coordinator assembly-phase resilience (v0.9.35-rc1)
 
 ## [v0.9.34-rc1] - 2026-07-11
 
 ### Fixed
-- Fix #238: honor run-level model pin for ALL subtasks
 
+- Fix #238: honor run-level model pin for ALL subtasks
 
 ## [v0.9.33-rc1] - 2026-07-11
 
 ### Fixed
-- fix(coordinator): reviewer worktree fidelity (#236) + git-CLI worktree provisioning (#237)
 
+- fix(coordinator): reviewer worktree fidelity (#236) + git-CLI worktree provisioning (#237)
 
 ## [v0.9.32-rc1] - 2026-07-11
 
 ### Fixed
+
 - fix(aks): self-grant KV Secrets Officer + retry on RBAC propagation (#234)
 - fix(coordinator): roster/breadth-aware outcome-spec drafter (#235)
 
 ### Changed
-- chore(release): v0.9.32-rc1 (#235 outcome-spec breadth + #234 KV-RBAC)
 
+- chore(release): v0.9.32-rc1 (#235 outcome-spec breadth + #234 KV-RBAC)
 
 ## [v0.9.31-rc1] - 2026-07-11
 
 ### Fixed
+
 - fix(coordinator): degrade single-eligible lockout to same-author fresh re-dispatch (#233)
 
 ### Changed
-- chore(release): v0.9.31-rc1 (#233 single-eligible lockout degrade)
 
+- chore(release): v0.9.31-rc1 (#233 single-eligible lockout degrade)
 
 ## [v0.9.30-rc1] - 2026-07-11
 
 ### Fixed
+
 - fix(coordinator): reframe decomposition from minimality to outcome-completeness (#225)
 - fix(rai): structured VERDICT sentinel contract for collective-assembly RAI gate (#231)
 - fix(coordinator,sandbox): autopilot outcome-spec auto-confirm (#228) + transient k8s pod-claim retry (#230)
 
 ### Changed
+
 - chore(release): v0.9.30-rc1 (#231 RAI sentinel + #225 outcome-complete decomposition + #226 steering test)
 
 ### Docs
+
 - docs: sync decomposition (outcome-completeness) + RAI verdict contract (#225, #231)
 
 ### Tests
-- test(coordinator): deterministic E2E coverage for mid-run steering queue->drain (#226)
 
+- test(coordinator): deterministic E2E coverage for mid-run steering queue->drain (#226)
 
 ## [v0.9.28-rc1] - 2026-07-11
 
 ### Other
-- Ship v0.9.28-rc1: assembly-steering wave (#223 + cap-drop + #226)
 
+- Ship v0.9.28-rc1: assembly-steering wave (#223 + cap-drop + #226)
 
 ## [v0.9.27-rc1] - 2026-07-11
 
 ### Fixed
-- Fix #222: scope-independent worktree staging (stop dropping subdirectory deliverables)
 
+- Fix #222: scope-independent worktree staging (stop dropping subdirectory deliverables)
 
 ## [v0.9.26-rc1] - 2026-07-11
 
 ### Fixed
-- fix(pod-per-run): propagate AutoApproveTools to AgentHost via /configure (#221)
 
+- fix(pod-per-run): propagate AutoApproveTools to AgentHost via /configure (#221)
 
 ## [v0.9.25-rc1] - 2026-07-10
 
 ### Fixed
-- fix(coordinator): pod-aware assembly-gate resumability probe (#220)
 
+- fix(coordinator): pod-aware assembly-gate resumability probe (#220)
 
 ## [v0.9.24-rc1] - 2026-07-10
 
 ### Fixed
+
 - Fix #218: coordinator lease heartbeat, ownership fencing, and per-project integration-build lock
 
 ### Other
+
 - Bump version to 0.9.24-rc1 (#218 lease-heartbeat fix)
 - Harden #218 lease heartbeat: make transient per-tick errors non-fatal
-
 
 ## [v0.9.23-rc1] - 2026-07-10
 
 ### Fixed
+
 - fix(#217): remove app-side capacity/quota scheduler; let Kubernetes own pod scheduling
 
 ### Changed
+
 - chore(release): v0.9.23-rc1 (#217 remove app-side capacity gate)
 
 ### Docs
-- docs(#217): sync sandbox/coordinator/quota docs to K8s-owned scheduling
 
+- docs(#217): sync sandbox/coordinator/quota docs to K8s-owned scheduling
 
 ## [v0.9.22-rc1] - 2026-07-10
 
 ### Fixed
-- fix(coordinator): deliver tool-approval gate live via heartbeat; guard child stall on pending approval (#212)
 
+- fix(coordinator): deliver tool-approval gate live via heartbeat; guard child stall on pending approval (#212)
 
 ## [v0.9.21-rc1] - 2026-07-10
 
 ### Fixed
+
 - fix(#196): forward tool-approval decisions to AgentHost pod in pod-per-run mode
 
 ### Docs
-- docs(reliability): document FinalScribe + reaper creation-grace config keys (#207,#210)
 
+- docs(reliability): document FinalScribe + reaper creation-grace config keys (#207,#210)
 
 ## [v0.9.20-rc1] - 2026-07-10
 
 ### Fixed
+
 - fix(coordinator,sandbox): bound final-Scribe recovery (#207) + reaper creation-grace (#210)
 - Fix Azure Fluent MCP fidelity
 
 ### Other
+
 - Ship Azure Fluent system
 - Implement Azure Fluent system redesign
 - Add self-contained Agent Fluent UI Kit
 
-
 ## [v0.9.19-rc1] - 2026-07-10
 
 ### Other
-- v0.9.19-rc1: dependency-base propagation fix + UI fixes
 
+- v0.9.19-rc1: dependency-base propagation fix + UI fixes
 
 ## [v0.9.18-rc1] - 2026-07-10
 
 ### Other
-- v0.9.18-rc1: decider-owned assembly steering routing (Fix-B) + worker RequireMtls drift fix
 
+- v0.9.18-rc1: decider-owned assembly steering routing (Fix-B) + worker RequireMtls drift fix
 
 ## [v0.9.17-rc1] - 2026-07-09
 
 ### Added
-- feat(coordinator): resilient assembly-review loop (v0.9.17-rc1)
 
+- feat(coordinator): resilient assembly-review loop (v0.9.17-rc1)
 
 ## [v0.9.16-rc1] - 2026-07-09
 
 ### Fixed
-- fix(preview): discover app port via /proc/net/tcp{,6}; legible observe failures
 
+- fix(preview): discover app port via /proc/net/tcp{,6}; legible observe failures
 
 ## [v0.9.15-rc1] - 2026-07-09
 
 ### Fixed
-- fix(preview): remove architecturally-invalid API-side sandbox reachability probe
 
+- fix(preview): remove architecturally-invalid API-side sandbox reachability probe
 
 ## [v0.9.14-rc1] - 2026-07-09
 
 ### Fixed
+
 - fix(preview): guarantee pod-IP-reachable preview URL via TCP forwarder + dynamic ports (v0.9.14-rc1)
 
 ### Docs
-- docs(learnings): mark STEER1 resolved (live-proven v0.9.13-rc1); log in-place-resume follow-up
 
+- docs(learnings): mark STEER1 resolved (live-proven v0.9.13-rc1); log in-place-resume follow-up
 
 ## [v0.9.13-rc1] - 2026-07-09
 
 ### Fixed
-- fix(steering): reliable in-place revision recovery (v0.9.13-rc1)
 
+- fix(steering): reliable in-place revision recovery (v0.9.13-rc1)
 
 ## [v0.9.12-rc1] - 2026-07-09
 
 ### Added
-- feat(steering+preview): unified autonomous steering + decoupled live preview (v0.9.12-rc1)
 
+- feat(steering+preview): unified autonomous steering + decoupled live preview (v0.9.12-rc1)
 
 ## [v0.9.11-rc1] - 2026-07-08
 
 ### Added
+
 - feat(preview): enforce first-class live-preview provisioning in software-delivery pipeline
 
 ### Other
+
 - Track A: durable terminal assembly events + build-test pod retention (v0.9.10-rc1)
 - Run page UX fixes: deterministic tree order, outcome-spec rendering, RAI verdict cleanup, visible revision cycle
-
 
 ## [v0.9.8-rc1] - 2026-07-08
 
 ### Other
-- Bind assembly Build & Test to a routable coordinator sandbox pod (pod-per-run)
 
+- Bind assembly Build & Test to a routable coordinator sandbox pod (pod-per-run)
 
 ## [v0.9.7-rc1] - 2026-07-08
 
 ### Fixed
-- fix(preview-path): git in API image, RAI-before-BuildTest gate ordering, run-tree review/preview UX
 
+- fix(preview-path): git in API image, RAI-before-BuildTest gate ordering, run-tree review/preview UX
 
 ## [v0.9.6-rc1] - 2026-07-08
 
 ### Fixed
+
 - fix(runtime): inactivity watchdog for hung streaming agent turns
 - fix(coordinator): root-cause fixes for stuck/failed orchestrations
 - fix(e2e): point screenshot config baseURL at live staging host
 
 ### Docs
+
 - docs(screenshots): add data-generation prerequisites so pages arent empty
 - docs(screenshots): reconcile plan+spec to real app pages
 - docs: add screenshot plan coverage for v0.9.5 pages
@@ -630,73 +1277,81 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs: regenerate MCP tool index (88 -> 90 tools; skill_import wording)
 
 ### Other
-- Block teamless orchestration + fix run-page review/topology/RAI UX + preview-from-build-test
 
+- Block teamless orchestration + fix run-page review/topology/RAI UX + preview-from-build-test
 
 ## [v0.9.5] - 2026-07-07
 
 ### Fixed
+
 - Fix coordinator run header wrapping
 - Fix coordinator run state and review UX
 
 ### Changed
+
 - chore(release): bump version 0.9.5
 
 ### Other
+
 - Harden coordinator run and console experience
 - Refine coordinator run action toolbar
 - Checkpoint coordinator run polish
 
-
 ## [v0.9.4] - 2026-07-07
 
 ### Changed
+
 - chore(release): bump version 0.9.4
 
 ### Other
+
 - Polish board orchestration layout
 - Polish dashboard overview
 - Update overview page content
 - Add product overview
 - Move playwright-cli skill from .claude to .copilot
 
-
 ## [v0.9.3] - 2026-07-06
 
 ### Changed
+
 - chore(release): bump version 0.9.3
 
 ### Other
+
 - Unify and delight Create Project; fix Copilot runtime provisioning
 - Ungate blueprint tabs in Projects create dialogs
 - Polish console and projects UI
 
-
 ## [v0.9.2] - 2026-07-06
 
 ### Fixed
+
 - fix(run-page): open the review panel when clicking "Review now" (was a no-op)
 - fix(tool-approval): route approvals to the owning child subtask run id (recurrence of #196)
 - fix(skills): show agent role in assignment UI; fix folder drag-drop import (ERR_ACCESS_DENIED)
 - fix(dev): localhost sign-in wiring — port 5173, CORS AllowCredentials, GITHUB_AUTHORIZE_URL call-sites
 
 ### Added
+
 - feat(run-page): responsive DAG reflow, wider session log, unhide Message coordinator, collapse low-signal events by default
 - feat(orchestrations): stop and delete orchestrations from the list page
 - feat(team): show assigned skills on agent detail panel
 
 ### Changed
+
 - chore(release): bump version to 0.9.2
 - chore(dev): Impeccable live-mode gating (DEV-only focus guard + inert z-index/pointer-events shims)
 - refactor(metrics): extract usage-run loaders with postgres/sqlite dual path in DashboardReadService
 
 ### Docs
-- docs: document v0.9.2 orchestration stop/delete + tool-approval routing + run-page UX + skills
 
+- docs: document v0.9.2 orchestration stop/delete + tool-approval routing + run-page UX + skills
 
 ## [v0.9.1] - 2026-07-06
 
 ### Fixed
+
 - fix(web): unify /api base-path so GitHub sign-in works on staging and localhost
 - fix(dev): align local frontend to :5173 + probe /health
 - fix(web): settle completed tool calls + calm CLI-style tool rows
@@ -706,22 +1361,26 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(web): reuse shared ArtifactBrowser in session panel Changes/Files tabs
 
 ### Added
+
 - feat(console): redesign /console as a true terminal UI (TUI)
 
 ### Changed
+
 - chore: bump version to 0.9.1 (sign-in /api base-path fix)
 - chore: bump version to 0.9.0
 
 ### Docs
+
 - docs: v0.9.0 wave - console TUI, skills UX, artifact browser, graph, tool rows, live send
 
 ### Other
-- Improve skill acquisition UX
 
+- Improve skill acquisition UX
 
 ## [v0.8.0] - 2026-07-06
 
 ### Fixed
+
 - fix(timeline): resolve child_approval case shadowing from #50/#196 merge
 - Fix skill catalog review findings: child-run injection, zip-slip hardening, stale-dir cleanup
 - fix(coordinator): propagate child subtask outputs via shared worktree branches (#197)
@@ -740,19 +1399,23 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Fix child tool approval routing
 
 ### Added
+
 - feat(skills): per-project skill catalog, acquisition, assignment + progressive disclosure (#51, #56)
 - feat(mcp-integrations): add browser chat control console (#50)
 - feat: harden blueprint and workflow generation
 
 ### Changed
+
 - chore(release): bump VERSION to 0.8.0
 - refactor(mcp-integrations): conversational TUI over reused coordinator machinery (#50)
 
 ### Docs
+
 - docs: document v0.8.0 features
 - docs: update v0.7.12 UI refinements
 
 ### Other
+
 - Render agent/LLM/tool hierarchy in transaction trace (#166)
 - Add preview-first delivery guidance
 - Make blueprint generation gate-aware
@@ -773,10 +1436,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Polish blueprint picker tabs and cards
 - Scribe: log v0.7.12 iteration wave 2, merge decisions, archive old entries
 
-
 ## [v0.7.12] - 2026-07-05
 
 ### Fixed
+
 - fix(web): keep outcome spec gate visible
 - Fix stale assembly blocked latch
 - fix(observability): emit App Insights model-turn telemetry
@@ -807,7 +1470,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(coordinator): honor explicit and active workflow on manual runs
 - fix(web): add workflow dropdown to global Start task dialog
 - fix(web): show all valid workflows in Start task dropdown
-- fix(observability): use OTel App* table names and column mappings
+- fix(observability): use OTel App\* table names and column mappings
 - fix(web): add coordinator.assembly_review_preserved to EventType union
 - fix(preview): pre-fill preview port from agent declaration or default to 8080 (#127)
 - fix(preview): gate preview button on sandbox pod Bound phase (#126)
@@ -837,6 +1500,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix(metrics): lazy-initialize LogsQueryClient to prevent constructor crash
 
 ### Added
+
 - feat(web): redesign coordinator graph UI (spine edges, card accents, minimap, zoom, session tree)
 - feat(dag): remove column labels, smaller minimap, full-height panel respects left nav
 - feat(dag): full-width bottom slide-in panel with session tree
@@ -857,6 +1521,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - feat(workflows): add mandatory build-test gate before human review (#157)
 
 ### Changed
+
 - chore(observability): compact overview metric tiles
 - chore(release): bump VERSION to 0.7.11 (workflow-selection + decompose identity fix)
 - chore(release): bump VERSION to 0.7.10 (6-fix staging bundle: #174 #175 #176 #179 #180/181 #183)
@@ -873,6 +1538,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - chore: bump version to 0.7.0
 
 ### Docs
+
 - docs: regenerate generated MCP references
 - docs: update v0.7.11 experiences and telemetry
 - docs: add repository blueprint suggestions
@@ -883,9 +1549,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs(workflows): drop stale code-review workflow references from API.md and templates
 
 ### Tests
+
 - test(web): cover outcome spec gate states
 
 ### Other
+
 - Bump VERSION to 0.7.12
 - Update project dialog tests
 - Share new project dialog shell
@@ -913,10 +1581,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Make workspace file tree scrollable
 - Harden az acr build on Windows
 
-
 ## [v0.7.0] - 2026-07-01
 
 ### Fixed
+
 - fix(workflow): pass submitting user ID to Scribe agent turn (#141)
 - fix: add missing Postgres migration for AssemblyReviews table
 - fix(observability): address rubber-duck review findings
@@ -975,7 +1643,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: add DeferredDecisions migration to correct Postgres migrations project
 - fix: deferred decision inbox for cross-replica coordinator confirm
 - fix: pass submitting user to coordinator AI agent SetupAsync calls
-- fix: don't inject AgentHost__KeyVaultUri via SandboxClaim env
+- fix: don't inject AgentHost\_\_KeyVaultUri via SandboxClaim env
 - fix: initialize AgentHost Key Vault URI parsing
 - fix: default AgentHost Key Vault URI for AKS deploy
 - fix: guard against unsubstituted AGENTHOST_KEYVAULT_URI placeholder
@@ -1018,7 +1686,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: agent-sandbox v0.5.0 + manifest.yaml (release.yaml renamed)
 - fix: --nodepool-taints (not --node-taints) on az aks create
 - fix: replica-safe web session exchange codes + copilot OAuth scope
-- fix(api): inject AgentHost__UserId so agent-host uses the user's Copilot token
+- fix(api): inject AgentHost\_\_UserId so agent-host uses the user's Copilot token
 - fix(checkpoint): shared Postgres checkpoint store for replica-safe cross-pod resume
 - fix(checkpoint): quiet the shared-volume fallback logging at startup
 - fix(api): gate A2A turns on agent-host readiness (healthz) + connect-refused retry
@@ -1071,7 +1739,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: API_URL default empty (same-origin), /docs redirect to /docs/
 - fix: OAuth redirect double-slash causing SecurityError on history.replaceState
 - fix: OAuth login button uses /auth/github/authorize not /api/auth/...
-- fix: route /auth/* to API pod, fix docs SPA fallback override
+- fix: route /auth/\* to API pod, fix docs SPA fallback override
 - fix: network policy blocking gateway ingress, TLS cert ref, and label selectors
 - fix: Dockerfile and deployment fixes for AKS
 - fix: add --enable-acns, set westus2 default, add .dockerignore
@@ -1257,6 +1925,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: 415 Content-Type header and Swagger 404
 
 ### Added
+
 - feat(observability): wire TransactionTracePanel to AppInsights distributed traces
 - feat(observability): v0.7 observability UI — traces, model panels, agent breakdown (#44, #46, #117, #118, #119)
 - feat(observability): add run throughput metrics for dashboard widgets (#106)
@@ -1467,6 +2136,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - feat(spec/001): event loop, Responsible AI, and governance spec update
 
 ### Changed
+
 - refactor(observability): remove event-stream fallback from TransactionTracePanel
 - chore(observability): remove DB-backed metrics layer, migrate dashboard to AppInsights
 - chore(observability): add OTel/AppInsights instrumentation and AKS Managed Prometheus (#106)
@@ -1474,7 +2144,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - chore(release): implement semver release process (#104)
 - chore: graph zoom-in button, card navigation, and scroll indicator (#100)
 - chore: replace AKS flowchart diagrams with block-beta block architecture diagrams (#101)
-- chore(repo): add issue-form templates for all 6 type:* kinds
+- chore(repo): add issue-form templates for all 6 type:\* kinds
 - build(aks): image-efficient redeploy + reproducible install scripts
 - chore: remove dead legacy agentweaver-sandbox image/template/warmpool
 - chore(deploy): apply serviceaccount-agenthost.yaml in 30-deploy.sh
@@ -1484,7 +2154,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - chore: remove SandboxExec spike folder
 - chore(api): quiet EF Core and framework Info log noise in committed config
 - chore: stop tracking .squad runtime/config dir
-- chore: ensure *.sh files always use LF line endings
+- chore: ensure \*.sh files always use LF line endings
 - chore(k8s): flip API to pod-per-run agent execution (live)
 - build(spec-018): apply Postgres + replicas:2 + RWX HOME cutover config
 - build(spec-018): Postgres cutover tooling + worker manifest hardening
@@ -1493,7 +2163,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - refactor(coordinator): remove DraftDeterministic crutch from production
 - refactor(rename): flip remaining plural scaffolders identifiers to agentweaver
 - refactor(rename): rename web client + docs Scaffolder -> Agentweaver (phase B)
-- refactor(rename): rename .NET solution Scaffolder.* -> Agentweaver.* (phase A)
+- refactor(rename): rename .NET solution Scaffolder._ -> Agentweaver._ (phase A)
 - refactor(008): extract Program.cs endpoints into MapXEndpoints classes
 - chore: remove legacy /watch route, simplify WatchPage to canonical route only
 - chore: change web dev server port from 5173 to 8080
@@ -1520,6 +2190,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - chore(setup): scaffold solution structure and directory tree [T001/link]
 
 ### Docs
+
 - docs: fix nav sidebar, remove AX TODO stub, fix README diagrams
 - docs(reference): add Agentweaver-on-AX integration analysis
 - docs: embed AKS block diagram in docs+README, add AX reference page, remove AX comparison from README
@@ -1604,6 +2275,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs: ratify Scaffolder constitution v1.0.0 (7 principles; no-emoji rule scoped to product)
 
 ### Tests
+
 - test(projects): provide IConfiguration to workspace provider
 - test: fix pre-existing test failures across backend and frontend (#80)
 - test(019): token usage store, projection service, and endpoint tests
@@ -1617,6 +2289,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - test(qa): Phase 10 - contract tests + integration QA + compliance [T051,T067-T079/smith+rai]
 
 ### Other
+
 - bug(run-page): show preview sandbox button for completed runs (#99)
 - bug(run-page): add preview sandbox to orchestration run page (#98)
 - Move personas under specs/ and link from spec index
@@ -1633,8 +2306,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - revert: pause Task 3 DiagnosticsPage/StatusDot changes pending Cluster page design
 - debug: add --verbose to ef bundle to diagnose failure
 - scripts: remove backup-cronjob.yaml from 30-deploy.sh
-- revert: remove erroneously re-added Auth__User env var
-- config: set Auth__User=sabbour (static-key fallback owner)
+- revert: remove erroneously re-added Auth\_\_User env var
+- config: set Auth\_\_User=sabbour (static-key fallback owner)
 - Remove static MCP API key; MCP auth via OAuth only
 - infra: switch to 3-pool layout with CriticalAddonsOnly system taint
 - infra(kata): wire sandbox pods to dedicated kata user pool (katapool)

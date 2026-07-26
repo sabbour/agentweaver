@@ -398,6 +398,14 @@ export class AgentweaverApiClient {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
+  rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
+    return this.request<import('./types').WebhookSecretRotationResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/webhook-secret/rotate`,
+      {},
+    );
+  }
+
   deleteProject(projectId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}?confirm=true`);
   }
@@ -667,12 +675,21 @@ export class AgentweaverApiClient {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import`, { repoUrl, locations });
   }
 
-  listSkillMarketplaces(): Promise<import('./types').SkillMarketplaceDto[]> {
-    return this.request<import('./types').SkillMarketplaceDto[]>('GET', '/skill-marketplaces');
+  // Project-scoped list: built-in config marketplaces + this project's user-added URL sources.
+  listSkillMarketplaces(projectId: string): Promise<import('./types').SkillMarketplaceDto[]> {
+    return this.request<import('./types').SkillMarketplaceDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces`);
   }
 
-  browseSkillMarketplace(projectId: string, marketplace: string, query?: string): Promise<import('./types').SkillMarketplaceBrowseResponse> {
-    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query });
+  addSkillMarketplaceSource(projectId: string, body: import('./types').AddSkillMarketplaceSourceRequest): Promise<import('./types').SkillMarketplaceDto> {
+    return this.request<import('./types').SkillMarketplaceDto>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/sources`, body);
+  }
+
+  removeSkillMarketplaceSource(projectId: string, name: string): Promise<void> {
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/sources/${encodeURIComponent(name)}`);
+  }
+
+  browseSkillMarketplace(projectId: string, marketplace: string, query?: string, page?: number, pageSize?: number): Promise<import('./types').SkillMarketplaceBrowseResponse> {
+    return this.request<import('./types').SkillMarketplaceBrowseResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/browse`, { query, page, pageSize });
   }
 
   importMarketplaceSkills(projectId: string, marketplace: string, locations: string[]): Promise<import('./types').SkillAcquisitionResponse> {
@@ -1103,6 +1120,14 @@ export class AgentweaverApiClient {
     );
   }
 
+  runWorkflowNow(projectId: string, workflowId: string): Promise<{ task_id: string }> {
+    return this.request<{ task_id: string }>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}/run`,
+      {},
+    );
+  }
+
   // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
   // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
   // pass was needed. Throws ApiError 400 when generation fails after the correction pass.
@@ -1164,6 +1189,10 @@ export class AgentweaverApiClient {
   // #247 — global notification center: pending Human Review (+ future Tool Approval) requests.
   getNotifications(signal?: AbortSignal): Promise<import('./types').NotificationsResponseDto> {
     return this.request<import('./types').NotificationsResponseDto>('GET', '/notifications', undefined, signal);
+  }
+
+  dismissNotification(notificationId: string): Promise<void> {
+    return this.request<void>('POST', `/notifications/${encodeURIComponent(notificationId)}/dismiss`);
   }
 
   // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).
