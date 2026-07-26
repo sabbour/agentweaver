@@ -169,6 +169,25 @@ function parseDrag(e: React.DragEvent): { taskId: string; sourceColumnId: string
   return null;
 }
 
+function intakeSummary(column: BoardColumnDto): string {
+  const taskCards = column.cards.filter((card): card is TaskCardDto => card.kind === 'task');
+  if (column.id !== 'ready') {
+    return `${taskCards.length} ${taskCards.length === 1 ? 'task' : 'tasks'} queued`;
+  }
+
+  const blockedCount = taskCards.filter((card) => card.is_ready_to_start === false).length;
+  const queuedCount = taskCards.length - blockedCount;
+  const segments: string[] = [];
+  if (queuedCount > 0 || blockedCount === 0) {
+    segments.push(`${queuedCount} ${queuedCount === 1 ? 'task' : 'tasks'} queued`);
+  }
+  if (blockedCount > 0) {
+    segments.push(`${blockedCount} blocked`);
+  }
+
+  return segments.join(' · ');
+}
+
 export function KanbanColumn(props: KanbanColumnProps) {
   const styles = useStyles();
   const {
@@ -187,11 +206,10 @@ export function KanbanColumn(props: KanbanColumnProps) {
   const isIntake = column.kind === 'intake';
   const isTerminal = column.kind === 'workflow' && (column.id === 'terminal' || column.collapsed_count != null);
   const description = STAGE_DESCRIPTIONS[column.id];
-  const taskCount = column.cards.filter((card) => card.kind === 'task').length;
   const runCount = column.cards.filter((card) => card.kind === 'run').length;
   const approvals = column.cards.filter((card) => card.kind === 'run' && (card as RunCardDto).has_pending_approval).length;
   const summary = isIntake
-    ? `${taskCount} ${taskCount === 1 ? 'task' : 'tasks'} queued`
+    ? intakeSummary(column)
     : `${runCount} ${runCount === 1 ? 'run' : 'runs'}${approvals ? ` · ${approvals} awaiting approval` : ''}`;
   const summaryDanger = column.id === 'problems';
   const summaryWarning = approvals > 0 && !summaryDanger;

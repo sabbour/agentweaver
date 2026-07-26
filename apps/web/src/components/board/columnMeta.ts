@@ -32,7 +32,7 @@ export function columnAccentColor(columnId: string, workflowIndex: number): stri
 // degrade gracefully (no subtitle) rather than printing "undefined".
 export const STAGE_DESCRIPTIONS: Record<string, string> = {
   backlog: "Captured work not yet committed to an agent run.",
-  ready: 'Committed tasks queued for the coordinator or pickup monitor.',
+  ready: 'Committed tasks wait here until prerequisites clear, then queue for the coordinator or pickup monitor.',
   problems: 'Failed, blocked, or declined runs that need attention.',
   'human-review': 'Agent work paused for human review or approval.',
   active: 'Runs actively moving through orchestration.',
