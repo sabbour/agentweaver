@@ -63,7 +63,12 @@ public sealed record MergeOutcome
     public string? Reason { get; init; }
 
     /// <summary>
-    /// List of relative file paths that had merge conflicts. Populated when Kind == Conflict.
+    /// List of relative file paths involved. Populated when Kind == Conflict (paths with real
+    /// git merge conflicts) and, since issue #523, optionally when Kind == Blocked and the
+    /// block reason is a dirty-working-tree divergence (paths whose uncommitted content
+    /// differs from the merge result) — this is not a git merge conflict, but reporting the
+    /// same paths here avoids a caller-facing event claiming "cannot be safely reconciled"
+    /// while showing an always-empty conflictingFiles list.
     /// </summary>
     public IReadOnlyList<string>? ConflictingFiles { get; init; }
 
@@ -82,10 +87,11 @@ public sealed record MergeOutcome
         WasFastForward = wasFastForward,
     };
 
-    public static MergeOutcome Blocked(string reason) => new()
+    public static MergeOutcome Blocked(string reason, IReadOnlyList<string>? conflictingFiles = null) => new()
     {
         Kind   = MergeOutcomeKind.Blocked,
         Reason = reason,
+        ConflictingFiles = conflictingFiles,
     };
 
     public static MergeOutcome Conflict(string reason, IReadOnlyList<string>? conflictingFiles = null) => new()

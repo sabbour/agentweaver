@@ -610,3 +610,127 @@ Azure deploy tooling (scripts/azure/variables.mjs) hardcoded KEYVAULT_NAME's DEF
 - status: open
 
 Verified on 2026-07-25 during the staging demo dry-run against https://agentweaver.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io. scripts/ui-harness/.auth/staging.storageState.json existed but contained cookies=[] and origins=[]. scripts/ui-harness/lib/auth.mjs loadStorageState() accepted that file because it only checks Array.isArray, so tools.mjs init/capture proceeded instead of exiting AUTH_EXPIRED. The first capture on '/' then produced only a progressbar DOM snapshot, which is a confusing false start for a non-interactive run that should have stopped immediately for human login. Treat empty storageState as expired (or add an authenticated-session probe before action commands) so harness runs fail fast instead of pretending auth is reusable.
+
+---
+
+## #523: build-test gate GitHubCopilotUnauthorizedException from stale token bypassing refresh
+
+- date: 2026-07-26
+- category: bug
+- surface: api
+- status: fixed
+
+Repro: on staging v0.11.3, the build-test assembly gate intermittently threw
+GitHubCopilotUnauthorizedException from AgentHost /configure, 3x across 3 different
+pods in one coordinator run, each only clearable via a manual /api/runs/{id}/retry.
+Earlier triage/fix/QA subtask gates in the SAME run never hit this.
+
+Root cause: KubernetesSandboxExecutor.ResolveGitHubAccessTokenAsync read the GitHub
+access token directly via the raw IGitHubTokenStore.GetAsync(...), bypassing
+IGitHubAccessTokenProvider (GitHubTokenRefreshService) -- the ONLY component that
+checks token expiry (60s skew) and performs OAuth refresh-token rotation. Every other
+Copilot-token consumer in the API (GitHubCopilotClientFactory, ProjectService,
+SkillCatalogService, RunWorkflowFactory) already goes through the refresh-aware
+provider; KubernetesSandboxExecutor was the one place that didn't.
+
+AgentHost pods trust the token shipped in the /configure request body unconditionally
+(KeyVaultUserTokenProvider's "fast path" skips its own Key Vault fetch when a
+pre-resolved token is present) -- so the API-side pre-resolution step is the sole
+gatekeeper of freshness for this path. The Build & Test gate launches a brand-new
+AgentHost pod keyed on the parent coordinator run ID (CollectiveAssemblyPipeline.
+RunBuildTestAsync), which is typically the FIRST /configure call for that run ID and
+can happen tens of minutes after earlier subtask pods were configured while the token
+was still fresh -- so only this gate is vulnerable to the token crossing its expiry
+window meanwhile. Manual retry sometimes 'fixed' it only if something else (e.g. an
+unrelated API request) happened to refresh the token in between attempts.
+
+Fix: threaded IGitHubAccessTokenProvider (already DI-registered as a singleton) into
+SandboxExecutorRouter -> KubernetesSandboxExecutor, and rewrote
+ResolveGitHubAccessTokenAsync to prefer GetValidAccessTokenAsync(scope) with a
+try/catch fallback to the old raw token-store read only if the provider is absent,
+throws, or returns empty (preserves compatibility for tests/DI configs without the
+provider wired). See apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs and
+SandboxExecutorRouter.cs. Tests: KubernetesSandboxExecutorClaimTests.cs (2 new cases:
+prefers refreshed token over a stale stored token; falls back to raw store without a
+provider).
+
+---
+
+## #523: assembly_merge_failed reports empty conflictingFiles for Blocked (non-conflict) outcomes
+
+- date: 2026-07-26
+- category: bug
+- surface: api
+- status: fixed
+
+Repro: a fully-approved human review still produced assembly_merge_failed with
+message 'the working tree cannot be safely reconciled with the merge result because
+uncommitted content diverges from the merge result and cannot be safely reconciled',
+but conflictingFiles was always []. An empty list contradicts an unreconcilable
+claim and made the failure impossible to diagnose from the event alone.
+
+Root cause: this is NOT the same known '.squad/ dirty-tracked-state' pattern
+documented elsewhere in this file (that one is still open and unrelated to this
+symptom) -- it recurs from a distinct code path. WorktreeManager's dirty-working-tree
+divergence check (IsWorkingTreeReconcilable, invoked from
+ReconcileDirtyCheckedOutMerge) returns MergeOutcome.Blocked(reason), a DIFFERENT
+discriminated case from MergeOutcome.Conflict(reason, conflictingFiles). Blocked never
+populated ConflictingFiles at all -- it isn't a git merge conflict, so
+ExtractConflictingFiles (which populates Conflict) was never in this call path. The
+merge-safety refusal itself is correct and intentional (the code must never silently
+discard uncommitted local content); only the diagnostic reporting was misleading.
+
+Fix (diagnostics only, no change to merge-safety decisions): IsWorkingTreeReconcilable
+now accumulates ALL divergent paths (instead of returning on the first one found) and
+ReconcileDirtyCheckedOutMerge threads them into MergeOutcome.Blocked(reason,
+blockingPaths). MergeOutcome.Blocked, CollectiveMergeResult.Failed, and the
+CoordinatorAssemblyMergeFailed event now carry these relative paths end-to-end
+(apps/Agentweaver.Api/Git/WorktreeManager.cs, WorktreeModels.cs,
+Coordinator/CollectiveAssemblyPipeline.cs, Coordinator/ICollectiveAssemblyPipeline.cs).
+Guarded a routing risk in CoordinatorAssemblyService.CompleteAfterApprovalAsync: the
+Conflict-vs-terminal-MergeFailed branch previously also treated any non-empty
+ConflictingFiles as a signal to retry via NeedsResolutionAsync -- tightened it to
+check merge.Outcome == CollectiveMergeOutcome.Conflict only, so a Blocked outcome with
+now-populated files is not accidentally rerouted. The HTTP-facing review-approval
+endpoint (WorktreeOperationsAdapter) already discarded ConflictingFiles for Blocked
+and is unaffected -- this fix only enriches the internal coordinator event. Only
+relative paths are ever reported (same safe-string guarantee as the existing Conflict
+case; verified via ReviewEndpointHybridMergeTests.
+BlockedAndConflict_Responses_NeverExposePathsOrFileContent, 21/21 still pass). New
+test: MergeWorktree_CheckedOut_ModifiedTrackedFile_Blocked_ReportsConflictingFiles in
+ReviewEndpointHybridMergeTests.cs, calling WorktreeManager.MergeWorktree directly
+since the HTTP adapter can't observe this diagnostic.
+
+Note (not fixed, out of scope): MergeOutcomeKind.Blocked's XML doc says 'retriable
+precondition failure', but CoordinatorAssemblyService already routed it to a
+TERMINAL MergeFailed status before this change too -- this doc/behavior mismatch
+predates #523 and was left as-is to keep this a narrow, low-risk change to
+safety-critical merge code.
+
+---
+
+## #523: coordinator.assembly_scribe_started/completed firing after a merge failure is by design
+
+- date: 2026-07-26
+- category: environment-fact
+- surface: api
+- status: fixed
+
+Repro observation: coordinator.assembly_scribe_started/assembly_scribe_completed
+events were seen firing AFTER a CoordinatorAssemblyMergeFailed event in the same run,
+which looked like the scribe running against a run whose merge did not succeed.
+
+Investigation: RunCoordinatorScribeAsync (apps/Agentweaver.Api/Coordinator/
+CoordinatorAssemblyService.cs) is called consistently from every terminal-status code
+path in the coordinator -- successful merges, Declined, and MergeFailed alike -- always
+passing the actual terminalStatus and mergeResult/declineReason explicitly. This is
+intentional: the scribe's job is to write a journal/history entry describing what
+happened to the run, including failures, so it must run AFTER the terminal outcome
+(merge success or failure) is known, not gated on merge success. The event ordering
+(merge fails -> terminal status set -> scribe runs and records the failure) is correct
+by design.
+
+Conclusion: not a defect, no code change made for this sub-issue of #523. If a future
+report shows the scribe recording incorrect/stale data (e.g. claiming success after a
+failure, rather than just running after one), re-open as a distinct bug against the
+scribe's data source, not its firing order.

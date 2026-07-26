@@ -2095,15 +2095,19 @@ public sealed class WorktreeManager
             RecurseIgnoredDirs   = false,
         });
 
-        if (!IsWorkingTreeReconcilable(repo, status, resultCommit.Tree, out var blockReason))
+        if (!IsWorkingTreeReconcilable(repo, status, resultCommit.Tree, out var blockReason, out var blockingPaths))
         {
             // Never advance the ref underneath content that would be silently lost —
             // fail loudly instead of corrupting the checked-out working directory.
             // The merge commit (if any) created above is left dangling in the object
             // database and is never referenced by any ref; it is inert and harmless.
+            // Issue #523: pass the actual blocking paths through so the caller-facing
+            // assembly_merge_failed event's conflictingFiles reflects reality instead of
+            // always reporting an empty list for this Blocked (non-conflict) outcome.
             return MergeOutcome.Blocked(
                 $"the working tree cannot be safely reconciled with the merge result because {blockReason}; " +
-                "commit, stash, or discard the local changes and retry");
+                "commit, stash, or discard the local changes and retry",
+                blockingPaths);
         }
 
         // Hard Reset moves HEAD's branch ref to resultCommit AND updates working tree + index,
@@ -2130,8 +2134,28 @@ public sealed class WorktreeManager
         RepositoryStatus status,
         Tree resultTree,
         out string blockReason)
+        => IsWorkingTreeReconcilable(repo, status, resultTree, out blockReason, out _);
+
+    /// <summary>
+    /// Overload that additionally reports every dirty path that blocked reconciliation
+    /// (issue #523): the caller-facing <c>assembly_merge_failed</c> event previously always
+    /// reported an empty <c>conflictingFiles</c> list for this Blocked outcome — because it is
+    /// not a git merge conflict, <see cref="ExtractConflictingFiles"/> was never in the call
+    /// path — which read as contradictory ("cannot be safely reconciled" alongside zero
+    /// conflicting files) and left operators no way to tell which path(s) were dirty without
+    /// shelling into the pod. <paramref name="blockingPaths"/> lists every path whose current
+    /// effective content diverges from <paramref name="resultTree"/>, so the emitted event can
+    /// carry that list instead of an always-empty one.
+    /// </summary>
+    private static bool IsWorkingTreeReconcilable(
+        Repository repo,
+        RepositoryStatus status,
+        Tree resultTree,
+        out string blockReason,
+        out IReadOnlyList<string> blockingPaths)
     {
         blockReason = string.Empty;
+        List<string>? blocking = null;
 
         const FileStatus dirtyMask =
             FileStatus.NewInIndex | FileStatus.ModifiedInIndex | FileStatus.DeletedFromIndex |
@@ -2182,12 +2206,15 @@ public sealed class WorktreeManager
 
             // The path is referenced by the result tree with diverging content, or is a
             // tracked path whose current content diverges from the merge result —
-            // reconciling would silently discard content that exists nowhere else.
+            // reconciling would silently discard content that exists nowhere else. Keep
+            // scanning (rather than returning immediately) so every blocking path is
+            // reported, not just the first one encountered.
             blockReason = "uncommitted content diverges from the merge result and cannot be safely reconciled";
-            return false;
+            (blocking ??= []).Add(path);
         }
 
-        return true;
+        blockingPaths = (IReadOnlyList<string>?)blocking ?? [];
+        return blocking is null;
     }
 
     /// <summary>

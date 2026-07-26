@@ -163,8 +163,8 @@ public sealed record CollectiveMergeResult
     public static CollectiveMergeResult Conflict(IReadOnlyList<string> files, string? reason) =>
         new() { Outcome = CollectiveMergeOutcome.Conflict, ConflictingFiles = files, Reason = reason };
 
-    public static CollectiveMergeResult Failed(string? reason) =>
-        new() { Outcome = CollectiveMergeOutcome.Failed, Reason = reason };
+    public static CollectiveMergeResult Failed(string? reason, IReadOnlyList<string>? conflictingFiles = null) =>
+        new() { Outcome = CollectiveMergeOutcome.Failed, Reason = reason, ConflictingFiles = conflictingFiles ?? [] };
 }
 
 public enum CollectiveMergeOutcome { Merged, Conflict, Failed }
