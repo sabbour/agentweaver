@@ -83,3 +83,7 @@ scripts/azure/params.*.json
 scripts/azure/steps/.rendered/
 scripts/azure/tests/.scratch-*/
 
+# Manual/ad-hoc issue repro scratch workspaces (e.g. issue581-manual-workspace/)
+# used for local start_preview verification -- never meant to be committed.
+issue*-manual-workspace/
+
