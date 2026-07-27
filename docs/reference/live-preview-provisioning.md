@@ -9,6 +9,7 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | Contract | Shipped behavior | Source |
 | --- | --- | --- |
 | Feature flag | None. The step runs whenever `PreviewStep` is wired and Build & Test is not declined. | `CoordinatorAssemblyService.ShouldRunDeterministicPreviewStep` |
+| Command resolution | Two tiers: the fast/free/deterministic `PreviewCommandResolver` heuristics run first; only when they return `Unresolved` does an LLM fallback (`IPreviewCommandModel`, issue #541) get a bounded worktree view and propose a command. The model-chosen command runs through the identical start/observe/approval path — only the command string's origin differs. If neither tier resolves, the terminal `preview_command_unresolved` outcome is preserved. | `PreviewStep.cs`; `CopilotPreviewCommandModel.cs` |
 | Build & Test coupling | Runs after Build & Test for `APPROVED` and `REQUEST_CHANGES`; skipped on `DECLINED`. | `CoordinatorAssemblyService.cs:753` |
 | Port choice | Platform observes the app port inside the sandbox pod using log hints plus `/proc/net/tcp` and `/proc/net/tcp6`, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:262`, `:610`, `:315` |
 | Registration readiness | In-pod AgentHost observe verifies app + forwarder readiness; the API never probes `podIP:{target_port}` before creating Service/HTTPRoute. | `PreviewRunner.cs:315`; `SandboxPreviewService.cs:134` |
@@ -35,7 +36,7 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | Event | Final? | Payload fields | Meaning |
 | --- | --- | --- | --- |
 | `sandbox.preview_applicability` | No | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` | Applicability recorded before Build & Test. |
-| `sandbox.preview_start_requested` | No | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` | `PreviewStep` resolved a command and is starting the app. |
+| `sandbox.preview_start_requested` | No | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` | `PreviewStep` resolved a command and is starting the app. `command_source` distinguishes the tier that resolved it: a heuristic source (e.g. `package.json:dev`, `csproj`, `dockerfile`) or `llm` for the model fallback (issue #541). |
 | `sandbox.preview_pending` | No | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` | Existing preview approval gate is waiting. |
 | `sandbox.preview_ready` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `pod_name`, `session_id`, `preview_runner_session_id`, `preview_url`, `keepalive_url`, `started_at` | Gateway preview is ready. `session_id` is the Gateway token; `preview_runner_session_id` is the supervised process id. |
 | `coordinator.preview_ready` | Mirror | Same as `sandbox.preview_ready` | Coordinator-family mirror for the ready outcome. |
@@ -48,7 +49,7 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | Reason | Meaning |
 | --- | --- |
 | `preview_infra_unavailable` | Pod-per-run or Gateway preview infrastructure cannot produce a reachable URL. |
-| `preview_command_unresolved` | The deterministic command resolver could not find how to run the app. The resolver tries the worktree root first, then probes conventional subdirectories (`client`, `app/client`, `frontend`, `web`, `app`, `src/client`) in that order; server/API/backend directories are not probed. |
+| `preview_command_unresolved` | Neither resolution tier could determine how to run the app: the deterministic resolver found no match (it tries the worktree root first, then probes conventional subdirectories — `client`, `app/client`, `frontend`, `web`, `app`, `src/client` — in that order; server/API/backend directories are not probed) AND the LLM fallback (issue #541) either declined, was unavailable, or proposed a command that failed defensive validation (empty command, or a working directory outside the worktree). |
 | `preview_runner_unauthorized` | AgentHost rejected the preview-runner credential. |
 | `process_exited` | Preview process could not start. |
 | `process_exited:exit={code}` | Preview process started but exited before a healthy port was observed. |
