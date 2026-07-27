@@ -180,10 +180,18 @@ internal sealed class PreviewRunnerToolProvider(
         if (!string.IsNullOrEmpty(context.RunId))
         {
             var options = agentHostOptions.Value;
-            var apiBaseUrl = string.IsNullOrWhiteSpace(options.ApiBaseUrl)
-                ? "http://localhost:5000"
-                : options.ApiBaseUrl!;
-            yield return PreviewPublishTool.Build(apiBaseUrl, options.ApiKey, context.RunId);
+            // #335 P1: prefer the per-turn ApiBaseUrl/ApiKey (delivered via AgentSetupParams on every
+            // turn -- see CopilotAIAgent.BuildSessionConfigTools) over the static AgentHostOptions,
+            // which the AgentHost pod template never populates on the warm-pool path. Falling back to
+            // the static option (env-var launch path) then finally to localhost keeps this safe for
+            // any context that predates the per-turn value (e.g. direct/CLI/test launches).
+            var apiBaseUrl = !string.IsNullOrWhiteSpace(context.ApiBaseUrl)
+                ? context.ApiBaseUrl!
+                : string.IsNullOrWhiteSpace(options.ApiBaseUrl)
+                    ? "http://localhost:5000"
+                    : options.ApiBaseUrl!;
+            var apiKey = string.IsNullOrWhiteSpace(context.ApiKey) ? options.ApiKey : context.ApiKey;
+            yield return PreviewPublishTool.Build(apiBaseUrl, apiKey, context.RunId, logger: context.Logger);
         }
     }
 }

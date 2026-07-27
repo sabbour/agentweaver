@@ -88,52 +88,116 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
-    // HM-2 — Checked-out branch, modified tracked file that genuinely diverges
-    // from the merge result → the merge is refused (Blocked/409) rather than
-    // silently advancing the ref underneath content that would be corrupted.
-    // Regression test for #348: a ref-only fallback here would advance HEAD's
-    // branch ref while leaving the stale index/working tree behind, making the
-    // agent's newly-added file appear as a staged deletion even though it is
-    // present in the new HEAD commit.
+    // HM-2 — Issue #527: checked-out branch, modified TRACKED file that is
+    // untouched by the agent's own subtask — the exact `.squad/` bookkeeping
+    // shape from #527, where a project's own tooling commits tracked state
+    // files and a later subtask's sandboxed agent appends to them without
+    // committing. This must now be auto-committed and merged, not blocked:
+    // the content never diverges from anything the agent branch cares about,
+    // so refusing the merge here was pure unnecessary friction on an
+    // otherwise fully-approved run.
     // =========================================================================
     [Fact]
-    public async Task Approve_CheckedOut_ModifiedTrackedFile_DivergesFromResult_Blocks()
+    public async Task Approve_CheckedOut_ModifiedTrackedFile_NotTouchedByChild_AutoCommitsAndMerges()
     {
         var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
             dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
 
-        // Dirty the main working tree: modify the tracked readme.txt without staging,
-        // with content that differs from the merge result (readme.txt is untouched by
-        // the agent, so the result tree still has the original "initial content").
+        // Dirty the main working tree: modify the tracked readme.txt without staging.
+        // readme.txt is untouched by the agent, so the result tree still holds the
+        // original "initial content" until this local edit is auto-committed.
         File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "locally modified content");
 
         var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
 
-        // The dirty tracked file diverges from the merge result and cannot be safely
-        // reconciled, so the merge must be blocked rather than silently succeeding.
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
-            "uncommitted content that diverges from the merge result must block the merge (retriable 409), " +
-            "never silently advance the ref underneath it");
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "#527: uncommitted-but-legitimate edits to a tracked file the agent never touched must be " +
+            "auto-committed and merged rather than blocking an otherwise fully-approved run");
 
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("status").GetString().Should().Be("awaiting_review");
-        body.GetProperty("error").GetString().Should().Contain("cannot be safely reconciled",
-            "the blocked reason must explain that the divergent local content could not be reconciled");
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+        result.MergeResult.Should().StartWith("merged:");
 
-        // The branch ref must NOT have advanced — no mutation occurred.
         using var repoAfter = new Repository(repoPath);
-        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().BeNull(
-            "a blocked merge must not mutate the originating branch ref");
-
-        // The user's local edit must be untouched.
+        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().NotBeNull(
+            "the merge must still advance the main branch ref to include the agent's file");
         File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("locally modified content",
-            "a blocked merge must not touch the working tree");
+            "the auto-committed local edit's content must be preserved exactly, never discarded");
 
-        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        var runAfterBlock = await runStore.GetAsync(run.Id);
-        runAfterBlock!.Status.Should().Be(RunStatus.AwaitingReview,
-            "the run must remain awaiting_review after a blocked (retriable) merge attempt");
+        var status = repoAfter.RetrieveStatus(new StatusOptions { IncludeUntracked = true });
+        status.IsDirty.Should().BeFalse(
+            "after the auto-commit and merge, the working tree must be clean — " +
+            "nothing left uncommitted for the next merge attempt to trip over");
+    }
+
+    // =========================================================================
+    // HM-2a — Low-level diagnostic regression test for #523: a Blocked outcome
+    // (working-tree divergence, not a git merge conflict) must populate
+    // ConflictingFiles with the divergent path(s), instead of always reporting
+    // an empty list alongside "cannot be safely reconciled". This calls
+    // WorktreeManager.MergeWorktree directly (bypassing the HTTP endpoint /
+    // WorktreeOperationsAdapter, which intentionally discards ConflictingFiles
+    // for Blocked outcomes on the review-approval HTTP surface) so the new
+    // diagnostic is actually observable. Uses an untracked-collision-diverges
+    // scenario (not a modified-tracked-file scenario) because #527's
+    // auto-commit fix now auto-commits and merges dirty tracked-file edits —
+    // untracked paths are outside that fix's scope and still correctly block.
+    // =========================================================================
+    [Fact]
+    public async Task MergeWorktree_CheckedOut_UntrackedFileCollides_Blocked_ReportsConflictingFiles()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "collision.txt"), "agent added this"));
+
+        // Untracked local file at the same path the agent added, with different content.
+        File.WriteAllText(Path.Combine(repoPath, "collision.txt"), "local untracked version");
+
+        var worktreeManager = _factory.Services.GetRequiredService<WorktreeManager>();
+        var outcome = worktreeManager.MergeWorktree(
+            repoPath, run.OriginatingBranch, run.WorktreeBranch!, run.TreeHash!);
+
+        outcome.Kind.Should().Be(MergeOutcomeKind.Blocked,
+            "an untracked collision with diverging content must block rather than conflict or auto-commit");
+        outcome.Reason.Should().Contain("cannot be safely reconciled");
+        outcome.ConflictingFiles.Should().NotBeNullOrEmpty(
+            "#523: a Blocked outcome must report which path(s) diverged, instead of an " +
+            "always-empty conflictingFiles list that contradicts the 'cannot be safely reconciled' reason");
+        outcome.ConflictingFiles.Should().Contain("collision.txt",
+            "the divergent path (collision.txt) must be identified by relative path only " +
+            "(no absolute paths or file content, per the safe-string guarantee)");
+    }
+
+    // =========================================================================
+    // HM-2b (genuine conflict) — Issue #527 companion: proves the auto-commit
+    // fix does NOT mask a real conflict. Both the local dirty edit AND the
+    // agent's own subtask modify the SAME tracked file's content differently —
+    // auto-committing the local edit turns it into a real ancestor commit, and
+    // the subsequent 3-way merge against the agent branch's own edit to that
+    // same file must still correctly fail as a genuine, human-resolvable
+    // conflict (terminal merge_failed), never silently pick a side.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_GenuineConflict_SameFileEditedByBothSides_StillFails()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "readme.txt"), "agent's conflicting edit"));
+
+        // Local dirty edit to the SAME file, with different content — this will be
+        // auto-committed, then must genuinely conflict against the agent branch's own
+        // edit to readme.txt during the 3-way merge.
+        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "local conflicting edit");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "a genuine merge conflict is a terminal MergeFailed outcome (200), not a retriable Blocked (409)");
+
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merge_failed",
+            "#527: auto-committing dirty tracked content must never hide a real same-file conflict between " +
+            "the local edit and the agent branch's own change — it must still correctly fail for human resolution");
     }
 
     // =========================================================================
@@ -347,25 +411,26 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     }
 
     // =========================================================================
-    // HM-4c — Companion to HM-4b proving the fix does NOT weaken real safety.
-    // The reconcile path is entered the same way (stale staged deletion) and
-    // harmless untracked node_modules/ artifacts are present, but there is ALSO
-    // a genuinely divergent uncommitted edit to a TRACKED file. The untracked
-    // artifacts must not mask that real divergence: the merge must still block.
+    // HM-4c — Issue #527 companion to HM-4b: harmless untracked node_modules/
+    // artifacts are present alongside an uncommitted edit to a tracked file
+    // the agent never touched. #527's auto-commit fix sweeps that edit into
+    // an ordinary commit before the merge-safety check runs, so the merge
+    // succeeds instead of blocking, and the untracked artifacts remain
+    // untouched exactly as #427 already guarantees.
     // =========================================================================
     [Fact]
-    public async Task Approve_CheckedOut_ReconcilePath_UntrackedArtifacts_StillBlockOnDivergentTrackedEdit()
+    public async Task Approve_CheckedOut_UntrackedArtifactsAndAutoCommittedTrackedEdit_Merges()
     {
-        // The agent adds a second tracked file "extra.txt" on main so we have a tracked
-        // file (readme.txt) the run leaves untouched to diverge locally.
+        // The agent adds a tracked file "agent-file.txt"; readme.txt is a second tracked
+        // file already on main that the agent's subtask never touches.
         var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
             dir => File.WriteAllText(Path.Combine(dir, "agent-file.txt"), "agent content"));
 
-        // Genuinely divergent local edit to a tracked file the merge result still holds
-        // with its ORIGINAL content — this content exists nowhere else and must be preserved.
+        // Uncommitted local edit to a tracked file the merge result leaves unchanged —
+        // must be auto-committed rather than blocking.
         File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "unsaved local work that diverges");
 
-        // Preview leftovers: harmless untracked artifacts alongside the real divergence.
+        // Preview leftovers: harmless untracked artifacts alongside the auto-committed edit.
         var nodeModules = Path.Combine(repoPath, "node_modules", "left-pad");
         Directory.CreateDirectory(nodeModules);
         File.WriteAllText(Path.Combine(nodeModules, "index.js"), "module.exports = () => {};");
@@ -373,20 +438,57 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         var response = await _ownerClient.PostAsJsonAsync(
             $"/api/runs/{run.Id}/review", new { approved = true });
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
-            "a real divergent edit to a tracked file must still block even when harmless untracked " +
-            "artifacts are also present — the #427 fix must not weaken tracked-content safety");
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "#527: an uncommitted edit to a tracked file the agent never touched must be auto-committed " +
+            "and merged, even when harmless untracked build artifacts are also present (#427)");
 
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("status").GetString().Should().Be("awaiting_review");
-        body.GetProperty("error").GetString().Should().Contain("cannot be safely reconciled");
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+        result.MergeResult.Should().StartWith("merged:");
 
-        // The divergent local edit must be untouched, and the ref must not have advanced.
         File.ReadAllText(Path.Combine(repoPath, "readme.txt")).Should().Be("unsaved local work that diverges",
-            "a blocked merge must not touch the divergent tracked file");
+            "the auto-committed local edit's content must be preserved exactly");
         using var repoAfter = new Repository(repoPath);
-        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().BeNull(
-            "a blocked merge must not mutate the originating branch ref");
+        repoAfter.Branches["main"]!.Tip.Tree["agent-file.txt"].Should().NotBeNull(
+            "the merge must still advance the main branch ref to include the agent's file");
+
+        // The untracked artifacts must still survive the merge intact.
+        File.Exists(Path.Combine(nodeModules, "index.js")).Should().BeTrue(
+            "a hard reset never touches untracked paths the result tree does not reference");
+        File.ReadAllText(Path.Combine(nodeModules, "index.js")).Should().Be("module.exports = () => {};");
+    }
+
+    // =========================================================================
+    // HM-4d — Companion proving #527's auto-commit fix does NOT weaken real
+    // safety when harmless untracked artifacts are also present: the local
+    // dirty edit and the agent's own subtask edit the SAME tracked file with
+    // different content — a genuine conflict, which must still correctly fail
+    // for human resolution.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_UntrackedArtifacts_StillFailsOnGenuineConflict()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "readme.txt"), "agent's conflicting edit"));
+
+        // Local dirty edit to the SAME file the agent's subtask also edited.
+        File.WriteAllText(Path.Combine(repoPath, "readme.txt"), "local conflicting edit");
+
+        // Harmless untracked artifacts alongside the genuine conflict.
+        var nodeModules = Path.Combine(repoPath, "node_modules", "left-pad");
+        Directory.CreateDirectory(nodeModules);
+        File.WriteAllText(Path.Combine(nodeModules, "index.js"), "module.exports = () => {};");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "a genuine merge conflict is a terminal MergeFailed outcome (200), not a retriable Blocked (409)");
+
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merge_failed",
+            "harmless untracked artifacts must never mask a real same-file conflict between the local edit " +
+            "and the agent branch's own change");
     }
 
     // =========================================================================
@@ -972,6 +1074,141 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
 
         // The file must actually be restored on disk — the whole point of reconciling.
         File.Exists(Path.Combine(repoPath, "readme.txt")).Should().BeTrue();
+    }
+
+    // =========================================================================
+    // HM-15 — Issue #527 end-to-end reproduction: a project's own tooling
+    // commits `.squad/` bookkeeping files as tracked content (e.g. after
+    // "casting a Squad team"), and a later subtask's sandboxed coding agent
+    // appends new decision/history entries directly to those already-tracked
+    // files WITHOUT committing (per the "mutable state is written via runtime
+    // tools, not git commits" convention). Human review has already approved
+    // the run. Previously this uncommitted-but-legitimate content blocked the
+    // otherwise fully-approved merge with assembly_merge_failed; it must now
+    // be auto-committed and merged.
+    // =========================================================================
+    [Fact]
+    public async Task Approve_CheckedOut_SquadBookkeepingUncommittedAppends_AutoCommitsAndMerges()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(dir =>
+        {
+            // The demo's own "cast a Squad team" step already committed these as
+            // tracked content on main (simulated below, before approval); the agent
+            // subtask itself only touches an unrelated source file.
+            File.WriteAllText(Path.Combine(dir, "src-fix.txt"), "the actual bug fix");
+        });
+
+        // Simulate the project's own Squad-cast step: .squad/ state files are already
+        // TRACKED content on main (committed prior to this run starting).
+        var squadDir = Path.Combine(repoPath, ".squad", "agents", "mcgonagall");
+        Directory.CreateDirectory(squadDir);
+        var historyPath = Path.Combine(squadDir, "history.md");
+        var decisionsPath = Path.Combine(repoPath, ".squad", "decisions.md");
+        var identityPath = Path.Combine(repoPath, ".squad", "identity");
+        Directory.CreateDirectory(identityPath);
+        var nowPath = Path.Combine(identityPath, "now.md");
+        File.WriteAllText(historyPath, "# History\n\n- initial entry\n");
+        File.WriteAllText(decisionsPath, "# Decisions\n\n- initial decision\n");
+        File.WriteAllText(nowPath, "idle\n");
+        using (var repo = new Repository(repoPath))
+        {
+            Commands.Stage(repo, new[] { ".squad/agents/mcgonagall/history.md", ".squad/decisions.md", ".squad/identity/now.md" });
+            var sig = new Signature("test", "test@example.com", DateTimeOffset.UtcNow);
+            repo.Commit("cast a Squad team", sig, sig);
+        }
+
+        // Simulate the bug-fix subtask's own sandboxed coding agent discovering the
+        // already-tracked .squad/ files and appending new entries directly to them,
+        // WITHOUT committing — the exact #527 repro shape.
+        File.AppendAllText(historyPath, "- the sandboxed agent noted a new decision here\n");
+        File.AppendAllText(decisionsPath, "- decided to fix the bug this way\n");
+        File.WriteAllText(nowPath, "working on the bug fix\n");
+
+        var response = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "#527: uncommitted .squad/ bookkeeping appends left behind by a subtask's sandboxed agent " +
+            "must be auto-committed and merged, not block an otherwise fully-approved run");
+
+        var result = await response.Content.ReadFromJsonAsync<ReviewResponse>();
+        result!.Status.Should().Be("merged");
+        result.MergeResult.Should().StartWith("merged:");
+
+        // The uncommitted .squad/ appends must be preserved (auto-committed), not discarded.
+        File.ReadAllText(historyPath).Should().Contain("the sandboxed agent noted a new decision here");
+        File.ReadAllText(decisionsPath).Should().Contain("decided to fix the bug this way");
+        File.ReadAllText(nowPath).Should().Be("working on the bug fix\n");
+
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["src-fix.txt"].Should().NotBeNull(
+            "the merge must still advance main to include the agent's actual bug-fix file");
+        var status = repoAfter.RetrieveStatus(new StatusOptions { IncludeUntracked = true });
+        status.IsDirty.Should().BeFalse(
+            "the working tree must end up completely clean — nothing left uncommitted for a future retry");
+    }
+
+    // =========================================================================
+    // HM-16 — Issue #527 retry-compounding sub-issue: proves that repeated
+    // coordinator merge attempts against the same repo do NOT compound an
+    // ever-growing set of dirty .squad/ content into failure. Each attempt
+    // independently sweeps whatever is currently dirty via the auto-commit
+    // fix, so a second attempt succeeds even though MORE uncommitted content
+    // accumulated between the first (successful) and second attempt.
+    // =========================================================================
+    [Fact]
+    public async Task MergeWorktree_RepeatedAttempts_AccumulatingSquadContentBetweenThem_EachAttemptSucceeds()
+    {
+        var (firstRun, repoPath) = await SetupRunAwaitingReviewWithMainCheckedOutAsync(
+            dir => File.WriteAllText(Path.Combine(dir, "fix-one.txt"), "first subtask's fix"));
+
+        var decisionsPath = Path.Combine(repoPath, ".squad", "decisions.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(decisionsPath)!);
+        File.WriteAllText(decisionsPath, "# Decisions\n\n- initial decision\n");
+        using (var repo = new Repository(repoPath))
+        {
+            Commands.Stage(repo, ".squad/decisions.md");
+            var sig = new Signature("test", "test@example.com", DateTimeOffset.UtcNow);
+            repo.Commit("cast a Squad team", sig, sig);
+        }
+
+        // First uncommitted append, then first merge attempt.
+        File.AppendAllText(decisionsPath, "- attempt 1 uncommitted decision\n");
+
+        var worktreeManager = _factory.Services.GetRequiredService<WorktreeManager>();
+        var firstOutcome = worktreeManager.MergeWorktree(
+            repoPath, firstRun.OriginatingBranch, firstRun.WorktreeBranch!, firstRun.TreeHash!);
+
+        firstOutcome.Kind.Should().Be(MergeOutcomeKind.Merged,
+            "#527: the first merge attempt must auto-commit the dirty .squad/ append and succeed");
+
+        // Set up a SECOND run/subtask against the SAME repo (main now includes fix-one.txt),
+        // by adding another worktree directly (not via the helper, which creates a fresh repo).
+        var secondRunId = RunId.New();
+        var secondWorktreeInfo = worktreeManager.AddWorktree(repoPath, "main", secondRunId);
+        File.WriteAllText(Path.Combine(secondWorktreeInfo.WorktreePath, "fix-two.txt"), "second subtask's fix");
+        var secondTreeHash = worktreeManager.CommitChanges(secondWorktreeInfo.WorktreePath, secondRunId);
+
+        // Between the two attempts, MORE uncommitted .squad/ content accumulates —
+        // simulating a retry where the sandboxed agent re-ran and appended again.
+        File.AppendAllText(decisionsPath, "- attempt 2 uncommitted decision, compounding on attempt 1\n");
+
+        var secondOutcome = worktreeManager.MergeWorktree(
+            repoPath, "main", secondWorktreeInfo.BranchName, secondTreeHash);
+
+        secondOutcome.Kind.Should().Be(MergeOutcomeKind.Merged,
+            "#527: a second merge attempt must succeed even though additional dirty .squad/ content " +
+            "accumulated since the first attempt — retries must never compound into failure");
+
+        File.ReadAllText(decisionsPath).Should()
+            .Contain("attempt 1 uncommitted decision")
+            .And.Contain("attempt 2 uncommitted decision, compounding on attempt 1");
+
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches["main"]!.Tip.Tree["fix-one.txt"].Should().NotBeNull();
+        repoAfter.Branches["main"]!.Tip.Tree["fix-two.txt"].Should().NotBeNull();
+        var status = repoAfter.RetrieveStatus(new StatusOptions { IncludeUntracked = true });
+        status.IsDirty.Should().BeFalse();
     }
 
     // =========================================================================

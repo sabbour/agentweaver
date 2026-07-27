@@ -190,6 +190,17 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Resolves the run owner's GitHub token so the API can pass it in /configure, avoiding the need
     // for the kata VM pod to call Azure AD or Key Vault (blocked by Cilium FQDN policies).
     private readonly IGitHubTokenStore? _tokenStore;
+    // Refresh-aware token accessor (issue #523): a Build & Test gate can launch its AgentHost pod for
+    // the FIRST time (a fresh pod, not yet /configure'd for this run) many minutes after the run's
+    // earlier subtask stages — long enough for the submitting user's Copilot-entitled OAuth access
+    // token to cross its expiry skew window. Reading the raw entry via IGitHubTokenStore.GetAsync (as
+    // ResolveGitHubAccessTokenAsync previously did) can hand a stale/expired access token to the pod,
+    // which the pod then trusts unconditionally (its "fast path" skips its own Key Vault fetch
+    // whenever a pre-resolved token arrives) — producing GitHubCopilotUnauthorizedException at
+    // /configure. Routing through the same GetValidAccessTokenAsync used by GitHubCopilotClientFactory
+    // ensures a near-expiry token is transparently rotated before being handed to a newly-launched pod.
+    // Null in unit tests → falls back to the raw (non-refreshing) token store read.
+    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     // Replica-safe run secret store used to persist the per-run preview-runner credential so a
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
     // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
@@ -222,7 +233,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IGitHubTokenStore? tokenStore = null,
         ISecretStore? secretStore = null,
         IRunEventStream? runEventStream = null,
-        IRunOptionsStore? runOptions = null)
+        IRunOptionsStore? runOptions = null,
+        IGitHubAccessTokenProvider? accessTokenProvider = null)
     {
         _client = client;
         _options = options;
@@ -236,6 +248,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _secretStore = secretStore;
         _runEventStream = runEventStream;
         _runOptions = runOptions;
+        _accessTokenProvider = accessTokenProvider;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -785,13 +798,39 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task<string?> ResolveGitHubAccessTokenAsync(string userId, CancellationToken ct)
     {
+        var scope = GitHubTokenScope.ForUser(userId);
+
+        // Prefer the refresh-aware provider (issue #523): a fresh AgentHost pod launched late in a
+        // long-running assembly (e.g. the Build & Test gate, well after the run's earlier subtask
+        // stages) can be handed a near-expiry or already-expired access token if we only ever read
+        // the raw stored entry — the pod's "fast path" trusts a pre-resolved token unconditionally
+        // and never re-validates it against Key Vault or GitHub. Routing through
+        // GetValidAccessTokenAsync mirrors GitHubCopilotClientFactory.CreateClientAsync and
+        // transparently rotates the token before it is handed to the pod.
+        if (_accessTokenProvider is not null)
+        {
+            try
+            {
+                var refreshed = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(refreshed))
+                    return refreshed;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "KubernetesSandboxExecutor: failed to resolve/refresh GitHub token for {UserId} via " +
+                    "IGitHubAccessTokenProvider — falling back to raw token store read.",
+                    userId);
+            }
+        }
+
         if (_tokenStore is null)
             return null;
 
         try
         {
-            var entry = await _tokenStore.GetAsync(
-                GitHubTokenScope.ForUser(userId), ct).ConfigureAwait(false);
+            var entry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
             if (entry.Status == GitHubTokenStatus.SignedIn && !string.IsNullOrEmpty(entry.AccessToken))
                 return entry.AccessToken;
         }

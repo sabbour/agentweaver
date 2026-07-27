@@ -18,12 +18,21 @@ public sealed class SandboxOutputRedactor
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         // AWS access key IDs
         new Regex(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
-        // GitHub personal access tokens (classic and fine-grained)
+        // GitHub personal access tokens (classic and fine-grained) and OAuth/app/refresh/user tokens
         new Regex(@"\bghp_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
         new Regex(@"\bgho_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
+        new Regex(@"\bghu_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
+        new Regex(@"\bghr_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
         new Regex(@"\bghs_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
         new Regex(@"\bghx_[A-Za-z0-9]{36}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
         new Regex(@"\bgithub_pat_[A-Za-z0-9_]{82}\b", RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
+        // JWT-shaped strings (three dot-separated base64url segments) — e.g. Key Vault / AAD tokens
+        // that may end up echoed in an error response body.
+        new Regex(@"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
+            RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
+        // Common header-style credential assignments (Authorization:/X-Api-Key: values).
+        new Regex(@"(?:Authorization|X-Api-Key)\s*:\s*[^\r\n]+",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         // PEM private key blocks
         new Regex(@"-----BEGIN .*PRIVATE KEY-----.*?-----END .*PRIVATE KEY-----",
             RegexOptions.Compiled | RegexOptions.Singleline, TimeSpan.FromSeconds(2)),

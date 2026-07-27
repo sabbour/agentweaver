@@ -1659,7 +1659,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (merge.Outcome != CollectiveMergeOutcome.Merged)
         {
             var mergeReason = merge.Reason ?? merge.Outcome.ToString().ToLowerInvariant();
-            if (merge.Outcome == CollectiveMergeOutcome.Conflict || (merge.ConflictingFiles?.Count ?? 0) > 0)
+            // Issue #523: gate strictly on Outcome == Conflict (real git merge conflicts), not on
+            // ConflictingFiles.Count > 0 — a Blocked/Failed outcome (e.g. a dirty-working-tree
+            // divergence detected by IsWorkingTreeReconcilable) can now also carry a non-empty
+            // ConflictingFiles list (for diagnostics), but that is a terminal precondition failure,
+            // not a resolvable git conflict, and must still route to the terminal MergeFailed path
+            // below rather than NeedsResolutionAsync.
+            if (merge.Outcome == CollectiveMergeOutcome.Conflict)
             {
                 await NeedsResolutionAsync(context, workPlanId, edges, mergeReason, new
                 {
