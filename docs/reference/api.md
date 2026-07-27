@@ -1224,7 +1224,7 @@ Request:
 ```
 
 Generation model fields are individual nullable project settings. `null` clears a project override and
-falls back to the corresponding global `Generation:*` setting (`Generation:Model`, then `gpt-5.4`).
+falls back to the corresponding global `Generation:*` setting (`Generation:Model`, then `gpt-5.6-sol`).
 They do not affect Console or normal project/run agent execution model selection. Response
 `204 No Content` on success.
 
@@ -2083,7 +2083,7 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | `Providers:GitHubCopilot:Endpoint` | `https://api.githubcopilot.com` | GitHub Copilot base URL |
 | `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | GitHub Copilot model name |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary; empty means use the SDK's auto-resolved runtime. Env fallbacks (in order): `AGENTWEAVER_COPILOT_CLI_PATH`, `COPILOT_CLI_PATH`. Grounded in `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. See [Configuration](/guide/configuration#provider-settings). |
-| `Generation:Model` | `gpt-5.4` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
+| `Generation:Model` | `gpt-5.6-sol` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback when a project has no `blueprint_generation_model`. |
 | `Generation:WorkflowModel` | `Generation:Model` | Optional global fallback when a project has no `workflow_generation_model`. |
 | `Generation:OutcomeSpecModel` | `Generation:Model` | Optional global fallback when a project has no `outcome_spec_generation_model`. |

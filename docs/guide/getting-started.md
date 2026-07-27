@@ -369,7 +369,7 @@ non-secret local settings there:
   },
   "Providers": {
     "GitHubCopilot": {
-      "Model": "claude-sonnet-4.6"
+      "Model": "claude-sonnet-5"
     }
   }
 }
