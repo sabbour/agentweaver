@@ -112,18 +112,22 @@ public sealed class AgentHostReaperCredentialTests
         var handler = new FakeKubeHandler();
         handler.OnGet(ListPath, ClaimsListJson(claimName, runId));
 
+        var preview = new StubPreviewService(hasActivePreview: true);
         var reaper = new AgentHostReaperService(
             ClientFor(handler),
             new EmptyRunStore(), // no active runs → the claim is an orphan by the active-run map
             new KubernetesSandboxOptions { Namespace = Namespace },
             NullLogger<AgentHostReaperService>.Instance,
             new InMemorySecretStore(),
-            new StubPreviewService(hasActivePreview: true));
+            preview);
 
         var reaped = await reaper.SweepOrphanedPodsAsync();
 
         reaped.Should().Be(0,
             "an orphaned claim whose run still has a live preview must be deferred, not reaped (#542)");
+        preview.RenewedRunId.Should().Be(runId,
+            "#560: deferring the reap must also renew the claim's cluster-side TTL so the sandbox " +
+            "controller does not reap the pod out from under the live preview");
     }
 
     [Fact]
@@ -239,6 +243,15 @@ public sealed class AgentHostReaperCredentialTests
 
         public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(_hasActivePreview);
+
+        /// <summary>Run id passed to <see cref="RenewBackingClaimTtlAsync"/>, or null if never called (#560).</summary>
+        public string? RenewedRunId { get; private set; }
+
+        public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
+        {
+            RenewedRunId = runId;
+            return Task.CompletedTask;
+        }
 
         public bool Enabled => true;
         public int AllowedPortMin => 3000;

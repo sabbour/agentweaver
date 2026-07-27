@@ -46,6 +46,44 @@ idle-expires (`Sandbox:Preview:IdleTimeoutMinutes`, default 30) or hits its hard
 (`Sandbox:Preview:MaxLifetimeHours`, default 8); the `SandboxPreviewReaperService` then deletes the
 route, and the next `AgentHostReaperService` sweep — now seeing no active preview — reaps the pod.
 
+### Cluster-side claim TTL renewal (issue #560)
+
+Deferring the **API-side** deletes above is necessary but not sufficient. Every `SandboxClaim` is
+created with a cluster-side lifecycle TTL
+(`spec.lifecycle.ttlSecondsAfterFinished = Sandbox:TimeoutSeconds`, default **600s**, with
+`shutdownPolicy: Delete`). The sandbox controller enforces this TTL **independently of the API**: once
+a run's pod workload *finishes* — which happens within seconds for a coordinator-dispatched child
+execution subtask when its turn ends — the controller reaps the pod ~`TimeoutSeconds` later. That is
+why a preview backed by a **terminal** run still went `NXDOMAIN` ~8–10 min after the turn ended even
+with the #542/#551 API-side deferral in place: the #551 deferral cannot stop the controller. (The
+coordinator run in the original A/B test survived only because it stayed *active* — its workload never
+"finished", so its claim TTL never fired — which is a different code path from the terminal-run
+deferral it was meant to prove.)
+
+While a preview is active, the API now **renews the backing claim's cluster TTL** so the controller
+keeps the pod alive for exactly as long as a preview may live:
+
+| Renewal trigger | Behavior | Source |
+| --- | --- | --- |
+| Turn-end release deferral | After deferring the delete, `RenewBackingClaimTtlAsync(runId)` patches the claim TTL. | `KubernetesSandboxExecutor.ReleaseAgentHostPodAsync` |
+| Orphan reaper deferral | After deferring the reap, the sweep renews the claim TTL. | `AgentHostReaperService.SweepOrphanedPodsAsync` |
+| Keepalive | Each keepalive renews the backing claim TTL for the route's run (read from the durable `preview-run-id` annotation). | `SandboxPreviewService.KeepAliveAsync` |
+
+`RenewBackingClaimTtlAsync` JSON-merge-patches `spec.lifecycle.ttlSecondsAfterFinished` up to
+`MaxLifetimeHours × 3600 + 600s` on both the agent-host (`agent-*`) and run-command (`run-*`) claim
+names for the run (whichever exists is patched; a missing candidate 404s and is ignored). MergePatch
+preserves the sibling `shutdownPolicy`. It is **leak-safe / best-effort**: a no-op when preview is
+disabled and never throws. Bounded teardown is preserved because the extended TTL is only a *backstop*
+— the API-side preview reaper and `AgentHostReaperService` still delete the claim promptly on
+idle/max expiry, which supersedes the TTL. It is only invoked while a preview is demonstrably active
+(both deferral sites gate on `HasActivePreviewAsync`; keepalive only runs for a live route).
+
+> **Operational note:** this relies on the sandbox controller recomputing the pod's deletion deadline
+> when `ttlSecondsAfterFinished` is patched mid-life (as Kubernetes `Job` TTL does). If a controller
+> instead snapshots the TTL at finish time, this renewal is ineffective and the pod TTL must instead
+> be raised at claim-creation time for preview-eligible runs. Validate against the live sandbox
+> controller before relying on this in production.
+
 ## AgentHost preview-runner endpoints
 
 These are platform-facing AgentHost endpoints. They are root-mounted on the AgentHost origin, not under the A2A path (`apps/Agentweaver.AgentHost/Program.cs:291`).

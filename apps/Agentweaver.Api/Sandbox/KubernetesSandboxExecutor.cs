@@ -567,6 +567,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 "KubernetesSandboxExecutor: deferring AgentHost pod release for run {RunId} (claim " +
                 "{Claim}) — a live preview is still active; the preview idle/max expiry will reap it.",
                 runId, claimName);
+            // #560: the claim's cluster-side ttlSecondsAfterFinished (set at creation, default 600s)
+            // would otherwise let the sandbox controller reap the pod ~TimeoutSeconds after this
+            // terminal turn finishes — independently of the deferral above, which only stops the
+            // API-side delete. Renew the claim TTL to cover the preview's hard-max lifetime so the
+            // controller keeps the pod alive exactly as long as the preview may live. Best-effort.
+            await _previewService.RenewBackingClaimTtlAsync(runId, ct).ConfigureAwait(false);
             return;
         }
 

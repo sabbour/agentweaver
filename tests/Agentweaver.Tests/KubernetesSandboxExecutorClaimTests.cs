@@ -707,15 +707,19 @@ public sealed class KubernetesSandboxExecutorClaimTests
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
+        var preview = new StubPreviewService(hasActivePreview: true);
         var executor = NewExecutor(
             handler, new StubSubmittingUserResolver("sabbour"),
-            previewService: new StubPreviewService(hasActivePreview: true));
+            previewService: preview);
 
         await executor.ReleaseAgentHostPodAsync(runId);
 
         handler.Requests.Should().NotContain(
             r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "an active preview must defer the claim delete so the preview URL stays reachable (#542)");
+        preview.RenewedRunId.Should().Be(runId,
+            "#560: deferring the API-side delete is not enough — the claim's cluster-side TTL must be " +
+            "renewed so the sandbox controller does not reap the pod out from under the live preview");
     }
 
     [Fact]
@@ -725,15 +729,19 @@ public sealed class KubernetesSandboxExecutorClaimTests
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
+        var preview = new StubPreviewService(hasActivePreview: false);
         var executor = NewExecutor(
             handler, new StubSubmittingUserResolver("sabbour"),
-            previewService: new StubPreviewService(hasActivePreview: false));
+            previewService: preview);
 
         await executor.ReleaseAgentHostPodAsync(runId);
 
         handler.Requests.Should().Contain(
             r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "with no active preview the claim must be deleted exactly as before (no pod leak)");
+        preview.RenewedRunId.Should().BeNull(
+            "#560: with no active preview there is nothing to keep alive, so the claim TTL must NOT be " +
+            "renewed (a renewal would extend the pod's cluster-side lifetime unnecessarily)");
     }
 
     [Fact]
@@ -759,8 +767,17 @@ public sealed class KubernetesSandboxExecutorClaimTests
         private readonly bool _hasActivePreview;
         public StubPreviewService(bool hasActivePreview) => _hasActivePreview = hasActivePreview;
 
+        /// <summary>Run id passed to <see cref="RenewBackingClaimTtlAsync"/>, or null if never called (#560).</summary>
+        public string? RenewedRunId { get; private set; }
+
         public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(_hasActivePreview);
+
+        public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
+        {
+            RenewedRunId = runId;
+            return Task.CompletedTask;
+        }
 
         public bool Enabled => true;
         public int AllowedPortMin => 3000;
