@@ -846,3 +846,26 @@ LIVE EMPIRICAL A/B PROOF (staging `agwv` cluster, kata pool, 2026-07-27) — the
 Option C (agent-host PDB) intentionally SKIPPED (documented as follow-up): agent-host pods are ephemeral pod-per-run; a PDB risks blocking legitimate node drains / warm-pool recreation and does NOT stop a `safe-to-evict:true` autoscaler scale-down anyway (the actual #574 mechanism). The dynamic annotation is the correct, targeted control.
 
 Gotcha for tests: `TryGetBoundPodName(JsonElement)` requires BOTH a `Ready=True` condition and `status.sandbox.name` on the SandboxClaim JSON — stubs missing the Ready condition make `SetBackingPodSafeToEvictAsync` no-op (resolves no bound pod), which silently fails the pin assertions.
+
+
+---
+
+## #578 FIXED (local): worker heartbeat reaper deleted live preview claims because worker pods had no preview config — preview-aware reaper + RBAC
+
+- date: 2026-07-27
+- category: bug
+- surface: api/infra
+- status: fixed (implemented + unit-validated; LIVE staging verification PENDING — env re-provisioning in progress)
+
+Confirmed root cause of #578 (after 4 refuted hypotheses: ttlSecondsAfterFinished cluster-clock, API-side delete paths, agent-sandbox controller as first mover, cluster-autoscaler). Kube-audit attribution nailed the FIRST delete of the live preview's backing claim to `system:serviceaccount:agentweaver:agentweaver-worker` (repro child d39cd048..., claim agent-d39cd04852f2, 2026-07-27T18:27:14Z), with worker logs `AgentHostReaper: deleted orphaned claim ... reaped 1 orphaned claims` at the same second; generic GC deleted the pod/sandbox downstream only.
+
+Mechanism: the WORKER role runs `CoordinatorHeartbeatService` -> `AgentHostReaperService`, whose orphan sweep treats a completed/`AssembleReady` child as orphaned. The intended safeguard `HasActivePreviewAsync(runId)` lists preview HTTPRoutes via the cluster client — but `k8s/base/worker-deployment.yaml` set NO `Sandbox__Preview__*` env, and DI (`Program.cs` AddSingleton<ISandboxPreviewService>) only builds the in-cluster client when `previewOptions.Enabled && IsInCluster`. So on the worker `_client` was null, `HasActivePreviewAsync` returned false permanently, and every sweep deleted the live-preview claim.
+
+Fix has THREE complementary parts (all required — the first alone is a no-op without the other two):
+1. Config parity: worker-deployment.yaml now mirrors api-deployment.yaml's `Sandbox__Preview__Enabled=true` + ZoneSuffix (from agentweaver-runtime-config `SANDBOX_PREVIEW_ZONE_SUFFIX`) + GatewayName/GatewayNamespace, so DI actually builds the worker's in-cluster client.
+2. Fail-safe cluster reads: `SandboxPreviewService.HasActivePreviewAsync` / `RenewBackingClaimTtlAsync` / `SetBackingPodSafeToEvictAsync` now gate on `_client is null` rather than `!Enabled`. A live route in cluster state is authoritative for ANY process that can see it, even one not wired to CREATE routes. (Leak-safe direction unchanged: a probe that returns no un-expired route, or fails, still returns false — #542.)
+3. RBAC (the piece the recovered WIP was MISSING): `agentweaver-worker-sandbox` Role now grants `gateway.networking.k8s.io/httproutes: get,list` (so the probe's HTTPRoute list doesn't 403 -> catch -> false -> delete), plus `sandboxclaims: patch,update` (TTL renewal #560) and `pods: patch` (safe-to-evict pin #574) so the reaper's defer branch pins actually apply instead of silently 403-ing. Worker still never creates/deletes routes — that stays with the API.
+
+Why RBAC was the critical gap: `HasActivePreviewAsync` catches ALL non-cancellation exceptions and returns false (leak-safe). A 403 on the worker's httproutes list is exactly such an exception, so without the grant the config+client fix would still false-negative and delete the claim. The whole fix hinges on that one read succeeding on the worker identity.
+
+Validation: `dotnet test tests/Agentweaver.Tests/... --filter "...AgentHostReaper|SandboxPreviewServiceCluster|Preview"` => 240 passed / 3 platform-skips. New tests: `Sweep_OrphanClaim_WithClusterVisiblePreview_StillDefers_WhenPreviewFeatureFlagIsOff`, `HasActivePreview_true_when_feature_flag_is_off_but_cluster_route_exists`, and the two `..._still_patches_when_feature_flag_is_off_but_cluster_client_exists` renamed cases. LIVE A/B (repro AssembleReady child + start_preview, confirm the claim SURVIVES a worker sweep and the preview URL stays resolvable) is still REQUIRED before closing #578 — staging was GC'd (routine 3-day policy) and is re-provisioning; do not close #578 until that passes.
