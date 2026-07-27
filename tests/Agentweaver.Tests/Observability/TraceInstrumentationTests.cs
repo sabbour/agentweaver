@@ -133,6 +133,119 @@ public sealed class TraceInstrumentationTests
         activity!.Stop();
     }
 
+    /// <summary>
+    /// Regression tests for issue #546: an <c>execute_tool</c> span must be bounded by the SDK
+    /// event timestamps (<c>ToolExecutionStartEvent.Timestamp</c> /
+    /// <c>ToolExecutionCompleteEvent.Timestamp</c>), not by the wall-clock instant our
+    /// single-consumer stream loop happens to observe the events. The GitHub Copilot SDK
+    /// dispatches tool calls sequentially, so a sibling tool that blocks (e.g. a <c>web_fetch</c>
+    /// waiting out its 5-minute HITL approval deadline) stalls delivery of every other tool's
+    /// lifecycle events. Observation-time bounding therefore inflated innocent, near-instant tools
+    /// (<c>list_decisions</c>, <c>get_memory</c>, <c>list_inbox</c>) to the same ~5-minute duration
+    /// as the blocked <c>web_fetch</c> — the exact symptom seen in transaction trace
+    /// <c>db469dc6-7dda-4464-8521-c0048a4e7398</c>.
+    /// </summary>
+    private static ActivityListener ListenToAgentweaverSource()
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Agentweaver",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
+    }
+
+    [Fact]
+    public void StartToolSpanCore_AnchorsStartToSdkTimestamp_NotObservationTime()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        // The SDK stamped the tool's start 5 minutes before our loop observed the event.
+        var sdkStart = DateTimeOffset.UtcNow.AddMinutes(-5);
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "list_decisions", sdkStart);
+
+        activity.Should().NotBeNull();
+        activity!.StartTimeUtc.Should().BeCloseTo(sdkStart.UtcDateTime, TimeSpan.FromMilliseconds(50),
+            "the span start must reflect the SDK ToolExecutionStartEvent.Timestamp, not 'now'");
+        activity.Stop();
+    }
+
+    [Fact]
+    public void StartToolSpanCore_NullTimestamp_FallsBackToObservationTime()
+    {
+        using var listener = ListenToAgentweaverSource();
+        var before = DateTime.UtcNow;
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "grep", startTime: null);
+
+        activity.Should().NotBeNull();
+        activity!.StartTimeUtc.Should().BeOnOrAfter(before.AddMilliseconds(-50),
+            "with no SDK timestamp the span must fall back to observation-time bounding");
+        activity.Stop();
+    }
+
+    [Fact]
+    public void CompleteToolSpanCore_FastToolObservedLate_ReportsRealShortDuration()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        // list_decisions really ran for ~20ms at T0, but its completion event was delivered to
+        // our consumer loop only after the sibling web_fetch's 5-minute HITL wait unblocked the
+        // stream. Anchoring both ends to the SDK timestamps must yield the true ~20ms duration.
+        var sdkStart = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var sdkEnd = sdkStart.AddMilliseconds(20);
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "list_decisions", sdkStart);
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(activity!, success: true, error: null, endTime: sdkEnd);
+
+        activity!.Duration.Should().BeCloseTo(TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(50),
+            "duration must reflect the tool's real execution window, not the 5 minutes it waited " +
+            "to be observed behind a blocked sibling");
+        activity.Duration.Should().BeLessThan(TimeSpan.FromMinutes(1),
+            "a near-instant tool must never inherit the blocked sibling's ~5-minute duration");
+    }
+
+    [Fact]
+    public void CompleteToolSpanCore_BlockedTool_ReportsItsOwnLongDuration()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        // The genuinely blocked web_fetch: SDK start T0, SDK complete T0 + 5 min. Its span must
+        // still show the real ~5-minute duration — the fix must not flatten legitimately slow tools.
+        var sdkStart = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var sdkEnd = sdkStart.AddMinutes(5);
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "web_fetch", sdkStart);
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(activity!, success: false, error: "URL fetch was denied by the operator.", endTime: sdkEnd);
+
+        activity!.Duration.Should().BeCloseTo(TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(1),
+            "the actually-blocked tool must keep its real ~5-minute duration");
+        activity.Status.Should().Be(ActivityStatusCode.Error);
+    }
+
+    [Fact]
+    public void CompleteToolSpanCore_EndBeforeStart_ClampsToNonNegativeDuration()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var sdkStart = DateTimeOffset.UtcNow;
+        var skewedEnd = sdkStart.AddMinutes(-1); // clock skew: completion "before" start
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "get_memory", sdkStart);
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(activity!, success: true, error: null, endTime: skewedEnd);
+
+        activity!.Duration.Should().BeGreaterThanOrEqualTo(TimeSpan.Zero,
+            "a backwards SDK timestamp must never produce a negative duration; it falls back to observation time");
+    }
+
     [Theory]
     [InlineData("tool_call", null, null, null, "tool")]
     [InlineData(null, "mock_search", null, null, "tool")]
