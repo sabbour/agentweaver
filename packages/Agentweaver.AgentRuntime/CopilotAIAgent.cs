@@ -1358,7 +1358,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 {
                     TrackApprovedShell(callId, callId);
                 }
-                StartToolSpan(callId, resolvedToolName);
+                StartToolSpan(callId, resolvedToolName, start.Timestamp);
                 EmitToolCallOnce(callId, resolvedToolName, start.Data.Arguments);
                 break;
             }
@@ -1379,13 +1379,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     break;
                 if (complete.Data.Success)
                 {
-                    CompleteToolSpan(callId, success: true, error: null);
+                    CompleteToolSpan(callId, success: true, error: null, endTime: complete.Timestamp);
                     EmitToolResultOnce(callId, complete.Data.Result?.Content ?? string.Empty);
                 }
                 else
                 {
                     var error = complete.Data.Error?.Message ?? "Tool execution failed.";
-                    CompleteToolSpan(callId, success: false, error: error);
+                    CompleteToolSpan(callId, success: false, error: error, endTime: complete.Timestamp);
                     EmitToolErrorOnce(callId, error);
                 }
                 break;
@@ -1403,9 +1403,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// tool call's span is still open when this one starts (overlapping tool calls), ambient
     /// parenting would nest this span under that other tool span instead of under the turn.
     /// </summary>
-    private void StartToolSpan(string callId, string toolName)
+    private void StartToolSpan(string callId, string toolName, DateTimeOffset? startTime = null)
     {
-        var activity = StartToolSpanCore(_turnActivity, toolName);
+        var activity = StartToolSpanCore(_turnActivity, toolName, startTime);
         if (activity is null) return;
         ConfigureToolSpanTags(activity, toolName, callId, _agentName, _runId);
         if (!_activeToolSpans.TryAdd(callId, activity))
@@ -1421,12 +1421,26 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// would incorrectly nest this new span under it instead of under the turn. Extracted as an
     /// internal static helper (mirroring <see cref="ConfigureToolSpanTags"/>) so the parenting
     /// behavior can be unit-tested without constructing the heavyweight <see cref="CopilotAIAgent"/>.
+    /// <para>
+    /// <paramref name="startTime"/> is the SDK <c>ToolExecutionStartEvent.Timestamp</c> — the
+    /// moment the tool lifecycle actually began at the source. When supplied it stamps the span's
+    /// start time rather than defaulting to "now" (when our single-consumer stream loop happened
+    /// to observe the event). This is the start half of the issue #546 fix: because the GitHub
+    /// Copilot SDK dispatches tool calls sequentially and a blocked sibling (e.g. a
+    /// <c>web_fetch</c> waiting out its 5-minute HITL approval deadline) stalls delivery of every
+    /// other tool's lifecycle events, observation-time bounding inflates innocent fast tools'
+    /// durations to the same wall-clock value. Anchoring to the SDK timestamp decouples the
+    /// recorded duration from that consumer-loop back-pressure.
+    /// </para>
     /// </summary>
-    internal static Activity? StartToolSpanCore(Activity? turnActivity, string toolName)
+    internal static Activity? StartToolSpanCore(Activity? turnActivity, string toolName, DateTimeOffset? startTime = null)
     {
-        return turnActivity is not null
+        var activity = turnActivity is not null
             ? ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal, turnActivity.Context)
             : ActivitySource.StartActivity($"execute_tool {toolName}", ActivityKind.Internal);
+        if (activity is not null && startTime is { } ts && ts != default)
+            activity.SetStartTime(ts.UtcDateTime);
+        return activity;
     }
 
     /// <summary>
@@ -1451,15 +1465,46 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// Closes the <c>execute_tool</c> span previously opened for <paramref name="callId"/>,
     /// recording success/error status. No-op if the span was never opened (e.g. defensive
     /// call-before-result paths or suppressed tools).
+    /// <para>
+    /// <paramref name="endTime"/> is the SDK <c>ToolExecutionCompleteEvent.Timestamp</c> — the
+    /// moment the tool lifecycle actually completed at the source. When supplied it stamps the
+    /// span's end time rather than defaulting to "now" (when our single-consumer stream loop
+    /// happened to observe the completion). This is the end half of the issue #546 fix (see
+    /// <see cref="StartToolSpanCore"/>): it keeps a fast tool's recorded duration honest even when
+    /// its completion event was delivered late behind a blocked sibling. The SDK timestamp is
+    /// clamped to be no earlier than the span's own start so a clock skew can never yield a
+    /// negative duration; if it would, we fall back to observation-time (Dispose default).
+    /// </para>
     /// </summary>
-    private void CompleteToolSpan(string callId, bool success, string? error)
+    private void CompleteToolSpan(string callId, bool success, string? error, DateTimeOffset? endTime = null)
     {
         if (!_activeToolSpans.TryRemove(callId, out var activity))
             return;
+        CompleteToolSpanCore(activity, success, error, endTime);
+    }
+
+    /// <summary>
+    /// Applies success/error status and the SDK completion timestamp to an already-open
+    /// <c>execute_tool</c> span, then disposes it. Extracted as an internal static helper
+    /// (mirroring <see cref="StartToolSpanCore"/> and <see cref="ConfigureToolSpanTags"/>) so the
+    /// issue #546 end-time-anchoring behavior can be unit-tested without constructing the
+    /// heavyweight <see cref="CopilotAIAgent"/>. The end timestamp is clamped to be no earlier
+    /// than the span's start so clock skew can never produce a negative duration; when the SDK
+    /// timestamp is absent, default, or would go backwards, the span falls back to
+    /// observation-time bounding (the <see cref="Activity.Dispose"/> default).
+    /// </summary>
+    internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime)
+    {
         activity.SetTag("gen_ai.tool.call.success", success);
         activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error, error);
         if (!success && !string.IsNullOrWhiteSpace(error))
             activity.SetTag("error.message", error);
+        if (endTime is { } ts && ts != default)
+        {
+            var endUtc = ts.UtcDateTime;
+            if (endUtc >= activity.StartTimeUtc)
+                activity.SetEndTime(endUtc);
+        }
         activity.Dispose();
     }
 
