@@ -140,7 +140,7 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
     });
   });
 
-  it('offers RAI, Rubberduck, Human Review and Build & Test in the add-node palette, but never Merge/Scribe', async () => {
+  it('offers RAI, Rubberduck, Human Review and Build & Test in a grouped add-node palette (no duplicate Build & Test), but never Merge/Scribe', async () => {
     const user = userEvent.setup();
     renderEditor(YAML_WITH_UNROUTED_RAI);
 
@@ -150,12 +150,22 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
       expect(screen.getByRole('menuitem', { name: /rai check/i })).toBeDefined();
       expect(screen.getByRole('menuitem', { name: /rubberduck review/i })).toBeDefined();
       expect(screen.getByRole('menuitem', { name: /human review/i })).toBeDefined();
-      // "Build & Test" appears twice: once as the pre-configured special-gate
-      // shortcut (SPECIAL_GATES) and once as the generic build_test node-type
-      // entry (AUTHORABLE_WORKFLOW_NODE_TYPES) — both are valid, non-conflicting
-      // ways to add the same node type, so assert at least one exists.
-      expect(screen.getAllByRole('menuitem', { name: /build & test/i }).length).toBeGreaterThan(0);
+      // "Build & Test" must now appear EXACTLY once (#558). It previously showed
+      // twice — once as the pre-configured SPECIAL_GATES preset and once as the raw
+      // build_test node-type — with identical labels, which was confusing. The raw
+      // primitive is dropped from the palette; the preset is the single entry point.
+      expect(screen.getAllByRole('menuitem', { name: /build & test/i })).toHaveLength(1);
     });
+
+    // The palette is grouped under scannable headers (#558).
+    expect(screen.getByText('Reviewers & gates')).toBeDefined();
+    expect(screen.getByText('Agent steps')).toBeDefined();
+    expect(screen.getByText('Flow control')).toBeDefined();
+
+    // Representative primitives remain reachable in their groups.
+    expect(screen.getByRole('menuitem', { name: /prompt \(agent turn\)/i })).toBeDefined();
+    expect(screen.getByRole('menuitem', { name: /peer review/i })).toBeDefined();
+    expect(screen.getByRole('menuitem', { name: /fan-out/i })).toBeDefined();
 
     expect(screen.queryByRole('menuitem', { name: /^merge$/i })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: /^scribe$/i })).toBeNull();

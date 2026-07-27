@@ -1,0 +1,5 @@
+---
+"agentweaver": patch
+---
+
+Fix the Visual Workflow Editor "Add node" palette (#558). "Build & Test" appeared twice with identical labels — once as the preconfigured `SPECIAL_GATES` preset and once as the raw `build_test` node-type from `AUTHORABLE_WORKFLOW_NODE_TYPES` — and the flat, mostly icon-less list mixed reviewer/gate roles, agent steps, and control-flow primitives with no separators or descriptions, making it hard to scan. The palette is now organized into three groups using the existing Fluent `MenuGroup`/`MenuGroupHeader`/`MenuDivider` pattern (as in `WorkflowsPage`): **Reviewers & gates** (RAI, Rubberduck, Human Review, Build & Test presets + Peer review, Check/gate primitives), **Agent steps** (Prompt), and **Flow control** (Fan-out, Fan-in, Coordinator-composed, Serial, Terminal). Every row now has an icon and a one-line description, and the duplicate is removed — the raw `build_test` primitive is dropped from the palette (fully represented by the "Build & Test" preset), so it appears exactly once.
