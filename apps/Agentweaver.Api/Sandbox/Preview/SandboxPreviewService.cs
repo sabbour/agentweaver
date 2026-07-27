@@ -69,6 +69,28 @@ public interface ISandboxPreviewService
     Task KeepAliveAsync(string token, CancellationToken ct = default);
 
     /// <summary>
+    /// Renews the backing SandboxClaim's cluster-side lifecycle TTL for <paramref name="runId"/> so the
+    /// sandbox controller does not reap the run's pod out from under a still-active preview (issue #560).
+    ///
+    /// <para><b>Why this exists:</b> the claim is created with
+    /// <c>spec.lifecycle.ttlSecondsAfterFinished = Sandbox:TimeoutSeconds</c> (default 600s). When a
+    /// child execution subtask's pod workload finishes, the controller reaps the pod ~TTL seconds later —
+    /// independently of the API. Issue #542/#551 only deferred the <em>API-side</em> pod release/orphan
+    /// sweep, which cannot stop the cluster controller, so a preview backed by a terminal run still
+    /// NXDOMAINs ~TimeoutSeconds after the turn ends. This hook JSON-merge-patches the claim TTL up to
+    /// cover the preview's own hard-max lifetime (<see cref="SandboxPreviewOptions.MaxLifetimeHours"/>
+    /// plus a margin), so the controller keeps the pod alive exactly as long as a preview may live.</para>
+    ///
+    /// <para><b>Leak-safe:</b> callers only invoke this while a preview is demonstrably active
+    /// (turn-end/reaper deferral gated by <see cref="HasActivePreviewAsync"/>, or keepalive). Bounded
+    /// teardown is preserved: the API-side preview reaper + AgentHost reaper still delete the claim
+    /// promptly on idle/max expiry, which supersedes the TTL; the extended TTL is only a backstop for
+    /// the window a preview is genuinely live. Best-effort and idempotent: a no-op when preview is
+    /// disabled, ignores 404s (claim already gone / never created), and never throws.</para>
+    /// </summary>
+    Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default);
+
+    /// <summary>
     /// Replica-safe ownership binding: returns <see langword="true"/> only when an HTTPRoute named
     /// for <paramref name="token"/> exists AND its <c>preview-run</c> annotation matches
     /// <paramref name="runId"/>. Reads cluster annotations, so either replica answers identically.
@@ -296,10 +318,91 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         // calls /preview-runner/processes/{sessionId}/health-check. Best-effort: never fails keepalive.
         await TryTouchPreviewRunnerProcessAsync(serviceName, ct).ConfigureAwait(false);
 
-        // TODO(morpheus): renew the backing SandboxClaim/pod TTL here once the claim-retention
-        // seam (KubernetesSandboxExecutor claim retention) exposes a per-run renew hook. Today the
-        // claim TTL is set at creation; the annotation bump above keeps the preview route alive and
-        // the reaper's orphan check covers the pod-gone case, so keepalive never blocks on this.
+        // #560: renew the backing SandboxClaim's cluster-side lifecycle TTL so the sandbox controller
+        // does not reap the run's pod out from under this still-active preview. The route annotation
+        // bump above only keeps the API-side reaper from deleting the route/pod; it does NOT stop the
+        // controller's ttlSecondsAfterFinished reap once a child subtask's workload finishes. Reading
+        // the run id off the route makes this replica-safe and keyed to the preview being kept alive.
+        var routeRunId = await TryReadRouteRunIdAsync(serviceName, ct).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(routeRunId))
+            await RenewBackingClaimTtlAsync(routeRunId!, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Best-effort read of the durable <c>preview-run-id</c> annotation off a preview HTTPRoute so
+    /// keepalive can renew the backing claim TTL for the right run (replica-safe). Returns
+    /// <see langword="null"/> on 404 or any read failure — the caller then skips claim renewal.
+    /// </summary>
+    private async Task<string?> TryReadRouteRunIdAsync(string routeName, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await _client!.CustomObjects.GetNamespacedCustomObjectAsync(
+                HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural, routeName,
+                cancellationToken: ct).ConfigureAwait(false);
+            var json = System.Text.Json.JsonSerializer.Serialize(raw);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("metadata", out var meta) &&
+                   meta.TryGetProperty("annotations", out var ann)
+                ? GetString(ann, PreviewReaper.AnnotationRunId)
+                : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    public async Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
+    {
+        // Leak-safe: only meaningful while a preview is active; callers gate on HasActivePreviewAsync
+        // (turn-end/reaper deferral) or keepalive. Never throws — a renewal failure must not fail the
+        // teardown-deferral or keepalive path it hangs off. No-op when preview is disabled.
+        if (!Enabled || string.IsNullOrEmpty(runId))
+            return;
+
+        // Cover the preview's own hard-max lifetime plus a margin so the controller keeps the pod for
+        // exactly as long as a preview may live. The API-side reaper still deletes the claim promptly
+        // on idle/max expiry (which supersedes this TTL), so the extended value is only a backstop.
+        var renewedTtlSeconds = checked(_options.MaxLifetimeHours * 3600 + 600);
+        var patchJson = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            spec = new { lifecycle = new { ttlSecondsAfterFinished = renewedTtlSeconds } },
+        });
+        var patch = new V1Patch(patchJson, V1Patch.PatchType.MergePatch);
+
+        // A run's preview is backed by either its agent-host claim (agent-*) or its run-command claim
+        // (run-*); patch whichever exists. A non-existent candidate 404s and is ignored — if neither
+        // exists this is a harmless no-op. MergePatch preserves the sibling shutdownPolicy.
+        foreach (var claimName in new[]
+        {
+            SandboxClaimConventions.DeriveAgentHostClaimName(runId),
+            SandboxClaimConventions.DeriveRunCommandClaimName(runId),
+        }.Distinct(StringComparer.Ordinal))
+        {
+            try
+            {
+                await _client!.CustomObjects.PatchNamespacedCustomObjectAsync(
+                    patch, SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
+                    _options.Namespace, SandboxClaimConventions.ClaimPlural, claimName,
+                    cancellationToken: ct).ConfigureAwait(false);
+                _logger.LogDebug(
+                    "SandboxPreviewService: renewed backing claim {Claim} TTL to {Ttl}s for run {RunId} (#560)",
+                    claimName, renewedTtlSeconds, runId);
+            }
+            catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Candidate claim does not exist for this run — expected for whichever of agent-*/run-*
+                // is not the backing claim; ignore.
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex,
+                    "SandboxPreviewService: best-effort claim TTL renewal failed for {Claim} (run {RunId}); " +
+                    "preview may NXDOMAIN when the cluster TTL elapses (#560)",
+                    claimName, runId);
+            }
+        }
     }
 
     /// <summary>

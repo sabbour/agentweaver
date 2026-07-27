@@ -301,6 +301,45 @@ public sealed class GitHubWebhookEndpointsTests : IClassFixture<GitHubWebhookWeb
     }
 
     [Fact]
+    public async Task Push_ProjectOriginStoredAsCloneUrl_StillFiresWorkflow()
+    {
+        // Regression: the "import from GitHub" creation path (ProjectService.CreateFromGitHubAsync)
+        // stores Project.Origin.SourceRepository as the full HTTPS clone URL, not the "owner/repo"
+        // contract form. A real GitHub delivery sends repository.full_name = "owner/repo", so the
+        // receiver must normalise both sides before matching — otherwise event-triggered workflows
+        // never fire for any URL-form project (confirmed end-to-end against staging: HTTP 204, no run).
+        var repoOwnerRepo = $"acme/demo-repo-{Guid.NewGuid():N}";
+        var cloneUrl = $"https://github.com/{repoOwnerRepo}";
+
+        var workingDir = _factory.NewWorkingDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDir, ".agentweaver", "workflows"));
+        await File.WriteAllTextAsync(
+            Path.Combine(workingDir, ".agentweaver", "workflows", "trigger.yaml"), PushTriggerYaml);
+
+        var project = MakeProject() with
+        {
+            WorkingDirectory = workingDir,
+            Origin = ProjectOrigin.FromGitHub(cloneUrl),
+            WebhookSecret = $"github-webhook:{Guid.NewGuid():N}",
+        };
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+            var secretStore = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            await secretStore.SetSecretAsync(project.WebhookSecret, WebhookSecret);
+            await projectStore.InsertAsync(project);
+        }
+
+        var body = PushPayload(repoOwnerRepo);
+        var response = await _client.SendAsync(BuildRequest(project.Id, "push", body, Sign(body)));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var tasks = await ListBacklogAsync(project.Id);
+        tasks.Should().ContainSingle();
+        tasks.Single().WorkflowOverrideId.Should().Be("on-push");
+    }
+
+    [Fact]
     public async Task RetriedDelivery_SameDeliveryId_DoesNotDoubleFire()
     {
         var (projectId, _, repoFullName) = await SeedProjectAsync(PushTriggerYaml);

@@ -775,3 +775,17 @@ POST /api/runs/{runId}/sandbox/preview (the agent-initiated start_preview tool c
 - status: fixed
 
 AgentHost pods are ephemeral and recycled shortly after a run completes, so transient tool-call failures (e.g. start_preview 403, or an unhandled-exception generic 'Tool execution failed') were impossible to investigate after the fact -- kubectl logs on the specific pod came back empty because it no longer existed. Root cause: PreviewPublishTool.Build (packages/Agentweaver.AgentRuntime/PreviewPublishTool.cs), which builds the start_preview tool, never called ILogger on its failure paths, even though AgentHost's process already has Application Insights/OpenTelemetry wired (apps/Agentweaver.AgentHost/AzureMonitorBootstrap.cs). Fixed (issue #528) by threading context.Logger from PreviewRunnerToolProvider into PreviewPublishTool.Build, logging a structured warning/error on non-success HTTP response or caught exception (tool name, run id, port, status code, response body), and redacting anything token/secret-shaped (Bearer/ghp_/gho_/ghu_/ghr_/JWT-shaped strings/Authorization header values) via Agentweaver.SandboxExec.SandboxOutputRedactor before it reaches the log sink.
+
+
+---
+
+## Visual Workflow Editor drag-to-connect broken by shared read-only node handles; ui-harness has no drag primitive
+
+- date: 2026-07-27
+- category: bug
+- surface: ui
+- status: fixed
+
+Reported by @sabbour on staging v0.11.6: the Visual Workflow Editor could not connect nodes by dragging ("can't even drag connect nodes", "you'd be lucky to create a saveable workflow"). Root cause: VisualWorkflowEditor reuses the shared read-only WorkflowNode (workflowNodeTypes in apps/web/src/components/WorkflowGraphPanel.tsx), whose connection <Handle>s were hard-coded to { opacity: 0, pointerEvents: 'none' } (correct for read-only renders like CoordinatorRunPage/WorkflowGraphPanel/LandingWorkflowDemo, all nodesConnectable={false}). pointer-events:none swallows the pointerdown React Flow needs to START a connection drag, so the correctly-wired onConnect never fired and no edge could be authored; opacity:0 also hid the grab affordance. Fixed (#555 / PR #556) by gating handle interactivity on a new `connectable` flag in WorkflowNodeData: read-only surfaces keep invisible non-interactive anchors, VisualWorkflowEditor.buildGraph sets connectable:true so handles render visible, pointer-events:all, isConnectable.
+
+Harness gotcha (filed as #557): the ui-harness driver (scripts/ui-harness/agent-driver-ui/tools.mjs) exposes only goto/open-preview/click/type-coordinator/resolve-approval/capture -- there is NO drag primitive, so canvas drag-to-connect and node-reposition CANNOT be automated or regression-tested by the harness. Diagnose canvas-interaction bugs from source (WorkflowGraphPanel.tsx handle styles + VisualWorkflowEditor onConnect wiring), not from harness runs.

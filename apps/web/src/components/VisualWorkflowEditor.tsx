@@ -8,6 +8,9 @@ import {
   Input,
   makeStyles,
   Menu,
+  MenuDivider,
+  MenuGroup,
+  MenuGroupHeader,
   MenuItem,
   MenuList,
   MenuPopover,
@@ -21,14 +24,22 @@ import {
 } from '@fluentui/react-components';
 import {
   AddRegular,
+  ArrowJoinRegular,
+  ArrowSplitRegular,
   BeakerRegular,
+  CheckmarkCircleRegular,
   CodeRegular,
   DeleteRegular,
   DismissRegular,
   EyeRegular,
+  FlagRegular,
+  FlowchartRegular,
+  PeopleTeamRegular,
   PersonFeedbackRegular,
   PersonRegular,
   ShieldCheckmarkRegular,
+  SparkleRegular,
+  TextBulletListLtrRegular,
   WarningRegular,
 } from '@fluentui/react-icons';
 import { EmptyState, PageHeader } from './ui';
@@ -68,6 +79,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentType } from 'react';
 import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
 import type { WfModel, WfNode } from '../utils/workflowYaml';
 import type { WorkflowNodeData } from './WorkflowGraphPanel';
@@ -129,6 +141,7 @@ const SPECIAL_GATES = [
     kind: 'gate',
     branches: ['revise', 'safety-failed', 'no-changes', 'review'],
     Icon: ShieldCheckmarkRegular,
+    description: 'Responsible-AI safety gate on the latest changes.',
   },
   {
     key: 'rubberduck',
@@ -139,6 +152,7 @@ const SPECIAL_GATES = [
     kind: 'gate',
     branches: ['pass', 'revise'],
     Icon: PersonFeedbackRegular,
+    description: 'Lightweight self-review checkpoint before proceeding.',
   },
   {
     key: 'human-review',
@@ -149,6 +163,7 @@ const SPECIAL_GATES = [
     kind: 'gate',
     branches: ['approved', 'request-changes', 'declined'],
     Icon: PersonRegular,
+    description: 'Pause for a human approve / request-changes decision.',
   },
   {
     key: 'build-test',
@@ -159,12 +174,32 @@ const SPECIAL_GATES = [
     agent: 'qa-engineer',
     branches: ['approved', 'request-changes', 'declined'],
     Icon: BeakerRegular,
+    description: 'Run build + tests as a live QA gate (qa-engineer).',
   },
 ] as const;
 
 const DEFAULT_BRANCHES: Record<string, string[]> = Object.fromEntries(
   SPECIAL_GATES.map((g) => [g.key, [...g.branches]]),
 );
+
+// Groups the "Add node" palette buckets primitives into (FR-050 authoring UX, #558).
+type NodePaletteGroup = 'gates' | 'steps' | 'flow';
+
+// Per-primitive palette metadata: a scannable icon + a one-line, plain-language
+// description + the group header it sits under. `build_test` is deliberately absent:
+// it is fully represented by the "Build & Test" preset in SPECIAL_GATES, and listing
+// the raw type again produced a confusing duplicate "Build & Test" row (#558). Users
+// who want a build/test step add the preset and edit it in the inspector.
+const NODE_TYPE_META: Record<string, { Icon: ComponentType; description: string; group: NodePaletteGroup }> = {
+  prompt: { Icon: SparkleRegular, description: 'A single agent turn that produces work.', group: 'steps' },
+  peer_review: { Icon: PeopleTeamRegular, description: "Another agent reviews the previous step's output.", group: 'gates' },
+  check: { Icon: CheckmarkCircleRegular, description: 'Generic verdict gate that branches on an outcome.', group: 'gates' },
+  fan_out: { Icon: ArrowSplitRegular, description: 'Split work into parallel subtasks.', group: 'flow' },
+  fan_in: { Icon: ArrowJoinRegular, description: 'Gather parallel subtask results back together.', group: 'flow' },
+  coordinator_composed: { Icon: FlowchartRegular, description: 'Delegate to a nested coordinator sub-workflow.', group: 'flow' },
+  serial: { Icon: TextBulletListLtrRegular, description: 'Run a fixed sequence of steps in order.', group: 'flow' },
+  terminal: { Icon: FlagRegular, description: 'Terminal end-state for a branch of the workflow.', group: 'flow' },
+};
 
 function gateKey(node: WfNode): string | null {
   if (node.type === 'build_test') return 'build-test';
@@ -266,6 +301,21 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
+  menuItemContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    maxWidth: '320px',
+    whiteSpace: 'normal',
+  },
+  menuItemTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  menuItemDescription: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+  },
 });
 
 function parseApiError400(err: unknown): { message: string; line: number | null } {
@@ -318,6 +368,7 @@ function buildGraph(
         state: { status: 'pending' },
         nodeType: gnt,
         isPlanned: true,
+        connectable: true,
       } as WorkflowNodeData,
     };
   });
@@ -570,6 +621,29 @@ export function VisualWorkflowEditor({
     onClose?.();
   }, [onClose]);
 
+  const renderPresetItem = (g: (typeof SPECIAL_GATES)[number]) => (
+    <MenuItem key={g.key} icon={<g.Icon />} onClick={() => handleAddSpecialGate(g)}>
+      <div className={styles.menuItemContent}>
+        <span className={styles.menuItemTitle}>{g.label}</span>
+        <span className={styles.menuItemDescription}>{g.description}</span>
+      </div>
+    </MenuItem>
+  );
+
+  const renderPrimitiveItems = (group: NodePaletteGroup) =>
+    AUTHORABLE_WORKFLOW_NODE_TYPES.filter((t) => NODE_TYPE_META[t]?.group === group).map((t) => {
+      const meta = NODE_TYPE_META[t];
+      const Icon = meta.Icon;
+      return (
+        <MenuItem key={t} icon={<Icon />} onClick={() => handleAddNode(t)}>
+          <div className={styles.menuItemContent}>
+            <span className={styles.menuItemTitle}>{NODE_TYPE_LABELS[t] ?? t}</span>
+            <span className={styles.menuItemDescription}>{meta.description}</span>
+          </div>
+        </MenuItem>
+      );
+    });
+
   return (
     <div className={styles.root}>
       <PageHeader
@@ -642,16 +716,21 @@ export function VisualWorkflowEditor({
               </MenuTrigger>
               <MenuPopover>
                 <MenuList>
-                  {SPECIAL_GATES.map((g) => (
-                    <MenuItem key={g.key} icon={<g.Icon />} onClick={() => handleAddSpecialGate(g)}>
-                      {g.label}
-                    </MenuItem>
-                  ))}
-                  {AUTHORABLE_WORKFLOW_NODE_TYPES.map((t) => (
-                    <MenuItem key={t} onClick={() => handleAddNode(t)}>
-                      {NODE_TYPE_LABELS[t] ?? t}
-                    </MenuItem>
-                  ))}
+                  <MenuGroup>
+                    <MenuGroupHeader>Reviewers &amp; gates</MenuGroupHeader>
+                    {SPECIAL_GATES.map(renderPresetItem)}
+                    {renderPrimitiveItems('gates')}
+                  </MenuGroup>
+                  <MenuDivider />
+                  <MenuGroup>
+                    <MenuGroupHeader>Agent steps</MenuGroupHeader>
+                    {renderPrimitiveItems('steps')}
+                  </MenuGroup>
+                  <MenuDivider />
+                  <MenuGroup>
+                    <MenuGroupHeader>Flow control</MenuGroupHeader>
+                    {renderPrimitiveItems('flow')}
+                  </MenuGroup>
                 </MenuList>
               </MenuPopover>
             </Menu>

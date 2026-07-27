@@ -95,6 +95,11 @@ public sealed class AgentHostReaperService : IAgentHostReaper
                     "AgentHostReaper: deferring reap of claim {Claim} (run {RunId}) — a live preview is " +
                     "still active; the preview idle/max expiry will release it.",
                     claim.ClaimName, claim.AnnotatedRunId);
+                // #560: the deferral above only stops the API-side reaper delete. The claim's
+                // cluster-side ttlSecondsAfterFinished would still let the sandbox controller reap the
+                // pod once its workload finished. Renew the claim TTL to cover the preview's hard-max
+                // lifetime so the pod survives as long as the preview may live. Best-effort/no-throw.
+                await RenewBackingClaimTtlAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false);
                 continue;
             }
 
@@ -273,6 +278,28 @@ public sealed class AgentHostReaperService : IAgentHostReaper
             _logger.LogWarning(ex,
                 "AgentHostReaper: active-preview probe failed for run {RunId}; treating as no active preview", runId);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// #560: best-effort renewal of the backing SandboxClaim's cluster-side TTL while a preview is
+    /// deferred, so the sandbox controller does not reap the pod out from under the live preview.
+    /// Delegates to the preview service (which owns claim-name resolution + the k8s client). Never
+    /// throws — a renewal failure must not fail the sweep.
+    /// </summary>
+    private async Task RenewBackingClaimTtlAsync(string? runId, CancellationToken ct)
+    {
+        if (_previewService is null || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            await _previewService.RenewBackingClaimTtlAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "AgentHostReaper: backing-claim TTL renewal failed for run {RunId} (best-effort)", runId);
         }
     }
 

@@ -110,6 +110,34 @@ describe('AssistantRunPage', () => {
     expect(screen.getByPlaceholderText('Message the assistant...')).toBeTruthy();
   });
 
+  it('shows suggested prompt buttons on the empty state and hides them once a run exists', async () => {
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    const suggestions = screen.getAllByTestId('assistant-suggested-prompt');
+    // A small, curated set — not a huge list.
+    expect(suggestions.length).toBeGreaterThanOrEqual(3);
+    expect(suggestions.length).toBeLessThanOrEqual(5);
+
+    typeAndSend('first message');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-suggested-prompts')).toBeNull();
+    });
+  });
+
+  it('clicking a suggested prompt populates the composer without submitting it', () => {
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    const [firstSuggestion] = screen.getAllByTestId('assistant-suggested-prompt');
+    const expectedText = firstSuggestion.textContent ?? '';
+    expect(expectedText.length).toBeGreaterThan(0);
+
+    fireEvent.click(firstSuggestion);
+
+    const textarea = screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement;
+    expect(textarea.value).toBe(expectedText);
+    // Populating is not the same as sending — no request should have gone out yet.
+    expect(apiClient.createAssistantRun).not.toHaveBeenCalled();
+  });
+
   it('creates a run on the first composer submit using real backend shape', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
     typeAndSend('what projects exist?');
