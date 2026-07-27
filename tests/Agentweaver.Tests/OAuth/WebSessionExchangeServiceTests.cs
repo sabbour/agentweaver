@@ -80,11 +80,18 @@ public class WebSessionExchangeServiceTests : IDisposable
     public async Task Issue_GeneratesUniqueOpaqueCodes()
     {
         var svc = NewService();
-        var a = await svc.IssueAsync("t1", "u1");
-        var b = await svc.IssueAsync("t2", "u2");
+        const string tokenA = "test-token-value-alpha-12345";
+        const string loginA = "test-login-alpha-12345";
+        const string tokenB = "test-token-value-beta-67890";
+        const string loginB = "test-login-beta-67890";
+        var a = await svc.IssueAsync(tokenA, loginA);
+        var b = await svc.IssueAsync(tokenB, loginB);
 
         a.Should().NotBe(b);
-        a.Should().NotContain("t1");
+        a.Should().NotBe(tokenA);
+        a.Should().NotBe(loginA);
+        b.Should().NotBe(tokenB);
+        b.Should().NotBe(loginB);
     }
 
     /// <summary>
@@ -147,4 +154,3 @@ public class WebSessionExchangeServiceTests : IDisposable
 
     public void Dispose() => _keepAlive.Dispose();
 }
-
