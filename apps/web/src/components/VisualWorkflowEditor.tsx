@@ -65,6 +65,7 @@ import {
   Background,
   Controls,
   ReactFlow,
+  useReactFlow,
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
@@ -343,6 +344,40 @@ function unroutedVerdicts(model: WfModel): { nodeId: string; verdicts: string[] 
     if (missing.length > 0) result.push({ nodeId: n.id, verdicts: missing });
   }
   return result;
+}
+
+// React Flow's `fitView` prop only fits the viewport once, on initial mount — it does
+// not re-run when `nodes` is later replaced (e.g. via syncGraph after handleAddNode /
+// handleAddSpecialGate write a new node into the YAML). Without this, a newly-added
+// node positioned outside the current viewport by buildGraph/layoutDag renders behind
+// the canvas pane's `overflow: hidden`, looking like the "Add node" click did nothing.
+//
+// This helper re-fits imperatively, but only when the node *count* grows — not on
+// every `nodes` change — so unrelated edits (renaming a node's label or its id,
+// reconnecting edges, dragging a node) don't steal the user's current pan/zoom
+// position. A count increase is a precise enough signal for "a node was added":
+// renames/reconnects preserve the count, and deletions decrease it (React Flow
+// already keeps deleted nodes on-screen, so no re-fit is needed there either).
+// Rendered as a child of <ReactFlow>, which exposes its internal provider context to
+// descendants, so no extra <ReactFlowProvider> wrapper is needed here.
+function FitViewOnNodeAdded({ nodes }: { nodes: Node[] }) {
+  const { fitView } = useReactFlow();
+  const prevCountRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const prevCount = prevCountRef.current;
+    prevCountRef.current = nodes.length;
+    if (prevCount === null || nodes.length <= prevCount) {
+      // First run (mount-time `fitView` prop already handled it) or no growth.
+      return;
+    }
+    // Defer to the next frame so the newly-added node's DOM measurements are ready.
+    requestAnimationFrame(() => {
+      void fitView({ padding: 0.2, maxZoom: 1.1, duration: 300 });
+    });
+  }, [nodes, fitView]);
+
+  return null;
 }
 
 export function VisualWorkflowEditor({
@@ -641,6 +676,7 @@ export function VisualWorkflowEditor({
               >
                 <Background />
                 <Controls showInteractive={false} />
+                <FitViewOnNodeAdded nodes={nodes} />
               </ReactFlow>
             </ActiveEdgeContext.Provider>
           </ExecutionModalContext.Provider>
