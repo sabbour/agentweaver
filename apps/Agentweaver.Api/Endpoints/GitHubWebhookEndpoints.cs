@@ -78,10 +78,19 @@ public static class GitHubWebhookEndpoints
                 return Results.BadRequest(new { error = "Payload is not valid JSON." });
             }
 
-            var repoFullName = payload?.Repository?.FullName;
-            if (string.IsNullOrWhiteSpace(repoFullName)
+            // GitHub always sends the canonical "owner/repo" in repository.full_name, but
+            // Project.Origin.SourceRepository is stored inconsistently depending on how the project
+            // was created: the "import from GitHub" path (ProjectService.CreateFromGitHubAsync) stores
+            // the full HTTPS clone URL, while the "create a new repo" connect path stores "owner/repo".
+            // Normalise BOTH sides to canonical "owner/repo" before comparing so a real delivery is
+            // matched regardless of which creation path produced the project (issue: event-triggered
+            // workflows never fired for URL-form projects).
+            var repoFullName = NormalizeRepoFullName(payload?.Repository?.FullName);
+            var projectRepo = NormalizeRepoFullName(project.Origin.SourceRepository);
+            if (repoFullName is null
                 || project.Origin.Kind != ProjectOriginKind.FromGitHub
-                || !string.Equals(project.Origin.SourceRepository, repoFullName, StringComparison.OrdinalIgnoreCase))
+                || projectRepo is null
+                || !string.Equals(projectRepo, repoFullName, StringComparison.Ordinal))
                 return Results.NoContent();
 
             var eventNames = new List<string> { $"{EventNamePrefix}{eventType}" };
@@ -103,6 +112,37 @@ public static class GitHubWebhookEndpoints
                 FiredWorkflowIds = firedWorkflowIds,
             });
         });
+    }
+
+    /// <summary>
+    /// Reduces a repository reference to canonical lowercase <c>owner/repo</c>. Accepts either the
+    /// contract form (<c>owner/repo</c>) or a full HTTPS clone URL
+    /// (e.g. <c>https://github.com/owner/repo(.git)</c>): the "import from GitHub" project-creation
+    /// path stores the URL form in <see cref="ProjectOrigin.SourceRepository"/>, while GitHub webhook
+    /// payloads always send <c>owner/repo</c>. Returns <c>null</c> when a usable owner/repo pair
+    /// cannot be extracted, so an unparseable value never accidentally matches.
+    /// </summary>
+    internal static string? NormalizeRepoFullName(string? repo)
+    {
+        if (string.IsNullOrWhiteSpace(repo)) return null;
+        var value = repo.Trim();
+
+        // Strip scheme + host when a URL form is supplied, keeping just the path.
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            value = uri.AbsolutePath;
+
+        value = value.Trim('/');
+        if (value.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            value = value[..^4];
+
+        var segments = value.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length < 2) return null;
+
+        // The last two path segments are always owner/repo (covers both "owner/repo" and a URL path).
+        var owner = segments[^2];
+        var name = segments[^1];
+        if (owner.Length == 0 || name.Length == 0) return null;
+        return $"{owner}/{name}".ToLowerInvariant();
     }
 }
 
