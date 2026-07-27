@@ -127,6 +127,31 @@ public sealed class KubernetesRemoteApiManifestTests
     }
 
     [Fact]
+    public void ApiSandboxRole_GrantsPatchAndUpdateOnSandboxClaims()
+    {
+        // #570: RenewBackingClaimTtlAsync (#560/#564) JSON-merge-patches the backing SandboxClaim's
+        // spec.lifecycle.ttlSecondsAfterFinished from KeepAliveAsync and both teardown-deferral paths.
+        // Without patch/update on this rule every renewal 403s and the #564 fix is a silent no-op —
+        // the sandbox controller still reaps the pod on the claim's original TTL. This test pins the
+        // rule so a future edit cannot regress the verb list without failing CI.
+        var rbac = ReadManifest("rbac-api.yaml");
+
+        // The first sandboxclaims rule in the file belongs to the agentweaver-api-sandbox Role (the
+        // worker Role's identical-looking rule is a separate, later block); matching directly on the
+        // rule text avoids ambiguity between the Role and RoleBinding, which share the
+        // `agentweaver-api-sandbox` metadata name.
+        var rule = Regex.Match(
+            rbac,
+            @"(?s)apiGroups:\s+- extensions\.agents\.x-k8s\.io\s+resources:\s+- sandboxclaims\s+verbs:\s+(?<verbs>(?:- \S+\s*)+)");
+
+        rule.Success.Should().BeTrue("the sandboxclaims rule must exist in the agentweaver-api-sandbox Role");
+        var verbs = Regex.Matches(rule.Groups["verbs"].Value, @"- (\S+)")
+            .Select(m => m.Groups[1].Value);
+
+        verbs.Should().Contain(new[] { "get", "list", "create", "delete", "patch", "update" });
+    }
+
+    [Fact]
     public void ProductionOverlay_EnablesAgentHostMtls()
     {
         var patch = ReadOverlayManifest("production", "patch-agenthost-mtls.yaml");
