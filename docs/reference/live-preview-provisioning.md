@@ -78,11 +78,21 @@ disabled and never throws. Bounded teardown is preserved because the extended TT
 idle/max expiry, which supersedes the TTL. It is only invoked while a preview is demonstrably active
 (both deferral sites gate on `HasActivePreviewAsync`; keepalive only runs for a live route).
 
-> **Operational note:** this relies on the sandbox controller recomputing the pod's deletion deadline
-> when `ttlSecondsAfterFinished` is patched mid-life (as Kubernetes `Job` TTL does). If a controller
-> instead snapshots the TTL at finish time, this renewal is ineffective and the pod TTL must instead
-> be raised at claim-creation time for preview-eligible runs. Validate against the live sandbox
-> controller before relying on this in production.
+> **Controller behaviour (verified against `kubernetes-sigs/agent-sandbox` v0.5.3, the pinned
+> `SANDBOX_CONTROLLER_VERSION`):** this renewal is effective because the controller recomputes the
+> deletion deadline from the **live** claim field on every reconcile — it does **not** snapshot an
+> absolute deadline at finish time. `SandboxClaimReconciler.checkExpiration` calls
+> `lifecycle.TimeLeft(time.Now(), claim.Spec.Lifecycle.ShutdownTime, claim.Spec.Lifecycle.TTLSecondsAfterFinished, finishedCondition)`,
+> and `lifecycle.ExpireAt` returns `finishedAt + ttlSecondsAfterFinished` (the earlier of that and the
+> optional spec `ShutdownTime`, which Agentweaver does not set). `finishedAt` is the fixed
+> `Finished` condition timestamp; the TTL is read live, so patching `spec.lifecycle.ttlSecondsAfterFinished`
+> upward moves the deadline forward, and a spec patch triggers an immediate reconcile
+> (`RequeueAfter = timeLeft`). The claim's TTL is the *sole* TTL-driven expiry: the controller never
+> copies `spec.lifecycle` onto the underlying `Sandbox` object, so there is no independent
+> Sandbox-level TTL that could reap the pod behind the claim. The only requirement is that a renewal
+> lands within `TimeoutSeconds` (default 600s) of the workload finishing — satisfied by the turn-end
+> release, the ~2-min reaper deferral, and per-request keepalive. **If the pinned controller version
+> changes, re-verify this reconcile behaviour**, as the fix depends on it.
 
 ## AgentHost preview-runner endpoints
 
