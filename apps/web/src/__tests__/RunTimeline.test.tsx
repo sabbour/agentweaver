@@ -41,6 +41,39 @@ describe('RunTimeline default expansion', () => {
     expect(screen.queryByText('Now the storage module')).toBeNull();
   });
 
+  it('numbers multiple distinct steps sequentially (Step 1, Step 2, Step 3) instead of labeling every step "Step 1"', () => {
+    // Regression test for a bug where every step in a run rendered as "Step 1" instead of
+    // incrementing — root-caused to `collapseContinuationNarrationSteps` folding an entire
+    // run's worth of continuation-narrated steps into one mega-step (see
+    // runTimelineSteps.test.ts's "does not merge continuation steps past the
+    // collapsible-narration caps" test for the underlying data-model regression test).
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Read the code' }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'read_file', arguments: { path: 'src/app.ts' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'agent.intent', { intent: 'Build the project' }),
+      evt(5, 'tool.call', { callId: 'c2', toolName: 'run_command', arguments: { command: 'npm run build' } }),
+      evt(6, 'tool.result', { callId: 'c2', content: 'ok' }),
+      evt(7, 'agent.intent', { intent: 'Deploy the artifact' }),
+      evt(8, 'tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm run deploy' } }),
+      evt(9, 'tool.result', { callId: 'c3', content: 'ok' }),
+      evt(10, 'agent.turn.end', {}),
+    ]);
+
+    expect(model.steps).toHaveLength(3);
+
+    render(
+      <Wrapper>
+        <RunTimeline steps={model.steps} running={false} />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('Step 1 ·')).toBeTruthy();
+    expect(screen.getByText('Step 2 ·')).toBeTruthy();
+    expect(screen.getByText('Step 3 ·')).toBeTruthy();
+    expect(screen.queryByText('Step 4 ·')).toBeNull();
+  });
+
   describe('RunTimeline tool arguments', () => {
     function openSingleTool() {
       fireEvent.click(screen.getByTestId('timeline-tool-group'));
