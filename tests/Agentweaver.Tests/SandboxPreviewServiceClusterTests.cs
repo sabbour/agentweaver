@@ -560,6 +560,90 @@ public sealed class SandboxPreviewServiceClusterTests
             r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}"),
             "#560: keepalive must renew the backing claim TTL so an actively-viewed preview is not reaped");
     }
+
+    // ---- issue #574: SetBackingPodSafeToEvictAsync (cluster-autoscaler scale-down protection) ------
+    // The kata node pool runs the cluster-autoscaler (min 1 / max 5) and the agent-sandbox controller
+    // marks sandbox pods safe-to-evict=true by default, so a scale-down drains the node and kills a
+    // live preview pod independently of the SandboxClaim TTL. Pinning the pod (safe-to-evict=false)
+    // while a preview is live keeps the autoscaler from draining its node; teardown resets it to true.
+
+    private static FakeKubeHandler HandlerWithBoundPod(string runId, string podName)
+    {
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        // GET the agent-host claim -> bound pod name in status.sandbox.name (replica-safe resolution).
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{agentClaim}",
+            "{\"apiVersion\":\"extensions.agents.x-k8s.io/v1beta1\",\"kind\":\"SandboxClaim\"," +
+            "\"metadata\":{\"name\":\"" + agentClaim + "\"}," +
+            "\"status\":{\"conditions\":[{\"type\":\"Ready\",\"status\":\"True\",\"reason\":\"Bound\"}]," +
+            "\"sandbox\":{\"name\":\"" + podName + "\"}}}");
+        return handler;
+    }
+
+    [Fact]
+    public async Task SetBackingPodSafeToEvict_false_pins_pod_against_autoscaler_scaledown()
+    {
+        const string runId = "run-574-pin";
+        const string podName = "agentweaver-agent-host-pin";
+        var handler = HandlerWithBoundPod(runId, podName);
+        var svc = NewService(handler);
+
+        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: false);
+
+        var patch = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}")).Subject;
+        patch.Body.Should().Contain("cluster-autoscaler.kubernetes.io/safe-to-evict")
+            .And.Contain("false",
+                "#574: a live preview must pin its backing pod so the autoscaler will not drain the kata node");
+    }
+
+    [Fact]
+    public async Task SetBackingPodSafeToEvict_true_releases_pod_on_teardown()
+    {
+        const string runId = "run-574-release";
+        const string podName = "agentweaver-agent-host-rel";
+        var handler = HandlerWithBoundPod(runId, podName);
+        var svc = NewService(handler);
+
+        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: true);
+
+        var patch = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}")).Subject;
+        patch.Body.Should().Contain("cluster-autoscaler.kubernetes.io/safe-to-evict")
+            .And.Contain("true",
+                "#574: on teardown the pod is released so the autoscaler can reclaim the kata node again");
+    }
+
+    [Fact]
+    public async Task SetBackingPodSafeToEvict_is_noop_when_no_bound_pod()
+    {
+        // No claim/pod exists (all GETs 404) -> best-effort no-op, no pod PATCH.
+        const string runId = "run-574-nopod";
+        var handler = new FakeKubeHandler();
+        var svc = NewService(handler);
+
+        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: false);
+
+        handler.Requests.Should().NotContain(r => r.Method == "PATCH" && r.Path.Contains("/pods/"),
+            "#574: with no bound pod there is nothing to pin — the call is a silent no-op");
+    }
+
+    [Fact]
+    public async Task SetBackingPodSafeToEvict_is_noop_when_preview_disabled()
+    {
+        const string runId = "run-574-disabled";
+        var handler = HandlerWithBoundPod(runId, "agentweaver-agent-host-x");
+        var svc = new SandboxPreviewService(
+            ClientFor(handler),
+            new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", MaxLifetimeHours = 8 },
+            NullLogger<SandboxPreviewService>.Instance);
+
+        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: false);
+
+        handler.Requests.Should().NotContain(r => r.Method == "PATCH",
+            "when the preview feature is disabled the pin is a no-op (leak-safe)");
+    }
 }
 
 /// <summary>

@@ -720,6 +720,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
         preview.RenewedRunId.Should().Be(runId,
             "#560: deferring the API-side delete is not enough — the claim's cluster-side TTL must be " +
             "renewed so the sandbox controller does not reap the pod out from under the live preview");
+        preview.SafeToEvictCalls.Should().ContainSingle().Which.Should().Be((runId, false),
+            "#574: deferring must also pin the backing pod (safe-to-evict=false) so the cluster-autoscaler " +
+            "does not drain the kata node and kill the pod during a scale-down");
     }
 
     [Fact]
@@ -742,6 +745,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         preview.RenewedRunId.Should().BeNull(
             "#560: with no active preview there is nothing to keep alive, so the claim TTL must NOT be " +
             "renewed (a renewal would extend the pod's cluster-side lifetime unnecessarily)");
+        preview.SafeToEvictCalls.Should().BeEmpty(
+            "#574: with no active preview the pod is not pinned — normal teardown proceeds");
     }
 
     [Fact]
@@ -776,6 +781,15 @@ public sealed class KubernetesSandboxExecutorClaimTests
         public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
         {
             RenewedRunId = runId;
+            return Task.CompletedTask;
+        }
+
+        /// <summary>(runId, safeToEvict) tuples passed to <see cref="SetBackingPodSafeToEvictAsync"/> (#574).</summary>
+        public List<(string RunId, bool SafeToEvict)> SafeToEvictCalls { get; } = new();
+
+        public Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
+        {
+            SafeToEvictCalls.Add((runId, safeToEvict));
             return Task.CompletedTask;
         }
 

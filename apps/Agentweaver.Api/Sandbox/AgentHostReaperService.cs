@@ -100,6 +100,11 @@ public sealed class AgentHostReaperService : IAgentHostReaper
                 // pod once its workload finished. Renew the claim TTL to cover the preview's hard-max
                 // lifetime so the pod survives as long as the preview may live. Best-effort/no-throw.
                 await RenewBackingClaimTtlAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false);
+                // #574: the TTL renewal only covers the controller's TTL reap. The kata node pool's
+                // cluster-autoscaler can still drain the node and kill this pod on scale-down (pods are
+                // safe-to-evict=true by default). Pin the backing pod against scale-down while the
+                // preview is live; the preview teardown resets it. Best-effort/no-throw.
+                await SetBackingPodSafeToEvictAsync(claim.AnnotatedRunId, false, ct).ConfigureAwait(false);
                 continue;
             }
 
@@ -300,6 +305,28 @@ public sealed class AgentHostReaperService : IAgentHostReaper
         {
             _logger.LogWarning(ex,
                 "AgentHostReaper: backing-claim TTL renewal failed for run {RunId} (best-effort)", runId);
+        }
+    }
+
+    /// <summary>
+    /// #574: best-effort pin of the backing sandbox pod against cluster-autoscaler scale-down while a
+    /// preview is deferred, so the autoscaler does not drain the kata node and kill the pod out from
+    /// under the live preview. Delegates to the preview service (which owns pod-name resolution + the
+    /// k8s client). Never throws — a pin failure must not fail the sweep.
+    /// </summary>
+    private async Task SetBackingPodSafeToEvictAsync(string? runId, bool safeToEvict, CancellationToken ct)
+    {
+        if (_previewService is null || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            await _previewService.SetBackingPodSafeToEvictAsync(runId, safeToEvict, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "AgentHostReaper: backing-pod safe-to-evict pin failed for run {RunId} (best-effort)", runId);
         }
     }
 

@@ -573,6 +573,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // API-side delete. Renew the claim TTL to cover the preview's hard-max lifetime so the
             // controller keeps the pod alive exactly as long as the preview may live. Best-effort.
             await _previewService.RenewBackingClaimTtlAsync(runId, ct).ConfigureAwait(false);
+            // #574: the TTL renewal above only covers the sandbox controller's TTL reap. The kata node
+            // pool's cluster-autoscaler can still drain the node and kill this pod during a scale-down
+            // (the pod is safe-to-evict=true by default). Pin the pod against scale-down while the
+            // preview is live; StopPreviewAsync resets it on teardown. Best-effort.
+            await _previewService.SetBackingPodSafeToEvictAsync(runId, false, ct).ConfigureAwait(false);
             return;
         }
 
