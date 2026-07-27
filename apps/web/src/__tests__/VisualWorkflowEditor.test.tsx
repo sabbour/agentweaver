@@ -26,7 +26,31 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-afterEach(cleanup);
+// #540 — spy on React Flow's imperative fitView while delegating to the real
+// implementation, so tests can assert *when* the editor re-fits the viewport
+// without losing real layout/rendering behavior.
+const fitViewSpy = vi.hoisted(() => vi.fn());
+vi.mock('@xyflow/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@xyflow/react')>();
+  return {
+    ...actual,
+    useReactFlow: () => {
+      const real = actual.useReactFlow();
+      return {
+        ...real,
+        fitView: (...args: Parameters<typeof real.fitView>) => {
+          fitViewSpy(...args);
+          return real.fitView(...args);
+        },
+      };
+    },
+  };
+});
+
+afterEach(() => {
+  cleanup();
+  fitViewSpy.mockClear();
+});
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
@@ -149,5 +173,41 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
     await waitFor(() => {
       expect(screen.getByText(/platform-owned tail steps/i)).toBeDefined();
     });
+  });
+});
+
+describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
+  it('re-fits the viewport after adding a node so it is not clipped by the canvas overflow', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await screen.findByText('Implement');
+    // Let the initial mount-time fitView (driven by the `fitView` prop, not our
+    // imperative hook) settle before asserting on our spy.
+    fitViewSpy.mockClear();
+
+    await user.click(await screen.findByRole('button', { name: /add node/i }));
+    await user.click(await screen.findByRole('menuitem', { name: /rubberduck review/i }));
+
+    await waitFor(() => {
+      expect(fitViewSpy).toHaveBeenCalled();
+    });
+  });
+
+  it('does not re-fit the viewport when an existing node is merely renamed', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    const implementNode = await screen.findByText('Implement');
+    fitViewSpy.mockClear();
+
+    fireEvent.click(implementNode);
+    const labelInput = await screen.findByDisplayValue('Implement');
+    fireEvent.change(labelInput, { target: { value: 'Implement (renamed)' } });
+    fireEvent.blur(labelInput);
+
+    await waitFor(() => {
+      expect((labelInput as HTMLInputElement).value).toBe('Implement (renamed)');
+    });
+    expect(fitViewSpy).not.toHaveBeenCalled();
   });
 });
