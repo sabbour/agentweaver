@@ -25,6 +25,13 @@ describe('categorizeTool', () => {
     expect(categorizeTool('viewport')).toBe('other');
     expect(categorizeTool('dispatch_agent')).toBe('other');
   });
+
+  it('treats preview process lifecycle tools as command activity instead of file views', () => {
+    expect(categorizeTool('start_preview_process')).toBe('command');
+    expect(deriveToolTitle('command', 'start_preview_process', { command: 'node server.js' })).toEqual({
+      title: 'Start Preview Process · node server.js',
+    });
+  });
 });
 
 describe('deriveToolTitle', () => {

@@ -178,6 +178,7 @@ export function categorizeTool(toolName: string): RunTimelineToolCategory {
   const segments = new Set(parts);
   if (
     n === 'run_command' || n === 'run' || hasToolPhrase(parts, ['run', 'command']) ||
+    hasToolPhrase(parts, ['preview', 'process']) ||
     hasToolSegment(segments, 'powershell', 'bash', 'shell', 'terminal', 'console', 'exec')
   ) {
     return 'command';
@@ -238,8 +239,8 @@ export function deriveToolTitle(
     case 'command': {
       const cmd = asStrOpt(args['command'] ?? args['cmd'] ?? args['script']);
       const isGeneric = toolName === 'run_command' || toolName === 'run';
-      const title = isGeneric ? 'Run command' : `Running ${toolName}`;
-      return { title, secondary: cmd };
+      if (isGeneric) return { title: 'Run command', secondary: cmd };
+      return { title: deriveHumanTitle(toolName, args) };
     }
     case 'read': {
       const range = deriveLineRange(args);
