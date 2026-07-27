@@ -34,6 +34,10 @@ Type a message and send it. The assistant can, among other things:
 
 It's calling the same MCP tools an external client would use — see [Reference — MCP tools](/reference/mcp-tools) for the full catalog. Tool calls the assistant makes appear inline in the conversation so you can see what it actually did, not just what it says it did.
 
+### Suggested prompts
+
+Before you've sent a first message, the empty state shows a handful of suggested-prompt chips — realistic starting points like "List my projects and each one's most recent run status" or "Start a quick smoke-test run". Clicking one fills the composer with that text so you can review or edit it before sending; it does not send automatically. These are meant to help first-time users and anyone doing a quick smoke test get going without having to think of a prompt from scratch.
+
 ## Deleting a session
 
 Hover a row and click the delete icon (or open the conversation and use the equivalent action). A confirmation dialog appears:
