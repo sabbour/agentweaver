@@ -91,6 +91,28 @@ public interface ISandboxPreviewService
     Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default);
 
     /// <summary>
+    /// Toggles the <c>cluster-autoscaler.kubernetes.io/safe-to-evict</c> annotation on the run's
+    /// backing sandbox pod (issue #574).
+    ///
+    /// <para><b>Why this exists:</b> the agent-sandbox controller materializes sandbox pods with
+    /// <c>safe-to-evict: "true"</c> by default, and the kata node pool runs the cluster-autoscaler
+    /// (min 1 / max 5). When load drops, the autoscaler drains a kata node to scale down and — because
+    /// the pod is marked safe-to-evict with no PodDisruptionBudget — kills a live preview pod out from
+    /// under its preview, entirely independently of <see cref="RenewBackingClaimTtlAsync"/> and the
+    /// SandboxClaim TTL (which is why the #560/#564/#570/#571 TTL-renewal chain never fixed it).
+    /// Setting the annotation to <c>false</c> while a preview is live tells the autoscaler it may not
+    /// drain that node, so the pod survives scale-down; resetting it to <c>true</c> on teardown lets
+    /// the node be reclaimed again.</para>
+    ///
+    /// <para><b>Best-effort:</b> a no-op when preview is disabled or the bound pod cannot be resolved,
+    /// and never throws — an annotation-patch failure must not fail the preview lifecycle path it hangs
+    /// off. Requires the <c>pods: patch</c> verb already granted to the API Role (rbac-api.yaml).</para>
+    /// </summary>
+    /// <param name="safeToEvict"><c>false</c> to pin the pod against autoscaler scale-down while a
+    /// preview is live; <c>true</c> to release it on teardown.</param>
+    Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default);
+
+    /// <summary>
     /// Replica-safe ownership binding: returns <see langword="true"/> only when an HTTPRoute named
     /// for <paramref name="token"/> exists AND its <c>preview-run</c> annotation matches
     /// <paramref name="runId"/>. Reads cluster annotations, so either replica answers identically.
@@ -191,12 +213,16 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
         var client = _client!;
 
-        // a/c. Patch the per-run selector label onto the bound pod (JSON merge patch).
+        // a/c. Patch the per-run selector label onto the bound pod (JSON merge patch). #574: in the
+        // same patch, set cluster-autoscaler.kubernetes.io/safe-to-evict=false so the autoscaler will
+        // not drain the kata node (and kill this pod) during a scale-down while the preview is live —
+        // the annotation is reset to true on preview teardown (StopPreviewAsync).
         var podPatchJson = System.Text.Json.JsonSerializer.Serialize(new
         {
             metadata = new
             {
                 labels = new Dictionary<string, string> { [PreviewReaper.PodPreviewRunLabel] = sanitizedRun },
+                annotations = new Dictionary<string, string> { [SafeToEvictAnnotation] = "false" },
             },
         });
         var podPatch = new V1Patch(podPatchJson, V1Patch.PatchType.MergePatch);
@@ -325,7 +351,13 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         // the run id off the route makes this replica-safe and keyed to the preview being kept alive.
         var routeRunId = await TryReadRouteRunIdAsync(serviceName, ct).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(routeRunId))
+        {
             await RenewBackingClaimTtlAsync(routeRunId!, ct).ConfigureAwait(false);
+            // #574: re-assert safe-to-evict=false on the backing pod so the cluster-autoscaler will not
+            // drain the kata node out from under this still-active preview during a scale-down. Symmetric
+            // with the TTL renewal above (which only covers the controller's TTL reap, not node eviction).
+            await SetBackingPodSafeToEvictAsync(routeRunId!, false, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -402,6 +434,58 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                     "preview may NXDOMAIN when the cluster TTL elapses (#560)",
                     claimName, runId);
             }
+        }
+    }
+
+    /// <summary>Cluster-autoscaler pod annotation controlling whether a node hosting the pod may be
+    /// drained during scale-down (issue #574).</summary>
+    internal const string SafeToEvictAnnotation = "cluster-autoscaler.kubernetes.io/safe-to-evict";
+
+    /// <inheritdoc />
+    public async Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
+    {
+        // Leak-safe: only meaningful while a preview is active (callers set false on start/keepalive/
+        // defer, true on teardown). No-op when preview is disabled. Never throws — an annotation patch
+        // failure must not fail the lifecycle path it hangs off.
+        if (!Enabled || string.IsNullOrEmpty(runId))
+            return;
+
+        try
+        {
+            var podName = await ResolveBoundPodNameAsync(runId, ct).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(podName))
+            {
+                _logger.LogDebug(
+                    "SandboxPreviewService: no bound pod to set safe-to-evict for run {RunId} (#574)", runId);
+                return;
+            }
+
+            var value = safeToEvict ? "true" : "false";
+            var patchJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                metadata = new
+                {
+                    annotations = new Dictionary<string, string> { [SafeToEvictAnnotation] = value },
+                },
+            });
+            var patch = new V1Patch(patchJson, V1Patch.PatchType.MergePatch);
+
+            await _client!.CoreV1.PatchNamespacedPodAsync(
+                patch, podName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
+            _logger.LogDebug(
+                "SandboxPreviewService: set {Annotation}={Value} on backing pod {Pod} for run {RunId} (#574)",
+                SafeToEvictAnnotation, value, podName, runId);
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Pod already gone (torn down / evicted) — nothing to pin or release.
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "SandboxPreviewService: best-effort safe-to-evict={SafeToEvict} patch failed for run {RunId}; " +
+                "the cluster-autoscaler may evict the preview pod on kata-node scale-down (#574)",
+                safeToEvict, runId);
         }
     }
 
@@ -592,8 +676,19 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         EnsureReady();
         var serviceName = PreviewReaper.ServiceName(token);
 
+        // #574: resolve the run BEFORE deleting the route so we can release the backing pod's
+        // safe-to-evict pin on teardown (the route carries the durable run-id annotation). This runs
+        // for both explicit stops and expiry reaps (ReapAsync calls StopPreviewAsync).
+        var runId = await TryReadRouteRunIdAsync(serviceName, ct).ConfigureAwait(false);
+
         await DeleteHttpRouteIdempotentAsync(serviceName, ct).ConfigureAwait(false);
         await DeleteServiceIdempotentAsync(serviceName, ct).ConfigureAwait(false);
+
+        // #574: the preview is gone, so let the cluster-autoscaler reclaim the kata node again by
+        // resetting safe-to-evict=true on the pod (it is deleted shortly after by the AgentHost reaper
+        // when the run is no longer active; resetting avoids pinning the node in the meantime).
+        if (!string.IsNullOrEmpty(runId))
+            await SetBackingPodSafeToEvictAsync(runId!, true, ct).ConfigureAwait(false);
 
         _logger.LogInformation("SandboxPreviewService: stopped preview {Fingerprint}", Fingerprint(token));
     }

@@ -789,3 +789,60 @@ AgentHost pods are ephemeral and recycled shortly after a run completes, so tran
 Reported by @sabbour on staging v0.11.6: the Visual Workflow Editor could not connect nodes by dragging ("can't even drag connect nodes", "you'd be lucky to create a saveable workflow"). Root cause: VisualWorkflowEditor reuses the shared read-only WorkflowNode (workflowNodeTypes in apps/web/src/components/WorkflowGraphPanel.tsx), whose connection <Handle>s were hard-coded to { opacity: 0, pointerEvents: 'none' } (correct for read-only renders like CoordinatorRunPage/WorkflowGraphPanel/LandingWorkflowDemo, all nodesConnectable={false}). pointer-events:none swallows the pointerdown React Flow needs to START a connection drag, so the correctly-wired onConnect never fired and no edge could be authored; opacity:0 also hid the grab affordance. Fixed (#555 / PR #556) by gating handle interactivity on a new `connectable` flag in WorkflowNodeData: read-only surfaces keep invisible non-interactive anchors, VisualWorkflowEditor.buildGraph sets connectable:true so handles render visible, pointer-events:all, isConnectable.
 
 Harness gotcha (filed as #557): the ui-harness driver (scripts/ui-harness/agent-driver-ui/tools.mjs) exposes only goto/open-preview/click/type-coordinator/resolve-approval/capture -- there is NO drag primitive, so canvas drag-to-connect and node-reposition CANNOT be automated or regression-tested by the harness. Diagnose canvas-interaction bugs from source (WorkflowGraphPanel.tsx handle styles + VisualWorkflowEditor onConnect wiring), not from harness runs.
+
+---
+
+## TTL A/B verify v0.12.1: SandboxClaim reaped in ~6min despite RBAC-fixed RenewBackingClaimTtlAsync — new failure mode, not RBAC
+
+- date: 2026-07-27
+- category: bug
+- surface: api
+- status: open
+
+Re-ran the #560 live A/B on staging v0.12.1 (project morpheus-ttl-verify-560, coordinator run ec4d003d-bd77-4121-aa18-61fd78e3f69c). Dispatched two subtasks; subtask run d24edd14-968c-4036-bd52-74ffb3a9866b finished its turn at 2026-07-27T12:02:10.403Z. Called POST /api/runs/{runId}/sandbox/preview at 12:04:37Z -> HTTP 200 with a real preview_url, backed by SandboxClaim agent-d24edd14968c / pod agentweaver-agent-host-jvqtp. AgentHostReaperService correctly logged 'deferring reap...a live preview is still active' at both 12:06:30Z and 12:07:57Z (no 403s, RBAC fix from #571 confirmed still working -- consistent with the prior 25/25 verification), and RenewBackingClaimTtlAsync's own code path never logged a Warning failure. Despite this, kubelet issued a Killing event for pod agentweaver-agent-host-jvqtp at exactly 12:07:57Z (same second as the second deferral log), the SandboxClaim agent-d24edd14968c is now completely absent from kubectl get sandboxclaim, and the preview_url NXDOMAINs. This is only ~5m47s after the subtask finished -- well BEFORE even the un-renewed default 600s TTL window (12:12:10Z) would have expired, so this is NOT the original ttlSecondsAfterFinished cluster-clock bug recurring. Two other AgentHost pods (agentweaver-agent-host-xwlv8, backing a legitimately-orphaned sibling claim agent-00123ee8302d) were killed at the exact same 12:07:57Z timestamp by the same reaper sweep, and a further pair (bs4sd/qmv4z) died together ~4-6 minutes after their own creation in a later sweep -- suggesting either a cascading-delete interaction in the AgentHostReaperService/cluster-controller path when one claim in a sweep is legitimately reaped, or an unrelated node-level churn event (node aks-katapool-28841148-vmss00000y went NodeNotReady and was replaced by a new node ...000z during this same window, though the actual Killing events were issued by kubelet on live nodes ...000x/...000z, not the NotReady one). Root cause NOT yet isolated -- do not guess-fix. Filed as a new issue referencing #560/#564/#571 for follow-up; full kubectl/API log evidence captured in the session that produced this entry.
+
+
+---
+
+## #574 root-caused: preview pods evicted by cluster-autoscaler kata-node scale-down, NOT SandboxClaim TTL
+
+- date: 2026-07-27
+- category: bug
+- surface: api/infra
+- status: root-caused (fix not yet implemented — non-trivial, stopped for review per 3-prior-failed-attempts caution)
+
+The ~6-minute AgentHost preview-pod death in #574 is definitively NOT a SandboxClaim `ttlSecondsAfterFinished` reap and NOT the AgentHostReaperService. It is the **cluster-autoscaler draining kata nodes (scale-down) plus occasional NotReady-node replacement**, evicting the kata pod entirely independent of the TTL/reaper machinery that #560/#564/#570/#571 all targeted. That whole fix line was aimed at the wrong mechanism, which is why RBAC-correct, source-correct renewal calls still "failed".
+
+Decisive LIVE evidence (staging `agwv` cluster, agentweaver ns, 2026-07-27 ~12:22Z):
+1. `kubectl get events -n agentweaver` shows repeated **`ScaleDown` -> `Killing`** pairs on agent-host pods, e.g. `pod/agentweaver-agent-host-cshwb: "deleting pod for node scale down"` + `Killing`, and same for `6v2rd`; plus `TriggeredScaleUp [aks-katapool 1->2]`. The kata pool oscillates 1<->2 nodes continuously.
+2. The live agent-host **pod carries `cluster-autoscaler.kubernetes.io/safe-to-evict: "true"`** (surfaced via the controller's `agents.x-k8s.io/propagated-annotations`), explicitly authorizing the autoscaler to drain the node and kill the pod to scale down. Our SandboxTemplate podTemplate sets NO annotations, so this is an agent-sandbox v0.5.3 controller DEFAULT, not ours.
+3. **No PodDisruptionBudget** exists for agent-host pods (only api/frontend/gateway/mcp/worker have PDBs) — nothing blocks their voluntary disruption.
+4. `cluster-autoscaler-status` configmap shows an active `scaleDown:` section for `aks-katapool-28841148-vmss`.
+5. Kata pool = `--enable-cluster-autoscaler --min-count 1 --max-count 5` (scripts/azure/steps/10-create-cluster.mjs): scales back toward 1 node whenever load drops, draining agent-host pods on the removed node. Pods tolerate `not-ready:NoExecute` only 300s, so a NotReady node (the one-off 000y in #574) evicts them after 5 min.
+
+Why this explains EVERY #574 observation: faster than 600s because it was never a TTL reap (node-level eviction, then `shutdownPolicy: Delete` promptly removed the workload-less claim -> claim "vanished" instantly); reaper "deferring reap" logs + renewal with no 403s were all true and all irrelevant; two pods dying the same second (jvqtp+xwlv8, bs4sd+qmv4z) = two ~1000m-CPU kata pods share one 4-vCPU node, so losing/draining one node kills both.
+
+Candidate (a) cascading-delete/reaper-race: RULED OUT by source review — every API-side delete path (AgentHostReaperService, KubernetesSandboxExecutor.ReleaseAgentHostPodAsync, SandboxPreviewService) correctly gates on HasActivePreviewAsync and defers; no legacy parallel delete path. Claim disappearance is a consequence of node-level eviction + shutdownPolicy:Delete.
+
+Proposed fix (NOT yet implemented; see decision Morpheus-issue-574): stop the autoscaler from draining kata nodes hosting a live/serving AgentHost pod. Option A (static): add `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` to the SandboxTemplate podTemplate annotations — simple but pins nodes for idle warm-pool spares too (cost/capacity regression) and unverified the controller lets a template annotation override its default. Option B (recommended, dynamic): patch the backing POD's safe-to-evict annotation to "false" when a preview goes live (symmetric with RenewBackingClaimTtlAsync) and back to "true" on teardown/release — needs pod-patch RBAC (the #571 Role covers sandboxclaims, likely not pods). Option C: add an agent-host PDB (weak alone). REQUIRED before shipping: empirically prove on staging that safe-to-evict:"false" actually stops the `ScaleDown` eviction (patch a live serving pod, observe a scale-down window, confirm its node is not drained) — do NOT repeat the looked-correct-but-untested pattern. Keep #560/#574 open until that experiment passes.
+
+
+---
+
+## #574 FIXED + LIVE-VALIDATED: dynamic `safe-to-evict` toggle on the backing preview pod (Option B)
+
+- date: 2026-07-27
+- category: bug
+- surface: api/infra
+- status: fixed (implemented + empirically validated on staging)
+
+Implemented the Option B fix from the #574 root-cause: `SandboxPreviewService.SetBackingPodSafeToEvictAsync(runId, bool, ct)` merge-patches the backing pod's `cluster-autoscaler.kubernetes.io/safe-to-evict` annotation. It is set to `"false"` (pin: block autoscaler scale-down eviction) everywhere a live preview is asserted — atomically in `StartPreviewAsync`'s pod patch, in `KeepAliveAsync`, in `KubernetesSandboxExecutor.ReleaseAgentHostPodAsync`'s defer branch, and in `AgentHostReaperService`'s defer branch — i.e. symmetric with every existing `RenewBackingClaimTtlAsync` call site. It is set back to `"true"` (release) in `StopPreviewAsync` (which `ReapAsync` also calls), resolving the runId before the HTTPRoute is deleted. The impl is best-effort/no-throw, no-ops when preview is disabled or no bound pod resolves, and ignores 404. RBAC: `agentweaver-api-sandbox` Role already grants `pods: get,list,patch` (k8s/base/rbac-api.yaml) — confirmed live via `kubectl auth can-i patch pods --as=system:serviceaccount:agentweaver:agentweaver-api` => yes. No RBAC change needed (unlike #571).
+
+LIVE EMPIRICAL A/B PROOF (staging `agwv` cluster, kata pool, 2026-07-27) — the non-negotiable step the prior 3 fixes skipped:
+- Forced a 2nd kata node up with a CPU-filler deploy, pinned a tiny pod `evict-exp-pin` (safe-to-evict:"false") onto that node, deleted the filler so the node became a low-util (~2.6%) scale-down candidate whose ONLY removal blocker was the pin annotation.
+- With `safe-to-evict:"false"`: node stayed `Ready` and autoscaler reported `scaleDown: NoCandidates` for ~14 min continuously — the pin blocked scale-down.
+- CONTROL: flipped the same pod to `safe-to-evict:"true"`; within ~3.5 min the autoscaler status for `aks-katapool-28841148-vmss` transitioned `NoCandidates` -> `scaleDown: candidates: 1` (lastTransitionTime 13:02:29Z) targeting exactly that node. The annotation is the deciding factor: `"false"` => not a candidate; `"true"` => candidate for removal/eviction. QED.
+
+Option C (agent-host PDB) intentionally SKIPPED (documented as follow-up): agent-host pods are ephemeral pod-per-run; a PDB risks blocking legitimate node drains / warm-pool recreation and does NOT stop a `safe-to-evict:true` autoscaler scale-down anyway (the actual #574 mechanism). The dynamic annotation is the correct, targeted control.
+
+Gotcha for tests: `TryGetBoundPodName(JsonElement)` requires BOTH a `Ready=True` condition and `status.sandbox.name` on the SandboxClaim JSON — stubs missing the Ready condition make `SetBackingPodSafeToEvictAsync` no-op (resolves no bound pod), which silently fails the pin assertions.

@@ -128,6 +128,9 @@ public sealed class AgentHostReaperCredentialTests
         preview.RenewedRunId.Should().Be(runId,
             "#560: deferring the reap must also renew the claim's cluster-side TTL so the sandbox " +
             "controller does not reap the pod out from under the live preview");
+        preview.SafeToEvictCalls.Should().ContainSingle().Which.Should().Be((runId, false),
+            "#574: deferring the reap must also pin the backing pod (safe-to-evict=false) so the " +
+            "cluster-autoscaler does not drain the kata node and kill the pod during a scale-down");
     }
 
     [Fact]
@@ -250,6 +253,15 @@ public sealed class AgentHostReaperCredentialTests
         public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
         {
             RenewedRunId = runId;
+            return Task.CompletedTask;
+        }
+
+        /// <summary>(runId, safeToEvict) tuples passed to <see cref="SetBackingPodSafeToEvictAsync"/> (#574).</summary>
+        public List<(string RunId, bool SafeToEvict)> SafeToEvictCalls { get; } = new();
+
+        public Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
+        {
+            SafeToEvictCalls.Add((runId, safeToEvict));
             return Task.CompletedTask;
         }
 
