@@ -1,0 +1,5 @@
+---
+"agentweaver": patch
+---
+
+Grant the `agentweaver-api-sandbox` Role `patch`/`update` on `sandboxclaims.extensions.agents.x-k8s.io` so the backing-claim TTL renewal added for #560 (#564) actually works (#570). Verified via a live A/B on staging: `SandboxPreviewService.RenewBackingClaimTtlAsync`/`KeepAliveAsync` JSON-merge-patch `spec.lifecycle.ttlSecondsAfterFinished` on the run's `SandboxClaim`, but the Role in `k8s/base/rbac-api.yaml` only ever granted `get, list, create, delete` on that resource — every renewal attempt returned HTTP 403 Forbidden, so #564 shipped a silent no-op and the sandbox controller kept reaping preview pods on their original TTL. Audited the other `SandboxPreviewService`/`KubernetesSandboxExecutor`/`AgentHostReaperService` patch paths (pods, HTTPRoutes) — both already carry the verbs they need, so `sandboxclaims` was the only gap. Added `KubernetesRemoteApiManifestTests.ApiSandboxRole_GrantsPatchAndUpdateOnSandboxClaims` to pin the verb list and catch this class of RBAC/code-permission mismatch in CI going forward.

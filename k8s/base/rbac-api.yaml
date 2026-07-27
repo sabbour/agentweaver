@@ -6,6 +6,10 @@ metadata:
   labels:
     app.kubernetes.io/part-of: agentweaver
 rules:
+  # #570: patch/update are required so KeepAliveAsync/RenewBackingClaimTtlAsync (#560/#564) can
+  # JSON-merge-patch spec.lifecycle.ttlSecondsAfterFinished on the backing SandboxClaim while a
+  # preview is active. Without these verbs every renewal attempt 403s and the fix in #564 is a
+  # silent no-op — the sandbox controller still reaps the pod on its original TTL.
   - apiGroups:
       - extensions.agents.x-k8s.io
     resources:
@@ -15,6 +19,8 @@ rules:
       - list
       - create
       - delete
+      - patch
+      - update
   # Templates and warm pools are deployed manifests. The API only reads them for
   # sandbox diagnostics; it must not be able to alter the pod template.
   - apiGroups:
