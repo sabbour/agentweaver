@@ -53,6 +53,18 @@ public interface ISandboxPreviewService
     /// </summary>
     Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Replica-safe check (issue #542): does <paramref name="runId"/> have at least one preview whose
+    /// idle/max expiry has NOT yet elapsed? Unlike <see cref="ListForRunAsync"/> this deliberately does
+    /// NOT require the backing pod to still exist — it answers "should the run's sandbox pod be kept
+    /// alive to keep a preview reachable?", which is asked precisely at the moment the pod is about to
+    /// be torn down (turn-end release / orphan reap), when the pod still exists. Returns
+    /// <see langword="false"/> when preview is disabled or no un-expired route exists, so the caller
+    /// falls back to normal teardown. Never throws — a lookup failure returns <see langword="false"/>
+    /// (leak-safe: defer only on positive evidence of an active preview).
+    /// </summary>
+    Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default);
+
     /// <summary>Bumps the preview's idle expiry to now + IdleTimeoutMinutes. Idempotent (404 ignored).</summary>
     Task KeepAliveAsync(string token, CancellationToken ct = default);
 
@@ -425,6 +437,51 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         }
 
         return sessions;
+    }
+
+    public async Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default)
+    {
+        // Leak-safe: only defer a pod teardown on POSITIVE evidence of a live preview. When preview is
+        // disabled, or the lookup fails, or no un-expired route exists, return false so the caller
+        // performs its normal teardown (issue #542).
+        if (!Enabled)
+            return false;
+
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        var now = _clock.GetUtcNow();
+
+        try
+        {
+            var raw = await _client!.CustomObjects.ListNamespacedCustomObjectAsync(
+                HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural,
+                labelSelector: $"{PreviewReaper.LabelPartOf}={PreviewReaper.LabelPartOfValue}",
+                cancellationToken: ct).ConfigureAwait(false);
+
+            foreach (var route in ParsePreviewRoutes(raw).Where(r =>
+                         string.Equals(r.SanitizedRun, sanitizedRun, StringComparison.Ordinal)))
+            {
+                // podExists:true — we are deciding whether to KEEP the pod for this preview, so pod
+                // existence is not a signal here (the pod is present at the teardown boundary). Only the
+                // idle (keepalive) and hard-max expiries bound the deferral, matching the reaper's own
+                // ExpiredIdle / ExpiredMax axes so a preview and its pod expire together.
+                var decision = PreviewReaper.Decide(
+                    now,
+                    PreviewReaper.ParseTimestamp(route.ExpiresAt),
+                    PreviewReaper.ParseTimestamp(route.MaxUntil),
+                    podExists: true);
+                if (decision == PreviewReapReason.Alive)
+                    return true;
+            }
+
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "SandboxPreviewService: active-preview probe failed for run {RunId}; treating as no active preview",
+                runId);
+            return false;
+        }
     }
 
     public async Task StopPreviewAsync(string token, CancellationToken ct = default)
