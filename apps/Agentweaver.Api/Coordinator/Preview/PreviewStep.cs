@@ -38,6 +38,7 @@ public sealed class PreviewStep
     private readonly AgentPreviewGate _previewGate;
     private readonly IPreviewRunnerHttpClient _httpClient;
     private readonly PreviewCommandResolver _resolver;
+    private readonly IPreviewCommandModel? _commandModel;
     private readonly IAgentHostTurnTokenRegistry _turnTokens;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
     private readonly RunStreamStore _streamStore;
@@ -55,12 +56,14 @@ public sealed class PreviewStep
         SandboxRuntimeOptions sandboxRuntime,
         ILogger<PreviewStep> logger,
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
-        IPodNameRegistry? podRegistry = null)
+        IPodNameRegistry? podRegistry = null,
+        IPreviewCommandModel? commandModel = null)
     {
         _previewService = previewService;
         _previewGate = previewGate;
         _httpClient = httpClient;
         _resolver = resolver;
+        _commandModel = commandModel;
         _turnTokens = turnTokens;
         _streamStore = streamStore;
         _sandboxRuntime = sandboxRuntime;
@@ -98,13 +101,22 @@ public sealed class PreviewStep
                 return;
             }
 
-            // 3. Resolve the run command (only heuristic step — Phase 1, no command agent).
+            // 3. Resolve the run command. Phase 1 = fast/free/deterministic heuristics (no model turn).
+            //    Phase 2 (issue #541) = an LLM fallback that runs ONLY when the heuristics come up empty,
+            //    giving a model a bounded worktree view to propose a command. The model-chosen command
+            //    still runs through the IDENTICAL sandboxed start/observe/approval path below — only the
+            //    command string's origin changes. If neither tier resolves, we preserve the terminal
+            //    preview_command_unresolved outcome (this fallback is additive, never a forced success).
             var resolution = _resolver.Resolve(request.WorktreePath);
             if (!resolution.Resolved || string.IsNullOrWhiteSpace(resolution.Command))
             {
-                EmitFailed(request, "preview_command_unresolved",
-                    "Could not determine how to run the app from the worktree (Phase-1 heuristics).");
-                return;
+                resolution = await TryResolveViaModelAsync(request, ct).ConfigureAwait(false);
+                if (resolution is null || !resolution.Resolved || string.IsNullOrWhiteSpace(resolution.Command))
+                {
+                    EmitFailed(request, "preview_command_unresolved",
+                        "Could not determine how to run the app from the worktree (heuristics and model fallback).");
+                    return;
+                }
             }
 
             EmitStartRequested(request, resolution.Source);
@@ -260,6 +272,82 @@ public sealed class PreviewStep
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogDebug(ex, "PreviewStep: best-effort stop of session {SessionId} for run {RunId} failed (ignored).", sessionId, runId);
+        }
+    }
+
+    /// <summary>
+    /// Phase-2 (issue #541) LLM fallback: only invoked when the deterministic heuristics returned
+    /// <see cref="PreviewCommandResolution.Unresolved"/>. Asks the model for a run command, then
+    /// defensively validates it (non-empty command + a working directory contained within the
+    /// worktree that actually exists) before returning a resolution tagged <c>Source = "llm"</c>.
+    /// Returns <see langword="null"/> when no model is wired, the model declines, or validation fails —
+    /// callers then preserve the terminal <c>preview_command_unresolved</c> outcome.
+    /// </summary>
+    private async Task<PreviewCommandResolution?> TryResolveViaModelAsync(PreviewStepRequest request, CancellationToken ct)
+    {
+        if (_commandModel is null)
+            return null;
+
+        PreviewCommandProposal? proposal;
+        try
+        {
+            proposal = await _commandModel.ProposeCommandAsync(
+                new PreviewCommandModelContext(request.RunId, null, request.SubmittingUser, request.WorktreePath),
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "PreviewStep: LLM command fallback threw for run {RunId}; treating as unresolved.", request.RunId);
+            return null;
+        }
+
+        if (proposal is null || !proposal.Previewable || string.IsNullOrWhiteSpace(proposal.Command))
+            return null;
+
+        var cwd = ResolveModelCwdWithinWorktree(request.WorktreePath, proposal.Cwd);
+        if (cwd is null)
+        {
+            _logger.LogWarning(
+                "PreviewStep: LLM-proposed cwd '{Cwd}' for run {RunId} escaped or does not exist in the worktree; treating as unresolved.",
+                proposal.Cwd, request.RunId);
+            return null;
+        }
+
+        _logger.LogInformation(
+            "PreviewStep: LLM command fallback resolved a command for run {RunId}.", request.RunId);
+        return new PreviewCommandResolution(true, proposal.Command, cwd, "llm", BindUncertain: true);
+    }
+
+    /// <summary>
+    /// Resolves a model-proposed working directory (relative to the worktree root, or <c>"."</c>) to
+    /// an absolute path INSIDE the worktree. Returns <see langword="null"/> for any escape, rooted
+    /// path, or non-existent directory so a model can never steer execution outside the checkout.
+    /// </summary>
+    internal static string? ResolveModelCwdWithinWorktree(string worktreePath, string? proposedCwd)
+    {
+        try
+        {
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(worktreePath));
+            var relative = string.IsNullOrWhiteSpace(proposedCwd) ? "." : proposedCwd.Trim();
+            if (Path.IsPathRooted(relative))
+                return null;
+
+            var combined = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(root, relative)));
+            var withSep = root + Path.DirectorySeparatorChar;
+            if (!combined.Equals(root, StringComparison.Ordinal)
+                && !combined.StartsWith(withSep, StringComparison.Ordinal))
+                return null;
+
+            return Directory.Exists(combined) ? combined : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 

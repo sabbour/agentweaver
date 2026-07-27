@@ -29,6 +29,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IRunEventStream? _runEventStream;
     private readonly IRunOptionsStore? _runOptions;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    private readonly Preview.ISandboxPreviewService? _previewService;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
@@ -38,7 +39,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
-        IGitHubAccessTokenProvider? accessTokenProvider = null)
+        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        Preview.ISandboxPreviewService? previewService = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -51,6 +53,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _runEventStream = runEventStream;
         _runOptions = runOptions;
         _accessTokenProvider = accessTokenProvider;
+        _previewService = previewService;
     }
 
     public ISandboxExecutor Resolve()
@@ -136,7 +139,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             return new KubernetesSandboxExecutor(
                 k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
                 _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream,
-                _runOptions, _accessTokenProvider);
+                _runOptions, _accessTokenProvider, _previewService);
         }
         catch (Exception ex)
         {

@@ -100,6 +100,55 @@ public sealed class AgentHostReaperCredentialTests
         reaped.Should().Be(1); // claim still reaped; credential delete is a best-effort no-op
     }
 
+    // Issue #542: a completed subtask's claim is an "orphan" per the active-run map the instant its
+    // turn ends. The reaper must NOT reap it while the run still has a live preview (that would 404 the
+    // preview URL), but MUST reap it once no preview is active (bounded eventual teardown — no leak).
+    [Fact]
+    public async Task Sweep_OrphanClaim_WithActivePreview_IsDeferred_NotReaped()
+    {
+        const string runId = "run-542-reaper-defer";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(ListPath, ClaimsListJson(claimName, runId));
+
+        var reaper = new AgentHostReaperService(
+            ClientFor(handler),
+            new EmptyRunStore(), // no active runs → the claim is an orphan by the active-run map
+            new KubernetesSandboxOptions { Namespace = Namespace },
+            NullLogger<AgentHostReaperService>.Instance,
+            new InMemorySecretStore(),
+            new StubPreviewService(hasActivePreview: true));
+
+        var reaped = await reaper.SweepOrphanedPodsAsync();
+
+        reaped.Should().Be(0,
+            "an orphaned claim whose run still has a live preview must be deferred, not reaped (#542)");
+    }
+
+    [Fact]
+    public async Task Sweep_OrphanClaim_WithNoActivePreview_IsReaped()
+    {
+        const string runId = "run-542-reaper-noactive";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(ListPath, ClaimsListJson(claimName, runId));
+
+        var reaper = new AgentHostReaperService(
+            ClientFor(handler),
+            new EmptyRunStore(),
+            new KubernetesSandboxOptions { Namespace = Namespace },
+            NullLogger<AgentHostReaperService>.Instance,
+            new InMemorySecretStore(),
+            new StubPreviewService(hasActivePreview: false));
+
+        var reaped = await reaper.SweepOrphanedPodsAsync();
+
+        reaped.Should().Be(1,
+            "once no preview is active the orphaned claim must be reaped (bounded eventual teardown)");
+    }
+
     [Fact]
     public void IsReapable_YoungInactiveClaim_IsProtectedByCreationGrace()
     {
@@ -180,6 +229,33 @@ public sealed class AgentHostReaperCredentialTests
             CreatedAt: createdAt,
             Orphaned: true,
             AnnotatedRunId: null);
+
+    // Minimal ISandboxPreviewService test double for the reaper defer path (#542): only
+    // HasActivePreviewAsync is consulted; every other member throws so an unexpected call is loud.
+    private sealed class StubPreviewService : ISandboxPreviewService
+    {
+        private readonly bool _hasActivePreview;
+        public StubPreviewService(bool hasActivePreview) => _hasActivePreview = hasActivePreview;
+
+        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(_hasActivePreview);
+
+        public bool Enabled => true;
+        public int AllowedPortMin => 3000;
+        public int AllowedPortMax => 9000;
+        public Task<PreviewSession> StartPreviewAsync(
+            string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+            string? previewRunnerSessionId = null) => throw new NotImplementedException();
+        public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task KeepAliveAsync(string token, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task StopPreviewAsync(string token, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task<int> ReapAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    }
 
     /// <summary>Minimal <see cref="IRunStore"/> that reports no active runs (every claim is orphaned).</summary>
     private sealed class EmptyRunStore : IRunStore

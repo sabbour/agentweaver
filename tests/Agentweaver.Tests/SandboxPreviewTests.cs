@@ -389,6 +389,9 @@ public class SandboxPreviewTests
         public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PreviewSession>>([]);
 
+        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(false);
+
         public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>

@@ -136,39 +136,8 @@ public sealed class PostRunScribeService(
         var project = await projectStore.GetAsync(pid, ct).ConfigureAwait(false);
         if (project is null || string.IsNullOrEmpty(project.WorkingDirectory)) return;
 
-        var decisions = (await memoryDb.Decisions
-            .Where(d => d.ProjectId == projectId && d.Status == "active")
-            .ToListAsync(ct).ConfigureAwait(false))
-            .OrderBy(d => d.CreatedAt)
-            .ToList();
-
-        var inbox = await memoryDb.DecisionInbox
-            .Where(e => e.ProjectId == projectId && e.Status == "pending")
-            .ToListAsync(ct).ConfigureAwait(false);
-
-        var memories = (await memoryDb.AgentMemory
-            .Where(m => m.ProjectId == projectId)
-            .ToListAsync(ct).ConfigureAwait(false))
-            .OrderBy(m => m.CreatedAt)
-            .ToList();
-
-        var session = (await memoryDb.SessionContexts
-            .Where(s => s.ProjectId == projectId && s.EndedAt == null)
-            .ToListAsync(ct).ConfigureAwait(false))
-            .OrderByDescending(s => s.StartedAt)
-            .FirstOrDefault();
-
-        var exporter = new SquadMemoryExporter(project.WorkingDirectory);
-
-        await exporter.ExportAsync(
-            decisions.Select(d => new DecisionExportDto(
-                d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList(),
-            inbox.Select(e => new InboxExportDto(
-                e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale)).ToList(),
-            memories.Select(m => new MemoryExportDto(
-                m.AgentName, m.Type, m.Content, m.CreatedAt)).ToList(),
-            session is null ? null : new SessionExportDto(
-                session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary),
-            ct).ConfigureAwait(false);
+        await MemoryLedgerExporter
+            .ExportAsync(projectId, project.WorkingDirectory, memoryDb, ct)
+            .ConfigureAwait(false);
     }
 }

@@ -182,6 +182,10 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IAssemblyGateCodeClass
     Agentweaver.Api.Coordinator.CopilotAssemblyGateCodeClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IPreviewClassifier,
     Agentweaver.Api.Coordinator.CopilotPreviewClassifier>();
+// LLM fallback for run-command resolution (issue #541): consulted only when the deterministic
+// PreviewCommandResolver heuristics return Unresolved.
+builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.IPreviewCommandModel,
+    Agentweaver.Api.Sandbox.Preview.CopilotPreviewCommandModel>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
@@ -715,7 +719,9 @@ builder.Services.AddSingleton<PortForwardService>();
             sp.GetRequiredService<Agentweaver.Api.Infrastructure.RunStreamStore>(),
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SandboxRuntimeOptions>>().Value,
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<Agentweaver.Api.Coordinator.Preview.PreviewStep>(),
-            sp.GetService<Agentweaver.Api.Auth.ISecretStore>()));
+            sp.GetService<Agentweaver.Api.Auth.ISecretStore>(),
+            podRegistry: null,
+            commandModel: sp.GetService<Agentweaver.Api.Sandbox.Preview.IPreviewCommandModel>()));
 }
 
 // Kubernetes runtime environment detection (pod name, in-cluster flag).

@@ -11,6 +11,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Preview;
 
@@ -147,7 +148,141 @@ public sealed class PreviewStepTests : IDisposable
         h.PreviewRunner.StartCalls.Should().Be(0);
     }
 
-    // ── Runner failures ───────────────────────────────────────────────────────────────
+    // ── LLM command fallback (issue #541) ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task HeuristicResolves_ModelFallbackNotConsulted()
+    {
+        // _worktree already has a resolvable Vite package.json → the heuristic wins and the model
+        // fallback must NOT be consulted (fast/free/deterministic first pass stays unchanged).
+        var model = new FakePreviewCommandModel
+        {
+            Override = _ => new PreviewCommandProposal(true, "should-not-be-used", "."),
+        };
+        var h = new Harness(_worktree, commandModel: model);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        model.CallCount.Should().Be(0);
+        h.TerminalKinds().Should().ContainSingle().Which.Should().Be(EventTypes.SandboxPreviewReady);
+        Str(h.Single(EventTypes.SandboxPreviewStartRequested), "command_source").Should().Be("package.json:dev");
+        h.PreviewRunner.LastCommand.Should().Be("npm run dev -- --host 0.0.0.0");
+    }
+
+    [Fact]
+    public async Task StaticHtmlOnly_ResolvesViaLlmFallback_EmitsReady_WithLlmSource()
+    {
+        // A plain static site with no build tooling → heuristics return Unresolved, the LLM fallback
+        // proposes a static server, and preview succeeds through the SAME start/observe/approval path.
+        Directory.Delete(_worktree, recursive: true);
+        Directory.CreateDirectory(_worktree);
+        File.WriteAllText(Path.Combine(_worktree, "index.html"), "<html><body>hi</body></html>");
+        File.WriteAllText(Path.Combine(_worktree, "styles.css"), "body{color:red}");
+
+        var model = new FakePreviewCommandModel
+        {
+            Override = _ => new PreviewCommandProposal(true, "npx --yes serve -l tcp://0.0.0.0:0 .", "."),
+        };
+        var h = new Harness(_worktree, commandModel: model);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        model.CallCount.Should().Be(1);
+        h.TerminalKinds().Should().ContainSingle().Which.Should().Be(EventTypes.SandboxPreviewReady);
+        Str(h.Single(EventTypes.SandboxPreviewStartRequested), "command_source").Should().Be("llm");
+        h.PreviewRunner.LastCommand.Should().Be("npx --yes serve -l tcp://0.0.0.0:0 .");
+        h.PreviewRunner.LastCwd.Should().Be(_worktree);
+    }
+
+    [Fact]
+    public async Task LlmDeclines_StillEmitsCommandUnresolved()
+    {
+        Directory.Delete(_worktree, recursive: true);
+        Directory.CreateDirectory(_worktree);
+        File.WriteAllText(Path.Combine(_worktree, "notes.txt"), "just some prose, nothing to run");
+
+        var model = new FakePreviewCommandModel
+        {
+            Override = _ => new PreviewCommandProposal(false, null, null),
+        };
+        var h = new Harness(_worktree, commandModel: model);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        model.CallCount.Should().Be(1);
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("preview_command_unresolved");
+        h.PreviewRunner.StartCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task LlmUnavailable_ReturnsNull_StillEmitsCommandUnresolved()
+    {
+        Directory.Delete(_worktree, recursive: true);
+        Directory.CreateDirectory(_worktree);
+        File.WriteAllText(Path.Combine(_worktree, "index.html"), "<html></html>");
+
+        var model = new FakePreviewCommandModel { Override = _ => null };
+        var h = new Harness(_worktree, commandModel: model);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        model.CallCount.Should().Be(1);
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("preview_command_unresolved");
+        h.PreviewRunner.StartCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task LlmProposesEscapingCwd_TreatedAsUnresolved()
+    {
+        // A model-proposed cwd that escapes the worktree must NOT be honored — it is treated as
+        // unresolved rather than steering execution outside the checkout.
+        Directory.Delete(_worktree, recursive: true);
+        Directory.CreateDirectory(_worktree);
+        File.WriteAllText(Path.Combine(_worktree, "index.html"), "<html></html>");
+
+        var model = new FakePreviewCommandModel
+        {
+            Override = _ => new PreviewCommandProposal(true, "python3 -m http.server --bind 0.0.0.0 0", "../../etc"),
+        };
+        var h = new Harness(_worktree, commandModel: model);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("preview_command_unresolved");
+        h.PreviewRunner.StartCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task LlmThrows_TreatedAsUnresolved_NeverBlocks()
+    {
+        Directory.Delete(_worktree, recursive: true);
+        Directory.CreateDirectory(_worktree);
+        File.WriteAllText(Path.Combine(_worktree, "index.html"), "<html></html>");
+
+        var model = new FakePreviewCommandModel { Exception = new InvalidOperationException("model boom") };
+        var h = new Harness(_worktree, commandModel: model);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("preview_command_unresolved");
+        h.PreviewRunner.StartCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task NoModelWired_PreservesUnresolvedBehavior()
+    {
+        Directory.Delete(_worktree, recursive: true);
+        Directory.CreateDirectory(_worktree);
+        File.WriteAllText(Path.Combine(_worktree, "index.html"), "<html></html>");
+
+        // No command model → identical to the pre-#541 heuristic-only behavior.
+        var h = new Harness(_worktree, commandModel: null);
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("preview_command_unresolved");
+        h.PreviewRunner.StartCalls.Should().Be(0);
+    }
 
     [Fact]
     public async Task ProcessStartThrows_EmitsProcessExited()
@@ -418,7 +553,8 @@ public sealed class PreviewStepTests : IDisposable
             string worktree,
             bool podPerRun = true,
             bool autoApprove = true,
-            IPodNameRegistry? podRegistry = null)
+            IPodNameRegistry? podRegistry = null,
+            IPreviewCommandModel? commandModel = null)
         {
             Streams.Create(RunId, "owner");
             var runtime = new SandboxRuntimeOptions
@@ -439,7 +575,8 @@ public sealed class PreviewStepTests : IDisposable
                 runtime,
                 NullLogger<PreviewStep>.Instance,
                 secretStore: null,
-                podRegistry: podRegistry);
+                podRegistry: podRegistry,
+                commandModel: commandModel);
         }
 
         public IReadOnlyList<string> Types() =>
@@ -551,6 +688,9 @@ public sealed class PreviewStepTests : IDisposable
 
         public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PreviewSession>>([]);
+
+        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(false);
 
         public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
 

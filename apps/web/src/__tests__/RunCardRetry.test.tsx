@@ -208,3 +208,69 @@ describe('RunCard — card navigation', () => {
     expect(mockNavigate).not.toHaveBeenCalledWith('/projects/proj-1/orchestrations/run-123');
   });
 });
+
+describe('RunCard — long task text truncation', () => {
+  it('clamps a long, multi-paragraph task prompt to a few lines instead of rendering it in full', () => {
+    const longTask = Array.from({ length: 20 }, (_, i) => `Paragraph ${i + 1} of a very long task prompt.`).join('\n\n');
+
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ status: 'failed', task: longTask })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    const taskEl = screen.getByTestId('run-card-task');
+    // Griffel (makeStyles) injects the clamp declarations via an atomic CSS class rather than an
+    // inline style, so assert against the generated stylesheet rule instead of computed style
+    // (jsdom's getComputedStyle doesn't resolve rules from injected <style> tags).
+    const taskClass = [...taskEl.classList].find((c) => c !== undefined) ? taskEl.className : '';
+    let foundClamp = false;
+    for (const sheet of Array.from(document.styleSheets)) {
+      for (const rule of Array.from((sheet as CSSStyleSheet).cssRules ?? [])) {
+        const cssText = (rule as CSSStyleRule).cssText ?? '';
+        if (cssText.includes('-webkit-line-clamp: 3') || cssText.includes('-webkit-line-clamp:3')) {
+          foundClamp = true;
+        }
+      }
+    }
+    expect(taskClass.length > 0).toBe(true);
+    expect(foundClamp).toBe(true);
+  });
+
+  it('exposes the full task text via the title attribute for hover/focus access', () => {
+    const longTask = 'A very long task prompt. '.repeat(50);
+
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ status: 'failed', task: longTask })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    const taskEl = screen.getByTestId('run-card-task');
+    expect(taskEl.getAttribute('title')).toBe(longTask);
+  });
+
+  it('renders the "(coordinator run)" fallback with a matching title when task is empty', () => {
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ status: 'failed', task: '' })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    const taskEl = screen.getByTestId('run-card-task');
+    expect(taskEl.textContent).toBe('(coordinator run)');
+    expect(taskEl.getAttribute('title')).toBe('(coordinator run)');
+  });
+
+  it('renders short task text normally without visual regression', () => {
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ status: 'failed', task: 'Fix bug' })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    const taskEl = screen.getByTestId('run-card-task');
+    expect(taskEl.textContent).toBe('Fix bug');
+    expect(taskEl.getAttribute('title')).toBe('Fix bug');
+  });
+});

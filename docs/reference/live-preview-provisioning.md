@@ -9,6 +9,7 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | Contract | Shipped behavior | Source |
 | --- | --- | --- |
 | Feature flag | None. The step runs whenever `PreviewStep` is wired and Build & Test is not declined. | `CoordinatorAssemblyService.ShouldRunDeterministicPreviewStep` |
+| Command resolution | Two tiers: the fast/free/deterministic `PreviewCommandResolver` heuristics run first; only when they return `Unresolved` does an LLM fallback (`IPreviewCommandModel`, issue #541) get a bounded worktree view and propose a command. The model-chosen command runs through the identical start/observe/approval path — only the command string's origin differs. If neither tier resolves, the terminal `preview_command_unresolved` outcome is preserved. | `PreviewStep.cs`; `CopilotPreviewCommandModel.cs` |
 | Build & Test coupling | Runs after Build & Test for `APPROVED` and `REQUEST_CHANGES`; skipped on `DECLINED`. | `CoordinatorAssemblyService.cs:753` |
 | Port choice | Platform observes the app port inside the sandbox pod using log hints plus `/proc/net/tcp` and `/proc/net/tcp6`, then registers a forwarder public port from `3000-9000`; no configured fixed app port is used. | `PreviewStep.cs:129`, `:166`; `PreviewRunner.cs:262`, `:610`, `:315` |
 | Registration readiness | In-pod AgentHost observe verifies app + forwarder readiness; the API never probes `podIP:{target_port}` before creating Service/HTTPRoute. | `PreviewRunner.cs:315`; `SandboxPreviewService.cs:134` |
@@ -16,6 +17,34 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | Infra unavailable | Emits `sandbox.preview_skipped_not_applicable` with reason `preview_infra_unavailable`. | `PreviewStep.cs:83` |
 | Preview failure | Emits `sandbox.preview_failed`; never blocks human review and never forces changes. | `PreviewStep.cs:31`, `CoordinatorAssemblyService.cs:772` |
 | Approval | Uses existing `AgentPreviewGate`; no preview-specific bypass. | `PreviewStep.cs:157` |
+
+## Sandbox pod retention while a preview is active (issue #542)
+
+A live preview resolves through: Gateway → per-preview `HTTPRoute` → per-run ClusterIP `Service`
+→ the run's **sandbox pod** (selected by pod label). The `HTTPRoute`/`Service` are reaped on their
+own annotation-driven schedule, but they are useless once the pod behind them is gone. Historically
+the sandbox pod's `SandboxClaim` was deleted **unconditionally** the moment the originating subtask's
+turn ended (`KubernetesSandboxExecutor.ReleaseAgentHostPodAsync`), and a completed subtask's claim
+also became an "orphan" to `AgentHostReaperService` immediately — so a preview URL handed to a human
+reviewer would `404` within minutes, before the review gate could open it.
+
+Both teardown paths now consult `ISandboxPreviewService.HasActivePreviewAsync(runId)` and **defer**
+while a preview is still alive:
+
+| Teardown path | Behavior with an active preview | Source |
+| --- | --- | --- |
+| Turn-end release | `ReleaseAgentHostPodAsync` skips the claim delete and returns; the pod stays up. | `KubernetesSandboxExecutor.cs` |
+| Orphan reaper sweep | `SweepOrphanedPodsAsync` skips (continues past) a claim whose run has a live preview. | `AgentHostReaperService.cs` |
+
+`HasActivePreviewAsync` returns `true` only when the run has an `HTTPRoute` whose **idle** expiry
+(`preview-expires-at`, bumped by keepalive) *and* **hard-max** expiry (`preview-max-until`) are both
+still in the future (`PreviewReaper.Decide(...) == Alive`). It deliberately does **not** require the
+pod to still exist (the pod is present at the teardown boundary), and it is leak-safe: preview
+disabled, no un-expired route, or any lookup failure all return `false`, so the caller performs its
+normal teardown. Eventual teardown is therefore bounded and cannot leak: with no keepalive the preview
+idle-expires (`Sandbox:Preview:IdleTimeoutMinutes`, default 30) or hits its hard max
+(`Sandbox:Preview:MaxLifetimeHours`, default 8); the `SandboxPreviewReaperService` then deletes the
+route, and the next `AgentHostReaperService` sweep — now seeing no active preview — reaps the pod.
 
 ## AgentHost preview-runner endpoints
 
@@ -35,7 +64,7 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | Event | Final? | Payload fields | Meaning |
 | --- | --- | --- | --- |
 | `sandbox.preview_applicability` | No | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` | Applicability recorded before Build & Test. |
-| `sandbox.preview_start_requested` | No | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` | `PreviewStep` resolved a command and is starting the app. |
+| `sandbox.preview_start_requested` | No | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` | `PreviewStep` resolved a command and is starting the app. `command_source` distinguishes the tier that resolved it: a heuristic source (e.g. `package.json:dev`, `csproj`, `dockerfile`) or `llm` for the model fallback (issue #541). |
 | `sandbox.preview_pending` | No | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` | Existing preview approval gate is waiting. |
 | `sandbox.preview_ready` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `pod_name`, `session_id`, `preview_runner_session_id`, `preview_url`, `keepalive_url`, `started_at` | Gateway preview is ready. `session_id` is the Gateway token; `preview_runner_session_id` is the supervised process id. |
 | `coordinator.preview_ready` | Mirror | Same as `sandbox.preview_ready` | Coordinator-family mirror for the ready outcome. |
@@ -48,7 +77,7 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | Reason | Meaning |
 | --- | --- |
 | `preview_infra_unavailable` | Pod-per-run or Gateway preview infrastructure cannot produce a reachable URL. |
-| `preview_command_unresolved` | The deterministic command resolver could not find how to run the app. The resolver tries the worktree root first, then probes conventional subdirectories (`client`, `app/client`, `frontend`, `web`, `app`, `src/client`) in that order; server/API/backend directories are not probed. |
+| `preview_command_unresolved` | Neither resolution tier could determine how to run the app: the deterministic resolver found no match (it tries the worktree root first, then probes conventional subdirectories — `client`, `app/client`, `frontend`, `web`, `app`, `src/client` — in that order; server/API/backend directories are not probed) AND the LLM fallback (issue #541) either declined, was unavailable, or proposed a command that failed defensive validation (empty command, or a working directory outside the worktree). |
 | `preview_runner_unauthorized` | AgentHost rejected the preview-runner credential. |
 | `process_exited` | Preview process could not start. |
 | `process_exited:exit={code}` | Preview process started but exited before a healthy port was observed. |

@@ -38,19 +38,27 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     private readonly KubernetesSandboxOptions _options;
     private readonly ILogger<AgentHostReaperService> _logger;
     private readonly ISecretStore? _secretStore;
+    // Issue #542: consulted before reaping an ORPHANED claim. GetActiveClaimMapAsync only counts
+    // InProgress/Pending/AwaitingReview runs as active, so a completed subtask's claim becomes an
+    // "orphan" the instant its turn ends — the reaper would then reap the pod out from under a still-
+    // live preview, defeating ReleaseAgentHostPodAsync's own deferral. Non-null → defer such claims
+    // while a preview is alive. Null in tests/non-preview deployments → normal reaping.
+    private readonly Preview.ISandboxPreviewService? _previewService;
 
     public AgentHostReaperService(
         IKubernetes client,
         IRunStore runStore,
         KubernetesSandboxOptions options,
         ILogger<AgentHostReaperService> logger,
-        ISecretStore? secretStore = null)
+        ISecretStore? secretStore = null,
+        Preview.ISandboxPreviewService? previewService = null)
     {
         _client = client;
         _runStore = runStore;
         _options = options;
         _logger = logger;
         _secretStore = secretStore;
+        _previewService = previewService;
     }
 
     /// <inheritdoc />
@@ -76,6 +84,19 @@ public sealed class AgentHostReaperService : IAgentHostReaper
 
             if (!IsReapable(claim, isActive, now, creationGrace))
                 continue;
+
+            // Issue #542: a completed subtask's claim is "orphan" per the active-run map, but if its
+            // run still has a live preview we must NOT reap the pod — the preview URL would 404. Defer
+            // until the preview idle/max-expires (then the preview reaper deletes the route and the next
+            // sweep reaps this claim), so the pod cannot leak.
+            if (await HasActivePreviewAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false))
+            {
+                _logger.LogInformation(
+                    "AgentHostReaper: deferring reap of claim {Claim} (run {RunId}) — a live preview is " +
+                    "still active; the preview idle/max expiry will release it.",
+                    claim.ClaimName, claim.AnnotatedRunId);
+                continue;
+            }
 
             if (await TryDeleteClaimAsync(claim.ClaimName, ct).ConfigureAwait(false))
             {
@@ -229,6 +250,29 @@ public sealed class AgentHostReaperService : IAgentHostReaper
         {
             _logger.LogWarning(ex,
                 "AgentHostReaper: failed to delete preview-runner credential for run {RunId} (best-effort)", runId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort probe: does <paramref name="runId"/> still have a live preview? Returns false when
+    /// no preview service is configured, the run id is missing, or the probe throws — the reaper must
+    /// keep working (and eventually reap) even if the preview lookup fails, so a probe failure defaults
+    /// to "no active preview" (leak-safe) rather than pinning the pod forever (issue #542).
+    /// </summary>
+    private async Task<bool> HasActivePreviewAsync(string? runId, CancellationToken ct)
+    {
+        if (_previewService is null || string.IsNullOrEmpty(runId))
+            return false;
+
+        try
+        {
+            return await _previewService.HasActivePreviewAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "AgentHostReaper: active-preview probe failed for run {RunId}; treating as no active preview", runId);
+            return false;
         }
     }
 
