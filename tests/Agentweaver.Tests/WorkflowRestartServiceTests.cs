@@ -628,6 +628,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var adapter = new WorktreeOperationsAdapter(
             manager,
             new RunStreamStore(),
+            new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
             NullLogger<WorktreeOperationsAdapter>.Instance);
         return (repoPath, basePath, manager, adapter);
     }

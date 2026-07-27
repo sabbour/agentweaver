@@ -411,29 +411,15 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     if (project is null) return Results.NotFound();
     if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
 
-    var decisions = await memoryDb.Decisions.Where(d => d.ProjectId == id).ToListAsync(ct);
-    var inbox = await memoryDb.DecisionInbox
-        .Where(e => e.ProjectId == id && e.Status == "pending").ToListAsync(ct);
-    var memories = await memoryDb.AgentMemory.Where(m => m.ProjectId == id).ToListAsync(ct);
-    var session = (await memoryDb.SessionContexts
-        .Where(s => s.ProjectId == id && s.EndedAt == null)
-        .ToListAsync(ct))
-        .OrderByDescending(s => s.StartedAt)
-        .FirstOrDefault();
-
-    var decisionDtos = decisions.Select(d => new Agentweaver.Squad.Memory.DecisionExportDto(
-        d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList();
-    var inboxDtos = inbox.Select(e => new Agentweaver.Squad.Memory.InboxExportDto(
-        e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale)).ToList();
-    var memoryDtos = memories.Select(m => new Agentweaver.Squad.Memory.MemoryExportDto(
-        m.AgentName, m.Type, m.Content, m.CreatedAt)).ToList();
-    var sessionDto = session is null ? null : new Agentweaver.Squad.Memory.SessionExportDto(
-        session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary);
+    var decisionCount = await memoryDb.Decisions.CountAsync(d => d.ProjectId == id && d.Status == "active", ct);
+    var inboxCount = await memoryDb.DecisionInbox.CountAsync(e => e.ProjectId == id && e.Status == "pending", ct);
+    var memoryCount = await memoryDb.AgentMemory.CountAsync(m => m.ProjectId == id, ct);
 
     try
     {
-        var exporter = new Agentweaver.Squad.Memory.SquadMemoryExporter(project.WorkingDirectory);
-        await exporter.ExportAsync(decisionDtos, inboxDtos, memoryDtos, sessionDto, ct);
+        // Explicit sync action (spec #25): must report success OR an actionable error — never a
+        // false success. ExportAsync throws on failure so it is surfaced here rather than swallowed.
+        await MemoryLedgerExporter.ExportAsync(id, project.WorkingDirectory, memoryDb, ct);
     }
     catch (OperationCanceledException)
     {
@@ -442,8 +428,12 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     catch (Exception ex)
     {
         app.Logger.LogWarning(ex, "Failed to export project memory for {ProjectId}.", id);
+        return Results.Problem(
+            title: "Memory export failed",
+            detail: $"The team ledger could not be written to the project workspace: {ex.Message}",
+            statusCode: StatusCodes.Status500InternalServerError);
     }
-    return Results.Ok(new { exported = true, decisions = decisions.Count, inbox = inbox.Count, memories = memories.Count });
+    return Results.Ok(new { exported = true, decisions = decisionCount, inbox = inboxCount, memories = memoryCount });
 });
 
 // POST /api/projects/{id}/memory/import
@@ -481,52 +471,24 @@ app.MapPost("/api/projects/{id}/memory/import", async (
         }
     }
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
-    return Results.Ok(new { imported = newCount });
+    var mirrorExported = await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    return Results.Ok(new { imported = newCount, mirror_exported = mirrorExported });
 });
     }
 }
 
 internal static class MemoryExportHelpers
 {
-    public static async Task TryExportAsync(
+    /// <summary>
+    /// Best-effort refresh of the workspace file mirror after a DB write. Returns whether the
+    /// mirror was written so callers can honestly report <c>mirror_exported</c> instead of implying
+    /// unconditional success. Never fails the caller's authoritative DB write.
+    /// </summary>
+    public static Task<bool> TryExportAsync(
         string projectId,
         string projectWorkingDirectory,
         MemoryDbContext memoryDb,
         CancellationToken ct,
         ILogger logger)
-    {
-        try
-        {
-            var decisions = await memoryDb.Decisions.Where(d => d.ProjectId == projectId).ToListAsync(ct);
-            var inbox = await memoryDb.DecisionInbox
-                .Where(e => e.ProjectId == projectId && e.Status == "pending").ToListAsync(ct);
-            var memories = await memoryDb.AgentMemory.Where(m => m.ProjectId == projectId).ToListAsync(ct);
-            var session = (await memoryDb.SessionContexts
-                .Where(s => s.ProjectId == projectId && s.EndedAt == null)
-                .ToListAsync(ct))
-                .OrderByDescending(s => s.StartedAt)
-                .FirstOrDefault();
-
-            var decisionDtos = decisions.Select(d => new Agentweaver.Squad.Memory.DecisionExportDto(
-                d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList();
-            var inboxDtos = inbox.Select(e => new Agentweaver.Squad.Memory.InboxExportDto(
-                e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale)).ToList();
-            var memoryDtos = memories.Select(m => new Agentweaver.Squad.Memory.MemoryExportDto(
-                m.AgentName, m.Type, m.Content, m.CreatedAt)).ToList();
-            var sessionDto = session is null ? null : new Agentweaver.Squad.Memory.SessionExportDto(
-                session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary);
-
-            var exporter = new Agentweaver.Squad.Memory.SquadMemoryExporter(projectWorkingDirectory);
-            await exporter.ExportAsync(decisionDtos, inboxDtos, memoryDtos, sessionDto, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to export project memory for {ProjectId}.", projectId);
-        }
-    }
+        => MemoryLedgerExporter.TryExportAsync(projectId, projectWorkingDirectory, memoryDb, ct, logger);
 }
