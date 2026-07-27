@@ -1,9 +1,49 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildRunTimeline } from '../timeline/runTimelineSteps';
+import { buildRunTimeline, categorizeTool, deriveToolTitle } from '../timeline/runTimelineSteps';
 import type { RunStreamEvent } from '../api/sse';
 
 const evt = (sequence: number, type: string, payload: Record<string, unknown>): RunStreamEvent =>
   ({ sequence, type: type as RunStreamEvent['type'], payload });
+
+describe('categorizeTool', () => {
+  it('matches known tool name variants without substring collisions', () => {
+    expect(categorizeTool('run_command')).toBe('command');
+    expect(categorizeTool('view_file')).toBe('read');
+    expect(categorizeTool('view')).toBe('read');
+    expect(categorizeTool('grep_search')).toBe('search');
+    expect(categorizeTool('ripgrep')).toBe('search');
+    expect(categorizeTool('search_design_system')).toBe('search');
+    expect(categorizeTool('str_replace_editor')).toBe('edit');
+    expect(categorizeTool('web_fetch')).toBe('web');
+  });
+
+  it('avoids false positives from substring-only matches', () => {
+    expect(categorizeTool('start_preview')).toBe('other');
+    expect(categorizeTool('code_review')).toBe('other');
+    expect(categorizeTool('pr_review')).toBe('other');
+    expect(categorizeTool('overview')).toBe('other');
+    expect(categorizeTool('viewport')).toBe('other');
+    expect(categorizeTool('dispatch_agent')).toBe('other');
+  });
+});
+
+describe('deriveToolTitle', () => {
+  it('uses file-specific titles for real read tools', () => {
+    expect(deriveToolTitle('read', 'view_file', { path: 'src/app.ts', view_range: [3, 8] })).toEqual({
+      title: 'View src/app.ts:3-8',
+    });
+  });
+
+  it('falls back to the humanized tool name when a read bucket has no path', () => {
+    expect(deriveToolTitle('read', 'get_file_contents', {})).toEqual({ title: 'Get File Contents' });
+  });
+
+  it('keeps preview-style tools meaningful once they avoid the read bucket', () => {
+    const category = categorizeTool('start_preview');
+    expect(category).toBe('other');
+    expect(deriveToolTitle(category, 'start_preview', { port: 7455 })).toEqual({ title: 'Start Preview' });
+  });
+});
 
 describe('buildRunTimeline', () => {
   it('groups tool calls and messages under the owning agent.intent step', () => {

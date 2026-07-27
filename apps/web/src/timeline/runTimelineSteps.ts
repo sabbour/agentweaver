@@ -144,33 +144,63 @@ const EXPAND_CONTENT_MAX = 8000;
 
 const asStrOpt = (v: unknown): string | undefined => (v == null ? undefined : String(v));
 
+function splitToolNameSegments(toolName: string): string[] {
+  return toolName
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function hasToolSegment(segments: ReadonlySet<string>, ...candidates: string[]): boolean {
+  return candidates.some((candidate) => segments.has(candidate));
+}
+
+function hasToolPhrase(parts: readonly string[], phrase: readonly string[]): boolean {
+  if (phrase.length === 0 || parts.length < phrase.length) return false;
+  for (let i = 0; i <= parts.length - phrase.length; i += 1) {
+    let matches = true;
+    for (let j = 0; j < phrase.length; j += 1) {
+      if (parts[i + j] !== phrase[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
 /** Map a raw tool name to a coarse activity category (icon + result-meta behaviour). */
 export function categorizeTool(toolName: string): RunTimelineToolCategory {
   const n = toolName.toLowerCase();
+  const parts = splitToolNameSegments(toolName);
+  const segments = new Set(parts);
   if (
-    n === 'run_command' || n === 'run' || n.includes('powershell') || n.includes('bash') ||
-    n.includes('shell') || n.includes('terminal') || n.includes('console') || n.includes('exec')
+    n === 'run_command' || n === 'run' || hasToolPhrase(parts, ['run', 'command']) ||
+    hasToolSegment(segments, 'powershell', 'bash', 'shell', 'terminal', 'console', 'exec')
   ) {
     return 'command';
   }
   if (
-    n.includes('edit') || n.includes('str_replace') || n.includes('replace') || n.includes('write') ||
-    n.includes('create') || n.includes('patch') || n.includes('apply') || n.includes('delete') ||
-    n.includes('move') || n.includes('insert')
+    hasToolPhrase(parts, ['str', 'replace'])
+    || hasToolPhrase(parts, ['apply', 'patch'])
+    || hasToolSegment(segments, 'edit', 'replace', 'write', 'create', 'patch', 'delete', 'move', 'insert')
   ) {
     return 'edit';
   }
   if (
-    n.includes('search') || n.includes('grep') || n.includes('glob') || n.includes('find') || n.includes('list')
+    hasToolSegment(segments, 'search', 'grep', 'glob', 'find', 'list') || segments.has('ripgrep')
   ) {
     return 'search';
   }
-  if (n.includes('read') || n.includes('view') || n.includes('cat') || n.includes('open') || n.includes('file')) {
+  if (
+    hasToolPhrase(parts, ['file', 'contents']) || hasToolSegment(segments, 'read', 'view', 'cat', 'open')
+  ) {
     return 'read';
   }
   if (
-    n.includes('http') || n.includes('web') || n.includes('fetch') || n.includes('url') ||
-    n.includes('workiq') || n.includes('email') || n.includes('cloud') || n.includes('api')
+    hasToolSegment(segments, 'http', 'web', 'fetch', 'url', 'workiq', 'email', 'cloud', 'api')
   ) {
     return 'web';
   }
@@ -214,7 +244,7 @@ export function deriveToolTitle(
     case 'read': {
       const range = deriveLineRange(args);
       if (display) return { title: `View ${display}${range ? `:${range}` : ''}` };
-      return { title: 'View file' };
+      return { title: deriveHumanTitle(toolName, args) };
     }
     case 'search': {
       const pattern = asStrOpt(args['pattern'] ?? args['query'] ?? args['glob'] ?? args['q']);
@@ -223,16 +253,17 @@ export function deriveToolTitle(
       return { title: 'Search' };
     }
     case 'edit': {
-      const n = toolName.toLowerCase();
-      const verb = n.includes('create')
+      const parts = splitToolNameSegments(toolName);
+      const segments = new Set(parts);
+      const verb = hasToolSegment(segments, 'create')
         ? 'Create'
-        : n.includes('delete')
+        : hasToolSegment(segments, 'delete')
           ? 'Delete'
-          : n.includes('move')
+          : hasToolSegment(segments, 'move')
             ? 'Move'
-            : n.includes('write')
+            : hasToolSegment(segments, 'write')
               ? 'Write'
-              : n.includes('patch') || n.includes('apply')
+              : hasToolPhrase(parts, ['apply', 'patch']) || hasToolSegment(segments, 'patch')
                 ? 'Apply patch'
                 : 'Edit';
       return { title: display ? `${verb} ${display}` : verb };
