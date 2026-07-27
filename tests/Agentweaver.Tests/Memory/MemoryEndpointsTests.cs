@@ -554,6 +554,52 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
             "re-submitting a slug whose entry is already rejected must return 409");
     }
 
+    // -------------------------------------------------------------------------
+    // /memory/export — honest sync-action reporting (issue #539, spec #25)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Test_MemoryExport_WritesDecisionsMdToWorkspace()
+    {
+        var workingDirectory = _factory.NewWorkingDirectory();
+        var projectId = await CreateProjectAsync(workingDirectory);
+        await SeedDecisionAsync(projectId, "morpheus", "architectural", "Use hexagonal architecture", "Ports and adapters.");
+
+        var response = await _client.PostAsync($"/api/projects/{projectId}/memory/export", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("exported").GetBoolean().Should().BeTrue();
+        body.GetProperty("decisions").GetInt32().Should().Be(1);
+
+        var decisionsPath = Path.Combine(workingDirectory, ".squad", "decisions.md");
+        File.Exists(decisionsPath).Should().BeTrue("the explicit export action must durably write the .squad/decisions.md mirror");
+        (await File.ReadAllTextAsync(decisionsPath)).Should().Contain("Use hexagonal architecture");
+    }
+
+    [Fact]
+    public async Task Test_MemoryExport_OnWriteFailure_ReturnsError_NotFalseSuccess()
+    {
+        var workingDirectory = _factory.NewWorkingDirectory();
+        var projectId = await CreateProjectAsync(workingDirectory);
+        await SeedDecisionAsync(projectId, "morpheus", "architectural", "A decision", "content");
+
+        // Sabotage the mirror write: a FILE named ".squad" makes creating the ".squad/" directory
+        // (for decisions.md) throw, so the export genuinely fails on disk.
+        await File.WriteAllTextAsync(Path.Combine(workingDirectory, ".squad"), "not a directory");
+
+        var response = await _client.PostAsync($"/api/projects/{projectId}/memory/export", null);
+
+        response.IsSuccessStatusCode.Should().BeFalse(
+            "an export that could not be written to disk must report an actionable error (spec #25), not a false success");
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.TryGetProperty("exported", out _).Should().BeFalse(
+            "a failed export must NOT return the {exported:true} success envelope");
+        body.GetProperty("title").GetString().Should().Contain("export");
+    }
+
     private async Task<string> CreateProjectAsync(string? workingDirectory = null)
     {
         var response = await _client.PostAsJsonAsync("/api/projects", new

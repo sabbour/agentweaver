@@ -1,6 +1,7 @@
 using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
@@ -149,6 +150,7 @@ public sealed class WorktreeRecoveryTests : IDisposable
         var adapter = new WorktreeOperationsAdapter(
             manager,
             new RunStreamStore(),
+            new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
             NullLogger<WorktreeOperationsAdapter>.Instance);
         var runId = RunId.New();
 

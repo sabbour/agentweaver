@@ -1,8 +1,10 @@
 using LibGit2Sharp;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 
 using WorkflowMergeResult = Agentweaver.AgentRuntime.Workflow.MergeResult;
@@ -16,15 +18,18 @@ public sealed class WorktreeOperationsAdapter : IWorktreeOperations
 {
     private readonly WorktreeManager _worktreeManager;
     private readonly RunStreamStore _streamStore;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WorktreeOperationsAdapter> _logger;
 
     public WorktreeOperationsAdapter(
         WorktreeManager worktreeManager,
         RunStreamStore streamStore,
+        IServiceScopeFactory scopeFactory,
         ILogger<WorktreeOperationsAdapter> logger)
     {
         _worktreeManager = worktreeManager;
         _streamStore = streamStore;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -45,7 +50,50 @@ public sealed class WorktreeOperationsAdapter : IWorktreeOperations
 
     public string CommitChanges(string worktreePath, string runId)
     {
+        // Materialize the authoritative DB-backed team ledger (.squad/decisions.md, agent history,
+        // .agentweaver/context/*) into the run's worktree BEFORE committing, so it rides the same
+        // commit/push flow as the run's other changes and actually lands in the user's repository
+        // (issue #539). Previously the ledger was only mirrored into the project's base working
+        // directory, which is never part of a committed/pushed run branch.
+        TryMirrorMemoryLedgerIntoWorktree(worktreePath, runId);
         return _worktreeManager.CommitChanges(worktreePath, RunId.Parse(runId));
+    }
+
+    /// <summary>
+    /// Best-effort export of the project's team memory ledger from the authoritative database into
+    /// the run's git worktree, resolved from the run id. Never throws and never blocks the commit —
+    /// a mirror failure must not strand the run's real deliverables. Skipped when the project has no
+    /// ledger content, so repositories that never used the memory feature are not polluted with an
+    /// empty <c>decisions.md</c>.
+    /// </summary>
+    private void TryMirrorMemoryLedgerIntoWorktree(string worktreePath, string runId)
+    {
+        try
+        {
+            if (!RunId.TryParse(runId, out var parsedRunId)) return;
+
+            using var scope = _scopeFactory.CreateScope();
+            var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+            var run = runStore.GetAsync(parsedRunId, CancellationToken.None).GetAwaiter().GetResult();
+            if (run?.ProjectId is null) return;
+
+            var projectId = run.ProjectId.Value.ToString();
+            var memoryDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+            if (!MemoryLedgerExporter
+                    .HasExportableContentAsync(projectId, memoryDb, CancellationToken.None)
+                    .GetAwaiter().GetResult())
+                return;
+
+            MemoryLedgerExporter
+                .TryExportAsync(projectId, worktreePath, memoryDb, CancellationToken.None, _logger)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to mirror memory ledger into worktree for run {RunId}; commit proceeds", runId);
+        }
     }
 
     public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch)
