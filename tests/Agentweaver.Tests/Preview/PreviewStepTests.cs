@@ -695,6 +695,9 @@ public sealed class PreviewStepTests : IDisposable
         public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default) =>
             Task.CompletedTask;
 
+        public Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>
