@@ -61,6 +61,14 @@ const useStyles = makeStyles({
     overflowWrap: 'anywhere',
     wordBreak: 'normal',
     minWidth: 0,
+    // Task text is captured as a free-text prompt and can run to many paragraphs — clamp it to
+    // a few lines so a long prompt can't blow up the card's height on the board. The full text
+    // is still available via the native `title` tooltip on hover/focus.
+    display: '-webkit-box',
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   meta: {
     color: tokens.colorNeutralForeground3,
@@ -196,7 +204,7 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
       onKeyDown={handleCardKeyDown}
     >
       <div className={styles.header}>
-        <Text className={styles.task}>{card.task || '(coordinator run)'}</Text>
+        <Text className={styles.task} title={card.task || '(coordinator run)'} data-testid="run-card-task">{card.task || '(coordinator run)'}</Text>
         <div className={styles.headerActions}>
           {card.has_pending_approval && (
             <Badge appearance="tint" color="warning" icon={<WarningRegular />} size="small">
