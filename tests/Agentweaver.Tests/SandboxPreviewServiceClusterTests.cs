@@ -387,6 +387,90 @@ public sealed class SandboxPreviewServiceClusterTests
 
         (await svc.VerifyTokenForRunAsync(token, "run-x")).Should().BeFalse();
     }
+
+    // ---- issue #542: HasActivePreviewAsync (pod-retention gate) ------------------------------------
+    // NOTE: HasActivePreviewAsync deliberately does NOT probe pod existence (podExists:true) — it runs
+    // at the teardown boundary where the pod is still present, so only the idle (keepalive) and hard-max
+    // expiries bound the deferral. Hence these tests need no pods GET stub.
+
+    [Fact]
+    public async Task HasActivePreview_true_when_run_has_an_unexpired_route()
+    {
+        const string runId = "run-542-alive";
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[" +
+            "{\"metadata\":{\"name\":\"preview-alive\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-expires-at\":\"2099-01-01T00:00:00Z\"," +
+            "\"agentweaver.dev/preview-max-until\":\"2099-01-01T00:00:00Z\"}}}]}");
+
+        var svc = NewService(handler);
+
+        (await svc.HasActivePreviewAsync(runId)).Should().BeTrue(
+            "a run with a route whose idle and max expiries are both still in the future has a live preview");
+    }
+
+    [Fact]
+    public async Task HasActivePreview_false_when_route_idle_expired()
+    {
+        const string runId = "run-542-idle-expired";
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[" +
+            "{\"metadata\":{\"name\":\"preview-idle\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-expires-at\":\"2000-01-01T00:00:00Z\"," +
+            "\"agentweaver.dev/preview-max-until\":\"2099-01-01T00:00:00Z\"}}}]}");
+
+        var svc = NewService(handler);
+
+        (await svc.HasActivePreviewAsync(runId)).Should().BeFalse(
+            "an idle-expired preview must not pin the pod — it lets the reaper release it (eventual teardown)");
+    }
+
+    [Fact]
+    public async Task HasActivePreview_false_when_run_has_no_route()
+    {
+        const string runId = "run-542-none";
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            """{"kind":"HTTPRouteList","items":[]}""");
+
+        var svc = NewService(handler);
+
+        (await svc.HasActivePreviewAsync(runId)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HasActivePreview_false_when_only_another_runs_route_is_active()
+    {
+        const string runId = "run-542-mine";
+        var otherSanitizedRun = PreviewReaper.PerRunLabel("run-542-someone-else");
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[" +
+            "{\"metadata\":{\"name\":\"preview-other\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + otherSanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-expires-at\":\"2099-01-01T00:00:00Z\"," +
+            "\"agentweaver.dev/preview-max-until\":\"2099-01-01T00:00:00Z\"}}}]}");
+
+        var svc = NewService(handler);
+
+        (await svc.HasActivePreviewAsync(runId)).Should().BeFalse(
+            "a live preview for a DIFFERENT run must not defer teardown of this run's pod");
+    }
 }
 
 /// <summary>

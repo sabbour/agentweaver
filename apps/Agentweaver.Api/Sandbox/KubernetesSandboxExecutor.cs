@@ -213,6 +213,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Source of the per-run AutoApproveTools flag propagated to the warm pod via /configure (bug
     // #221). Null in unit tests → the flag defaults false (same null-skip convention as above).
     private readonly IRunOptionsStore? _runOptions;
+    // Preview lifecycle probe. When a run has an ACTIVE live preview (issue #542), releasing its
+    // AgentHost pod at subtask-turn end would 404 the preview URL before a human reviewer can open it.
+    // Non-null → ReleaseAgentHostPodAsync defers the claim delete while a preview is alive. Null in
+    // unit tests / non-preview deployments → normal unconditional release (same null-skip convention).
+    private readonly Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? _previewService;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -234,7 +239,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         ISecretStore? secretStore = null,
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
-        IGitHubAccessTokenProvider? accessTokenProvider = null)
+        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null)
     {
         _client = client;
         _options = options;
@@ -249,6 +255,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _runEventStream = runEventStream;
         _runOptions = runOptions;
         _accessTokenProvider = accessTokenProvider;
+        _previewService = previewService;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -548,6 +555,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     public async Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        // Issue #542: if a live preview is still active for this run, releasing the pod here (at the
+        // originating subtask's turn end) would 404 the preview URL before any human-review gate or
+        // demo viewer can open it. Defer the claim delete while the preview is alive; the preview's own
+        // idle/max expiry + the reaper will eventually reap the pod, so this cannot leak.
+        if (_previewService is not null &&
+            await _previewService.HasActivePreviewAsync(runId, ct).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: deferring AgentHost pod release for run {RunId} (claim " +
+                "{Claim}) — a live preview is still active; the preview idle/max expiry will reap it.",
+                runId, claimName);
+            return;
+        }
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: releasing AgentHost pod for run {RunId} (claim {Claim})",
