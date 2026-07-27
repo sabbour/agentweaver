@@ -470,4 +470,50 @@ describe('buildRunTimeline', () => {
     expect(model.steps[0].tools).toHaveLength(5);
     expect(model.steps[1].intent).toBe('Now the README');
   });
+
+  it('does not merge continuation steps past the collapsible-narration caps (#step-numbering)', () => {
+    // Regression test: `wouldExceedCollapseLimits` must check the size the merged step
+    // would end up at (base + next), not just each side's pre-merge size — otherwise every
+    // cap gets overshot by one merge each time, and because the over-grown step keeps
+    // re-qualifying as the merge target on the next loop iteration, a realistically long
+    // run of small continuation-narrated steps ("Now let's...", "Next, I'll...",
+    // "Then...") collapses the ENTIRE run into a single step instead of stopping once a
+    // step reaches a reasonable size — so the UI showed every step of the run as "Step 1"
+    // instead of incrementing through Step 1, 2, 3...
+    const events: RunStreamEvent[] = [];
+    let seq = 1;
+    const intents = [
+      'Explore the repo structure',
+      "Now let's read the failing test file",
+      'Next, update the reducer logic',
+      'Now add the missing null check',
+      'Then run the test suite',
+      "Now let's fix the remaining lint issue",
+      'Next, add a regression test',
+      'Now update the changelog',
+      'Then verify the docs are current',
+      'Now clean up temp files',
+      'Finally verify the build passes',
+      'Now open a PR',
+    ];
+    for (const intent of intents) {
+      events.push(evt(seq, 'agent.intent', { intent }));
+      seq += 1;
+      const callId = `c${seq}`;
+      events.push(evt(seq, 'tool.call', { callId, toolName: 'read_file', arguments: { path: 'x.ts' } }));
+      seq += 1;
+      events.push(evt(seq, 'tool.result', { callId, content: 'ok' }));
+      seq += 1;
+    }
+    events.push(evt(seq, 'agent.turn.end', {}));
+
+    const model = buildRunTimeline(events);
+
+    // 12 real intents must fold into more than a couple of mega-steps, and no single
+    // collapsed step may exceed the intended 4-tool cap.
+    expect(model.steps.length).toBeGreaterThanOrEqual(3);
+    for (const step of model.steps) {
+      expect(step.tools.length).toBeLessThanOrEqual(4);
+    }
+  });
 });

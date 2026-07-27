@@ -424,14 +424,27 @@ function messageCharCount(step: RunTimelineStep): number {
   return step.messages.reduce((total, message) => total + message.text.trim().length, 0);
 }
 
-function isCollapsibleNarrationStep(step: RunTimelineStep): boolean {
-  if (step.synthetic) return false;
-  if (step.tools.length > MAX_COLLAPSIBLE_STEP_TOOLS) return false;
-  if (step.messages.length > MAX_COLLAPSIBLE_STEP_MESSAGES) return false;
-  if (step.children.length > MAX_COLLAPSIBLE_STEP_CHILDREN) return false;
-  if (messageCharCount(step) > MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS) return false;
-  if (step.tools.some((tool) => tool.status === 'error')) return false;
-  return step.tools.every((tool) => tool.category !== 'command' && tool.category !== 'web');
+/**
+ * Decide whether merging `next` onto `base` would keep the RESULTING step within the
+ * collapsible-narration bounds. This checks the size the merged step would actually end
+ * up at (base + next combined), not just each side's size before the merge — checking
+ * only the pre-merge sizes let every cap be overshot by one merge each time (e.g. two
+ * steps at the 4-tool/2-message cap could still merge into a 8-tool/4-message step), and
+ * — because the accumulated step then keeps re-qualifying as "previous" on the next loop
+ * iteration — a long run of small continuation-narrated steps (very common LLM habit:
+ * "Now let's...", "Next, I'll...", "Then...") could collapse the ENTIRE run into a
+ * single step instead of stopping once the step reached a reasonable size, appearing to
+ * the user as if every step of the run were "Step 1".
+ */
+function wouldExceedCollapseLimits(base: RunTimelineStep, next: RunTimelineStep): boolean {
+  if (base.synthetic || next.synthetic) return true;
+  if (base.tools.length + next.tools.length > MAX_COLLAPSIBLE_STEP_TOOLS) return true;
+  if (base.messages.length + next.messages.length > MAX_COLLAPSIBLE_STEP_MESSAGES) return true;
+  if (base.children.length + next.children.length > MAX_COLLAPSIBLE_STEP_CHILDREN) return true;
+  if (messageCharCount(base) + messageCharCount(next) > MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS) return true;
+  const combinedTools = [...base.tools, ...next.tools];
+  if (combinedTools.some((tool) => tool.status === 'error')) return true;
+  return combinedTools.some((tool) => tool.category === 'command' || tool.category === 'web');
 }
 
 function mergeTimelineSteps(base: RunTimelineStep, next: RunTimelineStep): void {
@@ -449,8 +462,7 @@ function collapseContinuationNarrationSteps(steps: RunTimelineStep[]): RunTimeli
     if (
       previous
       && isContinuationIntent(step.intent)
-      && isCollapsibleNarrationStep(previous)
-      && isCollapsibleNarrationStep(step)
+      && !wouldExceedCollapseLimits(previous, step)
     ) {
       mergeTimelineSteps(previous, step);
       continue;
