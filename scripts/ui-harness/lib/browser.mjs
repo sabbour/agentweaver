@@ -2,13 +2,21 @@ import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
 import { loadStorageState, loadSessionStorageSeed } from './auth.mjs';
 
 const GITHUB_OAUTH_ORIGIN = 'https://github.com';
-const GITHUB_OAUTH_PATHS = new Set(['/login', '/session']);
 const GENERATED_PREVIEW_LABEL = /^(?:[a-z]+-){3}[a-z2-7]{26}-preview$/;
 
+// The manual `login` subcommand in tools.mjs is the ONLY caller that ever sets
+// allowGitHubOAuthNavigation, and it only does so for its own human-supervised,
+// headful browser session. A real person can be routed through many github.com
+// paths mid-login beyond the initial OAuth authorize/callback hop -- 2FA
+// challenges, new-device verification, device-flow codes, org SSO, WebAuthn --
+// and GitHub has changed these exact paths over time, so we allow the whole
+// github.com origin here rather than chase an incomplete path allowlist. This
+// is safe specifically because it never applies to the automated/persona-driven
+// action() codepath, which does not (and must not) set this flag, so headless
+// scripted flows remain fully restricted to same-origin navigation.
 function isAllowedGitHubOAuthNavigation(target, options) {
   return options.allowGitHubOAuthNavigation === true
-    && target.origin === GITHUB_OAUTH_ORIGIN
-    && (target.pathname.startsWith('/login/oauth/') || GITHUB_OAUTH_PATHS.has(target.pathname));
+    && target.origin === GITHUB_OAUTH_ORIGIN;
 }
 
 function isAllowedAgentweaverPreviewNavigation(base, target, options) {
