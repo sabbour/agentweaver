@@ -49,6 +49,17 @@ public static class SandboxPathValidator
         return combined;
     }
 
+    /// <summary>
+    /// Validates either an agent-relative path or an absolute contained path,
+    /// routing absolute-looking input through <see cref="ValidateAbsoluteContained"/>
+    /// so exact-root and in-sandbox absolute paths are accepted while UNC, device,
+    /// and drive-relative escape forms remain rejected.
+    /// </summary>
+    public static string ValidateRelativeOrAbsoluteContained(string requestedPath, string sandboxRoot) =>
+        ShouldTreatAsAbsoluteOrEscapeAttempt(requestedPath)
+            ? ValidateAbsoluteContained(requestedPath, sandboxRoot)
+            : ValidateAndResolve(requestedPath, sandboxRoot);
+
     private static void ValidateNoReparsePointsInAncestors(string fullPath, string sandboxRoot)
     {
         var rootFull = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);

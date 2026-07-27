@@ -131,4 +131,45 @@ public sealed class SandboxPathValidatorTests : IDisposable
         result.Should().StartWith(_sandboxRoot);
         result.Should().EndWith("file.txt");
     }
+
+    [Fact]
+    public void EitherValidator_AbsoluteSandboxRoot_IsAccepted()
+    {
+        var result = SandboxPathValidator.ValidateRelativeOrAbsoluteContained(_sandboxRoot, _sandboxRoot);
+
+        result.TrimEnd(Path.DirectorySeparatorChar)
+            .Should().Be(Path.GetFullPath(_sandboxRoot).TrimEnd(Path.DirectorySeparatorChar));
+    }
+
+    [Fact]
+    public void EitherValidator_AbsoluteSubdirectoryInsideSandbox_IsAccepted()
+    {
+        var subdirectory = Path.Combine(_sandboxRoot, "preview", "app");
+
+        var result = SandboxPathValidator.ValidateRelativeOrAbsoluteContained(subdirectory, _sandboxRoot);
+
+        result.Should().Be(Path.GetFullPath(subdirectory));
+    }
+
+    [Fact]
+    public void EitherValidator_AbsolutePathOutsideSandbox_IsRejected()
+    {
+        var outsidePath = Path.GetFullPath(Path.Combine(_sandboxRoot, "..", "outside"));
+
+        var act = () => SandboxPathValidator.ValidateRelativeOrAbsoluteContained(outsidePath, _sandboxRoot);
+
+        act.Should().Throw<SandboxViolationException>();
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\file.txt")]
+    [InlineData(@"\\?\C:\sandbox")]
+    [InlineData(@"\\.\C:\sandbox")]
+    [InlineData("C:relative-to-drive")]
+    public void EitherValidator_WindowsAbsoluteEscapeForms_AreRejected(string path)
+    {
+        var act = () => SandboxPathValidator.ValidateRelativeOrAbsoluteContained(path, _sandboxRoot);
+
+        act.Should().Throw<SandboxViolationException>();
+    }
 }

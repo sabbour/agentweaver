@@ -110,9 +110,40 @@ public sealed class SandboxPolicyBackendTests : IDisposable
         decision.Metadata!["resolved_directory"].Should().Be(Path.Combine(_sandboxRoot, "frontend"));
     }
 
+    [Fact]
+    public void StartPreviewProcess_AbsoluteSandboxRootCwd_Allowed()
+    {
+        var context = new Dictionary<string, object>
+        {
+            ["tool_name"] = "start_preview_process",
+            ["cwd"] = _sandboxRoot,
+        };
+
+        var decision = _backend.Evaluate(context);
+
+        decision.Allowed.Should().BeTrue();
+        decision.Metadata!["resolved_directory"].Should().Be(_sandboxRoot);
+    }
+
+    [Fact]
+    public void StartPreviewProcess_AbsoluteSubdirectoryCwdInsideSandbox_Allowed()
+    {
+        var insidePath = Path.Combine(_sandboxRoot, "frontend");
+        var context = new Dictionary<string, object>
+        {
+            ["tool_name"] = "start_preview_process",
+            ["cwd"] = insidePath,
+        };
+
+        var decision = _backend.Evaluate(context);
+
+        decision.Allowed.Should().BeTrue();
+        decision.Metadata!["resolved_directory"].Should().Be(insidePath);
+    }
+
     [Theory]
-    [MemberData(nameof(PlatformAbsoluteCwds))]
-    public void StartPreviewProcess_AbsoluteCwd_Denied(string cwd)
+    [MemberData(nameof(PlatformOutsideAbsoluteCwds))]
+    public void StartPreviewProcess_AbsoluteCwdOutsideSandbox_Denied(string cwd)
     {
         var context = new Dictionary<string, object>
         {
@@ -123,7 +154,7 @@ public sealed class SandboxPolicyBackendTests : IDisposable
         _backend.Evaluate(context).Allowed.Should().BeFalse();
     }
 
-    public static TheoryData<string> PlatformAbsoluteCwds =>
+    public static TheoryData<string> PlatformOutsideAbsoluteCwds =>
         OperatingSystem.IsWindows()
             ? [@"C:\Windows", @"D:\outside", @"\\server\share"]
             : ["/etc", "/root", "/var"];

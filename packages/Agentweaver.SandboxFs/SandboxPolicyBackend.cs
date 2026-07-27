@@ -137,7 +137,7 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
 
                 var resolvedCwd = string.IsNullOrWhiteSpace(cwd)
                     ? _sandboxRoot
-                    : SandboxPathValidator.ValidateAndResolve(cwd, _sandboxRoot);
+                    : SandboxPathValidator.ValidateRelativeOrAbsoluteContained(cwd, _sandboxRoot);
 
                 return new ExternalPolicyDecision
                 {
@@ -220,15 +220,7 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
             }
 
             // Dispatch to correct validator based on whether path is absolute
-            string resolved;
-            if (SandboxPathValidator.ShouldTreatAsAbsoluteOrEscapeAttempt(path))
-            {
-                resolved = SandboxPathValidator.ValidateAbsoluteContained(path, _sandboxRoot);
-            }
-            else
-            {
-                resolved = SandboxPathValidator.ValidateAndResolve(path, _sandboxRoot);
-            }
+            var resolved = SandboxPathValidator.ValidateRelativeOrAbsoluteContained(path, _sandboxRoot);
 
             // FR-033: record resolved path in metadata for audit
             return new ExternalPolicyDecision
