@@ -188,6 +188,21 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
       `${doc.kind}/${doc.name} must be namespaced to 'agentweaver'`,
     );
   }
+
+  // Regression for #580: every built namespaced/cluster-scoped document must
+  // belong to some FILE_RESOURCES group, or deploy-from-local/release can
+  // silently omit it even though kustomize produced it.
+  const accountedFor = new Set(
+    Object.values(FILE_RESOURCES)
+      .flat()
+      .map(({ kind, name }) => `${kind}/${name}`),
+  );
+  for (const doc of docs) {
+    assert.ok(
+      accountedFor.has(`${doc.kind}/${doc.name}`),
+      `kustomize build produced ungrouped resource ${doc.kind}/${doc.name}; add it to FILE_RESOURCES`,
+    );
+  }
 });
 
 test("manifestForFilename() throws a clear error for an unknown filename (fail-fast, no silent partial applies)", () => {
