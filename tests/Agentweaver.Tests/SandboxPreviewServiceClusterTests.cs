@@ -471,6 +471,95 @@ public sealed class SandboxPreviewServiceClusterTests
         (await svc.HasActivePreviewAsync(runId)).Should().BeFalse(
             "a live preview for a DIFFERENT run must not defer teardown of this run's pod");
     }
+
+    // ---- issue #560: RenewBackingClaimTtlAsync (cluster-side pod-retention) ------------------------
+    // PR #551 only deferred the API-side claim delete/reap. The claim is created with a cluster-side
+    // spec.lifecycle.ttlSecondsAfterFinished (default 600s); when a child subtask's workload finishes
+    // the sandbox controller reaps the pod ~TTL later, independently of the API — so a preview backed
+    // by a terminal run still NXDOMAINs. RenewBackingClaimTtlAsync patches that TTL up to cover the
+    // preview's hard-max lifetime so the controller keeps the pod alive as long as the preview may live.
+
+    private const int ExpectedRenewedTtlSeconds = 8 * 3600 + 600; // MaxLifetimeHours(8h) + 10min margin
+
+    [Fact]
+    public async Task RenewBackingClaimTtl_patches_agent_claim_with_extended_lifecycle_ttl()
+    {
+        const string runId = "run-560-renew";
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler(); // unstubbed PATCH echoes 200 OK
+        var svc = NewService(handler);
+
+        await svc.RenewBackingClaimTtlAsync(runId);
+
+        var patch = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}")).Subject;
+        patch.Body.Should().Contain("ttlSecondsAfterFinished")
+            .And.Contain(ExpectedRenewedTtlSeconds.ToString(),
+                "#560: the backing claim's cluster-side TTL must be extended to cover the preview's hard-max lifetime");
+        patch.Body.Should().Contain("lifecycle",
+            "the patch must target spec.lifecycle so the sandbox controller honours the new TTL");
+    }
+
+    [Fact]
+    public async Task RenewBackingClaimTtl_also_covers_run_command_claim()
+    {
+        // A retained run-command (run-*) claim can back the preview instead of the agent-host claim;
+        // both candidate names must be renewed so whichever exists in-cluster is kept alive.
+        const string runId = "run-560-runcmd";
+        var runCommandClaim = SandboxClaimConventions.DeriveRunCommandClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        var svc = NewService(handler);
+
+        await svc.RenewBackingClaimTtlAsync(runId);
+
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{runCommandClaim}"),
+            "#560: the run-command claim path shares the same cluster TTL, so it must be renewed too");
+    }
+
+    [Fact]
+    public async Task RenewBackingClaimTtl_is_noop_when_preview_disabled()
+    {
+        const string runId = "run-560-disabled";
+        var handler = new FakeKubeHandler();
+        var svc = new SandboxPreviewService(
+            ClientFor(handler),
+            new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", MaxLifetimeHours = 8 },
+            NullLogger<SandboxPreviewService>.Instance);
+
+        await svc.RenewBackingClaimTtlAsync(runId);
+
+        handler.Requests.Should().NotContain(r => r.Method == "PATCH",
+            "when the preview feature is disabled the renewal is a no-op (leak-safe)");
+    }
+
+    [Fact]
+    public async Task KeepAlive_renews_backing_claim_ttl_for_the_route_run()
+    {
+        // Keepalive must not only bump the route idle expiry — it must also renew the backing claim TTL
+        // so a long-lived, actively-viewed preview is never reaped by the cluster controller mid-session.
+        const string runId = "run-560-keepalive";
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        var routeName = PreviewReaper.ServiceName(token);
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        // GET the route so keepalive can read the durable preview-run-id annotation (replica-safe).
+        handler.OnGet(
+            $"/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes/{routeName}",
+            "{\"metadata\":{\"name\":\"" + routeName + "\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-run-id\":\"" + runId + "\"}}}");
+
+        var svc = NewService(handler);
+
+        await svc.KeepAliveAsync(token);
+
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}"),
+            "#560: keepalive must renew the backing claim TTL so an actively-viewed preview is not reaped");
+    }
 }
 
 /// <summary>
