@@ -368,6 +368,7 @@ function buildGraph(
         state: { status: 'pending' },
         nodeType: gnt,
         isPlanned: true,
+        connectable: true,
       } as WorkflowNodeData,
     };
   });

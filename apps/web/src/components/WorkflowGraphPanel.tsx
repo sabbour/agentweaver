@@ -122,6 +122,13 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   executionPodName?: string | null;
   /** Layout direction for handle placement. 'LR' = left/right; 'TB' = top/bottom; 'GRID' exposes all sides for routed grid edges. */
   dir?: 'LR' | 'TB' | 'GRID';
+  /**
+   * When true, the node's connection handles are rendered visible and interactive so the
+   * user can drag-to-connect nodes in the editable canvas (VisualWorkflowEditor). Defaults
+   * to false: every read-only render surface (CoordinatorRunPage, WorkflowGraphPanel,
+   * LandingWorkflowDemo) keeps handles as invisible, non-interactive edge anchors.
+   */
+  connectable?: boolean;
   /** When true and the node is running, an orange tool-approval badge is shown. */
   hasPendingApproval?: boolean;
   /** Active preview URL associated with a build/test gate. */
@@ -879,6 +886,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     totalNanoAiu,
     totalTokens,
     executionPodName: nodeExecutionPodName,
+    connectable,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
@@ -915,7 +923,21 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     selected        ? s.pillSelected       : undefined,
   );
 
-  const handleStyle: React.CSSProperties = { opacity: 0, pointerEvents: 'none' };
+  // Read-only surfaces render handles as invisible, non-interactive edge anchors. In the
+  // editable canvas (connectable) they must be visible AND hittable, otherwise React Flow
+  // has no target to start a drag-to-connect gesture from (`pointerEvents: 'none'` swallows
+  // the pointerdown before a connection can begin).
+  const handleStyle: React.CSSProperties = connectable
+    ? {
+        opacity: 1,
+        pointerEvents: 'all',
+        width: 10,
+        height: 10,
+        background: tokens.colorBrandBackground,
+        border: `1.5px solid ${tokens.colorNeutralBackground1}`,
+        zIndex: 1,
+      }
+    : { opacity: 0, pointerEvents: 'none' };
   const dir = (data as WorkflowNodeData).dir;
   const targetPos = dir === 'TB' ? Position.Top : Position.Left;
   const sourcePos = dir === 'TB' ? Position.Bottom : Position.Right;
@@ -1019,19 +1041,19 @@ export function WorkflowNode({ data, selected }: NodeProps) {
       >
         {dir === 'GRID' ? (
           <>
-            <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} />
-            <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} />
-            <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} />
-            <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} />
-            <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} />
-            <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} />
-            <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} />
-            <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} />
+            <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} isConnectable={!!connectable} />
           </>
         ) : (
           <>
-            <Handle type="target" position={targetPos} style={handleStyle} />
-            <Handle type="source" position={sourcePos} style={handleStyle} />
+            <Handle type="target" position={targetPos} style={handleStyle} isConnectable={!!connectable} />
+            <Handle type="source" position={sourcePos} style={handleStyle} isConnectable={!!connectable} />
           </>
         )}
 
