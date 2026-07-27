@@ -1,5 +1,0 @@
----
-"agentweaver": patch
----
-
-Add an LLM-powered fallback for live-preview command discovery (#541). The deterministic `PreviewCommandResolver` heuristics still run first as a fast/free/instant pass, but when they can't tell how to run a project (for example a plain static HTML/CSS site with no build tooling — the case that silently failed during a demo), `PreviewStep` now gives a model a bounded, token-capped view of the worktree and asks it to propose the exact `0.0.0.0`-bound, OS-assigned-port command and working directory. The model-chosen command still runs through the same sandboxed AgentHost start → port-observation → approval-gate pipeline — no new trust boundary — and its working directory is validated to stay inside the worktree. If the model also declines or can't produce a viable command, preview still ends in the terminal `preview_command_unresolved` outcome (this tier is additive, never a forced success). The resolving tier is observable via the existing `command_source` telemetry field (`heuristic:<source>` vs `llm`).
