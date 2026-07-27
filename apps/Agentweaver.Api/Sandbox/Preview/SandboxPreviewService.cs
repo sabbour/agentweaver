@@ -58,10 +58,15 @@ public interface ISandboxPreviewService
     /// idle/max expiry has NOT yet elapsed? Unlike <see cref="ListForRunAsync"/> this deliberately does
     /// NOT require the backing pod to still exist — it answers "should the run's sandbox pod be kept
     /// alive to keep a preview reachable?", which is asked precisely at the moment the pod is about to
-    /// be torn down (turn-end release / orphan reap), when the pod still exists. Returns
-    /// <see langword="false"/> when preview is disabled or no un-expired route exists, so the caller
-    /// falls back to normal teardown. Never throws — a lookup failure returns <see langword="false"/>
-    /// (leak-safe: defer only on positive evidence of an active preview).
+    /// be torn down (turn-end release / orphan reap), when the pod still exists.
+    ///
+    /// <para>
+    /// This check is also used by the worker heartbeat reaper, so it must continue to inspect the
+    /// durable cluster preview state even if the current process is not configured to CREATE preview
+    /// routes itself. Returns <see langword="false"/> only when no un-expired route exists or the
+    /// cluster lookup fails; missing preview endpoint config alone must not make a live preview
+    /// invisible to the reaper.
+    /// </para>
     /// </summary>
     Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default);
 
@@ -388,9 +393,12 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     public async Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
     {
         // Leak-safe: only meaningful while a preview is active; callers gate on HasActivePreviewAsync
-        // (turn-end/reaper deferral) or keepalive. Never throws — a renewal failure must not fail the
-        // teardown-deferral or keepalive path it hangs off. No-op when preview is disabled.
-        if (!Enabled || string.IsNullOrEmpty(runId))
+        // (turn-end/reaper deferral) or keepalive. This best-effort retention also hangs off the worker
+        // heartbeat reaper, so it must still run when the current process can see cluster preview state
+        // but does not itself provision preview routes. No-op only when there is no cluster client or
+        // run id. Never throws — a renewal failure must not fail the teardown-deferral or keepalive path
+        // it hangs off.
+        if (_client is null || string.IsNullOrEmpty(runId))
             return;
 
         // Cover the preview's own hard-max lifetime plus a margin so the controller keeps the pod for
@@ -445,9 +453,11 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     public async Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
     {
         // Leak-safe: only meaningful while a preview is active (callers set false on start/keepalive/
-        // defer, true on teardown). No-op when preview is disabled. Never throws — an annotation patch
-        // failure must not fail the lifecycle path it hangs off.
-        if (!Enabled || string.IsNullOrEmpty(runId))
+        // defer, true on teardown). The worker heartbeat reaper also relies on this best-effort pin,
+        // so it must work whenever the process has a cluster client, even if preview route creation is
+        // not enabled locally. No-op only when there is no cluster client or run id. Never throws — an
+        // annotation patch failure must not fail the lifecycle path it hangs off.
+        if (_client is null || string.IsNullOrEmpty(runId))
             return;
 
         try
@@ -628,10 +638,11 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
     public async Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default)
     {
-        // Leak-safe: only defer a pod teardown on POSITIVE evidence of a live preview. When preview is
-        // disabled, or the lookup fails, or no un-expired route exists, return false so the caller
-        // performs its normal teardown (issue #542).
-        if (!Enabled)
+        // Leak-safe: only defer a pod teardown on POSITIVE evidence of a live preview. This cluster
+        // read is also used by the worker heartbeat reaper, so it must keep working even if that
+        // process lacks the API pod's preview-endpoint wiring; a live route in cluster state is still
+        // authoritative. Without a client (or a run id), we cannot inspect that state.
+        if (_client is null || string.IsNullOrEmpty(runId))
             return false;
 
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);

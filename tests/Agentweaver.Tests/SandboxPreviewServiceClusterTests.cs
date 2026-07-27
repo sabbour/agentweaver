@@ -472,6 +472,33 @@ public sealed class SandboxPreviewServiceClusterTests
             "a live preview for a DIFFERENT run must not defer teardown of this run's pod");
     }
 
+    [Fact]
+    public async Task HasActivePreview_true_when_feature_flag_is_off_but_cluster_route_exists()
+    {
+        // #578: the worker heartbeat reaper consults this cluster-state check even when the worker is
+        // not the role that provisions preview routes. A live HTTPRoute must still be visible.
+        const string runId = "run-578-drift";
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[" +
+            "{\"metadata\":{\"name\":\"preview-worker\",\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-expires-at\":\"2099-01-01T00:00:00Z\"," +
+            "\"agentweaver.dev/preview-max-until\":\"2099-01-01T00:00:00Z\"}}}]}");
+
+        var svc = new SandboxPreviewService(
+            ClientFor(handler),
+            new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", MaxLifetimeHours = 8 },
+            NullLogger<SandboxPreviewService>.Instance);
+
+        (await svc.HasActivePreviewAsync(runId)).Should().BeTrue(
+            "missing local preview-provisioning config must not make a live cluster preview invisible to the worker reaper");
+    }
+
     // ---- issue #560: RenewBackingClaimTtlAsync (cluster-side pod-retention) ------------------------
     // PR #551 only deferred the API-side claim delete/reap. The claim is created with a cluster-side
     // spec.lifecycle.ttlSecondsAfterFinished (default 600s); when a child subtask's workload finishes
@@ -520,9 +547,10 @@ public sealed class SandboxPreviewServiceClusterTests
     }
 
     [Fact]
-    public async Task RenewBackingClaimTtl_is_noop_when_preview_disabled()
+    public async Task RenewBackingClaimTtl_still_patches_when_feature_flag_is_off_but_cluster_client_exists()
     {
-        const string runId = "run-560-disabled";
+        const string runId = "run-560-worker-drift";
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var handler = new FakeKubeHandler();
         var svc = new SandboxPreviewService(
             ClientFor(handler),
@@ -531,8 +559,9 @@ public sealed class SandboxPreviewServiceClusterTests
 
         await svc.RenewBackingClaimTtlAsync(runId);
 
-        handler.Requests.Should().NotContain(r => r.Method == "PATCH",
-            "when the preview feature is disabled the renewal is a no-op (leak-safe)");
+        handler.Requests.Should().Contain(r =>
+                r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}"),
+            "the worker reaper must still be able to renew the backing claim TTL for a live preview even if local preview-provisioning config is missing");
     }
 
     [Fact]
@@ -630,9 +659,9 @@ public sealed class SandboxPreviewServiceClusterTests
     }
 
     [Fact]
-    public async Task SetBackingPodSafeToEvict_is_noop_when_preview_disabled()
+    public async Task SetBackingPodSafeToEvict_still_patches_when_feature_flag_is_off_but_cluster_client_exists()
     {
-        const string runId = "run-574-disabled";
+        const string runId = "run-574-worker-drift";
         var handler = HandlerWithBoundPod(runId, "agentweaver-agent-host-x");
         var svc = new SandboxPreviewService(
             ClientFor(handler),
@@ -641,8 +670,8 @@ public sealed class SandboxPreviewServiceClusterTests
 
         await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: false);
 
-        handler.Requests.Should().NotContain(r => r.Method == "PATCH",
-            "when the preview feature is disabled the pin is a no-op (leak-safe)");
+        handler.Requests.Should().Contain(r => r.Method == "PATCH" && r.Path.Contains("/pods/"),
+            "the worker reaper must still be able to pin the backing pod for a live preview even if local preview-provisioning config is missing");
     }
 }
 
