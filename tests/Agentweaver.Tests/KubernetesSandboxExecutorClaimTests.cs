@@ -50,11 +50,12 @@ public sealed class KubernetesSandboxExecutorClaimTests
         FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver,
         IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
         IPodNameRegistry? podRegistry = null, IGitHubTokenStore? tokenStore = null,
-        IGitHubAccessTokenProvider? accessTokenProvider = null) =>
+        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions, tokenStore: tokenStore,
-            accessTokenProvider: accessTokenProvider);
+            accessTokenProvider: accessTokenProvider, previewService: previewService);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -691,6 +692,91 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "cancellation must abort without waiting on any backoff delay");
         fault.MatchedRequests.Should().BeLessThanOrEqualTo(1,
             "the create must not be retried once the caller token is canceled");
+    }
+
+    // =========================================================================
+    // Issue #542: ReleaseAgentHostPodAsync must NOT delete the run's SandboxClaim (which reaps the
+    // backing pod) while a live preview is still active — otherwise the returned preview URL 404s
+    // before a human reviewer can open it. When no preview is active (or no preview service is wired),
+    // the claim delete must proceed exactly as before so pods never leak.
+    // =========================================================================
+    [Fact]
+    public async Task ReleaseAgentHostPod_defers_claim_delete_when_preview_active()
+    {
+        const string runId = "run-542-release-defer";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        var executor = NewExecutor(
+            handler, new StubSubmittingUserResolver("sabbour"),
+            previewService: new StubPreviewService(hasActivePreview: true));
+
+        await executor.ReleaseAgentHostPodAsync(runId);
+
+        handler.Requests.Should().NotContain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
+            "an active preview must defer the claim delete so the preview URL stays reachable (#542)");
+    }
+
+    [Fact]
+    public async Task ReleaseAgentHostPod_deletes_claim_when_no_active_preview()
+    {
+        const string runId = "run-542-release-noactive";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        var executor = NewExecutor(
+            handler, new StubSubmittingUserResolver("sabbour"),
+            previewService: new StubPreviewService(hasActivePreview: false));
+
+        await executor.ReleaseAgentHostPodAsync(runId);
+
+        handler.Requests.Should().Contain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
+            "with no active preview the claim must be deleted exactly as before (no pod leak)");
+    }
+
+    [Fact]
+    public async Task ReleaseAgentHostPod_deletes_claim_when_no_preview_service_configured()
+    {
+        const string runId = "run-542-release-nopreviewsvc";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"));
+
+        await executor.ReleaseAgentHostPodAsync(runId);
+
+        handler.Requests.Should().Contain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
+            "non-preview deployments (null preview service) must keep the original unconditional release");
+    }
+
+    // Minimal ISandboxPreviewService test double: only HasActivePreviewAsync is exercised by the
+    // release path; every other member throws so an unexpected call is caught loudly.
+    private sealed class StubPreviewService : Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService
+    {
+        private readonly bool _hasActivePreview;
+        public StubPreviewService(bool hasActivePreview) => _hasActivePreview = hasActivePreview;
+
+        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(_hasActivePreview);
+
+        public bool Enabled => true;
+        public int AllowedPortMin => 3000;
+        public int AllowedPortMax => 9000;
+        public Task<Agentweaver.Api.Sandbox.Preview.PreviewSession> StartPreviewAsync(
+            string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+            string? previewRunnerSessionId = null) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Agentweaver.Api.Sandbox.Preview.PreviewSession>> ListForRunAsync(
+            string runId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task KeepAliveAsync(string token, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task StopPreviewAsync(string token, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task<int> ReapAsync(CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class CompatibilityAgentHostLifecycle : IAgentHostPodLifecycle

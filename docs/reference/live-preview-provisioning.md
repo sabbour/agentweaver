@@ -18,6 +18,34 @@ For the Gateway routes and `PortForwardSessionDto`, see [Sandbox browser preview
 | Preview failure | Emits `sandbox.preview_failed`; never blocks human review and never forces changes. | `PreviewStep.cs:31`, `CoordinatorAssemblyService.cs:772` |
 | Approval | Uses existing `AgentPreviewGate`; no preview-specific bypass. | `PreviewStep.cs:157` |
 
+## Sandbox pod retention while a preview is active (issue #542)
+
+A live preview resolves through: Gateway → per-preview `HTTPRoute` → per-run ClusterIP `Service`
+→ the run's **sandbox pod** (selected by pod label). The `HTTPRoute`/`Service` are reaped on their
+own annotation-driven schedule, but they are useless once the pod behind them is gone. Historically
+the sandbox pod's `SandboxClaim` was deleted **unconditionally** the moment the originating subtask's
+turn ended (`KubernetesSandboxExecutor.ReleaseAgentHostPodAsync`), and a completed subtask's claim
+also became an "orphan" to `AgentHostReaperService` immediately — so a preview URL handed to a human
+reviewer would `404` within minutes, before the review gate could open it.
+
+Both teardown paths now consult `ISandboxPreviewService.HasActivePreviewAsync(runId)` and **defer**
+while a preview is still alive:
+
+| Teardown path | Behavior with an active preview | Source |
+| --- | --- | --- |
+| Turn-end release | `ReleaseAgentHostPodAsync` skips the claim delete and returns; the pod stays up. | `KubernetesSandboxExecutor.cs` |
+| Orphan reaper sweep | `SweepOrphanedPodsAsync` skips (continues past) a claim whose run has a live preview. | `AgentHostReaperService.cs` |
+
+`HasActivePreviewAsync` returns `true` only when the run has an `HTTPRoute` whose **idle** expiry
+(`preview-expires-at`, bumped by keepalive) *and* **hard-max** expiry (`preview-max-until`) are both
+still in the future (`PreviewReaper.Decide(...) == Alive`). It deliberately does **not** require the
+pod to still exist (the pod is present at the teardown boundary), and it is leak-safe: preview
+disabled, no un-expired route, or any lookup failure all return `false`, so the caller performs its
+normal teardown. Eventual teardown is therefore bounded and cannot leak: with no keepalive the preview
+idle-expires (`Sandbox:Preview:IdleTimeoutMinutes`, default 30) or hits its hard max
+(`Sandbox:Preview:MaxLifetimeHours`, default 8); the `SandboxPreviewReaperService` then deletes the
+route, and the next `AgentHostReaperService` sweep — now seeing no active preview — reaps the pod.
+
 ## AgentHost preview-runner endpoints
 
 These are platform-facing AgentHost endpoints. They are root-mounted on the AgentHost origin, not under the A2A path (`apps/Agentweaver.AgentHost/Program.cs:291`).
