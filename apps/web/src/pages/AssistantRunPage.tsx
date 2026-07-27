@@ -54,6 +54,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     maxWidth: '640px',
   },
+  suggestions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+    maxWidth: '640px',
+  },
   approvals: {
     display: 'flex',
     flexDirection: 'column',
@@ -99,6 +105,23 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
   },
 });
+
+/**
+ * Starter prompts shown on the empty-state screen (before a run exists) so a
+ * first-time user or someone doing a quick smoke test doesn't have to think of a
+ * prompt themselves. Each one is a realistic, self-contained request the operator
+ * assistant can act on today via its MCP tool surface (project_list,
+ * project_list_runs, run_status, coordinator_start/run_task, skill_list) — see
+ * decisions/inbox/trinity-assistant-run-prompt-buttons.md for why these five and
+ * not the landing page's longer, more elaborate demo scenarios.
+ */
+const SUGGESTED_PROMPTS: string[] = [
+  'List my projects and each one\u2019s most recent run status.',
+  'Start a quick smoke-test run: ask the coordinator to add a one-line README update to a project.',
+  'Show me the status of my most recent run, and flag anything waiting on my approval.',
+  'What MCP tools and skills do you currently have access to?',
+  'Create a new test project and kick off a small run to verify everything is wired up.',
+];
 
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
@@ -289,6 +312,14 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const pendingResumeFromRunIdRef = useRef<string | null>(null);
   const sendingRef = useRef(false);
 
+  // Populate (not submit) the composer with an example prompt — the user still reviews
+  // and hits send themselves, matching the Composer's normal edit-then-submit flow rather
+  // than auto-dispatching on click.
+  const handleSuggestionClick = useCallback((prompt: string) => {
+    setInput(prompt);
+    setError(null);
+  }, []);
+
   const { events, status: streamStatus } = useSeededRunStream(runId, undefined);
 
   // Keep the URL in sync with the active run id so a refresh or shared link resumes the
@@ -426,6 +457,22 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
             Start a conversation below. Your first message opens an operator run and the reply
             streams in here.
           </Text>
+        )}
+        {!runId && (
+          <div className={styles.suggestions} data-testid="assistant-suggested-prompts">
+            {SUGGESTED_PROMPTS.map((prompt) => (
+              <Button
+                key={prompt}
+                appearance="outline"
+                size="small"
+                shape="circular"
+                data-testid="assistant-suggested-prompt"
+                onClick={() => handleSuggestionClick(prompt)}
+              >
+                {prompt}
+              </Button>
+            ))}
+          </div>
         )}
         {runId && (
           <RunTimeline
