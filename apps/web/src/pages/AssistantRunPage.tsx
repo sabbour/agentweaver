@@ -285,6 +285,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const params = useParams<{ projectId?: string }>();
   const effectiveProjectId = projectId ?? params.projectId;
   const [searchParams, setSearchParams] = useSearchParams();
+  const routeRunId = searchParams.get('runId') ?? '';
 
   // The operator run id is created lazily on the first composer submit; until then the
   // stream stays disabled ('') and the page shows the empty invitation state. If the page
@@ -333,13 +334,11 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   // Keep the URL in sync with the active run id so a refresh or shared link resumes the
   // same conversation instead of dropping back to the empty invitation state.
   useEffect(() => {
-    const current = searchParams.get('runId') ?? '';
-    if (current === runId) return;
+    if (routeRunId === runId) return;
     const next = new URLSearchParams(searchParams);
     if (runId) next.set('runId', runId); else next.delete('runId');
     setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
+  }, [routeRunId, runId, searchParams, setSearchParams]);
 
   const timelineModel = useMemo(
     () => buildRunTimeline(events, { stripSerializedWorkPlan: false }),

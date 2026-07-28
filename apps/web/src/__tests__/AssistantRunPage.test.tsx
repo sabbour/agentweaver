@@ -2,8 +2,9 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AssistantRunPage } from '../pages/AssistantRunPage';
+import { AssistantRoute } from '../routes/AssistantRoute';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -55,6 +56,24 @@ function typeAndSend(message: string) {
   fireEvent.change(textarea, { target: { value: message } });
   // Enter submits the Composer.
   fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>;
+}
+
+function NewSessionRouteHarness() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate('/assistant?project=proj-7')} data-testid="new-session-nav">
+        New session
+      </button>
+      <AssistantRoute />
+      <LocationProbe />
+    </>
+  );
 }
 
 /** Real response shape from POST /api/assistant/runs (201). */
@@ -141,6 +160,30 @@ describe('AssistantRunPage', () => {
     });
     // Populating is not the same as sending — no request should have gone out yet.
     expect(apiClient.createAssistantRun).not.toHaveBeenCalled();
+  });
+
+  it('resets the active run when navigation clears runId from the assistant route', async () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?project=proj-7&runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<NewSessionRouteHarness />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-empty-state')).toBeNull();
+      expect(screen.getByTestId('location-probe').textContent).toBe('/assistant?project=proj-7&runId=assistant-run-1');
+    });
+
+    fireEvent.click(screen.getByTestId('new-session-nav'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
+      expect(screen.getByTestId('location-probe').textContent).toBe('/assistant?project=proj-7');
+    });
   });
 
   it('creates a run on the first composer submit using real backend shape', async () => {
