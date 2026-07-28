@@ -11,12 +11,13 @@ const string DocumentationBaseUrl = "https://sabbour.github.io/agentweaver/";
 // `style-src` needs `'unsafe-inline'` because @fluentui/react-components (Griffel)
 // injects `<style>` rules at runtime; there is no confirmed script-injection sink
 // today (see .security findings), so `script-src` intentionally stays strict with
-// no `'unsafe-inline'`/`'unsafe-eval'`.
+// no `'unsafe-inline'`/`'unsafe-eval'`. GitHub-backed project pickers render
+// avatars from avatars.githubusercontent.com, so img-src must allow that host.
 const string ContentSecurityPolicy =
     "default-src 'self'; " +
     "script-src 'self'; " +
     "style-src 'self' 'unsafe-inline'; " +
-    "img-src 'self' data:; " +
+    "img-src 'self' data: https://avatars.githubusercontent.com; " +
     "font-src 'self' data:; " +
     "connect-src 'self'; " +
     "object-src 'none'; " +
