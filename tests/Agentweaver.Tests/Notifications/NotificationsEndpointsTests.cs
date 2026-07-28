@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -181,6 +182,25 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
             await backlogStore.TryArchiveAsync(pid, taskId, archivedAt.Value);
     }
 
+    private async Task InsertReviewRequestedEventAsync(string runId, DateTimeOffset createdAt)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var nextSequence = await db.RunEvents
+            .Where(evt => evt.RunId == runId)
+            .Select(evt => (int?)evt.Sequence)
+            .MaxAsync() ?? 0;
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = nextSequence + 1,
+            EventType = EventTypes.CoordinatorAssemblyReviewRequested,
+            PayloadJson = """{"gateKind":"human-review"}""",
+            CreatedAt = createdAt.UtcDateTime,
+        });
+        await db.SaveChangesAsync();
+    }
+
     [Fact]
     public async Task GetNotifications_SurfacesBacklogPromotedNotification_ForDelegatedRun()
     {
@@ -272,6 +292,8 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
     {
         var projectId = await CreateBlankProjectAsync("Notif Project A");
         var run = await InsertAwaitingReviewRunAsync(projectId, "Implement the checkout flow", "Coordinator", "wf-run-1");
+        var reviewRequestedAt = DateTimeOffset.Parse("2026-07-28T01:02:03Z");
+        await InsertReviewRequestedEventAsync(run.Id.ToString(), reviewRequestedAt);
 
         var response = await _client.GetAsync("/api/notifications");
 
@@ -282,6 +304,7 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         var match = notifications.Should().ContainSingle(n => n.GetProperty("run_id").GetString() == run.Id.ToString())
             .Subject;
         match.GetProperty("type").GetString().Should().Be("human_review");
+        match.GetProperty("id").GetString().Should().StartWith($"review:{run.Id}:");
         match.GetProperty("project_id").GetString().Should().Be(projectId);
         match.GetProperty("agent_name").GetString().Should().Be("Coordinator");
         match.GetProperty("title").GetString().Should().Be("Implement the checkout flow");
@@ -471,6 +494,42 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
             .GetProperty("id").GetString();
 
         secondId.Should().Be(firstId);
+    }
+
+    [Fact]
+    public async Task GetNotifications_DismissedReview_ReappearsWhenSameRunRequestsReviewAgain()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project L");
+        var run = await InsertAwaitingReviewRunAsync(projectId, "Review me again", "Coordinator", "wf-run-3");
+        var firstReviewRequestedAt = DateTimeOffset.Parse("2026-07-28T01:00:00Z");
+        await InsertReviewRequestedEventAsync(run.Id.ToString(), firstReviewRequestedAt);
+
+        var first = await _client.GetAsync("/api/notifications");
+        var firstBody = await first.Content.ReadFromJsonAsync<JsonElement>();
+        var firstId = firstBody.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("run_id").GetString() == run.Id.ToString())
+            .GetProperty("id").GetString();
+        firstId.Should().StartWith($"review:{run.Id}:");
+
+        var dismiss = await _client.PostAsync($"/api/notifications/{Uri.EscapeDataString(firstId!)}/dismiss", content: null);
+        dismiss.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var afterDismiss = await _client.GetAsync("/api/notifications");
+        var afterDismissBody = await afterDismiss.Content.ReadFromJsonAsync<JsonElement>();
+        afterDismissBody.GetProperty("notifications").EnumerateArray()
+            .Should().NotContain(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+
+        var secondReviewRequestedAt = DateTimeOffset.Parse("2026-07-28T01:05:00Z");
+        await InsertReviewRequestedEventAsync(run.Id.ToString(), secondReviewRequestedAt);
+
+        var second = await _client.GetAsync("/api/notifications");
+        var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+        var secondId = secondBody.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("run_id").GetString() == run.Id.ToString())
+            .GetProperty("id").GetString();
+
+        secondId.Should().StartWith($"review:{run.Id}:");
+        secondId.Should().NotBe(firstId);
     }
 
     [Fact]
