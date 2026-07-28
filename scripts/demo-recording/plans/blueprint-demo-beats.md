@@ -13,21 +13,38 @@ stated reason (rather than silently dropping it, as happened before).
 Every beat below is intended to be captured **live** against the deployed staging app
 unless marked `BLOCKED`.
 
+An optional `On screen:` line after a beat's `Narration:` records the concrete on-screen
+actions the capture plan must perform (it is ignored by the narration parser, which only
+reads the `Narration:` line). These specs are the reproducible source of truth for the
+behavior fixes applied after the PR #613 review — the per-beat capture JSON under
+`recordings/_scratch/plans/` is generated/environment-specific and intentionally
+gitignored. Two pipeline-wide fixes also apply to every beat: the synthetic cursor now
+tracks the real post-zoom click coordinates, and camera zoom/pan is only used when a
+target genuinely needs magnifying (scale ≤ 1.02 = no zoom), to cut gratuitous motion.
+
 ## Beat 1.1 — Create the project
 
 Narration: "Start with an empty GitHub repository, paste in the repo URL, and create a new project from it. Once the repository is connected, give the project a name and move straight into setting up the team."
+
+On screen: This beat OWNS repo-connect + naming only — paste the repo URL, connect it, set the project name, then advance to blueprint selection. It must NOT re-run blueprint selection (that belongs to 1.2), so 1.1 and 1.2 are never captured as near-duplicate segments (fixes the "synced-1-1 and 1-2 are the same video" defect).
 
 ## Beat 1.2 — Choose a blueprint
 
 Narration: "Blueprints package the roles, skills, and workflows your team will use. You can generate a custom setup for a specific goal or start from a proven preset. Here, we'll choose the Product and Software Delivery blueprint. Behind the scenes, a casting algorithm assigns each role a named agent from a themed universe — so the team you're about to meet isn't just 'Agent 1, Agent 2' — it has personality and continuity across every run in this project."
 
+On screen: This beat OWNS blueprint selection only — pick the "Product and Software Delivery" blueprint and show the casting result. Do NOT re-enter the repo URL or project name (already done in 1.1) and reuse the existing project rather than creating a second one, so 1.2 is not a duplicate of 1.1.
+
 ## Beat 1.3 — Inspect the team
 
 Narration: "Here's the project team in action, with each agent's role and assigned skills visible at a glance. Every agent also shows its own default model and context window right here in the roster — so you can see at a glance which agent is running a fast, low-cost model for routine work versus a larger-context model for deep reasoning. From the Skills section, you can browse curated marketplaces or import skills directly from a GitHub repository, then assign those capabilities to the right agent for the workflow."
 
+On screen: Click an agent (e.g. Deckard) to open its card showing the default model (claude-opus-4.8) and context window. Then go to the Skills page and actually exercise the UI the narration describes: open the "Browse marketplaces" dialog, the "Generate skill" dialog, and the "Import skill" dialog (each opened then dismissed with Escape), then switch to the "Assignments" tab to show a skill assigned to an agent. Use no-zoom clicks — do not magnify unless a detail needs it.
+
 ## Beat 2.1 — Frame the product
 
 Narration: "We start by choosing the software delivery workflow and giving the team a concrete product challenge to solve. Notice the coordinator doesn't just take the request at face value — it drafts an OutcomeSpec: the goal, the desired outcome, the scope, and its assumptions, then picks the best-fit workflow for the job using an LLM pass over all the available workflows and roles, and tells you why it chose this one. You can always override that choice from the Start Task dialog, or just type 'use' and the workflow id. The idea here is Trailhead, a tool that helps groups turn scattered weekend trip planning into one shared plan everyone can agree on. From there, the brief lays out the core positioning, value props, and a simple first landing page experience centered around a 'Plan my first trip' call to action."
+
+On screen: Choose the software-delivery workflow, enter the Trailhead brief, and show the drafted OutcomeSpec (goal / outcome / scope / assumptions and the workflow-choice rationale). Keep the camera still on the OutcomeSpec content — remove the earlier zoom onto a meaningless empty area (the "zooms on a meaningless area around 00:27" defect); only zoom if it lands on real OutcomeSpec text.
 
 ## Beat 2.2 — Review and confirm the plan
 
@@ -37,13 +54,19 @@ Narration: "Before any work starts, the coordinator asks for your confirmation o
 
 Narration: "Once confirmed, the coordinator decomposes the spec into a WorkPlan — a dependency graph of subtasks — and dispatches child agents in parallel, each working in its own isolated sandbox so nothing they do can collide with another agent's work. This live topology graph shows every agent and its status as it runs. You're not just a spectator here: you can steer mid-run — send a directive, redirect a child agent, or amend the plan — without stopping the whole run. Watch: we'll send a quick redirect to one of the agents right now, then step through a few nodes to inspect the work plan before returning to the run view as outputs start landing in real time."
 
+On screen: Perform REAL steering and topology actions (both were previously narrated but never shown). (1) Send an actual steering directive to a running child agent via the run's steering/message box and confirm a new event/message lands on the run timeline before moving on. (2) Open the live topology graph view and `waitFor` a graph node to render before narrating over it — do not narrate over a blank/broken graph. If the current run's graph won't render, target a run that has an active multi-agent topology first.
+
 ## Beat 2.4 — Review the board
 
 Narration: "The board now shows the promoted tasks broken out into separate work items. Move the landing-page task from Backlog into Ready, and the coordinator immediately picks it up for execution."
 
+On screen: Create the landing-page work item exactly ONCE, then drag it from Backlog to Ready. Do not create it twice and delete the duplicate on camera (fixes the "duplicate workitem being entered into backlog then you delete it" defect). If a stray duplicate already exists from a prior session, remove it off-camera (eval-step cleanup) before recording so only a single create is shown.
+
 ## Beat 2.5 — Ship it
 
 Narration: "As the workflow progresses, approve each gate as it appears so the run can continue. Once Build and Test finishes, the preview environment comes online, and you open the preview to check the landing page running live."
+
+On screen: The preview step is gated by a human-in-the-loop approval (`start_preview` posts a `ToolApprovalRequired` card to the run timeline with a 5-minute timeout — this is a safety gate, NOT a product bug). When that card appears, promptly click "Approve" ("here's the human-in-the-loop safety gate — approving the preview now"), then `waitFor` the live preview to actually render before narrating over it. Must not sit on "Preview Unavailable: approval timed out".
 
 ## Beat 2.6 — Review the diff and approve the merge
 
@@ -53,9 +76,13 @@ Narration: "When the work is ready, a notification prompts you to review and app
 
 Narration: "The Dashboard gives a quick view of operational health, including throughput and quality across agents. In Observability, you can drill into traces, compare agent activity, and monitor usage, latency, and cost over time."
 
+On screen: Open the Dashboard and `waitFor` a real chart/tile element to render (not a fixed short timeout) before narrating over it — the dashboard takes time to load. Only then move on to Observability. Fixes "proceeds without waiting for it to load".
+
 ## Beat 2.8 — Review team memory and decisions
 
 Narration: "Here in the Decisions tab, the team's accepted decisions are carried forward automatically — these are one of four memory layers compiled into every agent's context: active decisions, core project context, learnings and patterns from prior runs, and the current open session. Agents propose new entries to a decision inbox, and after each run a Scribe pass merges the inbox into this shared ledger. That shared memory is what you just watched get created moments ago — it's how future runs pick up the same context without starting from scratch."
+
+On screen: Show the Decisions tab with a real, NON-EMPTY accepted decision. A decision must exist before this beat is captured — either let an earlier beat's run complete a Scribe pass that records one, or trigger one deliberately earlier in the sequence. Verify `GET /api/projects/{proj}/decisions` returns `total_count > 0` before rolling; do not show an empty tab (fixes "no decisions have been recorded by Scribe").
 
 ## Beat 2.9 — When something goes wrong
 
@@ -65,9 +92,13 @@ Narration: "Not every run finishes cleanly — that's expected. Runs that fail l
 
 Narration: "Open Workflows and choose the workflow that just completed. From there, add a schedule and pick a daily, weekly, or monthly cadence in UTC so the workflow keeps running automatically on its own. A separate heartbeat also runs continuously in the background, promoting Ready tasks and starting runs up to a configurable concurrency limit — so the board keeps moving even when nobody's watching it."
 
+On screen: Operate on the legitimate completed delivery workflow — NOT the stray "Copy of Bug Fix" (`bug-fix-copy`) duplicate. Any stray duplicate workflow must be cleaned up before capture; note there is currently no workflow-delete API/UI (see decisions inbox), so if the copy cannot be removed, frame the schedule beat on the intended delivery workflow and keep the duplicate out of frame.
+
 ## Beat 3.2 — Trigger it from GitHub
 
 Narration: "Schedules handle time-based runs, but webhooks handle real events. In Project Settings under Webhooks, generate a secret, copy the payload URL, and connect it to a GitHub repository webhook. Now watch it happen for real: we push a commit to the repository right now, and the webhook fires, triggering the same workflow automatically."
+
+On screen: After connecting the webhook and pushing the commit, show visible on-screen evidence that the webhook fired — navigate to the Runs/Orchestrations list (or run timeline) and show the newly triggered run appearing in near-real-time. If a live wait is impractical, cut to the resulting run with a short "watch for this" callout. Do not narrate the webhook firing with nothing visible on screen.
 
 ## Beat 4.1 — Pivot to the seeded bug
 
@@ -85,9 +116,13 @@ Narration: "Before changing any code, the workflow narrows the problem down. It 
 
 Narration: "The team traces the issue to the underlying implementation, applies the repair, and reruns the relevant tests to confirm the behavior is now stable. The follow-up validation shows the fix holding under the same conditions that previously triggered the problem."
 
+On screen: CLICK each work-plan step to expand/select/navigate it so the UI actually responds as narrated — do not merely hover over the steps (fixes "hovers over them without clicking"). Each click should produce a visible expand/detail change.
+
 ## Beat 4.5 — Preview the repaired behavior
 
 Narration: "Preview the repaired layout the same way you previewed the feature. On a narrow tablet, the banner and the button now stay in their own space instead of colliding."
+
+On screen: Same human-in-the-loop preview gate as beat 2.5 — when the `ToolApprovalRequired` card appears for `start_preview`, click "Approve", then `waitFor` the repaired preview to render before narrating. Must not show "Preview Unavailable: approval timed out".
 
 ## Beat 4.6 — Approve the bug fix
 

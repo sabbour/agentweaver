@@ -31,22 +31,46 @@ export function renderCaptureScript(plan) {
 
   lines.push(
     `  await page.goto(${JSON.stringify(plan.startUrl)}, { waitUntil: 'domcontentloaded' });`,
+    "  await page.evaluate(() => { try { sessionStorage.removeItem('__demoCaptureEpoch'); sessionStorage.removeItem('__demoActivityLog'); } catch (e) {} });",
     '  await page.evaluate(installSource);',
     `  await page.screencast.start({ path: ${JSON.stringify(plan.videoPath)}, size: { width: ${plan.viewport?.width ?? 1920}, height: ${plan.viewport?.height ?? 1080} } });`,
+    '  const centerOf = (box) => ({',
+    '    x: box.x + Math.max(8, Math.min(box.width / 2, box.width - 8)),',
+    '    y: box.y + Math.max(8, Math.min(box.height / 2, box.height - 8)),',
+    '  });',
+    '  // Drive the visible cursor + real mouse to a viewport point. Kept as one helper',
+    '  // so every interaction points the cursor at exactly where the click will land.',
+    '  const pointAt = async (x, y, steps = 18) => {',
+    '    await page.evaluate(({ x, y }) => { window.__demoCursorMove?.(x, y); }, { x: Math.round(x), y: Math.round(y) });',
+    '    await page.mouse.move(x, y, { steps });',
+    '  };',
+    '  // focus() optionally zooms toward the target. CRITICAL: a zoom transform MOVES the',
+    "  // element on screen, so the cursor must be placed using the element's POST-transform",
+    '  // box (recomputed after the transition settles), not the pre-zoom coordinates — that',
+    '  // pre-zoom placement was why "the pointer was nowhere near where the clicks are".',
+    '  // A scale <= 1.02 means "no zoom": reset any prior transform and just point, so we',
+    '  // stop panning the whole page for beats where nothing needs magnifying.',
     '  const focus = async (locator, scale = 1.45, steps = 18, hold = 260) => {',
     '    await locator.scrollIntoViewIfNeeded().catch(() => {});',
     '    const box = await locator.boundingBox();',
     "    if (!box) throw new Error('No bounding box');",
-    '    const x = box.x + Math.max(8, Math.min(box.width / 2, box.width - 8));',
-    '    const y = box.y + Math.max(8, Math.min(box.height / 2, box.height - 8));',
-    "    await page.evaluate(({ x, y, scale }) => { window.__demoActivityMark?.('focus', { x: Math.round(x), y: Math.round(y), scale }); window.__demoZoomFocus?.(x, y, scale); window.__demoCursorMove?.(x, y); }, { x, y, scale });",
-    '    await pause(220);',
-    '    await page.mouse.move(x, y, { steps });',
+    '    const pre = centerOf(box);',
+    '    const zoom = scale > 1.02;',
+    '    if (zoom) {',
+    "      await page.evaluate(({ x, y, scale }) => { window.__demoActivityMark?.('focus', { x: Math.round(x), y: Math.round(y), scale }); window.__demoZoomFocus?.(x, y, scale); }, { x: pre.x, y: pre.y, scale });",
+    '      await pause(500);',
+    '    } else {',
+    "      await page.evaluate(() => { window.__demoActivityMark?.('focus'); window.__demoZoomReset?.(); });",
+    '      await pause(300);',
+    '    }',
+    '    const zbox = (await locator.boundingBox()) ?? box;',
+    '    const post = centerOf(zbox);',
+    '    await pointAt(post.x, post.y, steps);',
     '    await pause(hold);',
     '  };',
-    '  const click = async (locator, scale = 1.45, after = 620) => {',
+    '  const click = async (locator, scale = 1.45, after = 620, force = false) => {',
     '    await focus(locator, scale);',
-    '    await locator.click();',
+    '    await locator.click(force ? { force: true } : {});',
     "    await page.evaluate(() => { window.__demoActivityMark?.('click'); window.__demoCursorClick?.(); });",
     '    await pause(after);',
     '  };',
@@ -66,14 +90,30 @@ export function renderCaptureScript(plan) {
     } else if (step.type === 'pause') {
       lines.push(`    await pause(${step.ms});`);
     } else if (step.type === 'click') {
-      lines.push(`    await click(${locatorExpression(step.selector)}, ${step.scale ?? 1.45}, ${step.after ?? 620});`);
+      lines.push(`    await click(${locatorExpression(step.selector)}, ${step.scale ?? 1.45}, ${step.after ?? 620}, ${step.force ? 'true' : 'false'});`);
     } else if (step.type === 'hover') {
       lines.push(`    await focus(${locatorExpression(step.selector)}, ${step.scale ?? 1.45}, 18, ${step.hold ?? 900});`);
     } else if (step.type === 'type') {
       lines.push(`    await typeInto(${locatorExpression(step.selector)}, ${JSON.stringify(step.text)}, ${step.scale ?? 1.6}, ${step.delay ?? 12}, ${step.after ?? 700});`);
     } else if (step.type === 'press') {
+      const pressTarget = step.selector ? `${locatorExpression(step.selector)}.press(${JSON.stringify(step.key)})` : `page.keyboard.press(${JSON.stringify(step.key)})`;
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('press', { key: ${JSON.stringify(step.key)} }));`);
-      lines.push(`    await page.keyboard.press(${JSON.stringify(step.key)});`);
+      lines.push(`    await ${pressTarget};`);
+      if (step.after) lines.push(`    await pause(${step.after});`);
+    } else if (step.type === 'eval') {
+      // Run an arbitrary in-page expression (e.g. a guarded cleanup that removes a
+      // duplicate list item before it is captured). Marked so the idle-trimmer keeps
+      // the surrounding frames. Kept intentionally simple: the expression string is
+      // authored in-repo, never from user input.
+      lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('eval'));`);
+      lines.push(`    await page.evaluate(() => { ${step.expression} });`);
+      if (step.after) lines.push(`    await pause(${step.after});`);
+    } else if (step.type === 'waitFor') {
+      // Wait for a real element (e.g. a rendered dashboard chart / topology node) to be
+      // visible before narrating over it — replaces fixed short timeouts that let beats
+      // move on before the view had actually loaded.
+      lines.push(`    await ${locatorExpression(step.selector)}.first().waitFor({ state: 'visible', timeout: ${step.timeout ?? 60000} });`);
+      lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('waitFor'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'select') {
       lines.push(`    await focus(${locatorExpression(step.selector)}, ${step.scale ?? 1.45}, 18, ${step.hold ?? 260});`);
@@ -85,6 +125,7 @@ export function renderCaptureScript(plan) {
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('waitText', { text: ${JSON.stringify(step.text)} }));`);
     } else if (step.type === 'goto') {
       lines.push(`    await page.goto(${JSON.stringify(step.url)}, { waitUntil: 'domcontentloaded' });`);
+      lines.push('    await page.evaluate(installSource);');
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('goto'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     }
