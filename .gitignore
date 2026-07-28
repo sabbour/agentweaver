@@ -83,3 +83,7 @@ scripts/azure/params.*.json
 scripts/azure/steps/.rendered/
 scripts/azure/tests/.scratch-*/
 
+
+# Demo recording output artifacts (large binary media, not source)
+recordings/
+.playwright-cli/

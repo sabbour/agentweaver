@@ -1,0 +1,13 @@
+{
+  "name": "agentweaver-demo-recording",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reusable demo-recording helpers for Agentweaver staging recordings.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
