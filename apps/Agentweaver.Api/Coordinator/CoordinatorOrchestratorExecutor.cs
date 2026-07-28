@@ -1687,6 +1687,27 @@ public sealed class CoordinatorOrchestratorExecutor
                 $"kept inline: {string.Join(", ", degradedStoryKeys)}.",
             };
 
+        if (inline.Count == 0 && promoted.Count > 0)
+        {
+            var storyKeys = promoted
+                .OrderBy(i => i)
+                .Select(i => drafts[i].StoryKey)
+                .ToList();
+            warnings.Add(
+                "Independent task promotion would have delegated the entire plan to backlog, so the coordinator kept all stories inline to preserve live subtask dispatch.");
+            _logger.LogWarning(
+                "Coordinator promotion classifier for run {RunId} would delegate the entire plan ({StoryKeys}); keeping all stories inline instead.",
+                input.RunId,
+                string.Join(", ", storyKeys));
+            return new PromotionPartitionResult(
+                [],
+                Enumerable.Range(0, drafts.Count).ToList(),
+                new Dictionary<int, string>(),
+                new HashSet<string>(StringComparer.Ordinal),
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                warnings);
+        }
+
         return new PromotionPartitionResult(promoted, inline, reasons, promotedKeys, auditRationales, warnings);
     }
 

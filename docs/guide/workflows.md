@@ -79,6 +79,8 @@ Click **New workflow** to open the visual editor with a YAML-backed template. Us
 
 Use **Edit visually** to build a workflow as a node graph. Drag roles onto the canvas, connect them, and configure each step visually. The editor generates the YAML for you.
 
+Click **Add node** to insert a new step. The palette is grouped under **Reviewers & gates**, **Agent steps**, and **Flow control**, and each entry shows an icon and a one-line description. **Build & Test** appears once, as a ready-to-use preset.
+
 For existing project workflows, use **Edit** to open the YAML editor or **Edit visually** to open the graph editor. Built-in workflows are read-only; use **Duplicate to project** to create an editable copy and open it in the visual editor.
 
 ## Running and scheduling workflows

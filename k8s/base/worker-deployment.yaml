@@ -231,6 +231,21 @@ spec:
               value: /mnt/a2a-client-tls/ca.crt
             - name: Sandbox__A2A__Port
               value: "8088"
+            # Preview gateway wiring — the worker heartbeat runs AgentHostReaperService, which must
+            # honor live previews before deleting completed child claims. Mirror the API deployment so
+            # both roles share the same preview state contract and config drift cannot blind the worker
+            # to active previews (#578).
+            - name: Sandbox__Preview__Enabled
+              value: "true"
+            - name: Sandbox__Preview__ZoneSuffix
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: SANDBOX_PREVIEW_ZONE_SUFFIX
+            - name: Sandbox__Preview__GatewayName
+              value: "agentweaver-preview-gateway"
+            - name: Sandbox__Preview__GatewayNamespace
+              value: "agentweaver"
           volumeMounts:
             # No /data PVC — worker does not use SQLite.
             - name: workspace

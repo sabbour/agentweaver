@@ -1,9 +1,56 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildRunTimeline } from '../timeline/runTimelineSteps';
+import { buildRunTimeline, categorizeTool, deriveToolTitle } from '../timeline/runTimelineSteps';
 import type { RunStreamEvent } from '../api/sse';
 
 const evt = (sequence: number, type: string, payload: Record<string, unknown>): RunStreamEvent =>
   ({ sequence, type: type as RunStreamEvent['type'], payload });
+
+describe('categorizeTool', () => {
+  it('matches known tool name variants without substring collisions', () => {
+    expect(categorizeTool('run_command')).toBe('command');
+    expect(categorizeTool('view_file')).toBe('read');
+    expect(categorizeTool('view')).toBe('read');
+    expect(categorizeTool('grep_search')).toBe('search');
+    expect(categorizeTool('ripgrep')).toBe('search');
+    expect(categorizeTool('search_design_system')).toBe('search');
+    expect(categorizeTool('str_replace_editor')).toBe('edit');
+    expect(categorizeTool('web_fetch')).toBe('web');
+  });
+
+  it('avoids false positives from substring-only matches', () => {
+    expect(categorizeTool('start_preview')).toBe('other');
+    expect(categorizeTool('code_review')).toBe('other');
+    expect(categorizeTool('pr_review')).toBe('other');
+    expect(categorizeTool('overview')).toBe('other');
+    expect(categorizeTool('viewport')).toBe('other');
+    expect(categorizeTool('dispatch_agent')).toBe('other');
+  });
+
+  it('treats preview process lifecycle tools as command activity instead of file views', () => {
+    expect(categorizeTool('start_preview_process')).toBe('command');
+    expect(deriveToolTitle('command', 'start_preview_process', { command: 'node server.js' })).toEqual({
+      title: 'Start Preview Process · node server.js',
+    });
+  });
+});
+
+describe('deriveToolTitle', () => {
+  it('uses file-specific titles for real read tools', () => {
+    expect(deriveToolTitle('read', 'view_file', { path: 'src/app.ts', view_range: [3, 8] })).toEqual({
+      title: 'View src/app.ts:3-8',
+    });
+  });
+
+  it('falls back to the humanized tool name when a read bucket has no path', () => {
+    expect(deriveToolTitle('read', 'get_file_contents', {})).toEqual({ title: 'Get File Contents' });
+  });
+
+  it('keeps preview-style tools meaningful once they avoid the read bucket', () => {
+    const category = categorizeTool('start_preview');
+    expect(category).toBe('other');
+    expect(deriveToolTitle(category, 'start_preview', { port: 7455 })).toEqual({ title: 'Start Preview' });
+  });
+});
 
 describe('buildRunTimeline', () => {
   it('groups tool calls and messages under the owning agent.intent step', () => {
@@ -86,6 +133,24 @@ describe('buildRunTimeline', () => {
     ]);
 
     expect(model.steps[0].tools).toHaveLength(0);
+  });
+
+  it('uses report_intent tool calls as step boundaries when no agent.intent event was emitted', () => {
+    const model = buildRunTimeline([
+      evt(1, 'tool.call', { callId: 'r1', toolName: 'report_intent', arguments: { intent: 'Inspect the repository' } }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'read_file', arguments: { path: 'src/app.ts' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'tool.call', { callId: 'r2', toolName: 'report_intent', arguments: { intent: 'Update the UI' } }),
+      evt(5, 'tool.call', { callId: 'c2', toolName: 'write_file', arguments: { path: 'src/app.tsx' } }),
+      evt(6, 'tool.result', { callId: 'c2', content: 'ok' }),
+      evt(7, 'agent.turn.end', {}),
+    ]);
+
+    expect(model.steps).toHaveLength(2);
+    expect(model.steps[0].intent).toBe('Inspect the repository');
+    expect(model.steps[1].intent).toBe('Update the UI');
+    expect(model.steps[0].tools).toHaveLength(1);
+    expect(model.steps[1].tools).toHaveLength(1);
   });
 
   it('marks a step running until its turn ends', () => {
@@ -422,5 +487,51 @@ describe('buildRunTimeline', () => {
     expect(model.steps).toHaveLength(2);
     expect(model.steps[0].tools).toHaveLength(5);
     expect(model.steps[1].intent).toBe('Now the README');
+  });
+
+  it('does not merge continuation steps past the collapsible-narration caps (#step-numbering)', () => {
+    // Regression test: `wouldExceedCollapseLimits` must check the size the merged step
+    // would end up at (base + next), not just each side's pre-merge size — otherwise every
+    // cap gets overshot by one merge each time, and because the over-grown step keeps
+    // re-qualifying as the merge target on the next loop iteration, a realistically long
+    // run of small continuation-narrated steps ("Now let's...", "Next, I'll...",
+    // "Then...") collapses the ENTIRE run into a single step instead of stopping once a
+    // step reaches a reasonable size — so the UI showed every step of the run as "Step 1"
+    // instead of incrementing through Step 1, 2, 3...
+    const events: RunStreamEvent[] = [];
+    let seq = 1;
+    const intents = [
+      'Explore the repo structure',
+      "Now let's read the failing test file",
+      'Next, update the reducer logic',
+      'Now add the missing null check',
+      'Then run the test suite',
+      "Now let's fix the remaining lint issue",
+      'Next, add a regression test',
+      'Now update the changelog',
+      'Then verify the docs are current',
+      'Now clean up temp files',
+      'Finally verify the build passes',
+      'Now open a PR',
+    ];
+    for (const intent of intents) {
+      events.push(evt(seq, 'agent.intent', { intent }));
+      seq += 1;
+      const callId = `c${seq}`;
+      events.push(evt(seq, 'tool.call', { callId, toolName: 'read_file', arguments: { path: 'x.ts' } }));
+      seq += 1;
+      events.push(evt(seq, 'tool.result', { callId, content: 'ok' }));
+      seq += 1;
+    }
+    events.push(evt(seq, 'agent.turn.end', {}));
+
+    const model = buildRunTimeline(events);
+
+    // 12 real intents must fold into more than a couple of mega-steps, and no single
+    // collapsed step may exceed the intended 4-tool cap.
+    expect(model.steps.length).toBeGreaterThanOrEqual(3);
+    for (const step of model.steps) {
+      expect(step.tools.length).toBeLessThanOrEqual(4);
+    }
   });
 });

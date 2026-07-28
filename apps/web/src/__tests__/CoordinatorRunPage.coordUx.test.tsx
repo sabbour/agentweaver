@@ -151,6 +151,11 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
+    const topLevelPreview = await screen.findByTestId('compact-preview-run-action', undefined, { timeout: 4000 });
+    expect(topLevelPreview.textContent).toContain('Open preview');
+    fireEvent.click(topLevelPreview);
+    expect(openSpy).toHaveBeenCalledWith('https://preview.example.test', '_blank', 'noopener,noreferrer');
+
     const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test:/i }, { timeout: 4000 });
     fireEvent.click(buildRow);
     const buildPreview = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });

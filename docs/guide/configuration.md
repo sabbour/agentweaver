@@ -55,7 +55,7 @@ dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secre
 | --- | --- | --- |
 | `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | Model name used for GitHub Copilot runs. The token comes from the signed-in user's OAuth session — no API key is needed. |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary. When empty (the default), the SDK auto-resolves its bundled runtime from `bin/.../runtimes/{rid}/native/copilot`. Set this only when auto-resolution can't find a runtime for the host RID. Grounded in `apps/Agentweaver.Api/appsettings.json` and `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. |
-| `Generation:Model` | `gpt-5.4` | Global fallback for server-side blueprint, workflow, and coordinator outcome-spec generation. Does not change normal project/run agent execution models. |
+| `Generation:Model` | `gpt-5.6-sol` | Global fallback for server-side blueprint, workflow, and coordinator outcome-spec generation. Does not change normal project/run agent execution models. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback for blueprint generation when a project has no `blueprint_generation_model`. |
 | `Generation:WorkflowModel` | `Generation:Model` | Optional global fallback for workflow YAML generation when a project has no `workflow_generation_model`. |
 | `Generation:OutcomeSpecModel` | `Generation:Model` | Optional global fallback for coordinator outcome-spec drafting when a project has no `outcome_spec_generation_model`. |

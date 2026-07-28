@@ -144,33 +144,83 @@ const EXPAND_CONTENT_MAX = 8000;
 
 const asStrOpt = (v: unknown): string | undefined => (v == null ? undefined : String(v));
 
+function readToolArguments(payload: Record<string, unknown>): Record<string, unknown> {
+  const raw = payload['arguments'];
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      // Ignore malformed string arguments and fall back to an empty object.
+    }
+  }
+  return {};
+}
+
+function readReportedIntent(payload: Record<string, unknown>): string | undefined {
+  const args = readToolArguments(payload);
+  return asStrOpt(args['intent'] ?? args['message'] ?? payload['intent'] ?? payload['message'])?.trim() || undefined;
+}
+
+function splitToolNameSegments(toolName: string): string[] {
+  return toolName
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function hasToolSegment(segments: ReadonlySet<string>, ...candidates: string[]): boolean {
+  return candidates.some((candidate) => segments.has(candidate));
+}
+
+function hasToolPhrase(parts: readonly string[], phrase: readonly string[]): boolean {
+  if (phrase.length === 0 || parts.length < phrase.length) return false;
+  for (let i = 0; i <= parts.length - phrase.length; i += 1) {
+    let matches = true;
+    for (let j = 0; j < phrase.length; j += 1) {
+      if (parts[i + j] !== phrase[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
 /** Map a raw tool name to a coarse activity category (icon + result-meta behaviour). */
 export function categorizeTool(toolName: string): RunTimelineToolCategory {
   const n = toolName.toLowerCase();
+  const parts = splitToolNameSegments(toolName);
+  const segments = new Set(parts);
   if (
-    n === 'run_command' || n === 'run' || n.includes('powershell') || n.includes('bash') ||
-    n.includes('shell') || n.includes('terminal') || n.includes('console') || n.includes('exec')
+    n === 'run_command' || n === 'run' || hasToolPhrase(parts, ['run', 'command']) ||
+    hasToolPhrase(parts, ['preview', 'process']) ||
+    hasToolSegment(segments, 'powershell', 'bash', 'shell', 'terminal', 'console', 'exec')
   ) {
     return 'command';
   }
   if (
-    n.includes('edit') || n.includes('str_replace') || n.includes('replace') || n.includes('write') ||
-    n.includes('create') || n.includes('patch') || n.includes('apply') || n.includes('delete') ||
-    n.includes('move') || n.includes('insert')
+    hasToolPhrase(parts, ['str', 'replace'])
+    || hasToolPhrase(parts, ['apply', 'patch'])
+    || hasToolSegment(segments, 'edit', 'replace', 'write', 'create', 'patch', 'delete', 'move', 'insert')
   ) {
     return 'edit';
   }
   if (
-    n.includes('search') || n.includes('grep') || n.includes('glob') || n.includes('find') || n.includes('list')
+    hasToolSegment(segments, 'search', 'grep', 'glob', 'find', 'list') || segments.has('ripgrep')
   ) {
     return 'search';
   }
-  if (n.includes('read') || n.includes('view') || n.includes('cat') || n.includes('open') || n.includes('file')) {
+  if (
+    hasToolPhrase(parts, ['file', 'contents']) || hasToolSegment(segments, 'read', 'view', 'cat', 'open')
+  ) {
     return 'read';
   }
   if (
-    n.includes('http') || n.includes('web') || n.includes('fetch') || n.includes('url') ||
-    n.includes('workiq') || n.includes('email') || n.includes('cloud') || n.includes('api')
+    hasToolSegment(segments, 'http', 'web', 'fetch', 'url', 'workiq', 'email', 'cloud', 'api')
   ) {
     return 'web';
   }
@@ -208,13 +258,13 @@ export function deriveToolTitle(
     case 'command': {
       const cmd = asStrOpt(args['command'] ?? args['cmd'] ?? args['script']);
       const isGeneric = toolName === 'run_command' || toolName === 'run';
-      const title = isGeneric ? 'Run command' : `Running ${toolName}`;
-      return { title, secondary: cmd };
+      if (isGeneric) return { title: 'Run command', secondary: cmd };
+      return { title: deriveHumanTitle(toolName, args) };
     }
     case 'read': {
       const range = deriveLineRange(args);
       if (display) return { title: `View ${display}${range ? `:${range}` : ''}` };
-      return { title: 'View file' };
+      return { title: deriveHumanTitle(toolName, args) };
     }
     case 'search': {
       const pattern = asStrOpt(args['pattern'] ?? args['query'] ?? args['glob'] ?? args['q']);
@@ -223,16 +273,17 @@ export function deriveToolTitle(
       return { title: 'Search' };
     }
     case 'edit': {
-      const n = toolName.toLowerCase();
-      const verb = n.includes('create')
+      const parts = splitToolNameSegments(toolName);
+      const segments = new Set(parts);
+      const verb = hasToolSegment(segments, 'create')
         ? 'Create'
-        : n.includes('delete')
+        : hasToolSegment(segments, 'delete')
           ? 'Delete'
-          : n.includes('move')
+          : hasToolSegment(segments, 'move')
             ? 'Move'
-            : n.includes('write')
+            : hasToolSegment(segments, 'write')
               ? 'Write'
-              : n.includes('patch') || n.includes('apply')
+              : hasToolPhrase(parts, ['apply', 'patch']) || hasToolSegment(segments, 'patch')
                 ? 'Apply patch'
                 : 'Edit';
       return { title: display ? `${verb} ${display}` : verb };
@@ -392,14 +443,27 @@ function messageCharCount(step: RunTimelineStep): number {
   return step.messages.reduce((total, message) => total + message.text.trim().length, 0);
 }
 
-function isCollapsibleNarrationStep(step: RunTimelineStep): boolean {
-  if (step.synthetic) return false;
-  if (step.tools.length > MAX_COLLAPSIBLE_STEP_TOOLS) return false;
-  if (step.messages.length > MAX_COLLAPSIBLE_STEP_MESSAGES) return false;
-  if (step.children.length > MAX_COLLAPSIBLE_STEP_CHILDREN) return false;
-  if (messageCharCount(step) > MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS) return false;
-  if (step.tools.some((tool) => tool.status === 'error')) return false;
-  return step.tools.every((tool) => tool.category !== 'command' && tool.category !== 'web');
+/**
+ * Decide whether merging `next` onto `base` would keep the RESULTING step within the
+ * collapsible-narration bounds. This checks the size the merged step would actually end
+ * up at (base + next combined), not just each side's size before the merge — checking
+ * only the pre-merge sizes let every cap be overshot by one merge each time (e.g. two
+ * steps at the 4-tool/2-message cap could still merge into a 8-tool/4-message step), and
+ * — because the accumulated step then keeps re-qualifying as "previous" on the next loop
+ * iteration — a long run of small continuation-narrated steps (very common LLM habit:
+ * "Now let's...", "Next, I'll...", "Then...") could collapse the ENTIRE run into a
+ * single step instead of stopping once the step reached a reasonable size, appearing to
+ * the user as if every step of the run were "Step 1".
+ */
+function wouldExceedCollapseLimits(base: RunTimelineStep, next: RunTimelineStep): boolean {
+  if (base.synthetic || next.synthetic) return true;
+  if (base.tools.length + next.tools.length > MAX_COLLAPSIBLE_STEP_TOOLS) return true;
+  if (base.messages.length + next.messages.length > MAX_COLLAPSIBLE_STEP_MESSAGES) return true;
+  if (base.children.length + next.children.length > MAX_COLLAPSIBLE_STEP_CHILDREN) return true;
+  if (messageCharCount(base) + messageCharCount(next) > MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS) return true;
+  const combinedTools = [...base.tools, ...next.tools];
+  if (combinedTools.some((tool) => tool.status === 'error')) return true;
+  return combinedTools.some((tool) => tool.category === 'command' || tool.category === 'web');
 }
 
 function mergeTimelineSteps(base: RunTimelineStep, next: RunTimelineStep): void {
@@ -417,8 +481,7 @@ function collapseContinuationNarrationSteps(steps: RunTimelineStep[]): RunTimeli
     if (
       previous
       && isContinuationIntent(step.intent)
-      && isCollapsibleNarrationStep(previous)
-      && isCollapsibleNarrationStep(step)
+      && !wouldExceedCollapseLimits(previous, step)
     ) {
       mergeTimelineSteps(previous, step);
       continue;
@@ -546,13 +609,36 @@ export function buildRunTimeline(
         // assistant run's RunEventSink, which appends { name, arguments } instead) so a real
         // tool name always resolves instead of falling back to the generic "tool" placeholder.
         const toolName = asStr(payload['toolName']) || asStr(payload['name']) || 'tool';
-        // report_intent IS the intent (already surfaced via agent.intent) — don't
-        // duplicate it as a tool row.
-        if (toolName === 'report_intent') break;
+        // Some streams still surface report_intent as a raw tool.call without the translated
+        // agent.intent event. Treat that as a step boundary so child/subtask runs do not
+        // collapse their entire transcript under a single synthetic "Step 1".
+        if (toolName === 'report_intent') {
+          const intent = readReportedIntent(payload);
+          if (intent) {
+            if (!(current && !current.synthetic && current.intent.trim() === intent)) {
+              if (current) closeStep(current);
+              const step: RunTimelineStep = {
+                id: `intent-${evt.sequence}`,
+                intent,
+                status: 'running',
+                active: true,
+                synthetic: false,
+                tools: [],
+                messages: [],
+                children: [],
+                sequence: evt.sequence,
+              };
+              steps.push(step);
+              current = step;
+              messageByStep.set(step.id, new Map());
+            }
+          }
+          break;
+        }
         const step = ensureStep(evt.sequence);
         const rawCallId = extractCallId(payload);
         const callId = rawCallId == null ? `call-${evt.sequence}` : String(rawCallId);
-        const args = (payload['arguments'] as Record<string, unknown>) ?? {};
+        const args = readToolArguments(payload);
         const category = categorizeTool(toolName);
         const { title, secondary } = deriveToolTitle(category, toolName, args);
         const tool: RunTimelineTool = {

@@ -51,6 +51,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly string _kubernetesSandboxNamespace;
+    private readonly WorkflowWorktreeMaterializer? _workflowWorktreeMaterializer;
 
     // Per-run snapshot of executorId -> render metadata, captured when the run's workflow is built
     // (StartAsync/ResumeAsync). The watch loop uses it to translate MAF executor lifecycle events
@@ -140,7 +141,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         ICheckpointStoreFactory? checkpointStoreFactory = null,
         Func<IRevisionEffectConfirmer?>? revisionEffectConfirmerAccessor = null,
         IGitHubPullRequestClient? prClient = null,
-        IGitHubAccessTokenProvider? accessTokenProvider = null)
+        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        WorkflowWorktreeMaterializer? workflowWorktreeMaterializer = null)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
@@ -162,6 +164,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         _backlogTaskStore = backlogTaskStore;
         _prClient = prClient;
         _accessTokenProvider = accessTokenProvider;
+        _workflowWorktreeMaterializer = workflowWorktreeMaterializer;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
         // AppPaths.DataDirectory/checkpoints so production needs no explicit config.
@@ -1384,9 +1387,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false,
         int? steeringDirectiveId = null, int? steeringAttempt = null)
     {
-        var effectiveDefinition = isChild
+        var effectiveWorkflow = isChild
             ? null
-            : await ResolveEffectiveDefinitionAsync(input.ProjectId, runId, ct).ConfigureAwait(false);
+            : await ResolveEffectiveWorkflowAsync(input.ProjectId, runId, ct).ConfigureAwait(false);
+        var effectiveDefinition = effectiveWorkflow?.Definition;
+        if (!isChild)
+            _workflowWorktreeMaterializer?.TryMaterialize(input.WorktreePath, effectiveDefinition);
         var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild, effectiveDefinition);
         // Capture the executorId -> render-metadata map so the watch loop can translate MAF executor
         // lifecycle events into workflow.step UI events for nodes without a dedicated self-emitter.
@@ -1464,7 +1470,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         var isChild = run.ParentRunId is not null;
         var effectiveDefinition = isChild
             ? null
-            : await ResolveEffectiveDefinitionAsync(run.ProjectId?.ToString(), run.Id.ToString(), ct).ConfigureAwait(false);
+            : (await ResolveEffectiveWorkflowAsync(run.ProjectId?.ToString(), run.Id.ToString(), ct).ConfigureAwait(false)).Definition;
         return BuildWorkflow(isChild, effectiveDefinition).Descriptor;
     }
 
@@ -1487,12 +1493,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(bool isChild) =>
         BuildWorkflow(isChild).ExecutorMeta;
 
-    private async Task<WorkflowDefinition> ResolveEffectiveDefinitionAsync(
+    private async Task<WorkflowLoadResult> ResolveEffectiveWorkflowAsync(
         string? projectId,
         string? runId,
         CancellationToken ct)
     {
-        var fallback = Workflows.BuiltInWorkflows.Default.Definition!;
+        var fallback = Workflows.BuiltInWorkflows.Default;
         if (_projectStore is null || _workflowRegistry is null)
             return fallback;
 
@@ -1509,7 +1515,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             throw new WorkflowBindException(
                 $"Project '{project.Id}' workflow could not be resolved: {workflowResult.Error ?? "unknown workflow error"}");
 
-        return workflowResult.Definition;
+        return workflowResult;
     }
 
     private async Task<string?> ResolveWorkflowOverrideIdAsync(string? runId, CancellationToken ct)
@@ -1564,9 +1570,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         {
             var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
             isChild = run?.ParentRunId is not null;
-            var effectiveDefinition = isChild
+            var effectiveWorkflow = isChild
                 ? null
-                : await ResolveEffectiveDefinitionAsync(run?.ProjectId?.ToString(), checkpointInfo.SessionId, ct).ConfigureAwait(false);
+                : await ResolveEffectiveWorkflowAsync(run?.ProjectId?.ToString(), checkpointInfo.SessionId, ct).ConfigureAwait(false);
+            var effectiveDefinition = effectiveWorkflow?.Definition;
+            if (!isChild && run is not null)
+                _workflowWorktreeMaterializer?.TryMaterialize(run.WorktreePath ?? string.Empty, effectiveDefinition);
             var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(isChild, effectiveDefinition);
             _runExecutorMeta[checkpointInfo.SessionId] = executorMetaForRun;
             return await InProcessExecution.ResumeStreamingAsync(
