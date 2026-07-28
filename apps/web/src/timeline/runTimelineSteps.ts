@@ -144,6 +144,25 @@ const EXPAND_CONTENT_MAX = 8000;
 
 const asStrOpt = (v: unknown): string | undefined => (v == null ? undefined : String(v));
 
+function readToolArguments(payload: Record<string, unknown>): Record<string, unknown> {
+  const raw = payload['arguments'];
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      // Ignore malformed string arguments and fall back to an empty object.
+    }
+  }
+  return {};
+}
+
+function readReportedIntent(payload: Record<string, unknown>): string | undefined {
+  const args = readToolArguments(payload);
+  return asStrOpt(args['intent'] ?? args['message'] ?? payload['intent'] ?? payload['message'])?.trim() || undefined;
+}
+
 function splitToolNameSegments(toolName: string): string[] {
   return toolName
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -590,13 +609,36 @@ export function buildRunTimeline(
         // assistant run's RunEventSink, which appends { name, arguments } instead) so a real
         // tool name always resolves instead of falling back to the generic "tool" placeholder.
         const toolName = asStr(payload['toolName']) || asStr(payload['name']) || 'tool';
-        // report_intent IS the intent (already surfaced via agent.intent) — don't
-        // duplicate it as a tool row.
-        if (toolName === 'report_intent') break;
+        // Some streams still surface report_intent as a raw tool.call without the translated
+        // agent.intent event. Treat that as a step boundary so child/subtask runs do not
+        // collapse their entire transcript under a single synthetic "Step 1".
+        if (toolName === 'report_intent') {
+          const intent = readReportedIntent(payload);
+          if (intent) {
+            if (!(current && !current.synthetic && current.intent.trim() === intent)) {
+              if (current) closeStep(current);
+              const step: RunTimelineStep = {
+                id: `intent-${evt.sequence}`,
+                intent,
+                status: 'running',
+                active: true,
+                synthetic: false,
+                tools: [],
+                messages: [],
+                children: [],
+                sequence: evt.sequence,
+              };
+              steps.push(step);
+              current = step;
+              messageByStep.set(step.id, new Map());
+            }
+          }
+          break;
+        }
         const step = ensureStep(evt.sequence);
         const rawCallId = extractCallId(payload);
         const callId = rawCallId == null ? `call-${evt.sequence}` : String(rawCallId);
-        const args = (payload['arguments'] as Record<string, unknown>) ?? {};
+        const args = readToolArguments(payload);
         const category = categorizeTool(toolName);
         const { title, secondary } = deriveToolTitle(category, toolName, args);
         const tool: RunTimelineTool = {
