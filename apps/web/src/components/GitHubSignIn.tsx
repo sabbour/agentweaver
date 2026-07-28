@@ -21,6 +21,8 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     minWidth: 0,
     maxWidth: '100%',
+    width: '100%',
+    justifyContent: 'flex-start',
   },
   triggerInner: {
     display: 'flex',
