@@ -400,6 +400,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceSourceService>()
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowWorktreeMaterializer>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
     sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
