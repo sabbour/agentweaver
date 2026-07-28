@@ -38,6 +38,7 @@ export interface ComposerSubmitData {
 export interface ComposerProps {
   value?: string;
   onChange?: (value: string) => void;
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
   /** Mirrors ChatInputProps.onSubmit(ev, { value }) */
   onSubmit?: (ev: React.SyntheticEvent, data: ComposerSubmitData) => void;
   /** Mirrors ChatInputProps.onStop(ev) — called when stop button pressed */
@@ -137,6 +138,7 @@ function SendButton({
 export function Composer({
   value = "",
   onChange,
+  textareaRef,
   onSubmit,
   onStop,
   placeholder = "Ask anything…",
@@ -157,7 +159,8 @@ export function Composer({
 }: ComposerProps) {
   // All hooks must be unconditional — declared before any early return.
   const styles = useComposerStyles();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const internalTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const resolvedTextareaRef = textareaRef ?? internalTextareaRef;
 
   const hasValue = value.trim().length > 0;
   const charCount = value.length;
@@ -167,11 +170,11 @@ export function Composer({
 
   // Auto-resize textarea (no-op when readOnly since textarea is not rendered)
   useEffect(() => {
-    const el = textareaRef.current;
+    const el = resolvedTextareaRef.current;
     if (!el || appearance === "single") return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-  }, [value, appearance]);
+  }, [value, appearance, resolvedTextareaRef]);
 
   const handleKeyDown = useCallback(
     (ev: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -256,7 +259,7 @@ export function Composer({
 
         {/* slot: editor */}
         <textarea
-          ref={textareaRef}
+          ref={resolvedTextareaRef}
           className={mergeClasses(
             styles.editor,
             appearance === "single" ? styles.editorSingle : undefined
