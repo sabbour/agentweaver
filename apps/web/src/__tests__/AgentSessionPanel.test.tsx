@@ -1222,6 +1222,39 @@ describe('AgentSessionPanel', () => {
     expect(vi.mocked(apiClient.getRunFileDiff)).not.toHaveBeenCalled();
   });
 
+  it('breaks child-run activity into multiple steps when the stream only reports raw report_intent tool calls', async () => {
+    currentEvents = [
+      { sequence: 1, type: 'tool.call', payload: { callId: 'ri-1', toolName: 'report_intent', arguments: { intent: 'Inspect the existing UI' } } },
+      { sequence: 2, type: 'tool.call', payload: { callId: 'tool-1', toolName: 'read_file', arguments: { path: 'src/app.tsx' } } },
+      { sequence: 3, type: 'tool.result', payload: { callId: 'tool-1', content: 'ok' } },
+      { sequence: 4, type: 'tool.call', payload: { callId: 'ri-2', toolName: 'report_intent', arguments: { intent: 'Apply the follow-up fix' } } },
+      { sequence: 5, type: 'tool.call', payload: { callId: 'tool-2', toolName: 'write_file', arguments: { path: 'src/app.tsx' } } },
+      { sequence: 6, type: 'tool.result', payload: { callId: 'tool-2', content: 'ok' } },
+      { sequence: 7, type: 'agent.turn.end', payload: {} },
+    ];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          variant="docked"
+          onClose={vi.fn()}
+          tree={tree}
+          selectedNodeId="subtask-1"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+        />
+      </Wrapper>,
+    );
+
+    const timeline = await screen.findByTestId('run-timeline', undefined, { timeout: 4000 });
+    expect(within(timeline).getByText('Inspect the existing UI')).toBeDefined();
+    expect(within(timeline).getByText('Apply the follow-up fix')).toBeDefined();
+    expect(within(timeline).getByText('Step 1 ·')).toBeDefined();
+    expect(within(timeline).getByText('Step 2 ·')).toBeDefined();
+  });
+
   it('renders a non-coordinator agent message as markdown inside its Timeline step', async () => {
     currentEvents = [
       { sequence: 1, type: 'agent.turn.start', payload: { turnId: 'worker-turn' } },
