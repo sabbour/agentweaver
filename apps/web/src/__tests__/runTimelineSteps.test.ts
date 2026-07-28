@@ -135,6 +135,24 @@ describe('buildRunTimeline', () => {
     expect(model.steps[0].tools).toHaveLength(0);
   });
 
+  it('uses report_intent tool calls as step boundaries when no agent.intent event was emitted', () => {
+    const model = buildRunTimeline([
+      evt(1, 'tool.call', { callId: 'r1', toolName: 'report_intent', arguments: { intent: 'Inspect the repository' } }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'read_file', arguments: { path: 'src/app.ts' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'tool.call', { callId: 'r2', toolName: 'report_intent', arguments: { intent: 'Update the UI' } }),
+      evt(5, 'tool.call', { callId: 'c2', toolName: 'write_file', arguments: { path: 'src/app.tsx' } }),
+      evt(6, 'tool.result', { callId: 'c2', content: 'ok' }),
+      evt(7, 'agent.turn.end', {}),
+    ]);
+
+    expect(model.steps).toHaveLength(2);
+    expect(model.steps[0].intent).toBe('Inspect the repository');
+    expect(model.steps[1].intent).toBe('Update the UI');
+    expect(model.steps[0].tools).toHaveLength(1);
+    expect(model.steps[1].tools).toHaveLength(1);
+  });
+
   it('marks a step running until its turn ends', () => {
     const model = buildRunTimeline([
       evt(1, 'agent.intent', { intent: 'Working now' }),
