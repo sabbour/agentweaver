@@ -19,11 +19,14 @@ import type { GitHubAuthStatus } from '../api/types';
 const useStyles = makeStyles({
   trigger: {
     cursor: 'pointer',
+    minWidth: 0,
+    maxWidth: '100%',
   },
   triggerInner: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
+    minWidth: 0,
   },
   avatar: {
     width: '28px',
@@ -31,6 +34,12 @@ const useStyles = makeStyles({
     borderRadius: '50%',
     objectFit: 'cover',
     flexShrink: '0',
+  },
+  login: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
 });
 
@@ -99,7 +108,7 @@ export function GitHubSignIn() {
         >
           <span className={styles.triggerInner}>
             {avatarUrl && <img src={avatarUrl} alt={login ?? ''} className={styles.avatar} />}
-            <Text>{login}</Text>
+            <Text className={styles.login}>{login}</Text>
           </span>
         </Button>
       </MenuTrigger>
