@@ -13,7 +13,7 @@ namespace Agentweaver.Tests.Coordinator;
 public sealed class PrdStoryPromotionPartitionTests
 {
     [Fact]
-    public async Task PartitionStoriesAsync_PromotesWholeDependencyComponent_WhenClassifierSaysIndependent()
+    public async Task PartitionStoriesAsync_KeepsAllStoriesInline_WhenPromotionWouldDelegateEntirePlan()
     {
         var classifier = new TestStoryIndependenceClassifier(_ =>
             new StoryIndependenceClassificationResult(true, "Separate pipeline service deliverable."));
@@ -28,10 +28,11 @@ public sealed class PrdStoryPromotionPartitionTests
 
         var result = await executor.PartitionStoriesAsync(input, spec, drafts, CancellationToken.None);
 
-        result.PromotedIndices.Should().Equal(0, 1);
-        result.InlineIndices.Should().BeEmpty();
-        result.PromotionReasons[0].Should().Be("LLM judged this dependency component to be an independent deliverable.");
-        result.PromotionReasons[1].Should().Be("Promoted with dependency component rooted at storefront.");
+        result.PromotedIndices.Should().BeEmpty();
+        result.InlineIndices.Should().Equal(0, 1);
+        result.PromotionReasons.Should().BeEmpty();
+        result.Warnings.Should().ContainSingle(w =>
+            w.Contains("delegated the entire plan to backlog", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -76,7 +77,8 @@ public sealed class PrdStoryPromotionPartitionTests
         var result = await executor.PartitionStoriesAsync(input, spec, drafts, CancellationToken.None);
         stopwatch.Stop();
 
-        result.PromotedIndices.Should().Equal(0, 1);
+        result.PromotedIndices.Should().BeEmpty();
+        result.InlineIndices.Should().Equal(0, 1);
         classifier.MaxConcurrentCalls.Should().Be(2);
         stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(12));
     }
