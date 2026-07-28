@@ -3873,6 +3873,13 @@ export function CoordinatorRunPage() {
         testId: 'coordinator-review-changes',
       }
     : null;
+  const previewAction = runPreviewState.status === 'ready'
+    ? {
+        label: 'Open preview',
+        icon: <OpenRegular />,
+        onClick: () => window.open(runPreviewState.previewUrl, '_blank', 'noopener,noreferrer'),
+      }
+    : null;
 
   const handleAssemblyApproval = useCallback(async (decision: 'approve' | 'decline') => {
     if (!runId) return;
@@ -4127,9 +4134,7 @@ export function CoordinatorRunPage() {
     );
   });
   const openPreview = () => {
-    if (runPreviewState.status === 'ready') {
-      window.open(runPreviewState.previewUrl, '_blank', 'noopener,noreferrer');
-    }
+    if (previewAction) previewAction.onClick();
   };
   const previewStatusContent = (compact = false) => {
     switch (runPreviewState.status) {
@@ -4295,6 +4300,17 @@ export function CoordinatorRunPage() {
                 <span className={styles.statusChip}>{elapsedLabel} elapsed</span>
               </div>
               <div className={styles.compactChromeActions}>
+                {previewAction && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    icon={previewAction.icon}
+                    onClick={previewAction.onClick}
+                    data-testid="compact-preview-run-action"
+                  >
+                    {previewAction.label}
+                  </Button>
+                )}
                 {primaryAction && (
                   <Button
                     appearance="primary"
