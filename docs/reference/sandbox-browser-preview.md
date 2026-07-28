@@ -17,13 +17,13 @@ exists and the caller owns it (`404`/`403`). Source:
 | Method & path | Body | Returns | Notes |
 |---|---|---|---|
 | `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path provisions Service + HTTPRoute and returns `preview_url` + `keepalive_url`; it does not API-probe `podIP:{target_port}`. `target_port` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
-| `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:57`](#source)). |
+| `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:60`](#source)). |
 | `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview's idle expiry to now + `IdleTimeoutMinutes`. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
 | `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Explicit stop. For the preview path `sessionId` is the capability token; deletes the HTTPRoute then the Service. Verifies run↔token first. |
 | `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists active preview sessions for the run. Liveness is the policy-safe existence of a bound pod with the preview-run label, not an API-side TCP probe. |
 
 The relative `keepalive_url` returned by `POST …/port-forward` is
-`/api/runs/{runId}/sandbox/preview/{token}/keepalive` ([`SandboxEndpoints.cs:70`](#source)).
+`/api/runs/{runId}/sandbox/preview/{token}/keepalive` ([`SandboxEndpoints.cs:107`](#source)).
 
 ## Readiness and liveness model
 
@@ -62,14 +62,15 @@ both retained claim naming conventions for the run — `agent-{runId}` for Agent
 ([`SandboxClaimConventions.cs:28`](#source), [`SandboxPreviewService.cs:432`](#source)).
 
 The request routes through a **human-in-the-loop approval gate** before any preview is provisioned
-([`AgentPreviewGate.RequestApprovalAsync`, `AgentPreviewGate.cs:85`](#source)):
+([`AgentPreviewGate.RequestApprovalAsync`, `AgentPreviewGate.cs:108`](#source)):
 
 - If an auto-approve source is on (see below) the request is **auto-granted** immediately.
 - Otherwise a `tool.approval_required` event is emitted onto the run timeline
-  ([`AgentPreviewGate.cs:103`](#source)) and the call **suspends** until an operator grants it via
-  `POST /api/runs/{runId}/tool-approvals` (with the emitted `request_id`) or the 5-minute window times out.
+  ([`AgentPreviewGate.cs:131`](#source)) and the call **suspends** until an operator grants it via
+  `POST /api/runs/{runId}/tool-approvals` (with the emitted `request_id`) or the approval window times out
+  (15 minutes by default; configurable).
 
-`StartPreviewRequest` ([`SandboxEndpoints.cs:311`](#source)) uses the snake_case DTO convention — the wire
+`StartPreviewRequest` ([`SandboxEndpoints.cs:475`](#source)) uses the snake_case DTO convention — the wire
 field is `target_port` via `[JsonPropertyName("target_port")]`, unlike `PortForwardRequest` which
 binds camelCase `targetPort`.
 
@@ -79,13 +80,17 @@ Any one being true auto-grants the preview (production default is human-gated):
 
 | Source | Where | Default |
 |---|---|---|
-| `Sandbox:Preview:AutoApprove` config / env `SANDBOX_PREVIEW_AUTO_APPROVE` | [`AgentPreviewGate.cs:125`](#source) | `false` |
+| `Sandbox:Preview:AutoApprove` config / env `SANDBOX_PREVIEW_AUTO_APPROVE` | [`AgentPreviewGate.cs:176`](#source) | `false` |
 | Per-run `AutoApproveTools` operator option | `IRunOptionsStore.Get(runId)` | `false` |
 | An existing run/always-scoped allow policy on the shared gate | `IToolApprovalGate.IsAutoApproved` | none |
 
 The env var `SANDBOX_PREVIEW_AUTO_APPROVE` is read directly (not via the ASP.NET `__` hierarchy separator),
 so the exact name works as an environment variable. It exists so an automated demo can run the preview flow
 end-to-end unattended; leave it `false` in production.
+
+The approval wait window is resolved separately from `Sandbox:Preview:ApprovalTimeoutMinutes` or
+`SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`. Missing or invalid values fall back to 15 minutes; `0` or any
+negative value clamps to 1 minute so the gate never schedules an immediate timeout.
 
 The relative `keepalive_url` example below is for the operator route.
 
@@ -119,7 +124,8 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:KeepAfterRun` | `true` | Retain the preview after the run completes / pod is released; only the reaper or an explicit stop removes it. |
 | `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
 | `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
-| `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:125`](#source). Keep `false` in production. |
+| `Sandbox:Preview:ApprovalTimeoutMinutes` (env `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) | `15` | Human approval window for the agent-initiated `start_preview` gate. Missing or invalid values fall back to 15 minutes; `0` or negative values clamp to 1 minute. Read in `AgentPreviewGate`. |
+| `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:176`](#source). Keep `false` in production. |
 
 ## Status codes
 

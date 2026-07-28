@@ -1,9 +1,10 @@
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Sandbox;
 
@@ -17,6 +18,8 @@ public sealed class AgentPreviewGateTests
 {
     private const string RunId = "run-preview-1";
     private static readonly TimeSpan ExpirationTimeout = TimeSpan.FromMilliseconds(250);
+    private const string ApprovalTimeoutEnvVar = "SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES";
+    private static readonly object ApprovalTimeoutEnvironmentLock = new();
 
     private static AgentPreviewGate CreateGate(
         bool autoApproveConfigured,
@@ -114,6 +117,50 @@ public sealed class AgentPreviewGateTests
         outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
     }
 
+    [Fact]
+    public void ResolveApprovalTimeout_ConfigMinutes_UsesConfiguredValue()
+    {
+        WithApprovalTimeoutEnvironmentVariable(null, () =>
+        {
+            var configuration = BuildConfiguration(("Sandbox:Preview:ApprovalTimeoutMinutes", "20"));
+
+            AgentPreviewGate.ResolveApprovalTimeout(configuration).Should().Be(TimeSpan.FromMinutes(20));
+        });
+    }
+
+    [Fact]
+    public void ResolveApprovalTimeout_ConfigInvalid_FallsBackToNamedEnvironmentVariable()
+    {
+        WithApprovalTimeoutEnvironmentVariable("18", () =>
+        {
+            var configuration = BuildConfiguration(("Sandbox:Preview:ApprovalTimeoutMinutes", "not-a-number"));
+
+            AgentPreviewGate.ResolveApprovalTimeout(configuration).Should().Be(TimeSpan.FromMinutes(18));
+        });
+    }
+
+    [Theory]
+    [InlineData(null, 15)]
+    [InlineData("", 15)]
+    [InlineData("wat", 15)]
+    [InlineData("0", 1)]
+    [InlineData("-4", 1)]
+    public void ResolveApprovalTimeout_UsesDefaultOrMinimum(string? configuredMinutes, int expectedMinutes)
+    {
+        WithApprovalTimeoutEnvironmentVariable(null, () =>
+        {
+            var values = new Dictionary<string, string?>();
+            if (configuredMinutes is not null)
+                values["Sandbox:Preview:ApprovalTimeoutMinutes"] = configuredMinutes;
+
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(values)
+                .Build();
+
+            AgentPreviewGate.ResolveApprovalTimeout(configuration).Should().Be(TimeSpan.FromMinutes(expectedMinutes));
+        });
+    }
+
     private static async Task<string> WaitForRequestIdAsync(RunStreamStore streams)
     {
         for (var i = 0; i < 200; i++)
@@ -130,4 +177,26 @@ public sealed class AgentPreviewGateTests
 
     private static string ReadString(object payload, string property) =>
         payload.GetType().GetProperty(property)!.GetValue(payload)!.ToString()!;
+
+    private static IConfiguration BuildConfiguration(params (string Key, string? Value)[] values) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(values.ToDictionary(x => x.Key, x => x.Value))
+            .Build();
+
+    private static void WithApprovalTimeoutEnvironmentVariable(string? value, Action assertion)
+    {
+        lock (ApprovalTimeoutEnvironmentLock)
+        {
+            var previousValue = Environment.GetEnvironmentVariable(ApprovalTimeoutEnvVar);
+            try
+            {
+                Environment.SetEnvironmentVariable(ApprovalTimeoutEnvVar, value);
+                assertion();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(ApprovalTimeoutEnvVar, previousValue);
+            }
+        }
+    }
 }

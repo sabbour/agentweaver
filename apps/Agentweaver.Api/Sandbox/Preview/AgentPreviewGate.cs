@@ -21,7 +21,10 @@ public enum PreviewApprovalOutcome
 /// agent calls <c>start_preview(port)</c> which routes here: the request is auto-approved when an
 /// auto-approve source is on, otherwise a <see cref="EventTypes.ToolApprovalRequired"/> card is
 /// emitted onto the run stream and the call suspends on the shared <see cref="IToolApprovalGate"/>
-/// until an operator grants it (POST /api/runs/{id}/tool-approvals) or it times out.
+/// until an operator grants it (POST /api/runs/{id}/tool-approvals) or the approval window times
+/// out. The wait window is configurable via <c>Sandbox:Preview:ApprovalTimeoutMinutes</c> / env
+/// <c>SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES</c>; missing or invalid values fall back to 15
+/// minutes and non-positive values clamp to 1 minute.
 ///
 /// <para>Auto-approve sources (any true ⇒ auto-grant, prod default is human-gated):</para>
 /// <list type="number">
@@ -36,6 +39,8 @@ public sealed class AgentPreviewGate
 {
     /// <summary>The tool name surfaced on HITL cards and approval-policy lookups.</summary>
     public const string ToolName = "start_preview";
+    private const int DefaultApprovalTimeoutMinutes = 15;
+    private const int MinimumApprovalTimeoutMinutes = 1;
 
     private readonly IToolApprovalGate _approvalGate;
     private readonly IRunOptionsStore _runOptions;
@@ -44,17 +49,32 @@ public sealed class AgentPreviewGate
     private readonly TimeSpan _approvalTimeout;
     private readonly ILogger<AgentPreviewGate> _logger;
 
+    /// <summary>
+    /// Builds the preview approval gate, resolving the global auto-approve flag and approval
+    /// timeout from <c>Sandbox:Preview</c> configuration. The approval timeout defaults to 15
+    /// minutes, falls back to the env var helper name, and clamps configured non-positive values
+    /// to 1 minute.
+    /// </summary>
     public AgentPreviewGate(
         IToolApprovalGate approvalGate,
         IRunOptionsStore runOptions,
         RunStreamStore streams,
         IConfiguration configuration,
         ILogger<AgentPreviewGate> logger)
-        : this(approvalGate, runOptions, streams, ResolveAutoApprove(configuration), logger, TimeSpan.FromMinutes(5))
+        : this(
+            approvalGate,
+            runOptions,
+            streams,
+            ResolveAutoApprove(configuration),
+            logger,
+            ResolveApprovalTimeout(configuration))
     {
     }
 
-    /// <summary>Test seam: inject the resolved auto-approve flag and timeout directly.</summary>
+    /// <summary>
+    /// Test seam: inject the resolved auto-approve flag and timeout directly. When the timeout is
+    /// omitted, the same 15-minute default is used.
+    /// </summary>
     internal AgentPreviewGate(
         IToolApprovalGate approvalGate,
         IRunOptionsStore runOptions,
@@ -68,7 +88,7 @@ public sealed class AgentPreviewGate
         _streams = streams;
         _autoApproveConfigured = autoApproveConfigured;
         _logger = logger;
-        _approvalTimeout = approvalTimeout ?? TimeSpan.FromMinutes(5);
+        _approvalTimeout = approvalTimeout ?? TimeSpan.FromMinutes(DefaultApprovalTimeoutMinutes);
     }
 
     /// <summary>
@@ -157,9 +177,27 @@ public sealed class AgentPreviewGate
         ParseBool(configuration["Sandbox:Preview:AutoApprove"])
         || ParseBool(Environment.GetEnvironmentVariable("SANDBOX_PREVIEW_AUTO_APPROVE"));
 
+    /// <summary>
+    /// Resolves the preview approval timeout from <c>Sandbox:Preview:ApprovalTimeoutMinutes</c> or
+    /// the <c>SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES</c> environment variable. Missing or
+    /// invalid values default to 15 minutes; non-positive values clamp to 1 minute.
+    /// </summary>
+    internal static TimeSpan ResolveApprovalTimeout(IConfiguration configuration) =>
+        ResolveApprovalTimeoutMinutes(configuration["Sandbox:Preview:ApprovalTimeoutMinutes"])
+        ?? ResolveApprovalTimeoutMinutes(Environment.GetEnvironmentVariable("SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES"))
+        ?? TimeSpan.FromMinutes(DefaultApprovalTimeoutMinutes);
+
     private static bool ParseBool(string? value) =>
         !string.IsNullOrWhiteSpace(value)
         && (value.Equals("true", StringComparison.OrdinalIgnoreCase)
             || value.Equals("1", StringComparison.Ordinal)
             || value.Equals("yes", StringComparison.OrdinalIgnoreCase));
+
+    private static TimeSpan? ResolveApprovalTimeoutMinutes(string? value)
+    {
+        if (!int.TryParse(value, out var minutes))
+            return null;
+
+        return TimeSpan.FromMinutes(Math.Max(MinimumApprovalTimeoutMinutes, minutes));
+    }
 }
