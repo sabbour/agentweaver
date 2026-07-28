@@ -40,8 +40,16 @@ function sectionLabel(heading: string): string {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+function formatVersionBadge(version: string): string {
+  if (!version) return '';
+  const [base, hash] = version.split('+', 2);
+  if (!hash) return version;
+  return `${base}+${hash.slice(0, 7)}`;
+}
+
 export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onFallbackProjectMissing }: LeftNavProps) {
   const version = useAppVersion();
+  const versionLabel = formatVersionBadge(version);
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -304,11 +312,12 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         <div className="aw-rail-footer__meta">
           <StatusDot />
           <Badge
+            className="aw-rail-footer__version"
             appearance="tint"
             color="warning"
-            title="Agentweaver is alpha software under active development."
+            title={version ? `Agentweaver is alpha software under active development. Full version: v${version}` : 'Agentweaver is alpha software under active development.'}
           >
-            Alpha{version ? ` v${version}` : ''}
+            Alpha{versionLabel ? ` v${versionLabel}` : ''}
           </Badge>
         </div>
       </div>
