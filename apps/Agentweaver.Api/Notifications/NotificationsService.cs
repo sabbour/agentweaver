@@ -62,6 +62,17 @@ public sealed class NotificationsService
             .Where(run => run.ArchivedAt is null && run.ProjectId is not null)
             .Where(run => ownedProjectNames.ContainsKey(run.ProjectId!.ToString()!))
             .ToList();
+        var ownedAwaitingReviewIds = ownedAwaitingReview.Select(run => run.Id.ToString()).ToList();
+        var reviewRequestedAtByRunId = await _db.RunEvents
+            .Where(evt => ownedAwaitingReviewIds.Contains(evt.RunId) && evt.EventType == EventTypes.CoordinatorAssemblyReviewRequested)
+            .GroupBy(evt => evt.RunId)
+            .Select(group => new
+            {
+                RunId = group.Key,
+                CreatedAt = group.Max(evt => evt.CreatedAt),
+            })
+            .ToDictionaryAsync(item => item.RunId, item => (DateTimeOffset?)item.CreatedAt, StringComparer.Ordinal, ct)
+            .ConfigureAwait(false);
 
         // Tool approval gates fire mid-execution, so the candidate pool is the caller's owned,
         // non-archived InProgress runs (mirrors the Human Review candidate pool above, just against
@@ -80,7 +91,10 @@ public sealed class NotificationsService
         var promoted = await BuildBacklogPromotedNotificationsAsync(ownedProjectNames, ct).ConfigureAwait(false);
 
         var notifications = ownedAwaitingReview
-            .Select(run => ToHumanReviewNotification(run, ownedProjectNames))
+            .Select(run => ToHumanReviewNotification(
+                run,
+                reviewRequestedAtByRunId.GetValueOrDefault(run.Id.ToString()),
+                ownedProjectNames))
             .Concat(ownedInProgress
                 .Where(run => pendingApprovals.ContainsKey(run.Id.ToString()))
                 .Select(run => ToToolApprovalNotification(run, pendingApprovals[run.Id.ToString()], ownedProjectNames)))
@@ -202,9 +216,11 @@ public sealed class NotificationsService
 
     private static NotificationDto ToHumanReviewNotification(
         Run run,
+        DateTimeOffset? reviewReadyAt,
         IReadOnlyDictionary<string, string> ownedProjectNames)
     {
         var projectId = run.ProjectId!.ToString()!;
+        var occurrenceAt = reviewReadyAt ?? run.EndedAt ?? run.StartedAt;
         // Mirrors the frontend's own fallback (ProjectPage.tsx): workflow_run_id when present,
         // otherwise the execution id, so the CTA always lands on a resolvable orchestration route.
         var deepLinkRunId = run.WorkflowRunId ?? run.Id.ToString();
@@ -214,14 +230,14 @@ public sealed class NotificationsService
 
         return new NotificationDto
         {
-            Id = $"review:{run.Id}",
+            Id = $"review:{run.Id}:{occurrenceAt.ToUnixTimeMilliseconds()}",
             Type = "human_review",
             RunId = run.Id.ToString(),
             ProjectId = projectId,
             ProjectName = ownedProjectNames.GetValueOrDefault(projectId, "Unknown project"),
             AgentName = run.AgentName,
             Title = title,
-            CreatedUtc = run.EndedAt ?? run.StartedAt,
+            CreatedUtc = occurrenceAt,
             CtaPath = $"/projects/{projectId}/orchestrations/{deepLinkRunId}",
         };
     }
