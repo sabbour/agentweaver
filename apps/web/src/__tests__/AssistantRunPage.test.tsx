@@ -124,7 +124,7 @@ describe('AssistantRunPage', () => {
     });
   });
 
-  it('clicking a suggested prompt populates the composer without submitting it', () => {
+  it('clicking a suggested prompt populates and focuses the composer without submitting it', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
     const [firstSuggestion] = screen.getAllByTestId('assistant-suggested-prompt');
     const expectedText = firstSuggestion.textContent ?? '';
@@ -133,7 +133,12 @@ describe('AssistantRunPage', () => {
     fireEvent.click(firstSuggestion);
 
     const textarea = screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement;
-    expect(textarea.value).toBe(expectedText);
+    await waitFor(() => {
+      expect(textarea.value).toBe(expectedText);
+      expect(document.activeElement).toBe(textarea);
+      expect(textarea.selectionStart).toBe(expectedText.length);
+      expect(textarea.selectionEnd).toBe(expectedText.length);
+    });
     // Populating is not the same as sending — no request should have gone out yet.
     expect(apiClient.createAssistantRun).not.toHaveBeenCalled();
   });

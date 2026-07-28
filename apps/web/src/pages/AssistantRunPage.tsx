@@ -300,6 +300,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   // below.
   const [pendingMessage, setPendingMessage] = useState<{ id: string; text: string } | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const scrolledForRunRef = useRef<string | null>(null);
   // Remembers the run id of a conversation that turned out to be genuinely, permanently
   // gone (404 run_not_found / 409 operator_run_closed below — NOT plain idle timeout, which
@@ -318,6 +319,13 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const handleSuggestionClick = useCallback((prompt: string) => {
     setInput(prompt);
     setError(null);
+    const textarea = composerTextareaRef.current;
+    if (!textarea) return;
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const cursor = prompt.length;
+      textarea.setSelectionRange(cursor, cursor);
+    });
   }, []);
 
   const { events, status: streamStatus } = useSeededRunStream(runId, undefined);
@@ -507,6 +515,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           </MessageBar>
         )}
         <Composer
+          textareaRef={composerTextareaRef}
           value={input}
           placeholder="Message the assistant..."
           onChange={(value) => { setInput(value); setError(null); }}
