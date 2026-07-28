@@ -1515,6 +1515,9 @@
           "Agentweaver.SandboxFs": "[1.0.0, )",
           "LibGit2Sharp": "[0.31.0, )"
         }
+      },
+      "agentweaver.web": {
+        "type": "Project"
       }
     }
   }

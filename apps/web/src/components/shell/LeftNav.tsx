@@ -50,6 +50,7 @@ function formatVersionBadge(version: string): string {
 export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onFallbackProjectMissing }: LeftNavProps) {
   const version = useAppVersion();
   const versionLabel = formatVersionBadge(version);
+  const footerVersionText = versionLabel ? `v${versionLabel}` : 'Alpha';
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -317,7 +318,7 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
             color="warning"
             title={version ? `Agentweaver is alpha software under active development. Full version: v${version}` : 'Agentweaver is alpha software under active development.'}
           >
-            Alpha{versionLabel ? ` v${versionLabel}` : ''}
+            <span className="aw-rail-footer__version-text">{footerVersionText}</span>
           </Badge>
         </div>
       </div>

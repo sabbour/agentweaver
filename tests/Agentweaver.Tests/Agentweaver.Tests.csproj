@@ -51,6 +51,10 @@
       <!-- Alias avoids CS0433: AgentHost and Api both emit a top-level 'Program' type. -->
       <Aliases>agenthost</Aliases>
     </ProjectReference>
+    <ProjectReference Include="..\..\apps\Agentweaver.Web\Agentweaver.Web.csproj">
+      <!-- Alias avoids CS0433: Web and Api both emit a top-level 'Program' type. -->
+      <Aliases>agentweaverweb</Aliases>
+    </ProjectReference>
     <ProjectReference Include="..\..\apps\Agentweaver.Mcp\Agentweaver.Mcp.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.Squad\Agentweaver.Squad.csproj" />
     <ProjectReference Include="..\..\apps\Agentweaver.Api.Migrations.Postgres\Agentweaver.Api.Migrations.Postgres.csproj" />

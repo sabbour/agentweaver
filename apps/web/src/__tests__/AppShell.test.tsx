@@ -209,18 +209,23 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/overview', undefined)).toBe('overview');
   });
 
-  it('shortens long dev version badges so the footer stays readable', async () => {
-    vi.spyOn(useAppVersionModule, 'useAppVersion').mockReturnValue('0.12.2-dev+391afc6e1234');
+  it('contains realistic dev version badges inside the footer while keeping the full version in the tooltip', async () => {
+    vi.spyOn(useAppVersionModule, 'useAppVersion').mockReturnValue('0.12.2-dev+a100e95');
     vi.mocked(apiClient.getGitHubAuthStatus).mockResolvedValue({
       status: 'signed_in',
-      login: 'octocat',
+      login: 'sabbour',
     } as never);
 
     renderShellAt('/overview');
 
-    expect(await screen.findByText('octocat')).toBeDefined();
-    expect(screen.getByText('Alpha v0.12.2-dev+391afc6')).toBeDefined();
-    expect(screen.queryByText('Alpha v0.12.2-dev+391afc6e1234')).toBeNull();
+    expect(await screen.findByText('sabbour')).toBeDefined();
+    const badgeText = screen.getByText('v0.12.2-dev+a100e95');
+    const badge = badgeText.closest('.aw-rail-footer__version') as HTMLElement | null;
+    expect(badge).toBeTruthy();
+    expect(badge?.title).toContain('Full version: v0.12.2-dev+a100e95');
+    expect(badge?.className).toContain('aw-rail-footer__version');
+    expect(badgeText.className).toBe('aw-rail-footer__version-text');
+    expect(screen.queryByText('Alpha v0.12.2-dev+a100e95')).toBeNull();
   });
 
   it('clears a deleted persisted project gracefully on a global route', async () => {
