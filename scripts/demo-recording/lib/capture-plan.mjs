@@ -101,12 +101,14 @@ export function renderCaptureScript(plan) {
       lines.push(`    await ${pressTarget};`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'eval') {
-      // Run an arbitrary in-page expression (e.g. a guarded cleanup that removes a
-      // duplicate list item before it is captured). Marked so the idle-trimmer keeps
-      // the surrounding frames. Kept intentionally simple: the expression string is
-      // authored in-repo, never from user input.
+      // Run an arbitrary in-page snippet (e.g. a guarded find-or-create that ensures a
+      // single backlog item exists and is promoted, instead of a duplicate create+delete
+      // on camera). Wrapped in an async IIFE so the snippet may use await (fetch the
+      // board API, etc.). Accepts `expression` or `code`. Marked so the idle-trimmer keeps
+      // the surrounding frames. The snippet is authored in-repo, never from user input.
+      const evalBody = step.expression ?? step.code ?? '';
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('eval'));`);
-      lines.push(`    await page.evaluate(() => { ${step.expression} });`);
+      lines.push(`    await page.evaluate(async () => { ${evalBody} });`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'waitFor') {
       // Wait for a real element (e.g. a rendered dashboard chart / topology node) to be
