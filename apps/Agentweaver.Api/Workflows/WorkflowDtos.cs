@@ -27,6 +27,51 @@ public sealed record WorkflowTriggerDto
     [JsonPropertyName("day_of_month")] public int? DayOfMonth { get; init; }
     [JsonPropertyName("time_of_day")] public string? TimeOfDay { get; init; }
     [JsonPropertyName("event_name")] public string? EventName { get; init; }
+    [JsonPropertyName("if")] public IReadOnlyList<WorkflowEventPredicateDto>? If { get; init; }
+}
+
+public sealed record WorkflowEventPredicateDto
+{
+    [JsonPropertyName("hasLabel")] public WorkflowEventLabelPredicateDto? HasLabel { get; init; }
+    [JsonPropertyName("isNotLabeledWith")] public WorkflowEventLabelPredicateDto? IsNotLabeledWith { get; init; }
+    [JsonPropertyName("baseBranch")] public WorkflowEventExactMatchDto? BaseBranch { get; init; }
+    [JsonPropertyName("reviewState")] public WorkflowEventStatePredicateDto? ReviewState { get; init; }
+    [JsonPropertyName("ref")] public WorkflowEventRefPredicateDto? Ref { get; init; }
+    [JsonPropertyName("category")] public WorkflowEventNamePredicateDto? Category { get; init; }
+    [JsonPropertyName("commentMatches")] public WorkflowEventPatternPredicateDto? CommentMatches { get; init; }
+    [JsonPropertyName("or")] public IReadOnlyList<WorkflowEventPredicateDto>? Or { get; init; }
+    [JsonPropertyName("not")] public IReadOnlyList<WorkflowEventPredicateDto>? Not { get; init; }
+}
+
+public sealed record WorkflowEventLabelPredicateDto
+{
+    [JsonPropertyName("label")] public required string Label { get; init; }
+}
+
+public sealed record WorkflowEventExactMatchDto
+{
+    [JsonPropertyName("equals")] public required string Exact { get; init; }
+}
+
+public sealed record WorkflowEventStatePredicateDto
+{
+    [JsonPropertyName("state")] public required string State { get; init; }
+}
+
+public sealed record WorkflowEventRefPredicateDto
+{
+    [JsonPropertyName("equals")] public string? Exact { get; init; }
+    [JsonPropertyName("prefix")] public string? Prefix { get; init; }
+}
+
+public sealed record WorkflowEventNamePredicateDto
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+}
+
+public sealed record WorkflowEventPatternPredicateDto
+{
+    [JsonPropertyName("pattern")] public required string Pattern { get; init; }
 }
 
 /// <summary>Response body for GET/POST the project's workflows list.</summary>
@@ -216,6 +261,48 @@ public static class WorkflowDtoMapper
         DayOfMonth = trigger.DayOfMonth,
         TimeOfDay = trigger.TimeOfDay?.ToString("HH:mm"),
         EventName = trigger.EventName,
+        If = trigger.Conditions.Count == 0 ? null : trigger.Conditions.Select(ToEventPredicateDto).ToList(),
+    };
+
+    private static WorkflowEventPredicateDto ToEventPredicateDto(WorkflowEventPredicate predicate) => predicate.Type switch
+    {
+        WorkflowEventPredicateType.HasLabel => new WorkflowEventPredicateDto
+        {
+            HasLabel = new WorkflowEventLabelPredicateDto { Label = predicate.Label! },
+        },
+        WorkflowEventPredicateType.IsNotLabeledWith => new WorkflowEventPredicateDto
+        {
+            IsNotLabeledWith = new WorkflowEventLabelPredicateDto { Label = predicate.Label! },
+        },
+        WorkflowEventPredicateType.BaseBranch => new WorkflowEventPredicateDto
+        {
+            BaseBranch = new WorkflowEventExactMatchDto { Exact = predicate.Exact! },
+        },
+        WorkflowEventPredicateType.ReviewState => new WorkflowEventPredicateDto
+        {
+            ReviewState = new WorkflowEventStatePredicateDto { State = predicate.State! },
+        },
+        WorkflowEventPredicateType.Ref => new WorkflowEventPredicateDto
+        {
+            Ref = new WorkflowEventRefPredicateDto { Exact = predicate.Exact, Prefix = predicate.Prefix },
+        },
+        WorkflowEventPredicateType.Category => new WorkflowEventPredicateDto
+        {
+            Category = new WorkflowEventNamePredicateDto { Name = predicate.Name! },
+        },
+        WorkflowEventPredicateType.CommentMatches => new WorkflowEventPredicateDto
+        {
+            CommentMatches = new WorkflowEventPatternPredicateDto { Pattern = predicate.Pattern! },
+        },
+        WorkflowEventPredicateType.Or => new WorkflowEventPredicateDto
+        {
+            Or = predicate.Predicates.Select(ToEventPredicateDto).ToList(),
+        },
+        WorkflowEventPredicateType.Not => new WorkflowEventPredicateDto
+        {
+            Not = predicate.Predicates.Select(ToEventPredicateDto).ToList(),
+        },
+        _ => throw new ArgumentOutOfRangeException(nameof(predicate), predicate.Type, null),
     };
 
     private static string NodeRoleForGraph(WorkflowNodeType t) => t switch

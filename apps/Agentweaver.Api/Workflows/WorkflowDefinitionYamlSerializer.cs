@@ -77,6 +77,11 @@ public static class WorkflowDefinitionYamlSerializer
             else if (trigger.Type == WorkflowTriggerType.Event)
             {
                 Line(sb, "  event_name", trigger.EventName);
+                if (trigger.Conditions.Count > 0)
+                {
+                    sb.AppendLine("  if:");
+                    AppendPredicateList(sb, trigger.Conditions, 4);
+                }
             }
         }
 
@@ -155,4 +160,66 @@ public static class WorkflowDefinitionYamlSerializer
         WorkflowScheduleInterval.Monthly => "monthly",
         _ => null,
     };
+
+    private static void AppendPredicateList(StringBuilder sb, IReadOnlyList<WorkflowEventPredicate> predicates, int indent)
+    {
+        foreach (var predicate in predicates)
+            AppendPredicate(sb, predicate, indent);
+    }
+
+    private static void AppendPredicate(StringBuilder sb, WorkflowEventPredicate predicate, int indent)
+    {
+        var pad = new string(' ', indent);
+        switch (predicate.Type)
+        {
+            case WorkflowEventPredicateType.HasLabel:
+                sb.Append(pad).AppendLine("- hasLabel:");
+                Line(sb, $"{pad}    label", predicate.Label);
+                break;
+
+            case WorkflowEventPredicateType.IsNotLabeledWith:
+                sb.Append(pad).AppendLine("- isNotLabeledWith:");
+                Line(sb, $"{pad}    label", predicate.Label);
+                break;
+
+            case WorkflowEventPredicateType.BaseBranch:
+                sb.Append(pad).AppendLine("- baseBranch:");
+                Line(sb, $"{pad}    equals", predicate.Exact);
+                break;
+
+            case WorkflowEventPredicateType.ReviewState:
+                sb.Append(pad).AppendLine("- reviewState:");
+                Line(sb, $"{pad}    state", predicate.State);
+                break;
+
+            case WorkflowEventPredicateType.Ref:
+                sb.Append(pad).AppendLine("- ref:");
+                Line(sb, $"{pad}    equals", predicate.Exact);
+                Line(sb, $"{pad}    prefix", predicate.Prefix);
+                break;
+
+            case WorkflowEventPredicateType.Category:
+                sb.Append(pad).AppendLine("- category:");
+                Line(sb, $"{pad}    name", predicate.Name);
+                break;
+
+            case WorkflowEventPredicateType.CommentMatches:
+                sb.Append(pad).AppendLine("- commentMatches:");
+                Line(sb, $"{pad}    pattern", predicate.Pattern);
+                break;
+
+            case WorkflowEventPredicateType.Or:
+                sb.Append(pad).AppendLine("- or:");
+                AppendPredicateList(sb, predicate.Predicates, indent + 4);
+                break;
+
+            case WorkflowEventPredicateType.Not:
+                sb.Append(pad).AppendLine("- not:");
+                AppendPredicateList(sb, predicate.Predicates, indent + 4);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(predicate.Type), predicate.Type, null);
+        }
+    }
 }

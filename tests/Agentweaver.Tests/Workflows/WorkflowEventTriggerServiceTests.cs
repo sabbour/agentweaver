@@ -72,7 +72,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
 
         trigger:
           type: event
-          event_name: issue.opened
+          event_name: github.issues.opened
         """;
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     {
         var project = await SeedProjectAsync(IssueOpenedEventYaml);
 
-        var fired = await _service.FireEventAsync(project, "issue.opened", dedupeKey: null, CancellationToken.None);
+        var fired = await _service.FireEventAsync(project, "github.issues.opened", dedupeKey: null, CancellationToken.None);
 
         fired.Should().BeEquivalentTo(new[] { "on-issue-opened" });
 
@@ -97,7 +97,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     {
         var project = await SeedProjectAsync(IssueOpenedEventYaml);
 
-        var fired = await _service.FireEventAsync(project, "pull_request.opened", dedupeKey: null, CancellationToken.None);
+        var fired = await _service.FireEventAsync(project, "github.pull_request.opened", dedupeKey: null, CancellationToken.None);
 
         fired.Should().BeEmpty();
         (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();
@@ -108,8 +108,8 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     {
         var project = await SeedProjectAsync(IssueOpenedEventYaml);
 
-        await _service.FireEventAsync(project, "issue.opened", "delivery-123", CancellationToken.None);
-        await _service.FireEventAsync(project, "issue.opened", "delivery-123", CancellationToken.None);
+        await _service.FireEventAsync(project, "github.issues.opened", "delivery-123", CancellationToken.None);
+        await _service.FireEventAsync(project, "github.issues.opened", "delivery-123", CancellationToken.None);
 
         (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle(
             because: "a retried webhook delivery with the same dedupe key must not double-fire");
@@ -120,8 +120,8 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     {
         var project = await SeedProjectAsync(IssueOpenedEventYaml);
 
-        await _service.FireEventAsync(project, "issue.opened", dedupeKey: null, CancellationToken.None);
-        await _service.FireEventAsync(project, "issue.opened", dedupeKey: null, CancellationToken.None);
+        await _service.FireEventAsync(project, "github.issues.opened", dedupeKey: null, CancellationToken.None);
+        await _service.FireEventAsync(project, "github.issues.opened", dedupeKey: null, CancellationToken.None);
 
         (await _backlog.ListByProjectAsync(project.Id)).Should().HaveCount(2);
     }
@@ -155,7 +155,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
 
         var project = await SeedProjectAsync(scheduleYaml);
 
-        var fired = await _service.FireEventAsync(project, "issue.opened", dedupeKey: null, CancellationToken.None);
+        var fired = await _service.FireEventAsync(project, "github.issues.opened", dedupeKey: null, CancellationToken.None);
 
         fired.Should().BeEmpty();
         (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();

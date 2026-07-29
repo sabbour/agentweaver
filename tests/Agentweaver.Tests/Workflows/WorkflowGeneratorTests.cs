@@ -51,6 +51,83 @@ public sealed class WorkflowGeneratorTests
     // YAML that parses but fails schema validation (no start/nodes) → drives a correction pass.
     private const string InvalidWorkflowYaml = "name: Broken Workflow\n";
 
+    private const string ScheduleTriggerWorkflowYaml = """
+        id: monday-triage
+        name: Monday Triage
+        description: Triage GitHub issues every Monday morning.
+        version: "1.0"
+        trigger:
+          type: schedule
+          interval: weekly
+          day_of_week: monday
+          time_of_day: "09:00"
+        start: triage
+        nodes:
+          - id: triage
+            type: prompt
+            label: Triage
+            role: backend-engineer
+            prompt: "Review the latest open issues."
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: triage
+            to: done
+        """;
+
+    private const string EventTriggerWorkflowYaml = """
+        id: comment-triage
+        name: Comment Triage
+        description: Start triage when someone issues the triage command.
+        version: "1.0"
+        trigger:
+          type: event
+          event_name: github.issue_comment.created
+          if:
+            - commentMatches:
+                pattern: "^/agentweaver:triage$"
+        start: triage
+        nodes:
+          - id: triage
+            type: prompt
+            label: Triage
+            role: backend-engineer
+            prompt: "Triage the referenced issue."
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: triage
+            to: done
+        """;
+
+    private const string InvalidTriggerWorkflowYaml = """
+        id: broken-trigger
+        name: Broken Trigger
+        description: Invalid trigger used to force a correction pass.
+        version: "1.0"
+        trigger:
+          type: event
+          event_name: github.issue_comment.created
+          if:
+            - commentMatches:
+                pattern: "("
+        start: triage
+        nodes:
+          - id: triage
+            type: prompt
+            label: Triage
+            role: backend-engineer
+            prompt: "Triage the referenced issue."
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: triage
+            to: done
+        """;
+
     private static CopilotWorkflowGenerator CreateGenerator(
         IAgentRunner runner,
         IDictionary<string, string?>? overrides = null)
@@ -204,6 +281,51 @@ public sealed class WorkflowGeneratorTests
 
         runner.LastTask.Should().Contain("<<<TARGET_REPOSITORY>>>");
         runner.LastTask.Should().Contain("Azure/aks");
+    }
+
+    [Fact]
+    public async Task ScheduleTriggerResponse_ReturnsParsedScheduleTrigger()
+    {
+        var runner = new ScriptedAgentRunner(ScheduleTriggerWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Run this every Monday at 9am UTC."));
+
+        result.Workflow.Trigger.Should().NotBeNull();
+        result.Workflow.Trigger!.Type.Should().Be(WorkflowTriggerType.Schedule);
+        result.Workflow.Trigger.Interval.Should().Be(WorkflowScheduleInterval.Weekly);
+        result.Workflow.Trigger.DayOfWeek.Should().Be(DayOfWeek.Monday);
+        result.Workflow.Trigger.TimeOfDay.Should().Be(new TimeOnly(9, 0));
+    }
+
+    [Fact]
+    public async Task EventTriggerResponse_ReturnsParsedEventTriggerPredicate()
+    {
+        var runner = new ScriptedAgentRunner(EventTriggerWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Whenever someone comments /agentweaver:triage, run triage."));
+
+        result.Workflow.Trigger.Should().NotBeNull();
+        result.Workflow.Trigger!.Type.Should().Be(WorkflowTriggerType.Event);
+        result.Workflow.Trigger.EventName.Should().Be("github.issue_comment.created");
+        result.Workflow.Trigger.Conditions.Should().ContainSingle();
+        result.Workflow.Trigger.Conditions[0].Type.Should().Be(WorkflowEventPredicateType.CommentMatches);
+        result.Workflow.Trigger.Conditions[0].Pattern.Should().Be("^/agentweaver:triage$");
+    }
+
+    [Fact]
+    public async Task InvalidTriggerThenValid_TriggersCorrectionPass()
+    {
+        var runner = new ScriptedAgentRunner(InvalidTriggerWorkflowYaml, EventTriggerWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest("Whenever someone comments /agentweaver:triage, run triage."));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Trigger.Should().NotBeNull();
+        result.Workflow.Trigger!.Conditions[0].Pattern.Should().Be("^/agentweaver:triage$");
+        runner.CallCount.Should().Be(2);
     }
 
     [Fact]

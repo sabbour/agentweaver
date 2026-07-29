@@ -152,6 +152,41 @@ public enum WorkflowScheduleInterval
     Monthly,
 }
 
+/// <summary>The structured event-trigger predicate vocabulary taught to the workflow generator and
+/// round-tripped by workflow YAML.</summary>
+public enum WorkflowEventPredicateType
+{
+    HasLabel,
+    IsNotLabeledWith,
+    BaseBranch,
+    ReviewState,
+    Ref,
+    Category,
+    CommentMatches,
+    Or,
+    Not,
+}
+
+/// <summary>The supported string-match operators for event-trigger predicates.</summary>
+public enum WorkflowEventStringMatchKind
+{
+    Equals,
+    Prefix,
+}
+
+/// <summary>A typed event-trigger predicate inside <c>trigger.if</c>.</summary>
+public sealed record WorkflowEventPredicate
+{
+    public required WorkflowEventPredicateType Type { get; init; }
+    public string? Label { get; init; }
+    public string? Exact { get; init; }
+    public string? Prefix { get; init; }
+    public string? State { get; init; }
+    public string? Name { get; init; }
+    public string? Pattern { get; init; }
+    public IReadOnlyList<WorkflowEventPredicate> Predicates { get; init; } = [];
+}
+
 /// <summary>
 /// An optional, first-class automation trigger for a workflow (issue #53). When present, a schedule
 /// trigger is evaluated by <c>WorkflowScheduleTriggerService</c> and an event trigger is evaluated by
@@ -181,11 +216,16 @@ public sealed record WorkflowTrigger
 
     /// <summary>
     /// Required for <see cref="WorkflowTriggerType.Event"/>: the event name this workflow starts a run
-    /// for (e.g. "issue.opened"). NOTE: matching an inbound event to this name IS implemented (see
-    /// <c>WorkflowEventTriggerService</c>), but no concrete external event SOURCE (e.g. a GitHub
-    /// webhook receiver) is wired to call it yet — this is the trigger mechanism/interface only.
+    /// for (e.g. "github.issues.opened"). Matching an inbound event to this name is implemented by
+    /// <c>WorkflowEventTriggerService</c> and is used by the GitHub webhook receiver.
     /// </summary>
     public string? EventName { get; init; }
+
+    /// <summary>
+    /// Optional structured event predicates (<c>trigger.if</c>) with implicit AND across the list and
+    /// explicit <c>or</c>/<c>not</c> wrappers for nested logic.
+    /// </summary>
+    public IReadOnlyList<WorkflowEventPredicate> Conditions { get; init; } = [];
 }
 
 /// <summary>

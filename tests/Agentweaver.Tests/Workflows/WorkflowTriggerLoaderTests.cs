@@ -103,7 +103,7 @@ public sealed class WorkflowTriggerLoaderTests
 
             trigger:
               type: event
-              event_name: issue.opened
+              event_name: github.issues.opened
             """;
 
         var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
@@ -111,7 +111,37 @@ public sealed class WorkflowTriggerLoaderTests
         result.IsValid.Should().BeTrue(because: result.Error);
         var trigger = result.Definition!.Trigger;
         trigger!.Type.Should().Be(WorkflowTriggerType.Event);
-        trigger.EventName.Should().Be("issue.opened");
+        trigger.EventName.Should().Be("github.issues.opened");
+    }
+
+    [Fact]
+    public void Load_EventTriggerWithPredicates_Parses()
+    {
+        var yaml = BaseYaml + """
+
+            trigger:
+              type: event
+              event_name: github.issues.labeled
+              if:
+                - hasLabel:
+                    label: "agentweaver:triage"
+                - or:
+                    - hasLabel:
+                        label: "needs triage"
+                    - not:
+                        - isNotLabeledWith:
+                            label: "customer"
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        result.IsValid.Should().BeTrue(because: result.Error);
+        var trigger = result.Definition!.Trigger!;
+        trigger.Conditions.Should().HaveCount(2);
+        trigger.Conditions[0].Type.Should().Be(WorkflowEventPredicateType.HasLabel);
+        trigger.Conditions[0].Label.Should().Be("agentweaver:triage");
+        trigger.Conditions[1].Type.Should().Be(WorkflowEventPredicateType.Or);
+        trigger.Conditions[1].Predicates.Should().HaveCount(2);
     }
 
     [Fact]
@@ -228,6 +258,44 @@ public sealed class WorkflowTriggerLoaderTests
     }
 
     [Fact]
+    public void Load_EventTriggerWithUnsupportedPredicate_Invalid()
+    {
+        var yaml = BaseYaml + """
+
+            trigger:
+              type: event
+              event_name: github.release.published
+              if:
+                - hasLabel:
+                    label: "ship-it"
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("not allowed");
+    }
+
+    [Fact]
+    public void Load_EventTriggerWithMalformedCommentRegex_Invalid()
+    {
+        var yaml = BaseYaml + """
+
+            trigger:
+              type: event
+              event_name: github.issue_comment.created
+              if:
+                - commentMatches:
+                    pattern: "("
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("valid regex");
+    }
+
+    [Fact]
     public void Serialize_ThenReload_RoundTripsScheduleTrigger()
     {
         var result = WorkflowDefinitionLoader.Load(BaseYaml + """
@@ -258,7 +326,10 @@ public sealed class WorkflowTriggerLoaderTests
 
             trigger:
               type: event
-              event_name: pull_request.opened
+              event_name: github.pull_request.opened
+              if:
+                - baseBranch:
+                    equals: "main"
             """, "triage.yaml");
         result.IsValid.Should().BeTrue(because: result.Error);
 
@@ -268,6 +339,9 @@ public sealed class WorkflowTriggerLoaderTests
         reloaded.IsValid.Should().BeTrue(because: reloaded.Error);
         var trigger = reloaded.Definition!.Trigger;
         trigger!.Type.Should().Be(WorkflowTriggerType.Event);
-        trigger.EventName.Should().Be("pull_request.opened");
+        trigger.EventName.Should().Be("github.pull_request.opened");
+        trigger.Conditions.Should().ContainSingle();
+        trigger.Conditions[0].Type.Should().Be(WorkflowEventPredicateType.BaseBranch);
+        trigger.Conditions[0].Exact.Should().Be("main");
     }
 }

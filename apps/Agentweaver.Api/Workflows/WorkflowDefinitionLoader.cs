@@ -1,4 +1,5 @@
 using YamlDotNet.Core;
+using YamlDotNet.RepresentationModel;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using Agentweaver.Squad.Catalog;
@@ -25,9 +26,11 @@ public static class WorkflowDefinitionLoader
         if (yaml.Length > 262_144)
             return WorkflowLoadResult.Invalid(source, $"{source}: workflow resource exceeds the 262144 character limit.");
 
+        YamlMappingNode? rootNode = null;
         WorkflowYamlDto? dto;
         try
         {
+            rootNode = TryParseRootMapping(yaml);
             dto = Deserializer.Deserialize<WorkflowYamlDto>(yaml);
         }
         catch (YamlException ex)
@@ -38,7 +41,7 @@ public static class WorkflowDefinitionLoader
         if (dto is null)
             return WorkflowLoadResult.Invalid(source, $"{source}: empty or null workflow document.");
 
-        if (!TryMapAndValidate(dto, source, isBuiltIn, out var definition, out var error, out var loadWarnings))
+        if (!TryMapAndValidate(dto, rootNode, source, isBuiltIn, out var definition, out var error, out var loadWarnings))
             return WorkflowLoadResult.Invalid(source, error!);
 
         return WorkflowLoadResult.Valid(source, definition!, isBuiltIn, loadWarnings);
@@ -46,6 +49,7 @@ public static class WorkflowDefinitionLoader
 
     private static bool TryMapAndValidate(
         WorkflowYamlDto dto,
+        YamlMappingNode? rootNode,
         string source,
         bool isBuiltIn,
         out WorkflowDefinition? definition,
@@ -205,7 +209,7 @@ public static class WorkflowDefinitionLoader
         WorkflowTrigger? trigger = null;
         if (dto.Trigger is not null)
         {
-            if (!TryParseTrigger(dto.Trigger, source, out trigger, out error))
+            if (!TryParseTrigger(dto.Trigger, GetChildMapping(rootNode, "trigger"), source, out trigger, out error))
                 return false;
         }
 
@@ -225,7 +229,7 @@ public static class WorkflowDefinitionLoader
     }
 
     private static bool TryParseTrigger(
-        TriggerYamlDto dto, string source, out WorkflowTrigger? trigger, out string? error)
+        TriggerYamlDto dto, YamlMappingNode? triggerNode, string source, out WorkflowTrigger? trigger, out string? error)
     {
         trigger = null;
         error = null;
@@ -282,11 +286,21 @@ public static class WorkflowDefinitionLoader
             {
                 if (string.IsNullOrWhiteSpace(dto.EventName))
                     return Fail(source, "event trigger is missing its required 'event_name'.", out error);
+                if (!TryClassifyEventName(dto.EventName, out var eventFamily))
+                    return Fail(
+                        source,
+                        $"event trigger has unsupported event_name '{dto.EventName}'. Use github.push or github.<issues|issue_comment|pull_request|pull_request_review|release|discussion>[.<action>].",
+                        out error);
+
+                var conditions = Array.Empty<WorkflowEventPredicate>();
+                if (!TryParseEventConditions(triggerNode, eventFamily, source, out conditions, out error))
+                    return false;
 
                 trigger = new WorkflowTrigger
                 {
                     Type = WorkflowTriggerType.Event,
                     EventName = dto.EventName.Trim(),
+                    Conditions = conditions,
                 };
                 return true;
             }
@@ -294,6 +308,305 @@ public static class WorkflowDefinitionLoader
             default:
                 return Fail(source, $"trigger has unknown type '{dto.Type}' (expected 'schedule' or 'event').", out error);
         }
+    }
+
+    private static bool TryParseEventConditions(
+        YamlMappingNode? triggerNode,
+        WorkflowEventFamily eventFamily,
+        string source,
+        out WorkflowEventPredicate[] conditions,
+        out string? error)
+    {
+        conditions = [];
+        error = null;
+        if (triggerNode is null) return true;
+
+        var ifNode = GetChild(triggerNode, "if");
+        if (ifNode is null) return true;
+        if (ifNode is not YamlSequenceNode sequence)
+            return Fail(source, "event trigger 'if' must be a YAML list.", out error);
+
+        var parsed = new List<WorkflowEventPredicate>(sequence.Children.Count);
+        for (var i = 0; i < sequence.Children.Count; i++)
+        {
+            if (!TryParseEventPredicate(
+                    sequence.Children[i],
+                    eventFamily,
+                    source,
+                    $"trigger.if[{i}]",
+                    out var predicate,
+                    out error))
+            {
+                return false;
+            }
+
+            parsed.Add(predicate);
+        }
+
+        conditions = [.. parsed];
+        return true;
+    }
+
+    private static bool TryParseEventPredicate(
+        YamlNode node,
+        WorkflowEventFamily eventFamily,
+        string source,
+        string path,
+        out WorkflowEventPredicate predicate,
+        out string? error)
+    {
+        predicate = null!;
+        error = null;
+
+        if (node is not YamlMappingNode mapping)
+            return Fail(source, $"{path} must be a mapping with exactly one predicate key.", out error);
+        if (mapping.Children.Count != 1)
+            return Fail(source, $"{path} must contain exactly one predicate key.", out error);
+
+        var entry = mapping.Children.Single();
+        if (entry.Key is not YamlScalarNode keyNode || string.IsNullOrWhiteSpace(keyNode.Value))
+            return Fail(source, $"{path} must use a scalar predicate key.", out error);
+
+        var key = keyNode.Value!.Trim();
+        switch (NormalizePredicateKey(key))
+        {
+            case "haslabel":
+                if (!IsAllowedPredicate(eventFamily, WorkflowEventPredicateType.HasLabel))
+                    return Fail(source, $"{path} predicate '{key}' is not allowed for event '{EventFamilyName(eventFamily)}'.", out error);
+                return TryParseLabelPredicate(entry.Value, source, path, key, WorkflowEventPredicateType.HasLabel, out predicate, out error);
+
+            case "isnotlabeledwith":
+                if (!IsAllowedPredicate(eventFamily, WorkflowEventPredicateType.IsNotLabeledWith))
+                    return Fail(source, $"{path} predicate '{key}' is not allowed for event '{EventFamilyName(eventFamily)}'.", out error);
+                return TryParseLabelPredicate(entry.Value, source, path, key, WorkflowEventPredicateType.IsNotLabeledWith, out predicate, out error);
+
+            case "basebranch":
+                if (!IsAllowedPredicate(eventFamily, WorkflowEventPredicateType.BaseBranch))
+                    return Fail(source, $"{path} predicate '{key}' is not allowed for event '{EventFamilyName(eventFamily)}'.", out error);
+                return TryParseExactStringPredicate(entry.Value, source, path, key, "equals", WorkflowEventPredicateType.BaseBranch, out predicate, out error);
+
+            case "reviewstate":
+                if (!IsAllowedPredicate(eventFamily, WorkflowEventPredicateType.ReviewState))
+                    return Fail(source, $"{path} predicate '{key}' is not allowed for event '{EventFamilyName(eventFamily)}'.", out error);
+                return TryParseNamedStringPredicate(entry.Value, source, path, key, "state", WorkflowEventPredicateType.ReviewState, out predicate, out error);
+
+            case "ref":
+                if (!IsAllowedPredicate(eventFamily, WorkflowEventPredicateType.Ref))
+                    return Fail(source, $"{path} predicate '{key}' is not allowed for event '{EventFamilyName(eventFamily)}'.", out error);
+                return TryParseRefPredicate(entry.Value, source, path, out predicate, out error);
+
+            case "category":
+                if (!IsAllowedPredicate(eventFamily, WorkflowEventPredicateType.Category))
+                    return Fail(source, $"{path} predicate '{key}' is not allowed for event '{EventFamilyName(eventFamily)}'.", out error);
+                return TryParseNamedStringPredicate(entry.Value, source, path, key, "name", WorkflowEventPredicateType.Category, out predicate, out error);
+
+            case "commentmatches":
+                if (!IsAllowedPredicate(eventFamily, WorkflowEventPredicateType.CommentMatches))
+                    return Fail(source, $"{path} predicate '{key}' is not allowed for event '{EventFamilyName(eventFamily)}'.", out error);
+                return TryParseCommentMatchesPredicate(entry.Value, source, path, out predicate, out error);
+
+            case "or":
+                return TryParseCompoundPredicate(entry.Value, eventFamily, source, path, WorkflowEventPredicateType.Or, out predicate, out error);
+
+            case "not":
+                return TryParseCompoundPredicate(entry.Value, eventFamily, source, path, WorkflowEventPredicateType.Not, out predicate, out error);
+
+            default:
+                return Fail(source, $"{path} uses unknown predicate '{key}'.", out error);
+        }
+    }
+
+    private static bool TryParseLabelPredicate(
+        YamlNode node,
+        string source,
+        string path,
+        string key,
+        WorkflowEventPredicateType type,
+        out WorkflowEventPredicate predicate,
+        out string? error)
+    {
+        predicate = null!;
+        error = null;
+        if (!TryGetRequiredStringField(node, "label", source, $"{path}.{key}", out var label, out error))
+            return false;
+
+        predicate = new WorkflowEventPredicate
+        {
+            Type = type,
+            Label = label,
+        };
+        return true;
+    }
+
+    private static bool TryParseExactStringPredicate(
+        YamlNode node,
+        string source,
+        string path,
+        string key,
+        string fieldName,
+        WorkflowEventPredicateType type,
+        out WorkflowEventPredicate predicate,
+        out string? error)
+    {
+        predicate = null!;
+        error = null;
+
+        var value = TryGetScalarValue(node);
+        if (string.IsNullOrWhiteSpace(value)
+            && !TryGetRequiredStringField(node, fieldName, source, $"{path}.{key}", out value, out error))
+        {
+            return false;
+        }
+
+        predicate = new WorkflowEventPredicate
+        {
+            Type = type,
+            Exact = value,
+        };
+        return true;
+    }
+
+    private static bool TryParseNamedStringPredicate(
+        YamlNode node,
+        string source,
+        string path,
+        string key,
+        string fieldName,
+        WorkflowEventPredicateType type,
+        out WorkflowEventPredicate predicate,
+        out string? error)
+    {
+        predicate = null!;
+        error = null;
+
+        var value = TryGetScalarValue(node);
+        if (string.IsNullOrWhiteSpace(value)
+            && !TryGetRequiredStringField(node, fieldName, source, $"{path}.{key}", out value, out error))
+        {
+            return false;
+        }
+
+        predicate = type switch
+        {
+            WorkflowEventPredicateType.ReviewState => new WorkflowEventPredicate { Type = type, State = value },
+            WorkflowEventPredicateType.Category => new WorkflowEventPredicate { Type = type, Name = value },
+            _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
+        };
+        return true;
+    }
+
+    private static bool TryParseRefPredicate(
+        YamlNode node,
+        string source,
+        string path,
+        out WorkflowEventPredicate predicate,
+        out string? error)
+    {
+        predicate = null!;
+        error = null;
+
+        var scalar = TryGetScalarValue(node);
+        if (!string.IsNullOrWhiteSpace(scalar))
+        {
+            predicate = new WorkflowEventPredicate
+            {
+                Type = WorkflowEventPredicateType.Ref,
+                Exact = scalar,
+            };
+            return true;
+        }
+
+        if (node is not YamlMappingNode mapping)
+            return Fail(source, $"{path}.ref must be a scalar ref or a mapping with 'equals' or 'prefix'.", out error);
+
+        var exact = TryGetOptionalStringField(mapping, "equals");
+        var prefix = TryGetOptionalStringField(mapping, "prefix");
+        var specified = (string.IsNullOrWhiteSpace(exact) ? 0 : 1) + (string.IsNullOrWhiteSpace(prefix) ? 0 : 1);
+        if (specified != 1)
+            return Fail(source, $"{path}.ref must set exactly one of 'equals' or 'prefix'.", out error);
+
+        predicate = new WorkflowEventPredicate
+        {
+            Type = WorkflowEventPredicateType.Ref,
+            Exact = exact,
+            Prefix = prefix,
+        };
+        return true;
+    }
+
+    private static bool TryParseCommentMatchesPredicate(
+        YamlNode node,
+        string source,
+        string path,
+        out WorkflowEventPredicate predicate,
+        out string? error)
+    {
+        predicate = null!;
+        error = null;
+        if (!TryGetRequiredStringField(node, "pattern", source, $"{path}.commentMatches", out var pattern, out error))
+            return false;
+
+        try
+        {
+            _ = new System.Text.RegularExpressions.Regex(pattern);
+        }
+        catch (ArgumentException ex)
+        {
+            return Fail(source, $"{path}.commentMatches.pattern is not a valid regex: {ex.Message}", out error);
+        }
+
+        predicate = new WorkflowEventPredicate
+        {
+            Type = WorkflowEventPredicateType.CommentMatches,
+            Pattern = pattern,
+        };
+        return true;
+    }
+
+    private static bool TryParseCompoundPredicate(
+        YamlNode node,
+        WorkflowEventFamily eventFamily,
+        string source,
+        string path,
+        WorkflowEventPredicateType type,
+        out WorkflowEventPredicate predicate,
+        out string? error)
+    {
+        predicate = null!;
+        error = null;
+
+        List<YamlNode>? childNodes = node switch
+        {
+            YamlSequenceNode sequence => [.. sequence.Children],
+            YamlMappingNode mapping => [mapping],
+            _ => null,
+        };
+        if (childNodes is null || childNodes.Count == 0)
+            return Fail(source, $"{path}.{(type == WorkflowEventPredicateType.Or ? "or" : "not")} must contain at least one nested predicate.", out error);
+
+        var parsed = new List<WorkflowEventPredicate>(childNodes.Count);
+        for (var i = 0; i < childNodes.Count; i++)
+        {
+            if (!TryParseEventPredicate(
+                    childNodes[i],
+                    eventFamily,
+                    source,
+                    $"{path}.{(type == WorkflowEventPredicateType.Or ? "or" : "not")}[{i}]",
+                    out var nested,
+                    out error))
+            {
+                return false;
+            }
+
+            parsed.Add(nested);
+        }
+
+        predicate = new WorkflowEventPredicate
+        {
+            Type = type,
+            Predicates = [.. parsed],
+        };
+        return true;
     }
 
     private static bool TryParseInterval(string raw, out WorkflowScheduleInterval interval)
@@ -322,6 +635,143 @@ public static class WorkflowDefinitionLoader
         }
     }
 
+    private static YamlMappingNode? TryParseRootMapping(string yaml)
+    {
+        using var reader = new StringReader(yaml);
+        var stream = new YamlStream();
+        stream.Load(reader);
+        return stream.Documents.Count == 0 ? null : stream.Documents[0].RootNode as YamlMappingNode;
+    }
+
+    private static YamlNode? GetChild(YamlMappingNode? mapping, string key)
+    {
+        if (mapping is null) return null;
+        foreach (var child in mapping.Children)
+        {
+            if (child.Key is YamlScalarNode scalar &&
+                string.Equals(scalar.Value, key, StringComparison.Ordinal))
+            {
+                return child.Value;
+            }
+        }
+
+        return null;
+    }
+
+    private static YamlMappingNode? GetChildMapping(YamlMappingNode? mapping, string key) => GetChild(mapping, key) as YamlMappingNode;
+
+    private static string? TryGetScalarValue(YamlNode node) =>
+        node is YamlScalarNode scalar && !string.IsNullOrWhiteSpace(scalar.Value)
+            ? scalar.Value.Trim()
+            : null;
+
+    private static string? TryGetOptionalStringField(YamlMappingNode mapping, string key) =>
+        GetChild(mapping, key) is YamlScalarNode scalar && !string.IsNullOrWhiteSpace(scalar.Value)
+            ? scalar.Value.Trim()
+            : null;
+
+    private static bool TryGetRequiredStringField(
+        YamlNode node,
+        string field,
+        string source,
+        string path,
+        out string value,
+        out string? error)
+    {
+        value = string.Empty;
+        error = null;
+        if (node is not YamlMappingNode mapping)
+            return Fail(source, $"{path} must be a mapping containing '{field}'.", out error);
+
+        var raw = TryGetOptionalStringField(mapping, field);
+        if (string.IsNullOrWhiteSpace(raw))
+            return Fail(source, $"{path} is missing its required '{field}' field.", out error);
+
+        value = raw;
+        return true;
+    }
+
+    private static string NormalizePredicateKey(string raw) =>
+        raw.Trim().Replace("_", string.Empty).Replace("-", string.Empty).ToLowerInvariant();
+
+    private static bool TryClassifyEventName(string raw, out WorkflowEventFamily family)
+    {
+        var value = raw.Trim();
+        if (string.Equals(value, "github.push", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("github.push.", StringComparison.OrdinalIgnoreCase))
+        {
+            family = WorkflowEventFamily.Push;
+            return true;
+        }
+
+        if (MatchesEventFamily(value, "github.issues"))
+        {
+            family = WorkflowEventFamily.Issues;
+            return true;
+        }
+
+        if (MatchesEventFamily(value, "github.issue_comment"))
+        {
+            family = WorkflowEventFamily.IssueComment;
+            return true;
+        }
+
+        if (MatchesEventFamily(value, "github.pull_request"))
+        {
+            family = WorkflowEventFamily.PullRequest;
+            return true;
+        }
+
+        if (MatchesEventFamily(value, "github.pull_request_review"))
+        {
+            family = WorkflowEventFamily.PullRequestReview;
+            return true;
+        }
+
+        if (MatchesEventFamily(value, "github.release"))
+        {
+            family = WorkflowEventFamily.Release;
+            return true;
+        }
+
+        if (MatchesEventFamily(value, "github.discussion"))
+        {
+            family = WorkflowEventFamily.Discussion;
+            return true;
+        }
+
+        family = default;
+        return false;
+    }
+
+    private static bool MatchesEventFamily(string eventName, string prefix) =>
+        string.Equals(eventName, prefix, StringComparison.OrdinalIgnoreCase) ||
+        eventName.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAllowedPredicate(WorkflowEventFamily family, WorkflowEventPredicateType type) => family switch
+    {
+        WorkflowEventFamily.Issues => type is WorkflowEventPredicateType.HasLabel or WorkflowEventPredicateType.IsNotLabeledWith,
+        WorkflowEventFamily.PullRequest => type is WorkflowEventPredicateType.HasLabel or WorkflowEventPredicateType.IsNotLabeledWith or WorkflowEventPredicateType.BaseBranch,
+        WorkflowEventFamily.PullRequestReview => type == WorkflowEventPredicateType.ReviewState,
+        WorkflowEventFamily.Push => type == WorkflowEventPredicateType.Ref,
+        WorkflowEventFamily.Release => false,
+        WorkflowEventFamily.Discussion => type == WorkflowEventPredicateType.Category,
+        WorkflowEventFamily.IssueComment => type == WorkflowEventPredicateType.CommentMatches,
+        _ => false,
+    };
+
+    private static string EventFamilyName(WorkflowEventFamily family) => family switch
+    {
+        WorkflowEventFamily.Issues => "github.issues.*",
+        WorkflowEventFamily.IssueComment => "github.issue_comment.*",
+        WorkflowEventFamily.PullRequest => "github.pull_request.*",
+        WorkflowEventFamily.PullRequestReview => "github.pull_request_review.*",
+        WorkflowEventFamily.Push => "github.push",
+        WorkflowEventFamily.Release => "github.release.*",
+        WorkflowEventFamily.Discussion => "github.discussion.*",
+        _ => "unknown",
+    };
+
     private static bool Fail(string source, string message, out string? error)
     {
         error = $"{source}: {message}";
@@ -349,6 +799,17 @@ public static class WorkflowDefinitionLoader
             case "terminal": type = WorkflowNodeType.Terminal; return true;
             default: type = default; return false;
         }
+    }
+
+    private enum WorkflowEventFamily
+    {
+        Issues,
+        IssueComment,
+        PullRequest,
+        PullRequestReview,
+        Push,
+        Release,
+        Discussion,
     }
 }
 
