@@ -52,14 +52,16 @@ run timeline:
 - A **"the agent wants to expose a preview server on port N"** approval card appears (the same kind of card
   used for the agent's URL-fetch requests). **Approve** it and the agent gets back the live `preview_url`;
   the preview behaves exactly like one you started yourself (same URL, same auto-expiry, same Stop).
-- If you don't approve within ~5 minutes the request lapses and the agent is told the preview was not
-  granted.
+- If you don't approve within the configured window (15 minutes by default) the request lapses and the
+  agent is told the preview was not granted.
 - The agent can only ever request a preview for **its own run** — the run is bound server-side, so a
   `start_preview` call can't reach another run's pod.
 
 Operators running automated demos can set `SANDBOX_PREVIEW_AUTO_APPROVE=true` (or the per-run
-auto-approve-tools option) to grant these requests automatically; in normal use the approval stays in your
-hands.
+auto-approve-tools option) to grant these requests automatically. Teams that want a longer or shorter manual
+approval window can set `Sandbox:Preview:ApprovalTimeoutMinutes` or
+`SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`; missing or invalid values fall back to 15 minutes and non-positive
+values clamp to 1 minute. In normal use the approval stays in your hands.
 
 ## Build & Test preview
 

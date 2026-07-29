@@ -27,6 +27,7 @@ public sealed class GenerationModelOptions
     public string? Model { get; set; } = DefaultModel;
 
     public string? BlueprintModel { get; set; }
+    public string? SkillModel { get; set; }
     public string? WorkflowModel { get; set; }
     public string? OutcomeSpecModel { get; set; }
 
@@ -34,6 +35,7 @@ public sealed class GenerationModelOptions
     public string? ReplyClassificationModel { get; set; }
 
     public string ResolveBlueprintModel(string? projectModel = null) => Resolve(projectModel, BlueprintModel, Model);
+    public string ResolveSkillModel(string? projectModel = null) => Resolve(projectModel, SkillModel, Model);
     public string ResolveWorkflowModel(string? projectModel = null) => Resolve(projectModel, WorkflowModel, Model);
     public string ResolveOutcomeSpecModel(string? projectModel = null) => Resolve(projectModel, OutcomeSpecModel, Model);
 
@@ -55,6 +57,7 @@ public sealed class GenerationModelOptions
     public static bool IsValid(GenerationModelOptions options) =>
         IsAllowedModelId(options.Model)
         && IsAllowedModelId(options.BlueprintModel)
+        && IsAllowedModelId(options.SkillModel)
         && IsAllowedModelId(options.WorkflowModel)
         && IsAllowedModelId(options.OutcomeSpecModel)
         && IsAllowedModelId(options.ReplyClassificationModel);

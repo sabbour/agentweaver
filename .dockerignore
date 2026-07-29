@@ -13,6 +13,7 @@
 # Squad / AI
 .squad
 .copilot
+.copilot-*
 .github/agents
 
 # Node

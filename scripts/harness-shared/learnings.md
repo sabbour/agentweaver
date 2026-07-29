@@ -846,3 +846,67 @@ LIVE EMPIRICAL A/B PROOF (staging `agwv` cluster, kata pool, 2026-07-27) — the
 Option C (agent-host PDB) intentionally SKIPPED (documented as follow-up): agent-host pods are ephemeral pod-per-run; a PDB risks blocking legitimate node drains / warm-pool recreation and does NOT stop a `safe-to-evict:true` autoscaler scale-down anyway (the actual #574 mechanism). The dynamic annotation is the correct, targeted control.
 
 Gotcha for tests: `TryGetBoundPodName(JsonElement)` requires BOTH a `Ready=True` condition and `status.sandbox.name` on the SandboxClaim JSON — stubs missing the Ready condition make `SetBackingPodSafeToEvictAsync` no-op (resolves no bound pod), which silently fails the pin assertions.
+---
+
+## #578 FIXED (local): worker heartbeat reaper deleted live preview claims because worker pods had no preview config — preview-aware reaper + RBAC
+
+- date: 2026-07-27
+- category: bug
+- surface: api/infra
+- status: fixed (implemented + unit-validated; LIVE staging verification PENDING — env re-provisioning in progress)
+
+Confirmed root cause of #578 (after 4 refuted hypotheses: ttlSecondsAfterFinished cluster-clock, API-side delete paths, agent-sandbox controller as first mover, cluster-autoscaler). Kube-audit attribution nailed the FIRST delete of the live preview's backing claim to `system:serviceaccount:agentweaver:agentweaver-worker` (repro child d39cd048..., claim agent-d39cd04852f2, 2026-07-27T18:27:14Z), with worker logs `AgentHostReaper: deleted orphaned claim ... reaped 1 orphaned claims` at the same second; generic GC deleted the pod/sandbox downstream only.
+
+Mechanism: the WORKER role runs `CoordinatorHeartbeatService` -> `AgentHostReaperService`, whose orphan sweep treats a completed/`AssembleReady` child as orphaned. The intended safeguard `HasActivePreviewAsync(runId)` lists preview HTTPRoutes via the cluster client — but `k8s/base/worker-deployment.yaml` set NO `Sandbox__Preview__*` env, and DI (`Program.cs` AddSingleton<ISandboxPreviewService>) only builds the in-cluster client when `previewOptions.Enabled && IsInCluster`. So on the worker `_client` was null, `HasActivePreviewAsync` returned false permanently, and every sweep deleted the live-preview claim.
+
+Fix has THREE complementary parts (all required — the first alone is a no-op without the other two):
+1. Config parity: worker-deployment.yaml now mirrors api-deployment.yaml's `Sandbox__Preview__Enabled=true` + ZoneSuffix (from agentweaver-runtime-config `SANDBOX_PREVIEW_ZONE_SUFFIX`) + GatewayName/GatewayNamespace, so DI actually builds the worker's in-cluster client.
+2. Fail-safe cluster reads: `SandboxPreviewService.HasActivePreviewAsync` / `RenewBackingClaimTtlAsync` / `SetBackingPodSafeToEvictAsync` now gate on `_client is null` rather than `!Enabled`. A live route in cluster state is authoritative for ANY process that can see it, even one not wired to CREATE routes. (Leak-safe direction unchanged: a probe that returns no un-expired route, or fails, still returns false — #542.)
+3. RBAC (the piece the recovered WIP was MISSING): `agentweaver-worker-sandbox` Role now grants `gateway.networking.k8s.io/httproutes: get,list` (so the probe's HTTPRoute list doesn't 403 -> catch -> false -> delete), plus `sandboxclaims: patch,update` (TTL renewal #560) and `pods: patch` (safe-to-evict pin #574) so the reaper's defer branch pins actually apply instead of silently 403-ing. Worker still never creates/deletes routes — that stays with the API.
+
+Why RBAC was the critical gap: `HasActivePreviewAsync` catches ALL non-cancellation exceptions and returns false (leak-safe). A 403 on the worker's httproutes list is exactly such an exception, so without the grant the config+client fix would still false-negative and delete the claim. The whole fix hinges on that one read succeeding on the worker identity.
+
+Validation: `dotnet test tests/Agentweaver.Tests/... --filter "...AgentHostReaper|SandboxPreviewServiceCluster|Preview"` => 240 passed / 3 platform-skips. New tests: `Sweep_OrphanClaim_WithClusterVisiblePreview_StillDefers_WhenPreviewFeatureFlagIsOff`, `HasActivePreview_true_when_feature_flag_is_off_but_cluster_route_exists`, and the two `..._still_patches_when_feature_flag_is_off_but_cluster_client_exists` renamed cases. LIVE A/B (repro AssembleReady child + start_preview, confirm the claim SURVIVES a worker sweep and the preview URL stays resolvable) is still REQUIRED before closing #578 — staging was GC'd (routine 3-day policy) and is re-provisioning; do not close #578 until that passes.
+---
+
+## #580 root-caused + live-mitigated on staging: deploy tooling silently dropped `allow-agenthost-to-mcp`, not pod init/readiness instability
+
+- date: 2026-07-27
+- category: bug
+- surface: api
+- status: mitigated-live / tooling-fix-required
+
+Staging run `58cf42ad-0a21-49e8-941a-7be1e164aeeb` was **not** a pod-creation/readiness failure despite the user-facing text saying `Initialization timed out`. App Insights for operation `13c5b926d0822ae8fe38122704df4e16` shows the full launch succeeded quickly: API created claim `agent-58cf42ad0a21` at 18:34:40Z, it bound pod `agentweaver-agent-host-gnhdt` at 18:34:42Z, `/healthz` on `https://10.244.6.217:8088/healthz` returned 200 after 1 attempt, `/configure` returned 200, and `RemoteAgentProxy: SetupAsync complete` logged at 18:34:44Z. The actual timeout happened ~60s later *inside the AgentHost operator-assistant turn* when `AgentweaverMcpToolProvider.ConnectAsync` tried to open `AgentHost__McpEndpoint=http://agentweaver-mcp:8080/mcp`; AgentHost logged `{EndpointName} client initialization timed out.` and App Insights captured `System.TimeoutException at ModelContextProtocol.Client.McpClient.<ConnectAsync>` with outer message `Initialization timed out`. The code timeout here is **30s per MCP connect** (`packages/Agentweaver.AgentRuntime/AgentweaverMcpToolProvider.cs`, `AgentweaverMcpConnectionOptions.ConnectionTimeout = 30s`); the end-to-end A2A turn took ~60s because the failed MCP initialization consumed the turn before the API released the pod.
+
+Live staging symptom was the missing policy (`kubectl get networkpolicy allow-agenthost-to-mcp -n agentweaver` -> NotFound) even though repo/tag `v0.12.2` already contains it in `k8s/base/networkpolicy-mcp.yaml` and includes that file in the deploy apply-order list. The *actual* source bug was in the deploy renderer/grouping layer: `scripts/azure/steps/30-deploy.mjs` applies manifests by filename group, and `scripts/azure/lib/kustomize.mjs`'s `FILE_RESOURCES["networkpolicy-mcp.yaml"]` listed only `allow-gateway-to-mcp` and `allow-api-to-mcp`, silently omitting the third document `allow-agenthost-to-mcp`. Result: `azure:deploy-from-local` / release deploys applied `networkpolicy-mcp.yaml` but only the first two MCP policies, never the AgentHost ingress rule. With `default-deny-ingress` selecting the MCP pod, AgentHost egress alone was insufficient: from a live AgentHost pod, `curl http://agentweaver-mcp:8080/healthz` hung until timeout and `curl http://agentweaver-mcp:8080/mcp` also timed out. After applying the already-committed base manifest live (`kubectl apply -f k8s/base/networkpolicy-mcp.yaml`), the missing policy was created immediately; the same AgentHost pod could then reach MCP (`/healthz` -> HTTP 200, `/mcp` -> HTTP 401 as expected without bearer auth), and a fresh assistant run `8586b313-63c3-497e-bb3a-a2b3d49d9ff1` succeeded live with a real reply and `tools_invoked:["project_list"]`. A deliberately reproduced pre-fix run `9ffd740e-5d2a-4dab-95e7-8756c1ddc105` failed the same way as #580, confirming this was not a one-off.
+
+This does **not** overlap the #574/#578 preview-pod teardown/autoscaler investigation in mechanism: the failing #580 pods were created, bound, ready, configured, and alive for the full turn window; no evidence of claim TTL reap, autoscaler drain, eviction, image-pull delay, scheduling delay, or `/healthz` readiness failure was present during the init window. Prevent recurrence by keeping `FILE_RESOURCES` in strict 1:1 sync with every doc emitted by kustomize; add a regression test that every built resource is accounted for, so a newly-added doc cannot be silently skipped by deploy-from-local/release again.
+
+## #578 definitively root-caused: worker heartbeat reaper deletes preview-backed child claims because preview detection is disabled on worker pods
+
+Live delete-attribution run on staging finally closed the loop on #578. The actual deleter was **not** the API, **not** `ttlSecondsAfterFinished`, **not** the agent-sandbox controller acting first, and **not** cluster-autoscaler for this repro. It was our own **worker** pod:
+
+- Repro child run: `d39cd048-52f2-4026-ad0e-5baf9c37de3a`
+- Claim: `agent-d39cd04852f2`
+- Pod: `agentweaver-agent-host-xm9ml`
+- Preview started successfully and served 200 first.
+- Kubernetes audit recorded the first delete at `2026-07-27T18:27:14.1358555Z` by `system:serviceaccount:agentweaver:agentweaver-worker` on `sandboxclaims/agent-d39cd04852f2`.
+- Immediately after, audit showed generic garbage collector deletes for the sandbox and pod, confirming those were downstream effects of the claim delete.
+
+Worker logs matched the audit timestamp exactly:
+
+- `AgentHostReaper: deleted orphaned claim agent-d39cd04852f2`
+- `AgentHostReaper: deleted orphaned preview-runner credential for run d39cd048-52f2-4026-ad0e-5baf9c37de3a`
+- `AgentHostReaper: reaped 1 orphaned claims`
+
+Source explains why this happens:
+
+1. `CoordinatorHeartbeatService` is registered unconditionally and periodically invokes `IAgentHostReaper`, so the worker role participates in orphan-claim sweeps, not just the API role.
+2. `AgentHostReaperService.GetActiveClaimMapAsync()` only counts `InProgress`, `Pending`, and `AwaitingReview` runs as active. The completed / `AssembleReady` child run used for preview therefore looks "orphaned".
+3. The only safeguard is `HasActivePreviewAsync(runId)`.
+4. `SandboxPreviewService.HasActivePreviewAsync()` returns false immediately when preview is disabled.
+5. `k8s/base/api-deployment.yaml` sets `Sandbox__Preview__Enabled=true` (+ gateway vars), but `k8s/base/worker-deployment.yaml` does **not** set any `Sandbox__Preview__*` env vars.
+
+Result: on worker pods, preview detection is permanently disabled, so the reaper can never see the live preview that should protect the claim. On the next sweep after the child is no longer in the active-run map, the worker deletes the claim as orphaned and the preview dies ~60-90s after `start_preview`.
+
+This explains why the earlier #578 TTL-renewal attempt was live-refuted even with `ttlSecondsAfterFinished=29400`: the worker reaper's delete path ignores TTL entirely because it is an explicit delete.

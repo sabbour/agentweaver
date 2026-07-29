@@ -83,3 +83,13 @@ scripts/azure/params.*.json
 scripts/azure/steps/.rendered/
 scripts/azure/tests/.scratch-*/
 
+
+# Demo recording output artifacts (large binary media, not source).
+# Intermediate captures, per-beat segments, and narration audio are ignored;
+# only the final assembled video(s) under recordings/final/ are tracked.
+recordings/*
+!recordings/final/
+recordings/final/*
+!recordings/final/*.webm
+!recordings/final/*.mp4
+.playwright-cli/

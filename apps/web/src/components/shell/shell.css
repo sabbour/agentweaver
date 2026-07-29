@@ -395,7 +395,6 @@
 .aw-rail-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--spacingHorizontalS);
   padding: var(--spacingVerticalS) var(--spacingHorizontalS);
   flex-shrink: 0;
@@ -406,13 +405,34 @@
 .aw-rail-footer > .fui-Button,
 .aw-rail-footer .fui-Menu {
   min-width: 0;
+  flex: 1 1 132px;
 }
 
 .aw-rail-footer__meta {
   display: inline-flex;
   align-items: center;
   gap: var(--spacingHorizontalXS);
-  flex-shrink: 0;
+  min-width: 0;
+  flex: 0 1 116px;
+  max-width: 116px;
+}
+
+.aw-rail-footer__version {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100px;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.aw-rail-footer__version-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --------------------------------------------------------------------------

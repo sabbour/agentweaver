@@ -255,14 +255,13 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 
 Returns a `ClusterDiagnosticsDto` with the current state of the Kubernetes cluster as seen by the Agentweaver API. Requires authentication. Returns `404 Not Found` when cluster diagnostics are not available (e.g. non-AKS deployment).
 
-Six component health checks run **concurrently** with a 5-second individual timeout each:
+Five component health checks run **concurrently** with a 5-second individual timeout each:
 
 | Check name | What it tests |
 | --- | --- |
 | `postgresql` | Postgres connectivity |
-| `github_installation_token` | GitHub token-store validity for the configured scope |
 | `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means the signing-key step in `npm run azure:provision-infra` was skipped. |
-| `agent_pod_quota` | CPU headroom in the sandbox namespace. Since #217 removed the `ResourceQuota` CPU cap there is no hard limit to measure against, so this check reports `unknown`. |
+| `agent_pod_quota` | Effective admission headroom in the sandbox namespace, computed from the tighter of the `pods` and SandboxClaim object quotas. |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |
 
@@ -272,7 +271,7 @@ Response `200 OK` — a `ClusterDiagnosticsDto`:
 {
   "component_health": [
     { "name": "postgresql", "status": "pass", "detail": null, "duration_ms": 12 },
-    { "name": "agent_pod_quota", "status": "warn", "detail": "CPU headroom: 1.2 cores", "duration_ms": 45 }
+    { "name": "agent_pod_quota", "status": "warn", "detail": "4 additional agent pod starts available before quota exhaustion (limited by pods; pods 196/200, sandboxclaims 188/200 used)", "duration_ms": 45 }
   ],
   "namespace_quota": {
     "cpu_used": 3.8,
@@ -1224,7 +1223,7 @@ Request:
 ```
 
 Generation model fields are individual nullable project settings. `null` clears a project override and
-falls back to the corresponding global `Generation:*` setting (`Generation:Model`, then `gpt-5.4`).
+falls back to the corresponding global `Generation:*` setting (`Generation:Model`, then `gpt-5.6-sol`).
 They do not affect Console or normal project/run agent execution model selection. Response
 `204 No Content` on success.
 
@@ -2083,7 +2082,7 @@ The run's event stream is held in memory by `RunStreamStore` and is not persiste
 | `Providers:GitHubCopilot:Endpoint` | `https://api.githubcopilot.com` | GitHub Copilot base URL |
 | `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | GitHub Copilot model name |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary; empty means use the SDK's auto-resolved runtime. Env fallbacks (in order): `AGENTWEAVER_COPILOT_CLI_PATH`, `COPILOT_CLI_PATH`. Grounded in `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. See [Configuration](/guide/configuration#provider-settings). |
-| `Generation:Model` | `gpt-5.4` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
+| `Generation:Model` | `gpt-5.6-sol` | Global fallback for blueprint, workflow, and coordinator outcome-spec generation. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback when a project has no `blueprint_generation_model`. |
 | `Generation:WorkflowModel` | `Generation:Model` | Optional global fallback when a project has no `workflow_generation_model`. |
 | `Generation:OutcomeSpecModel` | `Generation:Model` | Optional global fallback when a project has no `outcome_spec_generation_model`. |

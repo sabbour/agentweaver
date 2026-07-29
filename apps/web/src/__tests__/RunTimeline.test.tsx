@@ -15,6 +15,31 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 afterEach(() => cleanup());
 
+describe('RunTimeline layout (overlap regression)', () => {
+  it('pins the timeline root to flex-shrink: 0 so it never collapses under a flex-column scroll parent', () => {
+    // Regression test for the tool-approval overlap bug: when RunTimeline is a flex item in
+    // a flex-column scroll container (the session message scroll region), a shrinkable root
+    // (min-height: 0 + default flex-shrink: 1) collapsed to height 0. Its accordion content
+    // then overflowed visibly and the in-thread "Tool Approval Required" card rendered on
+    // top of it. The root must be flex-shrink: 0 so it always reserves its content height.
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Inspect the repo' }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'web_fetch', arguments: { url: 'https://example.com' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'agent.turn.end', {}),
+    ]);
+
+    render(
+      <Wrapper>
+        <RunTimeline embedded steps={model.steps} running={false} />
+      </Wrapper>,
+    );
+
+    const root = screen.getByTestId('run-timeline');
+    expect(getComputedStyle(root).flexShrink).toBe('0');
+  });
+});
+
 describe('RunTimeline default expansion', () => {
   it('keeps the step count label aligned with the rendered top-level steps after narration collapsing', () => {
     const model = buildRunTimeline([
@@ -39,6 +64,39 @@ describe('RunTimeline default expansion', () => {
     expect(screen.getByText('Build the prototype with Vite + React')).toBeTruthy();
     expect(screen.getByText('Review the result')).toBeTruthy();
     expect(screen.queryByText('Now the storage module')).toBeNull();
+  });
+
+  it('numbers multiple distinct steps sequentially (Step 1, Step 2, Step 3) instead of labeling every step "Step 1"', () => {
+    // Regression test for a bug where every step in a run rendered as "Step 1" instead of
+    // incrementing — root-caused to `collapseContinuationNarrationSteps` folding an entire
+    // run's worth of continuation-narrated steps into one mega-step (see
+    // runTimelineSteps.test.ts's "does not merge continuation steps past the
+    // collapsible-narration caps" test for the underlying data-model regression test).
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Read the code' }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'read_file', arguments: { path: 'src/app.ts' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'agent.intent', { intent: 'Build the project' }),
+      evt(5, 'tool.call', { callId: 'c2', toolName: 'run_command', arguments: { command: 'npm run build' } }),
+      evt(6, 'tool.result', { callId: 'c2', content: 'ok' }),
+      evt(7, 'agent.intent', { intent: 'Deploy the artifact' }),
+      evt(8, 'tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm run deploy' } }),
+      evt(9, 'tool.result', { callId: 'c3', content: 'ok' }),
+      evt(10, 'agent.turn.end', {}),
+    ]);
+
+    expect(model.steps).toHaveLength(3);
+
+    render(
+      <Wrapper>
+        <RunTimeline steps={model.steps} running={false} />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('Step 1 ·')).toBeTruthy();
+    expect(screen.getByText('Step 2 ·')).toBeTruthy();
+    expect(screen.getByText('Step 3 ·')).toBeTruthy();
+    expect(screen.queryByText('Step 4 ·')).toBeNull();
   });
 
   describe('RunTimeline tool arguments', () => {

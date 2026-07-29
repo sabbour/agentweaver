@@ -3,6 +3,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AppShell } from '../components/shell/AppShell';
 import { projectIdFromPath } from '../components/shell/projectIdFromPath';
 import { resolveActiveKey } from '../components/shell/navConfig';
+import * as useAppVersionModule from '../hooks/useAppVersion';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
@@ -80,6 +81,7 @@ function renderShellAt(path: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  vi.spyOn(useAppVersionModule, 'useAppVersion').mockReturnValue('');
   vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
   vi.mocked(apiClient.getProject).mockResolvedValue(makeProject('proj-1', 'Project One'));
   vi.mocked(apiClient.checkHealth).mockResolvedValue(true);
@@ -205,6 +207,25 @@ describe('AppShell navigation', () => {
     expect(screen.getByText('Board')).toBeDefined();
     // Overview is still the active item (global content stays global).
     expect(resolveActiveKey('/overview', undefined)).toBe('overview');
+  });
+
+  it('contains realistic dev version badges inside the footer while keeping the full version in the tooltip', async () => {
+    vi.spyOn(useAppVersionModule, 'useAppVersion').mockReturnValue('0.12.2-dev+a100e95');
+    vi.mocked(apiClient.getGitHubAuthStatus).mockResolvedValue({
+      status: 'signed_in',
+      login: 'sabbour',
+    } as never);
+
+    renderShellAt('/overview');
+
+    expect(await screen.findByText('sabbour')).toBeDefined();
+    const badgeText = screen.getByText('v0.12.2-dev+a100e95');
+    const badge = badgeText.closest('.aw-rail-footer__version') as HTMLElement | null;
+    expect(badge).toBeTruthy();
+    expect(badge?.title).toContain('Full version: v0.12.2-dev+a100e95');
+    expect(badge?.className).toContain('aw-rail-footer__version');
+    expect(badgeText.className).toBe('aw-rail-footer__version-text');
+    expect(screen.queryByText('Alpha v0.12.2-dev+a100e95')).toBeNull();
   });
 
   it('clears a deleted persisted project gracefully on a global route', async () => {

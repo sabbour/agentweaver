@@ -1,0 +1,30 @@
+export function buildStableStagingInterimPlan({ baseUrl, projectId }) {
+  return {
+    startUrl: `${baseUrl}/projects/${projectId}`,
+    videoPath: 'C:/Users/asabbour/Git/agentweaver/recordings/blueprint-demo-final/interim-deterministic-take.webm',
+    viewport: { width: 1920, height: 1080 },
+    steps: [
+      { type: 'badge', label: 'Beat 1.3', title: 'Inspect the team', duration: 1800 },
+      { type: 'click', selector: "page.getByRole('link', { name: 'Agents', exact: true })", scale: 1.42, after: 900 },
+      { type: 'click', selector: "page.getByRole('link', { name: 'Skills', exact: true })", scale: 1.42, after: 900 },
+      { type: 'click', selector: "page.getByRole('button', { name: 'Browse marketplaces', exact: true })", scale: 1.55, after: 1200 },
+      { type: 'press', key: 'Escape', after: 500 },
+      { type: 'click', selector: "page.getByRole('button', { name: 'Import skill', exact: true })", scale: 1.55, after: 1000 },
+      { type: 'press', key: 'Escape', after: 500 },
+      { type: 'click', selector: "page.getByRole('tab', { name: 'Assignments', exact: true })", scale: 1.45, after: 900 },
+      { type: 'badge', label: 'Beat 2.1', title: 'Frame the product', duration: 1800 },
+      { type: 'click', selector: "page.getByRole('link', { name: 'Dashboard', exact: true })", scale: 1.42, after: 800 },
+      { type: 'click', selector: "page.getByRole('button', { name: 'Start task' }).first()", scale: 1.58, after: 700 },
+      { type: 'select', selector: "page.getByRole('combobox', { name: 'Workflow' }).first()", option: { label: 'Software Delivery' }, scale: 1.48, after: 500 },
+      { type: 'type', selector: "page.getByRole('textbox', { name: 'Goal' })", text: 'Planning a weekend trip with friends turns into a mess of group chats, links, and half-made plans, and everyone ends up on a different page. I want to launch Trailhead: shape the first experience, and ship a landing page with a welcome banner, three value props, and one primary Plan my first trip button.', scale: 1.72, delay: 6, after: 900 },
+      { type: 'click', selector: "page.getByRole('button', { name: 'Define Outcome' })", scale: 1.62, after: 1400 },
+      { type: 'badge', label: 'Beat 2.2', title: 'Confirm the plan', duration: 2000 },
+      { type: 'click', selector: "page.getByRole('checkbox', { name: /Independent task promotion/i }).first()", scale: 1.5, after: 600 },
+      { type: 'click', selector: "page.getByRole('button', { name: 'Confirm plan' }).first()", scale: 1.62, after: 1600 },
+      { type: 'badge', label: 'Beat 2.3', title: 'Show backlog handoff', duration: 1800 },
+      { type: 'goto', url: `${baseUrl}/projects/${projectId}/board`, after: 1200 },
+      { type: 'waitText', text: 'Agent task board', timeout: 30000 },
+      { type: 'hover', selector: "page.getByRole('button', { name: /Jump to Backlog:/i })", scale: 1.48, hold: 1400 },
+    ],
+  };
+}

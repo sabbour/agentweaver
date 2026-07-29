@@ -569,6 +569,7 @@ export interface TeamDto {
   project_name: string;
   universe: string;
   members: TeamMemberDto[];
+  retired_members?: TeamMemberDto[];
   layout: 'canonical' | 'legacy' | 'absent';
   migration_available: boolean;
 }
@@ -1118,23 +1119,12 @@ export interface WarmPoolStatusDto {
   age_seconds?: number | null;
 }
 
-export interface SandboxObjectDto {
-  name: string;
-  phase: string; // 'running' | 'pending' | 'standby' | 'unknown'
-  ready: boolean;
-  pod_name?: string | null;
-  template_ref?: string | null;
-  warm_pool?: string | null;
-  age_seconds?: number | null;
-}
-
 export interface SandboxClaimObjectDto {
   name: string;
   phase: string; // 'bound' | 'pending' | 'unknown'
   ready: boolean;
   run_id?: string | null;
   bound_sandbox?: string | null;
-  sandbox_template_ref?: string | null;
   warm_pool?: string | null;
   age_seconds?: number | null;
 }
@@ -1147,7 +1137,6 @@ export interface ClusterDiagnosticsDto {
   orphaned_agent_pods: AgentPodInfoDto[];
   pending_capacity_runs: PendingCapacityRunDto[];
   warm_pools?: WarmPoolStatusDto[];
-  sandbox_objects?: SandboxObjectDto[];
   sandbox_claims?: SandboxClaimObjectDto[];
 }
 

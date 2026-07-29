@@ -123,6 +123,48 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
             .WithMessage("*GitHub sign-in is required*");
     }
 
+    [Theory]
+    [InlineData("owner/repo")]
+    [InlineData("git@github.com:owner/repo.git")]
+    [InlineData("http://github.com/owner/repo")]
+    public async Task CreateFromGitHubAsync_Rejects_NonHttpsGitHubUrlFormats(string sourceRepository)
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var service = BuildService(store, db: testDb.Db);
+        var dir = NewDir();
+
+        var act = async () =>
+            await service.CreateFromGitHubAsync("Proj", sourceRepository, dir, null, null, null, "user");
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*HTTPS GitHub URL starting with https://github.com/*")
+            .WithParameterName("sourceRepository");
+    }
+
+    [Theory]
+    [InlineData("https://github.com/owner/repo")]
+    [InlineData("https://github.com/owner/repo.git")]
+    [InlineData("HTTPS://GitHub.com/Owner/Repo")]
+    public async Task CreateFromGitHubAsync_Accepts_HttpsGitHubUrlFormats(string sourceRepository)
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var tokenStore = new InMemoryGitHubTokenStore();
+        var scope = GitHubTokenScope.Installation;
+        await tokenStore.SetAsync(scope, new GitHubToken(
+            "ghp_test_token", null, null, "testuser", null, ["repo", "read:user"]));
+
+        var service = BuildService(store, tokenStore: tokenStore, db: testDb.Db);
+        var dir = NewDir();
+
+        var project = await service.CreateFromGitHubAsync(
+            "GitHub Project", sourceRepository, dir, null, null, null, "test-user");
+
+        project.Origin.SourceRepository.Should().Be(sourceRepository);
+        Directory.Exists(project.WorkingDirectory).Should().BeTrue();
+    }
+
     // =========================================================================
     // PC-04: CreateFromGitHubAsync succeeds when token is set (uses stub git)
     // =========================================================================

@@ -96,6 +96,7 @@ export const FILE_RESOURCES = Object.freeze({
   "networkpolicy-mcp.yaml": [
     { kind: "NetworkPolicy", name: "allow-gateway-to-mcp" },
     { kind: "NetworkPolicy", name: "allow-api-to-mcp" },
+    { kind: "NetworkPolicy", name: "allow-agenthost-to-mcp" },
   ],
   "networkpolicy-sandbox.yaml": [
     { kind: "NetworkPolicy", name: "sandbox-deny-ingress" },

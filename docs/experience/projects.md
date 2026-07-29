@@ -177,7 +177,7 @@ The same model exists in MCP: predefined blueprints are applied by `blueprint_id
 
 Use MCP when an agent or script needs to manage projects without the web UI.
 
-Current scope note: the web UI is the complete GitHub repository-linking create flow; current MCP `project_create` accepts origin and workspace fields plus blueprint fields, but does not expose a `source_repository` argument.
+For GitHub-backed MCP project creation, call `project_create` with `origin: "github"` and `source_repository` as either `owner/repo` or a full `https://github.com/owner/repo` URL. The MCP tool normalizes the shorthand to the full HTTPS URL before calling the API.
 
 ### Project tools
 
@@ -185,7 +185,7 @@ Current scope note: the web UI is the complete GitHub repository-linking create 
 |---|---|
 | `project_list` | List all Agentweaver projects. |
 | `project_get` | Get one project by id, including name, origin, working directory, provider settings, state, and availability. |
-| `project_create` | Create a project with name, working directory, optional origin, and optional blueprint. |
+| `project_create` | Create a project with name, working directory, optional GitHub origin/source repository, and optional blueprint. |
 | `project_rename` | Rename the project display name. |
 | `project_delete` | Delete the project record. |
 | `project_configure` | Configure default model provider settings. |
@@ -207,13 +207,13 @@ For a predefined blueprint:
 
 1. Call `list_blueprints`.
 2. Pick a blueprint id.
-3. Call `project_create` with `name`, `working_directory`, `origin`, and `blueprint_id`.
+3. Call `project_create` with `name`, `working_directory`, `origin`, optional `source_repository`, and `blueprint_id`.
 
 For a generated blueprint:
 
 1. Call `blueprint_generate` with a natural-language description.
 2. Inspect the returned blueprint and generated workflow YAML.
-3. Call `project_create` with `name`, `working_directory`, `origin`, inline `blueprint`, and `generated_workflow_yaml`.
+3. Call `project_create` with `name`, `working_directory`, `origin`, optional `source_repository`, inline `blueprint`, and `generated_workflow_yaml`.
 
 For a custom inline blueprint:
 
@@ -314,7 +314,7 @@ MCP equivalent: `project_rename`.
 
 #### Default model
 
-**Default model** sets the model used by default for future runs. In the web UI, the field is **GitHub Copilot model** and is free-text — enter any model id from the GitHub Copilot catalog (e.g. `claude-sonnet-4.6`). Leave the field **empty** to use "Auto (coordinator picks)": the coordinator selects a model per subtask using per-role defaults, and different subtasks may use different models. Success shows **Model settings saved.**
+**Default model** sets the model used by default for future runs. In the web UI, the field is **GitHub Copilot model** and is free-text — enter any model id from the GitHub Copilot catalog (e.g. `claude-sonnet-5`). Leave the field **empty** to use "Auto (coordinator picks)": the coordinator selects a model per subtask using per-role defaults, and different subtasks may use different models. Success shows **Model settings saved.**
 
 MCP equivalent: `project_configure`.
 

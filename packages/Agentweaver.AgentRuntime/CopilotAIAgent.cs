@@ -173,7 +173,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private string? _degradedReason;
     private int _runDegradedEmitted;
     private int _shellTimeoutFailureEmitted;
+    private int _nativeShellDenyAttempts;
     private long _shellExecutionGeneration;
+    private volatile bool _denyNativeShellLifecycleToolCalls;
 
     /// <summary>
     /// Inactivity watchdog window for a streaming turn. If the Copilot SDK yields no chunk within
@@ -347,6 +349,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _turnModelId = null;
         _turnTimeToFirstTokenMs = null;
         _shellTimeoutFailureEmitted = 0;
+        _nativeShellDenyAttempts = 0;
+        _denyNativeShellLifecycleToolCalls = false;
 
         _logger.LogInformation(
             "SetupAsync entered — workingDirectory={WorkingDirectory}, runId={RunId}, streamIsNull={StreamIsNull}",
@@ -473,6 +477,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         // calls to nonexistent tools (#268).
         _includeTeamCoordinationPrompt = _registeredToolNames.Contains("list_decisions");
 
+        const bool denyNativeShell = true;
+        // Keep the SDK lifecycle translator aligned with the permission handler: when native
+        // shell is denied for this run, any lifecycle start event for the SDK's built-in shell
+        // must be surfaced to the frontend as run_command instead of the raw native tool name.
+        // This avoids "bash" winning the first-write dedupe race against the handler's relabeled
+        // synthetic tool.call.
+        _denyNativeShellLifecycleToolCalls = denyNativeShell;
+
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(
@@ -488,7 +500,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 // per-command ISandboxExecutor/bubblewrap filesystem confinement (the permission
                 // handler validates only the working directory, never the command text). All shell
                 // must instead go through the sandboxed run_command tool registered above.
-                denyNativeShell: true),
+                denyNativeShell: denyNativeShell),
             WorkingDirectory = _workingDirectory,
             EnableConfigDiscovery = false,
             Streaming = true,
@@ -1255,7 +1267,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // streaming loop, so the sequence increment and the channel write are taken under one
     // lock. This keeps event sequence numbers monotonic AND in arrival order.
 
-    private void Emit(string type, object payload)
+    internal void Emit(string type, object payload)
     {
         var stream = StreamWriter;
         if (stream is null) return;
@@ -1266,20 +1278,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
     }
 
-    private void EmitToolCallOnce(string callId, string toolName, object? arguments)
+    internal void EmitToolCallOnce(string callId, string toolName, object? arguments)
     {
         if (_emittedCalls.TryAdd(callId, 0))
             Emit("tool.call", new { callId, toolName, arguments });
     }
 
-    private void EmitToolResultOnce(string callId, string content)
+    internal void EmitToolResultOnce(string callId, string content)
     {
         EmitToolCallOnce(callId, "unknown", null); // defensive call-before-result
         if (_emittedTerminals.TryAdd(callId, 0))
             Emit("tool.result", new { callId, content });
     }
 
-    private void EmitToolErrorOnce(string callId, string errorMessage)
+    internal void EmitToolErrorOnce(string callId, string errorMessage)
     {
         EmitToolCallOnce(callId, "unknown", null); // defensive call-before-error
         if (_emittedTerminals.TryAdd(callId, 0))
@@ -1318,50 +1330,23 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// as chunk content raw representations) into individual tool.call / tool.result /
     /// tool.error run events. Observe-only: it never alters execution. The result content
     /// is the SDK's own execution output for an approved (in-sandbox) call — nothing is
-    /// fabricated. Denied calls never execute, so they never reach this path.
+    /// fabricated. The one exception is the SDK's native shell start event: when this run
+    /// hard-denies native shell, the lifecycle still surfaces a start callback using the raw
+    /// built-in tool name (for example <c>bash</c>). That callback is normalized to
+    /// <c>run_command</c> here so the append-only event stream stays consistent with the
+    /// permission handler's denial path regardless of which callback arrives first.
     /// </summary>
     private void TranslateToolLifecycle(object? raw)
     {
         switch (raw)
         {
             case ToolExecutionStartEvent start when start.Data is not null:
-            {
-                var callId = start.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
-                var toolName = start.Data.ToolName ?? "";
-
-                // Translate report_intent into an agent.intent event BEFORE general suppression.
-                if (string.Equals(toolName, "report_intent", StringComparison.OrdinalIgnoreCase))
-                {
-                    _suppressedCallIds.Add(callId);
-                    try
-                    {
-                        if (start.Data.Arguments is { } argsEl &&
-                            argsEl.TryGetProperty("intent", out var intentEl))
-                        {
-                            var intentText = intentEl.GetString();
-                            if (!string.IsNullOrWhiteSpace(intentText))
-                                Emit("agent.intent", new { intent = intentText });
-                        }
-                    }
-                    catch { /* non-fatal: suppress raw event even if parsing fails */ }
-                    break;
-                }
-
-                if (SuppressedInternalTools.Contains(toolName))
-                {
-                    _suppressedCallIds.Add(callId);
-                    break;
-                }
-                var resolvedToolName = toolName.Length > 0 ? toolName : "unknown";
-                if (IsShellToolName(resolvedToolName) &&
-                    _shellExecutionTracker?.ActiveExecution is null)
-                {
-                    TrackApprovedShell(callId, callId);
-                }
-                StartToolSpan(callId, resolvedToolName, start.Timestamp);
-                EmitToolCallOnce(callId, resolvedToolName, start.Data.Arguments);
+                ObserveToolExecutionStarted(
+                    start.Data.ToolCallId,
+                    start.Data.ToolName,
+                    start.Data.Arguments,
+                    start.Timestamp);
                 break;
-            }
             case ToolExecutionCompleteEvent complete when complete.Data is not null:
             {
                 var callId = complete.Data.ToolCallId ?? Guid.NewGuid().ToString("n");
@@ -1391,6 +1376,60 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 break;
             }
         }
+    }
+
+    internal void ObserveToolExecutionStarted(
+        string? toolCallId,
+        string? toolName,
+        object? arguments,
+        DateTimeOffset? startTime)
+    {
+        var callId = toolCallId ?? Guid.NewGuid().ToString("n");
+        var rawToolName = toolName ?? "";
+
+        // Translate report_intent into an agent.intent event BEFORE general suppression.
+        if (string.Equals(rawToolName, "report_intent", StringComparison.OrdinalIgnoreCase))
+        {
+            _suppressedCallIds.Add(callId);
+            try
+            {
+                if (arguments is JsonElement argsEl &&
+                    argsEl.TryGetProperty("intent", out var intentEl))
+                {
+                    var intentText = intentEl.GetString();
+                    if (!string.IsNullOrWhiteSpace(intentText))
+                        Emit("agent.intent", new { intent = intentText });
+                }
+            }
+            catch { /* non-fatal: suppress raw event even if parsing fails */ }
+            return;
+        }
+
+        if (SuppressedInternalTools.Contains(rawToolName))
+        {
+            _suppressedCallIds.Add(callId);
+            return;
+        }
+
+        var resolvedToolName = rawToolName.Length > 0 ? rawToolName : "unknown";
+        if (_denyNativeShellLifecycleToolCalls && IsNativeShellLifecycleToolName(resolvedToolName))
+        {
+            // The SDK can surface a native-shell start callback even though the permission handler
+            // rejects that exact ToolCallId immediately afterwards. Emit the normalized
+            // run_command label here so whichever source wins the first-write race yields the same
+            // frontend-visible tool name, then suppress any later lifecycle terminal for this id.
+            _suppressedCallIds.Add(callId);
+            EmitToolCallOnce(callId, "run_command", arguments);
+            return;
+        }
+
+        if (IsShellToolName(resolvedToolName) &&
+            _shellExecutionTracker?.ActiveExecution is null)
+        {
+            TrackApprovedShell(callId, callId);
+        }
+        StartToolSpan(callId, resolvedToolName, startTime);
+        EmitToolCallOnce(callId, resolvedToolName, arguments);
     }
 
     /// <summary>
@@ -1513,10 +1552,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// two independent layers: AGT policy evaluation AND direct SandboxPolicyBackend check.
     /// Both must allow for the tool call to proceed. The handler is also a per-tool
     /// observability source. A denied call is surfaced here as a tool.call + tool.error pair
-    /// carrying the gate reason, because denied calls never execute and so never reach the
-    /// streaming tool-execution lifecycle. An approved call is surfaced from that lifecycle in
-    /// the streaming loop (call + real result); the handler only co-emits its tool.call when it
-    /// holds the SDK's real ToolCallId, so the two sources dedup instead of diverging.
+    /// carrying the gate reason. Approved calls surface from the streaming lifecycle (call + real
+    /// result); the handler only co-emits its tool.call when it holds the SDK's real ToolCallId,
+    /// so the two sources dedup instead of diverging. Native-shell denials are a special case:
+    /// the SDK can still emit a raw shell <c>tool.call</c> start event for the same ToolCallId,
+    /// so the lifecycle translator normalizes that start event to <c>run_command</c> to keep the
+    /// first event the frontend sees consistent with this handler's hard denial.
     /// </summary>
     internal Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>> BuildPermissionHandler(
         SandboxGovernance governance,
@@ -1528,6 +1569,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         CancellationToken runCt,
         bool denyNativeShell = true)
     {
+        _denyNativeShellLifecycleToolCalls = denyNativeShell;
         return (request, invocation) =>
         {
             if (denyNativeShell && request is PermissionRequestShell)
@@ -1535,8 +1577,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 var shellCallId = GetToolCallId(request) ?? Guid.NewGuid().ToString("n");
                 var (_, shellArgs) = MapToToolCall(request);
                 shellArgs["directory"] = workingDirectory;
-                const string denyReason =
-                    "Native Copilot shell is disabled; use the sandboxed run_command tool (routed through the sandbox executor).";
+                var denyReason = BuildNativeShellDenyReason(
+                    Interlocked.Increment(ref _nativeShellDenyAttempts));
                 emitToolCallOnce(shellCallId, "run_command", shellArgs);
                 emitToolErrorOnce(shellCallId, denyReason);
                 EmitRunDegradedOnce("run_command", denyReason);
@@ -1833,6 +1875,24 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private static bool IsShellToolName(string toolName) =>
         string.Equals(toolName, "run_command", StringComparison.OrdinalIgnoreCase) ||
         toolName.Contains("shell", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsNativeShellLifecycleToolName(string toolName) =>
+        string.Equals(toolName, "bash", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName, "sh", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName, "shell", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName, "powershell", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName, "pwsh", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName, "cmd", StringComparison.OrdinalIgnoreCase);
+
+    internal static string BuildNativeShellDenyReason(int attemptNumber)
+    {
+        const string baseReason =
+            "Native Copilot shell is disabled; use the sandboxed run_command tool (routed through the sandbox executor).";
+        if (attemptNumber <= 1)
+            return baseReason;
+
+        return $"{baseReason} This is attempt {attemptNumber} to use the disabled native shell in this run; stop retrying it and use run_command for any remaining shell commands.";
+    }
 
     /// <summary>
     /// Maps a Copilot SDK <see cref="PermissionRequest"/> to an AGT tool-call

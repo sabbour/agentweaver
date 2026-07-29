@@ -52,7 +52,7 @@ The user starts with an intent, not a form:
 
 The assistant turns that into a sequence of concrete tool calls and narrates the results in natural language.
 
-1. **Find or create the project.** It calls `project_list` to see whether the repository is already registered. If not, it calls `project_create` with the local working directory, optionally applying a blueprint. The returned project ID becomes the anchor for the rest of the session.
+1. **Find or create the project.** It calls `project_list` to see whether the repository is already registered. If not, it calls `project_create` with the local working directory, optionally setting `origin: "github"` plus `source_repository` as either `owner/repo` or a full `https://github.com/owner/repo` URL; the MCP tool normalizes the shorthand to the full HTTPS URL before calling the API. It can also apply a blueprint. The returned project ID becomes the anchor for the rest of the session.
 2. **Shape the team.** It calls `catalog_list_roles` or `catalog_list_scenarios` when it needs role context, then `team_cast` with the goal. If the user wants to inspect the proposed cast, the assistant leaves `confirm=false`; if the instruction is clear, it can use `confirm=true` to create and confirm in one step. It can then call `team_get` and `team_member_get_charter` to explain who will do what.
 3. **Capture work.** It calls `backlog_capture_task` for individual tasks, or `backlog_decompose_spec` to preview tasks from a workspace markdown spec. When the list looks right, it calls `send_all_backlog_to_ready` or `backlog_move_to_ready` so the board reflects what is ready to be claimed.
 4. **Start the coordinator.** It calls `coordinator_start` with a plain-language goal. This starts a coordinator run, but the coordinator does not dispatch child work immediately. It drafts an outcome spec and stops at a confirmation gate.
@@ -148,7 +148,7 @@ Purpose: create, find, configure, delete, and inspect Agentweaver projects and t
 |---|---|
 | `project_list` | Lists all Agentweaver projects the caller can see. |
 | `project_get` | Gets one project by ID. |
-| `project_create` | Creates a project from a local working directory; can apply either a predefined `blueprint_id` or an inline `blueprint`, and can carry generated workflow YAML. |
+| `project_create` | Creates a project from a local working directory, optionally links a GitHub repository via `origin` + `source_repository`, can apply either a predefined `blueprint_id` or an inline `blueprint`, and can carry generated workflow YAML. |
 | `project_rename` | Renames an existing project. |
 | `project_delete` | Deletes a project by ID with confirmation handled by the API call. |
 | `project_configure` | Updates the project's default model provider and provider-specific model IDs. |

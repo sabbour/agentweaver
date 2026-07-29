@@ -217,11 +217,19 @@ test("buildImage: az acr build invocation includes --build-arg IMAGE_TAG and GIT
 
 test("acrDigestForTag/waitForAcrTagDigest: retries then returns null when the tag never resolves", async () => {
   const exec = fakeExec({ captureImpl: async () => ({ stdout: "", stderr: "", code: 0 }) });
+  const sleeps = [];
   const digest = await waitForAcrTagDigest("agentweaver-api", "v1.2.3", CFG, {
     exec,
-    sleep: async () => {}, // skip real delays in tests
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    }, // skip real delays in tests
   });
   assert.equal(digest, null);
+  assert.deepEqual(sleeps.slice(0, 4), [2000, 4000, 8000, 15000]);
+  assert.ok(
+    sleeps.reduce((sum, ms) => sum + ms, 0) >= 5 * 60 * 1000,
+    "waitForAcrTagDigest must keep polling long enough for ACR's eventual-consistency lag",
+  );
 });
 
 test("acrDigestForTag: parses the first non-empty tsv line as the digest", async () => {

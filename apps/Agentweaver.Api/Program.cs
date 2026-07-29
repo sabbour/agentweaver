@@ -400,6 +400,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceSourceService>()
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
 builder.Services.AddScoped<Agentweaver.Api.Skills.SkillPromptComposer>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowWorktreeMaterializer>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.WorkflowStageProjector>();
 builder.Services.AddSingleton<Agentweaver.Api.Runs.IWorkflowStageProjector>(
     sp => sp.GetRequiredService<Agentweaver.Api.Runs.WorkflowStageProjector>());
@@ -416,6 +417,10 @@ builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowEventTriggerService>();
 // GitHub webhook receiver (issue #53 follow-up): the real external event source wired to the event
 builder.Services.AddHostedService<Agentweaver.Api.Workflows.WorkflowScheduleTriggerService>();
+// Squad state consolidation (issue #621): project-level background service that idempotently merges
+// each project's decisions inbox into the canonical .squad/decisions.md on the default branch,
+// decoupled from per-run branch merges. Disable via Squad:StateConsolidationEnabled=false.
+builder.Services.AddHostedService<Agentweaver.Api.Squad.SquadStateConsolidationService>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.DiagnosticsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.DashboardReadService>();
 builder.Services.AddSingleton<Agentweaver.Api.Metrics.AppInsightsMetricsService>();

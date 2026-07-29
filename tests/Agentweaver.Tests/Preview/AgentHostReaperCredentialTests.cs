@@ -134,6 +134,37 @@ public sealed class AgentHostReaperCredentialTests
     }
 
     [Fact]
+    public async Task Sweep_OrphanClaim_WithClusterVisiblePreview_StillDefers_WhenPreviewFeatureFlagIsOff()
+    {
+        // #578: the worker heartbeat reaper must honor a live preview even if that process is not the
+        // role that provisions preview routes. "Enabled=false" here simulates the old worker-config
+        // drift; the preview service can still see the durable cluster route state, so the claim must
+        // NOT be deleted.
+        const string runId = "run-578-worker-reaper";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(ListPath, ClaimsListJson(claimName, runId));
+
+        var preview = new StubPreviewService(hasActivePreview: true, enabled: false);
+        var reaper = new AgentHostReaperService(
+            ClientFor(handler),
+            new EmptyRunStore(),
+            new KubernetesSandboxOptions { Namespace = Namespace },
+            NullLogger<AgentHostReaperService>.Instance,
+            new InMemorySecretStore(),
+            preview);
+
+        var reaped = await reaper.SweepOrphanedPodsAsync();
+
+        reaped.Should().Be(0,
+            "the reaper must not delete a claim when cluster preview state still proves a live preview, " +
+            "even if the local process is not the one that provisions previews");
+        preview.RenewedRunId.Should().Be(runId);
+        preview.SafeToEvictCalls.Should().ContainSingle().Which.Should().Be((runId, false));
+    }
+
+    [Fact]
     public async Task Sweep_OrphanClaim_WithNoActivePreview_IsReaped()
     {
         const string runId = "run-542-reaper-noactive";
@@ -242,7 +273,12 @@ public sealed class AgentHostReaperCredentialTests
     private sealed class StubPreviewService : ISandboxPreviewService
     {
         private readonly bool _hasActivePreview;
-        public StubPreviewService(bool hasActivePreview) => _hasActivePreview = hasActivePreview;
+        private readonly bool _enabled;
+        public StubPreviewService(bool hasActivePreview, bool enabled = true)
+        {
+            _hasActivePreview = hasActivePreview;
+            _enabled = enabled;
+        }
 
         public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(_hasActivePreview);
@@ -265,7 +301,7 @@ public sealed class AgentHostReaperCredentialTests
             return Task.CompletedTask;
         }
 
-        public bool Enabled => true;
+        public bool Enabled => _enabled;
         public int AllowedPortMin => 3000;
         public int AllowedPortMax => 9000;
         public Task<PreviewSession> StartPreviewAsync(

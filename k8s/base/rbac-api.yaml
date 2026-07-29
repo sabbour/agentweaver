@@ -98,7 +98,14 @@ roleRef:
   name: agentweaver-api-sandbox
 ---
 # Worker sandbox-dispatch permissions. Keep this distinct from the API Role:
-# worker jobs do not manage browser-preview Services/HTTPRoutes or patch pods.
+# the worker never CREATES browser-preview Services/HTTPRoutes (route lifecycle
+# stays with the API). But the worker heartbeat runs AgentHostReaperService, whose
+# orphan sweep must honor live previews before deleting a completed child's claim
+# (#578). That preview check reads cluster HTTPRoute state and, on defer, renews the
+# backing claim TTL (#560) and re-pins the backing pod's safe-to-evict annotation
+# (#574) — so the worker needs read on httproutes and patch on sandboxclaims/pods.
+# Without these the worker's HasActivePreviewAsync 403s, false-negatives, and deletes
+# the live preview's backing claim (the #578 root cause).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -107,6 +114,8 @@ metadata:
   labels:
     app.kubernetes.io/part-of: agentweaver
 rules:
+  # #578: patch/update let the reaper's defer branch renew the backing SandboxClaim
+  # TTL (#560/#564) so the sandbox controller does not reap a still-previewed pod.
   - apiGroups:
       - extensions.agents.x-k8s.io
     resources:
@@ -116,10 +125,26 @@ rules:
       - list
       - create
       - delete
+      - patch
+      - update
+  # #578: patch lets the reaper's defer branch re-pin the backing pod's
+  # cluster-autoscaler.kubernetes.io/safe-to-evict annotation to "false" (#574) so a
+  # kata-node scale-down does not evict a still-previewed pod.
   - apiGroups:
       - ""
     resources:
       - pods
+    verbs:
+      - get
+      - list
+      - patch
+  # #578: read-only access to per-preview HTTPRoutes so the worker's
+  # AgentHostReaperService.HasActivePreviewAsync can see a live preview and defer the
+  # orphan reap. The worker never creates or deletes routes — that stays with the API.
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - httproutes
     verbs:
       - get
       - list

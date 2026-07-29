@@ -33,7 +33,7 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:GitHub:ClientSecret` | none | GitHub OAuth App client secret — required for sign-in |
 | `Auth:GitHub:CallbackUrl` | none | OAuth callback URL registered in the GitHub App (must match exactly) |
 | `Auth:GitHub:FrontendUrl` | none | URL the API redirects to after a successful sign-in |
-| `Auth:GitHub:AllowedOrg` | none | When set, users must belong to this GitHub org to access the API |
+| `Auth:GitHub:AllowedOrg` | none | Comma/semicolon-delimited list of allow-rules. Each rule is one of: `org` (bare org — any member), `org/*` (explicit wildcard, same as bare org), or `org/team-slug` (only that specific team). A caller is allowed if they satisfy ANY rule. Team display names with spaces or uppercase are defensively slugified (e.g. `Azure/AKS PM` is treated as `Azure/aks-pm`). Example: `Azure/aks,Azure/AKS PM,azure-management-and-platforms/*`. |
 | `Auth:GitHub:ScopeProvider` | `caller` | Token scope selection. `caller` isolates credentials per signed-in user; set to `installation` only to revert to the old shared installation scope for single-user local dev. |
 
 Set the OAuth client secret locally with user-secrets:
@@ -55,8 +55,9 @@ dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secre
 | --- | --- | --- |
 | `Providers:GitHubCopilot:Model` | `claude-sonnet-4.6` | Model name used for GitHub Copilot runs. The token comes from the signed-in user's OAuth session — no API key is needed. |
 | `Providers:GitHubCopilot:RuntimeCliPath` | `""` (empty) | Optional explicit path to the native Copilot CLI binary. When empty (the default), the SDK auto-resolves its bundled runtime from `bin/.../runtimes/{rid}/native/copilot`. Set this only when auto-resolution can't find a runtime for the host RID. Grounded in `apps/Agentweaver.Api/appsettings.json` and `packages/Agentweaver.AgentRuntime/Providers/GitHubCopilotClientFactory.cs:50`. |
-| `Generation:Model` | `gpt-5.4` | Global fallback for server-side blueprint, workflow, and coordinator outcome-spec generation. Does not change normal project/run agent execution models. |
+| `Generation:Model` | `gpt-5.6-sol` | Global fallback for server-side blueprint, skill, workflow, and coordinator outcome-spec generation. Does not change normal project/run agent execution models. |
 | `Generation:BlueprintModel` | `Generation:Model` | Optional global fallback for blueprint generation when a project has no `blueprint_generation_model`. |
+| `Generation:SkillModel` | `Generation:Model` | Optional global fallback for skill generation. |
 | `Generation:WorkflowModel` | `Generation:Model` | Optional global fallback for workflow YAML generation when a project has no `workflow_generation_model`. |
 | `Generation:OutcomeSpecModel` | `Generation:Model` | Optional global fallback for coordinator outcome-spec drafting when a project has no `outcome_spec_generation_model`. |
 

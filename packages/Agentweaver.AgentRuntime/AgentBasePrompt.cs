@@ -2,8 +2,9 @@ namespace Agentweaver.AgentRuntime;
 
 /// <summary>
 /// Minimal base system prompt injected for every agent run.
-/// Covers only the universal runtime contract — report_intent/report_outcome tooling
-/// and the working-directory safety constraint. Agent identity, working style, and
+/// Covers only the universal runtime contract — report_intent/report_outcome tooling,
+/// the working-directory safety constraint, and the shell-routing rule (native shell is
+/// disabled; all shell goes through run_command). Agent identity, working style, and
 /// tool-usage guidance belong in the agent's charter (<c>systemPromptContext</c>),
 /// which is appended after this base when present.
 /// </summary>
@@ -47,6 +48,16 @@ internal static class AgentBasePrompt
           reason); the outcome is captured in the run record and surfaced in the UI — no file needed.
         - Persist durable project facts with record_memory, and cross-cutting decisions with
           submit_decision, instead of writing them to files.
+
+        SHELL COMMANDS — ALWAYS USE run_command
+        Run EVERY shell/terminal command through the run_command tool. This runtime's native
+        shell/bash tool is permanently disabled: every call to a built-in bash/sh/shell tool is
+        rejected with "Native Copilot shell is disabled; use the sandboxed run_command tool",
+        which wastes a whole tool-calling turn. Do NOT attempt the native shell first and wait for
+        it to fail — go straight to run_command with your full command line. run_command executes
+        inside the sandbox (filesystem-confined, output-redacted, resource-bounded); the native
+        shell is not a fallback and never will be. If run_command is not in your tool list, this
+        run has no shell at all — do not call any shell tool.
 
         Call report_intent(intent) before each major step.
         Batch related work into the fewest practical tool-calling turns. Use one report_intent for
