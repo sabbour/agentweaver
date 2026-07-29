@@ -40,13 +40,15 @@ Narration: "Skills are reusable guidance you can attach to an agent. Instead of 
 
 Narration: "Next we author the workflow that will run that triage. In Workflows, we choose Generate from description and type what we want in plain language: every Monday at nine, read the most recent open issues, classify and de-duplicate the feature requests, and produce a summary report plus a full mini-spec for each distinct idea — read-only, with no comments or label changes on GitHub. Agentweaver drafts the workflow graph and, because we said 'every Monday,' it automatically adds a weekly Monday schedule. We review the generated steps and the schedule trigger, then save it to the project."
 
-## Beat 3.1 — Generate the content-authoring skill
+## Beat 3.1 — Import the content-authoring skill
 
-Narration: "We use the same Generate skill flow a second time, now for content authoring. The description tells the writer to first study the repository's existing posts — their frontmatter, filename convention, and directory layout — and match them exactly, then write a well-structured post with a short hook, sentence-style headings, and descriptive links. We review the draft, save it, and assign it to the writer."
+Narration: "For writing quality, we don't generate a second skill. Instead, we import a purpose-built open-source skill from the marketplace: Conor Bronsdon's MIT-licensed avoid-ai-writing repo. We add the GitHub source, browse the detected skill, import it into this project's catalog, and assign it to the writer so the draft follows concrete guidance for stripping AI writing tells instead of generic vibes."
+
+On screen: Open Browse marketplaces, add the `conorbronsdon/avoid-ai-writing` source, browse the detected `avoid-ai-writing` skill, import it, then assign it to Hermione in the project's skill catalog.
 
 ## Beat 3.2 — Start the content-authoring task
 
-Narration: "Now we put the team to work. We start a content-authoring task: write a blog post titled 'Running multi-agent orchestration frameworks on AKS.' The built-in content workflow takes it from draft, through review and editing, to a publish step. Notice we don't hand the team the blog's file convention — discovering how this repo structures its posts is part of the job, and exactly what the skill we just wrote tells it to do."
+Narration: "Now we put the team to work. We start a content-authoring task: write a blog post titled 'Running multi-agent orchestration frameworks on AKS.' The built-in content workflow takes it from draft, through review and editing, to a publish step. Notice we don't hand the team the blog's file convention — discovering how this repo structures its posts is part of the job, and exactly what the skill we just assigned tells it to do."
 
 ## Beat 3.3 — Review the drafted post
 
