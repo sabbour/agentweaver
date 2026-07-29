@@ -74,9 +74,9 @@ Narration: "When the work is ready, a notification prompts you to review and app
 
 ## Beat 2.7 — Check project health
 
-Narration: "The Dashboard gives a quick view of operational health, including throughput and quality across agents. In Observability, you can drill into traces, compare agent activity, and monitor usage, latency, and cost over time."
+Narration: "The Dashboard gives a quick view of operational health, including throughput and quality across agents. In Observability, you can drill into traces, compare agent activity, and monitor usage, latency, and cost over time. Opening a run's transaction trace reveals the full distributed tree of agent, model, and tool spans behind a single operation."
 
-On screen: Open the Dashboard and `waitFor` a real chart/tile element to render (not a fixed short timeout) before narrating over it — the dashboard takes time to load. Only then move on to Observability. Fixes "proceeds without waiting for it to load".
+On screen: Open the Dashboard and `waitFor` a real chart/tile element to render (not a fixed short timeout) before narrating over it — the dashboard takes time to load. Only then move on to Observability. Then switch to the **Traces** tab (`/observability/traces`, `ObservabilityTracesPage.tsx`) and open one run's transaction trace by clicking its **Preview trace** button (targeted by run id, not a positional/first-item selector) so the `TransactionTracePanel` expands and renders the real agent/LLM/tool span tree — showing an actual transaction trace, not just the dashboard. Fixes "proceeds without waiting for it to load".
 
 ## Beat 2.8 — Review team memory and decisions
 
