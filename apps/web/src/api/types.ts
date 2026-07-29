@@ -569,6 +569,7 @@ export interface TeamDto {
   project_name: string;
   universe: string;
   members: TeamMemberDto[];
+  retired_members?: TeamMemberDto[];
   layout: 'canonical' | 'legacy' | 'absent';
   migration_available: boolean;
 }

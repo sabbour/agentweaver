@@ -280,6 +280,28 @@ describe('LifecycleEventCard — tool.approval_required', () => {
   });
 });
 
+describe('LifecycleEventCard — shell.approval_required', () => {
+  it('renders the timeline shell approval gate with a stable test id', () => {
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('shell.approval_required', {
+            requestId: 'req-shell',
+            commandHash: 'hash-shell',
+            command: 'rm -rf /tmp/example',
+          })}
+          runId="run-shell"
+        />
+      </Wrapper>,
+    );
+
+    const gate = screen.getByTestId('shell-approval-gate');
+    expect(gate.getAttribute('role')).toBe('alert');
+    expect(screen.getByText('Dangerous command — approval required')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDefined();
+  });
+});
+
 describe('LifecycleEventCard — coordinator.integration_conflict_auto_resolved', () => {
   it('renders a neutral informational summary for auto-resolved merge conflicts', () => {
     render(

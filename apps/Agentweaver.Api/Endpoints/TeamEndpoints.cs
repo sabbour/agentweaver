@@ -50,22 +50,26 @@ app.MapGet("/api/projects/{id}/team", async (
         var reader = new SquadReader(project.WorkingDirectory);
         var layout = reader.DetectLayout();
         var team = reader.ReadTeam();
+        var retiredMembers = reader.ReadAlumniMembers();
 
         if (team is null) return Results.NotFound();
 
-        var members = team.Members.Select(m =>
+        TeamMemberDto MapMember(CastMember m)
         {
             var charterFile = Path.Combine(project.WorkingDirectory, m.CharterPath);
             DateTimeOffset? created = File.Exists(charterFile) ? new DateTimeOffset(File.GetCreationTimeUtc(charterFile), TimeSpan.Zero) : null;
             DateTimeOffset? updated = File.Exists(charterFile) ? new DateTimeOffset(File.GetLastWriteTimeUtc(charterFile), TimeSpan.Zero) : null;
             return CastingMappings.ToDto(m, created, updated);
-        }).ToList();
+        }
+
+        var members = team.Members.Select(MapMember).ToList();
 
         return Results.Ok(new TeamDto
         {
             ProjectName = team.ProjectName,
             Universe = team.Universe,
             Members = members,
+            RetiredMembers = retiredMembers.Select(MapMember).ToList(),
             Layout = layout.HasConflict ? "conflict"
                 : layout.HasCanonical ? "canonical"
                 : layout.HasLegacy ? "legacy"
