@@ -1,4 +1,5 @@
 import { browserZoomBootstrapSource } from './zoom.mjs';
+import { browserDomCueBootstrapSource } from './dom-cues.mjs';
 
 // buildInstallSource used to be a hand-duplicated copy of zoom.mjs's bootstrap
 // (with the same '#root'-only transform bug). Now delegates to the single
@@ -6,7 +7,7 @@ import { browserZoomBootstrapSource } from './zoom.mjs';
 // bootstrap only exists in one place and any future fix (like the body- vs
 // root-transform fix) can't silently drift out of sync between the two files.
 function buildInstallSource() {
-  return browserZoomBootstrapSource();
+  return `${browserZoomBootstrapSource()}\n${browserDomCueBootstrapSource()}`;
 }
 
 function locatorExpression(selector) {
@@ -18,6 +19,26 @@ export function renderCaptureScript(plan) {
   const lines = [
     'async page => {',
     '  const pause = ms => page.waitForTimeout(ms);',
+    '  const cueLog = [];',
+    `  const beatId = ${JSON.stringify(plan.beatId ?? null)};`,
+    `  const passiveCueWatchers = ${JSON.stringify(plan.cueWatchers ?? [])};`,
+    '  page.__demoCueSink = cueLog;',
+    '  if (!page.__demoCueBindingInstalled && typeof page.exposeBinding === \'function\') {',
+    "    await page.exposeBinding('__demoReportCue', (_source, cue) => {",
+    '      const sink = page.__demoCueSink;',
+    '      if (!Array.isArray(sink)) return;',
+    '      if (sink.some((existing) => existing.name === cue.name)) return;',
+    '      const captureStartedAtEpochMs = page.__demoCaptureStartedAtEpochMs ?? Date.now();',
+    '      sink.push({',
+    '        ...cue,',
+    '        beatId: cue.beatId ?? page.__demoCaptureBeatId ?? null,',
+    '        sequence: sink.length,',
+    '        tMs: Math.max(0, Date.now() - captureStartedAtEpochMs),',
+    '        receivedAtEpochMs: Date.now(),',
+    '      });',
+    '    });',
+    '    page.__demoCueBindingInstalled = true;',
+    '  }',
     `  const installSource = ${installSource};`,
     '  await page.addInitScript(installSource);',
     `  await page.setViewportSize({ width: ${plan.viewport?.width ?? 1920}, height: ${plan.viewport?.height ?? 1080} });`,
@@ -48,7 +69,10 @@ export function renderCaptureScript(plan) {
     '  await page.evaluate(installSource);',
     "  await page.evaluate(() => { try { sessionStorage.removeItem('__demoCaptureEpoch'); sessionStorage.removeItem('__demoActivityLog'); } catch (e) {} });",
     "  await page.evaluate(() => { try { window.__demoZoomReset?.(); } catch (e) {} });",
+    '  page.__demoCaptureBeatId = beatId;',
     `  await page.screencast.start({ path: ${JSON.stringify(plan.videoPath)}, size: { width: ${plan.viewport?.width ?? 1920}, height: ${plan.viewport?.height ?? 1080} } });`,
+    '  page.__demoCaptureStartedAtEpochMs = Date.now();',
+    '  await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);',
     '  const centerOf = (box) => ({',
     '    x: box.x + Math.max(8, Math.min(box.width / 2, box.width - 8)),',
     '    y: box.y + Math.max(8, Math.min(box.height / 2, box.height - 8)),',
@@ -192,7 +216,16 @@ export function renderCaptureScript(plan) {
       // Wait for a real element (e.g. a rendered dashboard chart / topology node) to be
       // visible before narrating over it — replaces fixed short timeouts that let beats
       // move on before the view had actually loaded.
-      lines.push(`    await ${locatorExpression(step.selector)}.first().waitFor({ state: 'visible', timeout: ${step.timeout ?? 60000} });`);
+      const cue = step.cue ? {
+        ...step.cue,
+        source: step.cue.source ?? { kind: 'selector', selector: step.selector },
+      } : null;
+      lines.push(`    { const waitLocator = ${locatorExpression(step.selector)}.first();`);
+      lines.push(`      await waitLocator.waitFor({ state: 'visible', timeout: ${step.timeout ?? 60000} });`);
+      if (cue) {
+        lines.push(`      await waitLocator.evaluate((node, cue) => window.__demoEmitDomCue?.(cue, node), ${JSON.stringify(cue)});`);
+      }
+      lines.push('    }');
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('waitFor'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'select') {
@@ -202,10 +235,18 @@ export function renderCaptureScript(plan) {
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'waitText') {
       lines.push(`    await page.waitForFunction(() => document.body.innerText.includes(${JSON.stringify(step.text)}), { timeout: ${step.timeout ?? 180000} });`);
+      if (step.cue) {
+        const cue = {
+          ...step.cue,
+          source: step.cue.source ?? { kind: 'text', selector: 'body', includes: step.text },
+        };
+        lines.push(`    await page.evaluate((cue) => window.__demoEmitDomCue?.(cue, document.body), ${JSON.stringify(cue)});`);
+      }
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('waitText', { text: ${JSON.stringify(step.text)} }));`);
     } else if (step.type === 'goto') {
       lines.push(`    await page.goto(${JSON.stringify(step.url)}, { waitUntil: 'domcontentloaded' });`);
       lines.push('    await page.evaluate(installSource);');
+      lines.push('    await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('goto'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     }
@@ -215,12 +256,14 @@ export function renderCaptureScript(plan) {
     '  } finally {',
     '    watcherActive = false;',
     '    await approvalWatcher.catch(() => {});',
+    "    await page.evaluate(() => window.__demoStopDomCueWatchers?.()).catch(() => {});",
     "    await page.evaluate(() => window.__demoZoomReset?.()).catch(() => {});",
     '    await pause(350);',
     '    await page.screencast.stop().catch(() => {});',
     '  }',
     "  const activityLog = await page.evaluate(() => window.__demoStopActivity?.() ?? window.__demoGetActivityLog?.() ?? []).catch(() => []);",
-    '  return { url: page.url(), activityLog };',
+    '  page.__demoCueSink = null;',
+    '  return { url: page.url(), activityLog, cueLog, captureStartedAtEpochMs: page.__demoCaptureStartedAtEpochMs };',
     '}',
   );
 

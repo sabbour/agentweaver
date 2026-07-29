@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/demo-recording/capture.schema.json",
+  "title": "Agentweaver demo capture plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "beats"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "requireAllBeats": { "type": "boolean", "default": false },
+    "beats": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/beat" }
+    }
+  },
+  "$defs": {
+    "beat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "startUrl": { "type": ["string", "null"] },
+        "freshNavigation": { "type": "boolean" },
+        "videoPath": { "type": "string", "minLength": 1 },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "cueWatchers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/cue" }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "minLength": 1 },
+              "cue": { "$ref": "#/$defs/cue" }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "cue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "stableForMs": { "type": "integer", "minimum": 0 },
+        "deadlineMs": { "type": "integer", "minimum": 1 },
+        "source": { "$ref": "#/$defs/source" },
+        "rect": { "$ref": "#/$defs/rect" }
+      }
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "selector"],
+          "properties": {
+            "kind": { "const": "selector" },
+            "selector": { "type": "string", "minLength": 1 },
+            "state": { "enum": ["visible", "attached"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "selector", "attribute"],
+          "properties": {
+            "kind": { "const": "attribute" },
+            "selector": { "type": "string", "minLength": 1 },
+            "attribute": { "type": "string", "minLength": 1 },
+            "equals": { "type": ["string", "number", "boolean"] },
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": ["string", "number", "boolean"] }
+            }
+          },
+          "anyOf": [{ "required": ["equals"] }, { "required": ["values"] }]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "selector"],
+          "properties": {
+            "kind": { "const": "text" },
+            "selector": { "type": "string", "minLength": 1 },
+            "equals": { "type": "string" },
+            "includes": { "type": "string" },
+            "pattern": { "type": "string" },
+            "flags": { "type": "string" }
+          },
+          "oneOf": [
+            { "required": ["equals"] },
+            { "required": ["includes"] },
+            { "required": ["pattern"] }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "selector", "operator"],
+          "properties": {
+            "kind": { "const": "predicate" },
+            "selector": { "type": "string", "minLength": 1 },
+            "operator": {
+              "enum": [
+                "exists",
+                "count-gte",
+                "count-eq",
+                "any-attribute-in",
+                "all-attribute-in",
+                "text-includes",
+                "text-matches"
+              ]
+            },
+            "attribute": { "type": "string", "minLength": 1 },
+            "value": { "type": ["string", "number"] },
+            "values": {
+              "type": "array",
+              "items": { "type": ["string", "number", "boolean"] }
+            },
+            "minCount": { "type": "integer", "minimum": 0 },
+            "pattern": { "type": "string" },
+            "flags": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "enum": ["matched-element", "element", "first-matching", "union", "none"]
+        },
+        "selector": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
