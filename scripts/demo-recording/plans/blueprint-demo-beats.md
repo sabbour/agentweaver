@@ -92,7 +92,7 @@ Narration: "Not every run finishes cleanly — that's expected. Runs that fail l
 
 Narration: "Open Workflows and choose the workflow that just completed. From there, add a schedule and pick a daily, weekly, or monthly cadence in UTC so the workflow keeps running automatically on its own. A separate heartbeat also runs continuously in the background, promoting Ready tasks and starting runs up to a configurable concurrency limit — so the board keeps moving even when nobody's watching it."
 
-On screen: Operate on the legitimate completed delivery workflow — NOT the stray "Copy of Bug Fix" (`bug-fix-copy`) duplicate. Any stray duplicate workflow must be cleaned up before capture; note there is currently no workflow-delete API/UI (see decisions inbox), so if the copy cannot be removed, frame the schedule beat on the intended delivery workflow and keep the duplicate out of frame.
+On screen: Operate on a legitimate schedulable delivery workflow selected explicitly by name — the capture targets the `software-delivery-copy` workflow (a clone of the completed Software Delivery workflow) via a name-based selector, NOT a positional/first-item selector, so the stray "Copy of Bug Fix" (`bug-fix-copy`) duplicate is never picked up by accident. There is currently no workflow-delete API/UI (see decisions inbox), so the stray `bug-fix-copy` remains visible-but-unused in the list rather than being removed; the schedule dialog is opened and configured (e.g. Weekly / Monday / 09:00 UTC) on the intended `software-delivery-copy` row.
 
 ## Beat 3.2 — Trigger it from GitHub
 
