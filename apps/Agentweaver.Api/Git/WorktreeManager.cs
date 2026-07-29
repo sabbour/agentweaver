@@ -2020,8 +2020,10 @@ public sealed class WorktreeManager
             return MergeOutcome.Merged(newSha, "working-tree-reset", prevSha, newSha, wasFastForward: true);
         }
 
-        // (d-3) 3-way merge.
-        var result = repo.ObjectDatabase.MergeCommits(origin.Tip, worktree.Tip, new MergeTreeOptions());
+        // (d-3) 3-way merge. Squad bookkeeping ledgers are neutralised (issue #621) so a run's
+        // stale/racing copy of those centrally-consolidated files can neither conflict nor clobber
+        // the originating branch's version; every other path merges with unchanged semantics.
+        var result = MergeCommitsPreferringSquadStateFromOurs(repo, origin.Tip, worktree.Tip);
         if (result.Status == MergeTreeStatus.Conflicts)
         {
             return MergeOutcome.Conflict(
@@ -2091,8 +2093,8 @@ public sealed class WorktreeManager
         }
         else
         {
-            // 3-way merge.
-            var mergeTreeResult = repo.ObjectDatabase.MergeCommits(origin.Tip, worktree.Tip, new MergeTreeOptions());
+            // 3-way merge. See issue #621: Squad bookkeeping ledgers resolve path-level "ours".
+            var mergeTreeResult = MergeCommitsPreferringSquadStateFromOurs(repo, origin.Tip, worktree.Tip);
             if (mergeTreeResult.Status == MergeTreeStatus.Conflicts)
             {
                 return MergeOutcome.Conflict(
@@ -2383,8 +2385,8 @@ public sealed class WorktreeManager
                 worktree.Tip.Sha, "ref-only", prevSha, worktree.Tip.Sha, wasFastForward: true);
         }
 
-        // 3-way merge.
-        var result = repo.ObjectDatabase.MergeCommits(origin.Tip, worktree.Tip, new MergeTreeOptions());
+        // 3-way merge. See issue #621: Squad bookkeeping ledgers resolve path-level "ours".
+        var result = MergeCommitsPreferringSquadStateFromOurs(repo, origin.Tip, worktree.Tip);
         if (result.Status == MergeTreeStatus.Conflicts)
         {
             return MergeOutcome.Conflict(
@@ -2580,6 +2582,151 @@ public sealed class WorktreeManager
     }
 
     private Signature WithTimestamp() => new(_signature.Name, _signature.Email, DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// Canonical Squad bookkeeping files that are owned exclusively by the project-level
+    /// <c>SquadStateConsolidationService</c> and must NEVER be authored by an individual run's
+    /// branch merge (issue #621). These are the single, in-place-rewritten ledgers that many
+    /// concurrent Squad-bootstrapped coordinator runs all touch on the same lines — a genuine,
+    /// human-resolution-required 3-way conflict today, since the plumbing-level
+    /// <see cref="ObjectDatabase.MergeCommits"/> path does not honour <c>.gitattributes</c>
+    /// <c>merge=union</c> drivers. During a per-run merge these paths are resolved path-level
+    /// "ours" (the originating branch's current version always wins), so a run's stale/racing
+    /// copy can neither produce a conflict nor silently clobber newer consolidated content.
+    ///
+    /// <para>Deliberately NARROW: only the exact files reproduced in #621 are listed. Per-session,
+    /// uniquely-named append targets (<c>.squad/log/**</c>, <c>.squad/orchestration-log/**</c>,
+    /// <c>.squad/decisions/inbox/*.md</c>) are intentionally excluded — they never collide across
+    /// branches and carry each run's own genuine, non-derived output, so they must continue to
+    /// merge normally. The list is kept as a small constant so it is easy to extend later once a
+    /// path is confirmed to be centrally consolidated rather than genuinely run-branch-specific.</para>
+    /// </summary>
+    private static readonly string[] SquadConsolidatedExactPaths =
+    {
+        ".squad/decisions.md",
+        ".squad/identity/now.md",
+    };
+
+    /// <summary>
+    /// Returns true when <paramref name="path"/> (forward-slash, tree-relative) is one of the
+    /// canonical Squad bookkeeping ledgers excluded from per-run branch merges (issue #621):
+    /// the exact <see cref="SquadConsolidatedExactPaths"/> entries, or any per-agent
+    /// <c>.squad/agents/{name}/history.md</c> (Scribe appends cross-agent updates to these from
+    /// every run, so they conflict across concurrent runs exactly like <c>decisions.md</c>).
+    /// </summary>
+    internal static bool IsSquadConsolidatedStatePath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        foreach (var exact in SquadConsolidatedExactPaths)
+        {
+            if (string.Equals(path, exact, StringComparison.Ordinal)) return true;
+        }
+
+        // .squad/agents/{name}/history.md — exactly one path segment for {name}.
+        const string prefix = ".squad/agents/";
+        const string suffix = "/history.md";
+        if (path.StartsWith(prefix, StringComparison.Ordinal) &&
+            path.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            var middle = path.Substring(prefix.Length, path.Length - prefix.Length - suffix.Length);
+            if (middle.Length > 0 && !middle.Contains('/')) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Collects the tree-relative paths of every canonical Squad bookkeeping ledger
+    /// (<see cref="IsSquadConsolidatedStatePath"/>) that exists as a blob in <paramref name="tree"/>.
+    /// Only the known locations are probed (no full-tree walk) to keep this cheap.
+    /// </summary>
+    private static IEnumerable<string> EnumerateSquadConsolidatedStatePaths(Tree tree)
+    {
+        foreach (var exact in SquadConsolidatedExactPaths)
+        {
+            if (tree[exact] is { TargetType: TreeEntryTargetType.Blob }) yield return exact;
+        }
+
+        if (tree[".squad/agents"] is { TargetType: TreeEntryTargetType.Tree, Target: Tree agents })
+        {
+            foreach (var agentDir in agents)
+            {
+                if (agentDir.TargetType != TreeEntryTargetType.Tree) continue;
+                var historyPath = $".squad/agents/{agentDir.Name}/history.md";
+                if (tree[historyPath] is { TargetType: TreeEntryTargetType.Blob }) yield return historyPath;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs the same 3-way tree merge as <see cref="ObjectDatabase.MergeCommits"/>, but first
+    /// neutralises the canonical Squad bookkeeping ledgers (issue #621) so they resolve path-level
+    /// "ours": for every path matched by <see cref="IsSquadConsolidatedStatePath"/>, the
+    /// <paramref name="theirs"/> side is forced to byte-match <paramref name="ours"/> (or removed
+    /// when <paramref name="ours"/> lacks it) before merging. Because both sides then agree on those
+    /// paths, they can never be the source of a conflict and the merged tree always retains
+    /// <paramref name="ours"/>'s (the originating branch's) version — while EVERY other path merges
+    /// with completely unchanged semantics, including genuine conflict detection.
+    ///
+    /// <para>The neutralised side is materialised as a throwaway commit parented on
+    /// <paramref name="theirs"/> so the merge base (and therefore the 3-way result for all
+    /// non-Squad paths) is identical to a direct <c>MergeCommits(ours, theirs)</c>. That temp
+    /// commit is never referenced by any ref and is inert (the same dangling-object pattern the
+    /// existing merge-commit-then-reset paths already rely on). When no ledger differs between the
+    /// two sides, the direct merge is used unchanged.</para>
+    /// </summary>
+    private MergeTreeResult MergeCommitsPreferringSquadStateFromOurs(Repository repo, Commit ours, Commit theirs)
+    {
+        var oursTree = ours.Tree;
+        var theirsTree = theirs.Tree;
+
+        var candidatePaths = EnumerateSquadConsolidatedStatePaths(oursTree)
+            .Concat(EnumerateSquadConsolidatedStatePaths(theirsTree))
+            .Distinct(StringComparer.Ordinal);
+
+        var definition = TreeDefinition.From(theirsTree);
+        var changed = false;
+        foreach (var path in candidatePaths)
+        {
+            var oursEntry = oursTree[path];
+            var theirsEntry = theirsTree[path];
+
+            if (oursEntry is not { TargetType: TreeEntryTargetType.Blob })
+            {
+                // Ours has no blob here: make theirs agree it is absent so no add/edit conflict arises.
+                if (theirsEntry is not null)
+                {
+                    definition.Remove(path);
+                    changed = true;
+                }
+                continue;
+            }
+
+            // Force theirs to ours' exact blob; skip when already identical to avoid needless churn.
+            if (theirsEntry?.Target.Sha != oursEntry.Target.Sha)
+            {
+                definition.Add(path, (Blob)oursEntry.Target, oursEntry.Mode);
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            return repo.ObjectDatabase.MergeCommits(ours, theirs, new MergeTreeOptions());
+        }
+
+        var neutralizedTree = repo.ObjectDatabase.CreateTree(definition);
+        var signature = WithTimestamp();
+        var neutralizedTheirs = repo.ObjectDatabase.CreateCommit(
+            signature,
+            signature,
+            "Neutralize Squad-state ledgers for conflict-free merge (issue #621)",
+            neutralizedTree,
+            new[] { theirs },
+            prettifyMessage: false);
+
+        return repo.ObjectDatabase.MergeCommits(ours, neutralizedTheirs, new MergeTreeOptions());
+    }
 
     /// <summary>
     /// Extracts the list of conflicting relative file paths from a <see cref="MergeTreeResult"/>
