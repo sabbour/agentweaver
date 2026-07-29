@@ -215,6 +215,49 @@ All valid workflows in the project's available set are candidates. A backlog tas
 
 Rebuild guidance: treat invocation kind as observability and policy context, not as a candidate gate. If a selected id cannot resolve, validate, or bind, do not "helpfully" run it anyway.
 
+## Event Trigger Predicate DSL
+
+Event-triggered workflows can further constrain a matched `github.<event>[.<action>]` trigger with a
+small structured `if:` predicate DSL. The design goal is deliberate narrowness: enough expressiveness
+for label, branch, review-state, and comment-command routing, without introducing a general-purpose
+expression language.
+
+- A plain `if:` array is implicitly **AND**.
+- `or:` wraps an array of child predicates.
+- `not:` wraps a single child predicate.
+- Predicate validation is fail-closed at workflow load time: malformed shapes, unknown enum values,
+  unsupported event/predicate combinations, and invalid regexes reject the workflow definition.
+
+Current vocabulary:
+
+- `has_label` / `is_not_labeled_with` — `github.issues*`, `github.pull_request*`
+- `base_branch` — `github.pull_request*`
+- `review_state` — `github.pull_request_review*`
+- `ref` (`equals` / `prefix`) — `github.push`
+- `category` — `github.discussion*`
+- `comment_matches` — `github.issue_comment*`
+
+Example:
+
+```yaml
+trigger:
+  type: event
+  event_name: github.issue_comment.created
+  if:
+    - comment_matches: { pattern: "^/agentweaver:triage$" }
+    - not:
+        or:
+          - comment_matches: { pattern: "^/agentweaver:ignore$" }
+          - comment_matches: { pattern: "^/agentweaver:skip$" }
+```
+
+### `comment_matches` security boundary
+
+`comment_matches` preserves the repo's existing webhook trust boundary. The GitHub comment body is
+used only for a fixed regex boolean check. The workflow engine does **not** extract capture groups,
+derive arguments, log the raw text at info level, persist it into backlog metadata, or forward it
+into downstream prompts. The output of the predicate is only "matched" or "did not match."
+
 ## Workflow Library and Generation
 
 ### Catalog Library

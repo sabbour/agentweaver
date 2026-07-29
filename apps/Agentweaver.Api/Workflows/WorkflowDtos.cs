@@ -27,6 +27,56 @@ public sealed record WorkflowTriggerDto
     [JsonPropertyName("day_of_month")] public int? DayOfMonth { get; init; }
     [JsonPropertyName("time_of_day")] public string? TimeOfDay { get; init; }
     [JsonPropertyName("event_name")] public string? EventName { get; init; }
+    [JsonPropertyName("if")] public IReadOnlyList<WorkflowTriggerPredicateDto>? If { get; init; }
+}
+
+public sealed record WorkflowTriggerPredicateDto
+{
+    [JsonPropertyName("hasLabel")] public WorkflowTriggerLabelPredicateDto? HasLabel { get; init; }
+    [JsonPropertyName("isNotLabeledWith")] public WorkflowTriggerLabelPredicateDto? IsNotLabeledWith { get; init; }
+    [JsonPropertyName("baseBranch")] public WorkflowTriggerBaseBranchPredicateDto? BaseBranch { get; init; }
+    [JsonPropertyName("reviewState")] public WorkflowTriggerReviewStatePredicateDto? ReviewState { get; init; }
+    [JsonPropertyName("ref")] public WorkflowTriggerRefPredicateDto? Ref { get; init; }
+    [JsonPropertyName("category")] public WorkflowTriggerCategoryPredicateDto? Category { get; init; }
+    [JsonPropertyName("commentMatches")] public WorkflowTriggerCommentMatchesPredicateDto? CommentMatches { get; init; }
+    [JsonPropertyName("or")] public IReadOnlyList<WorkflowTriggerPredicateDto>? Or { get; init; }
+    [JsonPropertyName("not")] public WorkflowTriggerPredicateDto? Not { get; init; }
+}
+
+public sealed record WorkflowTriggerLabelPredicateDto
+{
+    [JsonPropertyName("label")] public string? Label { get; init; }
+}
+
+public sealed record WorkflowTriggerBaseBranchPredicateDto
+{
+    [JsonPropertyName("branch")] public string? Branch { get; init; }
+}
+
+public sealed record WorkflowTriggerReviewStatePredicateDto
+{
+    [JsonPropertyName("state")] public string? State { get; init; }
+}
+
+public sealed record WorkflowTriggerRefPredicateDto
+{
+    [JsonPropertyName("branch")] public string? Branch { get; init; }
+    [JsonPropertyName("matchMode")] public string? MatchMode { get; init; }
+}
+
+public sealed record WorkflowTriggerCategoryPredicateDto
+{
+    [JsonPropertyName("name")] public string? Name { get; init; }
+}
+
+public sealed record WorkflowTriggerCommentMatchesPredicateDto
+{
+    [JsonPropertyName("pattern")] public string? Pattern { get; init; }
+}
+
+public sealed record WorkflowTriggerConfigResponse
+{
+    [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
 }
 
 /// <summary>Response body for GET/POST the project's workflows list.</summary>
@@ -216,6 +266,67 @@ public static class WorkflowDtoMapper
         DayOfMonth = trigger.DayOfMonth,
         TimeOfDay = trigger.TimeOfDay?.ToString("HH:mm"),
         EventName = trigger.EventName,
+        If = trigger.If.Count == 0 ? null : trigger.If.Select(ToTriggerPredicateDto).ToList(),
+    };
+
+    internal static TriggerYamlDto ToTriggerYamlDto(WorkflowTriggerDto trigger) => new()
+    {
+        Type = trigger.Type,
+        Interval = trigger.Interval,
+        DayOfWeek = trigger.DayOfWeek,
+        DayOfMonth = trigger.DayOfMonth,
+        TimeOfDay = trigger.TimeOfDay,
+        EventName = trigger.EventName,
+        If = trigger.If?.Select(ToTriggerPredicateYamlDto).ToList(),
+    };
+
+    private static WorkflowTriggerPredicateDto ToTriggerPredicateDto(WorkflowTriggerPredicate predicate) => new()
+    {
+        HasLabel = predicate.HasLabel is null ? null : new WorkflowTriggerLabelPredicateDto { Label = predicate.HasLabel.Label },
+        IsNotLabeledWith = predicate.IsNotLabeledWith is null ? null : new WorkflowTriggerLabelPredicateDto { Label = predicate.IsNotLabeledWith.Label },
+        BaseBranch = predicate.BaseBranch is null ? null : new WorkflowTriggerBaseBranchPredicateDto { Branch = predicate.BaseBranch.Branch },
+        ReviewState = predicate.ReviewState is null ? null : new WorkflowTriggerReviewStatePredicateDto { State = ReviewStateToApi(predicate.ReviewState.State) },
+        Ref = predicate.Ref is null ? null : new WorkflowTriggerRefPredicateDto
+        {
+            Branch = predicate.Ref.Branch,
+            MatchMode = MatchModeToApi(predicate.Ref.MatchMode),
+        },
+        Category = predicate.Category is null ? null : new WorkflowTriggerCategoryPredicateDto { Name = predicate.Category.Name },
+        CommentMatches = predicate.CommentMatches is null ? null : new WorkflowTriggerCommentMatchesPredicateDto { Pattern = predicate.CommentMatches.Pattern },
+        Or = predicate.Or.Count == 0 ? null : predicate.Or.Select(ToTriggerPredicateDto).ToList(),
+        Not = predicate.Not is null ? null : ToTriggerPredicateDto(predicate.Not),
+    };
+
+    private static TriggerPredicateYamlDto ToTriggerPredicateYamlDto(WorkflowTriggerPredicateDto predicate) => new()
+    {
+        HasLabel = predicate.HasLabel is null ? null : new TriggerLabelPredicateYamlDto { Label = predicate.HasLabel.Label },
+        IsNotLabeledWith = predicate.IsNotLabeledWith is null ? null : new TriggerLabelPredicateYamlDto { Label = predicate.IsNotLabeledWith.Label },
+        BaseBranch = predicate.BaseBranch is null ? null : new TriggerBaseBranchPredicateYamlDto { Branch = predicate.BaseBranch.Branch },
+        ReviewState = predicate.ReviewState is null ? null : new TriggerReviewStatePredicateYamlDto { State = predicate.ReviewState.State },
+        Ref = predicate.Ref is null ? null : new TriggerRefPredicateYamlDto
+        {
+            Branch = predicate.Ref.Branch,
+            MatchMode = predicate.Ref.MatchMode,
+        },
+        Category = predicate.Category is null ? null : new TriggerCategoryPredicateYamlDto { Name = predicate.Category.Name },
+        CommentMatches = predicate.CommentMatches is null ? null : new TriggerCommentMatchesPredicateYamlDto { Pattern = predicate.CommentMatches.Pattern },
+        Or = predicate.Or?.Select(ToTriggerPredicateYamlDto).ToList(),
+        Not = predicate.Not is null ? null : ToTriggerPredicateYamlDto(predicate.Not),
+    };
+
+    private static string ReviewStateToApi(WorkflowTriggerReviewState state) => state switch
+    {
+        WorkflowTriggerReviewState.Approved => "approved",
+        WorkflowTriggerReviewState.ChangesRequested => "changes_requested",
+        WorkflowTriggerReviewState.Commented => "commented",
+        _ => throw new ArgumentOutOfRangeException(nameof(state)),
+    };
+
+    private static string MatchModeToApi(WorkflowTriggerMatchMode mode) => mode switch
+    {
+        WorkflowTriggerMatchMode.Equals => "equals",
+        WorkflowTriggerMatchMode.Prefix => "prefix",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode)),
     };
 
     private static string NodeRoleForGraph(WorkflowNodeType t) => t switch

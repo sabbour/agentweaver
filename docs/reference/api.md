@@ -218,6 +218,43 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `PUT` | `/api/projects/{projectId}/backlog/settings` | Update backlog pickup settings |
 | `GET` | `/api/projects/{projectId}/review-policies` | List review policies |
 | `POST` | `/api/projects/{projectId}/review-policies/sync` | Reload review policies from disk |
+| `GET` | `/api/projects/{projectId}/workflows` | List workflows, including structured trigger metadata |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get one workflow, including its trigger |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get the workflow's trigger config as structured JSON |
+| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Replace/create the workflow's trigger config |
+| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear the workflow's trigger config |
+| `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
+| `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |
+
+Workflow trigger objects use the existing top-level trigger fields (`type`, `interval`,
+`day_of_week`, `day_of_month`, `time_of_day`, `event_name`) plus an optional `if` predicate array
+for event triggers. The array is implicitly ANDed; compound logic uses nested `or` / `not` wrapper
+predicates. The current JSON predicate vocabulary is:
+
+- `hasLabel: { label }`
+- `isNotLabeledWith: { label }`
+- `baseBranch: { branch }`
+- `reviewState: { state }` where `state` is `approved`, `changes_requested`, or `commented`
+- `ref: { branch, matchMode }` where `matchMode` is `equals` or `prefix`
+- `category: { name }`
+- `commentMatches: { pattern }`
+
+Example trigger payload:
+
+```json
+{
+  "type": "event",
+  "event_name": "github.pull_request.opened",
+  "if": [
+    {
+      "or": [
+        { "baseBranch": { "branch": "main" } },
+        { "baseBranch": { "branch": "release/v1" } }
+      ]
+    }
+  ]
+}
+```
 | `GET` | `/api/projects/{projectId}/review-policies/{policyName}` | Get a review policy |
 | `PUT` | `/api/projects/{projectId}/review-policies/active` | Set the active review policy |
 | `GET` | `/api/projects/{projectId}/workflows` | List workflow definitions |

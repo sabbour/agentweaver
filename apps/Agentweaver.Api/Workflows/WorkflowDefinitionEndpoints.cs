@@ -70,6 +70,91 @@ public static class WorkflowDefinitionEndpoints
             return Results.Ok(WorkflowDtoMapper.ToDetail(result, EffectiveDefaultId(project!)));
         });
 
+        // GET /api/projects/{projectId}/workflows/{workflowId}/trigger — structured trigger config
+        // for UI-driven editing without hand-authoring YAML.
+        app.MapGet("/api/projects/{projectId}/workflows/{workflowId}/trigger", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            IProjectStore projectStore,
+            WorkflowRegistry registry,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+
+            var result = registry.Get(project!, workflowId);
+            if (result?.Definition is null) return Results.NotFound();
+
+            return Results.Ok(new WorkflowTriggerConfigResponse
+            {
+                Trigger = result.Definition.Trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(result.Definition.Trigger),
+            });
+        });
+
+        // PUT /api/projects/{projectId}/workflows/{workflowId}/trigger — replace/create the
+        // workflow's trigger via structured JSON instead of raw YAML editing.
+        app.MapPut("/api/projects/{projectId}/workflows/{workflowId}/trigger", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            WorkflowTriggerDto request,
+            IProjectStore projectStore,
+            WorkflowRegistry registry,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+            if (!IsValidWorkflowId(workflowId))
+                return Results.BadRequest(new { error = "Invalid workflow id." });
+            if (request is null)
+                return Results.BadRequest(new { error = "trigger is required." });
+
+            var current = registry.Get(project!, workflowId);
+            if (current?.Definition is null) return Results.NotFound();
+
+            if (!WorkflowDefinitionLoader.TryParseTrigger(
+                    WorkflowDtoMapper.ToTriggerYamlDto(request),
+                    workflowId,
+                    out var trigger,
+                    out var triggerError))
+                return Results.BadRequest(new { error = triggerError ?? "Trigger validation failed." });
+
+            var updatedDefinition = current.Definition with { Trigger = trigger };
+            var persistError = await PersistWorkflowDefinitionAsync(project!, workflowId, updatedDefinition, projectStore, registry, ct);
+            if (persistError is not null) return persistError;
+
+            return Results.Ok(new WorkflowTriggerConfigResponse
+            {
+                Trigger = trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(trigger),
+            });
+        });
+
+        // DELETE /api/projects/{projectId}/workflows/{workflowId}/trigger — clear the trigger while
+        // preserving the rest of the workflow definition.
+        app.MapDelete("/api/projects/{projectId}/workflows/{workflowId}/trigger", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            IProjectStore projectStore,
+            WorkflowRegistry registry,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+            if (!IsValidWorkflowId(workflowId))
+                return Results.BadRequest(new { error = "Invalid workflow id." });
+
+            var current = registry.Get(project!, workflowId);
+            if (current?.Definition is null) return Results.NotFound();
+
+            var updatedDefinition = current.Definition with { Trigger = null };
+            var persistError = await PersistWorkflowDefinitionAsync(project!, workflowId, updatedDefinition, projectStore, registry, ct);
+            if (persistError is not null) return persistError;
+
+            return Results.Ok(new WorkflowTriggerConfigResponse { Trigger = null });
+        });
+
         // PUT /api/projects/{projectId}/workflows/default — set the project's default workflow (FR-041).
         // Body { workflow_id: string|null }. A null/omitted workflow_id clears back to the built-in
         // default. A non-null id must resolve to a valid workflow in the project's registry first.
@@ -621,6 +706,50 @@ public static class WorkflowDefinitionEndpoints
                 _ = ex;
             }
         }
+        return null;
+    }
+
+    private static async Task<IResult?> PersistWorkflowDefinitionAsync(
+        Project project,
+        string workflowId,
+        WorkflowDefinition definition,
+        IProjectStore projectStore,
+        WorkflowRegistry registry,
+        CancellationToken ct)
+    {
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(definition);
+        var load = WorkflowDefinitionLoader.Load(yaml, workflowId);
+        if (!load.IsValid || load.Definition is null)
+            return Results.BadRequest(new { error = load.Error ?? "Workflow validation failed.", warnings = load.Warnings });
+
+        try
+        {
+            var workflowsDir = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows");
+            Directory.CreateDirectory(workflowsDir);
+            var filePath = Path.Combine(workflowsDir, $"{workflowId}.yaml");
+            var workspaceRoot = project.WorkingDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!WorkspacePathGuard.TryResolveContainedPath(workspaceRoot, filePath, out var safePath))
+                return Results.BadRequest(new { error = "Invalid workflow id." });
+
+            await File.WriteAllTextAsync(safePath, yaml, ct);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Results.Problem($"Could not write workflow file: {ex.Message}",
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        var syncProject = project;
+        var allowedIds = project.AllowedWorkflowIds;
+        if (allowedIds is { Count: > 0 } &&
+            !allowedIds.Contains(workflowId, StringComparer.OrdinalIgnoreCase))
+        {
+            var updatedIds = allowedIds.Append(workflowId).ToList();
+            await projectStore.UpdateAllowedWorkflowIdsAsync(project.Id, updatedIds, DateTimeOffset.UtcNow, ct);
+            syncProject = project with { AllowedWorkflowIds = updatedIds };
+        }
+
+        registry.Sync(syncProject);
         return null;
     }
 

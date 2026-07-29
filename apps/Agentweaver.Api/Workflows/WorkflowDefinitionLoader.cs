@@ -2,6 +2,7 @@ using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using Agentweaver.Squad.Catalog;
+using System.Text.RegularExpressions;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -224,7 +225,7 @@ public static class WorkflowDefinitionLoader
         return true;
     }
 
-    private static bool TryParseTrigger(
+    internal static bool TryParseTrigger(
         TriggerYamlDto dto, string source, out WorkflowTrigger? trigger, out string? error)
     {
         trigger = null;
@@ -237,6 +238,9 @@ public static class WorkflowDefinitionLoader
         {
             case "schedule":
             {
+                if (dto.If is not null)
+                    return Fail(source, "schedule triggers do not support an 'if' predicate list.", out error);
+
                 if (string.IsNullOrWhiteSpace(dto.Interval))
                     return Fail(source, "schedule trigger is missing its required 'interval' ('daily', 'weekly', or 'monthly').", out error);
                 if (!TryParseInterval(dto.Interval, out var interval))
@@ -283,10 +287,28 @@ public static class WorkflowDefinitionLoader
                 if (string.IsNullOrWhiteSpace(dto.EventName))
                     return Fail(source, "event trigger is missing its required 'event_name'.", out error);
 
+                var predicates = new List<WorkflowTriggerPredicate>();
+                if (dto.If is { Count: 0 })
+                    return Fail(source, "event trigger 'if' must declare at least one predicate when present.", out error);
+
+                if (dto.If is { Count: > 0 })
+                {
+                    if (!TryGetGitHubEventType(dto.EventName.Trim(), out var eventType))
+                        return Fail(source, "event trigger predicates require a GitHub event name in the form 'github.<event>' or 'github.<event>.<action>'.", out error);
+
+                    for (var i = 0; i < dto.If.Count; i++)
+                    {
+                        if (!TryParsePredicate(dto.If[i], eventType, source, $"trigger.if[{i}]", out var predicate, out error))
+                            return false;
+                        predicates.Add(predicate!);
+                    }
+                }
+
                 trigger = new WorkflowTrigger
                 {
                     Type = WorkflowTriggerType.Event,
                     EventName = dto.EventName.Trim(),
+                    If = predicates,
                 };
                 return true;
             }
@@ -327,6 +349,221 @@ public static class WorkflowDefinitionLoader
         error = $"{source}: {message}";
         return false;
     }
+
+    private static bool TryParsePredicate(
+        TriggerPredicateYamlDto dto,
+        string eventType,
+        string source,
+        string path,
+        out WorkflowTriggerPredicate? predicate,
+        out string? error)
+    {
+        predicate = null;
+        error = null;
+
+        var fieldCount =
+            (dto.HasLabel is null ? 0 : 1) +
+            (dto.IsNotLabeledWith is null ? 0 : 1) +
+            (dto.BaseBranch is null ? 0 : 1) +
+            (dto.ReviewState is null ? 0 : 1) +
+            (dto.Ref is null ? 0 : 1) +
+            (dto.Category is null ? 0 : 1) +
+            (dto.CommentMatches is null ? 0 : 1) +
+            (dto.Or is null ? 0 : 1) +
+            (dto.Not is null ? 0 : 1);
+
+        if (fieldCount != 1)
+            return Fail(source, $"{path} must declare exactly one predicate kind.", out error);
+
+        if (dto.HasLabel is not null)
+        {
+            if (!SupportsEventType(eventType, "issues", "pull_request"))
+                return Fail(source, $"{path}.has_label is only supported for github.issues and github.pull_request events.", out error);
+            if (string.IsNullOrWhiteSpace(dto.HasLabel.Label))
+                return Fail(source, $"{path}.has_label.label is required.", out error);
+
+            predicate = new WorkflowTriggerPredicate
+            {
+                HasLabel = new WorkflowTriggerLabelPredicate { Label = dto.HasLabel.Label.Trim() },
+            };
+            return true;
+        }
+
+        if (dto.IsNotLabeledWith is not null)
+        {
+            if (!SupportsEventType(eventType, "issues", "pull_request"))
+                return Fail(source, $"{path}.is_not_labeled_with is only supported for github.issues and github.pull_request events.", out error);
+            if (string.IsNullOrWhiteSpace(dto.IsNotLabeledWith.Label))
+                return Fail(source, $"{path}.is_not_labeled_with.label is required.", out error);
+
+            predicate = new WorkflowTriggerPredicate
+            {
+                IsNotLabeledWith = new WorkflowTriggerLabelPredicate { Label = dto.IsNotLabeledWith.Label.Trim() },
+            };
+            return true;
+        }
+
+        if (dto.BaseBranch is not null)
+        {
+            if (!SupportsEventType(eventType, "pull_request"))
+                return Fail(source, $"{path}.base_branch is only supported for github.pull_request events.", out error);
+            if (string.IsNullOrWhiteSpace(dto.BaseBranch.Branch))
+                return Fail(source, $"{path}.base_branch.branch is required.", out error);
+
+            predicate = new WorkflowTriggerPredicate
+            {
+                BaseBranch = new WorkflowTriggerBaseBranchPredicate { Branch = dto.BaseBranch.Branch.Trim() },
+            };
+            return true;
+        }
+
+        if (dto.ReviewState is not null)
+        {
+            if (!SupportsEventType(eventType, "pull_request_review"))
+                return Fail(source, $"{path}.review_state is only supported for github.pull_request_review events.", out error);
+            if (string.IsNullOrWhiteSpace(dto.ReviewState.State))
+                return Fail(source, $"{path}.review_state.state is required.", out error);
+            if (!TryParseReviewState(dto.ReviewState.State, out var reviewState))
+                return Fail(source, $"{path}.review_state.state has unknown value '{dto.ReviewState.State}'.", out error);
+
+            predicate = new WorkflowTriggerPredicate
+            {
+                ReviewState = new WorkflowTriggerReviewStatePredicate { State = reviewState },
+            };
+            return true;
+        }
+
+        if (dto.Ref is not null)
+        {
+            if (!SupportsEventType(eventType, "push"))
+                return Fail(source, $"{path}.ref is only supported for github.push events.", out error);
+            if (string.IsNullOrWhiteSpace(dto.Ref.Branch))
+                return Fail(source, $"{path}.ref.branch is required.", out error);
+            if (string.IsNullOrWhiteSpace(dto.Ref.MatchMode))
+                return Fail(source, $"{path}.ref.match_mode is required.", out error);
+            if (!TryParseMatchMode(dto.Ref.MatchMode, out var matchMode))
+                return Fail(source, $"{path}.ref.match_mode has unknown value '{dto.Ref.MatchMode}'.", out error);
+
+            predicate = new WorkflowTriggerPredicate
+            {
+                Ref = new WorkflowTriggerRefPredicate
+                {
+                    Branch = dto.Ref.Branch.Trim(),
+                    MatchMode = matchMode,
+                },
+            };
+            return true;
+        }
+
+        if (dto.Category is not null)
+        {
+            if (!SupportsEventType(eventType, "discussion"))
+                return Fail(source, $"{path}.category is only supported for github.discussion events.", out error);
+            if (string.IsNullOrWhiteSpace(dto.Category.Name))
+                return Fail(source, $"{path}.category.name is required.", out error);
+
+            predicate = new WorkflowTriggerPredicate
+            {
+                Category = new WorkflowTriggerCategoryPredicate { Name = dto.Category.Name.Trim() },
+            };
+            return true;
+        }
+
+        if (dto.CommentMatches is not null)
+        {
+            if (!SupportsEventType(eventType, "issue_comment"))
+                return Fail(source, $"{path}.comment_matches is only supported for github.issue_comment events.", out error);
+            if (string.IsNullOrWhiteSpace(dto.CommentMatches.Pattern))
+                return Fail(source, $"{path}.comment_matches.pattern is required.", out error);
+            try
+            {
+                _ = new Regex(dto.CommentMatches.Pattern, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+            }
+            catch (ArgumentException ex)
+            {
+                return Fail(source, $"{path}.comment_matches.pattern is not a valid regex: {ex.Message}", out error);
+            }
+
+            predicate = new WorkflowTriggerPredicate
+            {
+                CommentMatches = new WorkflowTriggerCommentMatchesPredicate { Pattern = dto.CommentMatches.Pattern },
+            };
+            return true;
+        }
+
+        if (dto.Or is not null)
+        {
+            if (dto.Or.Count == 0)
+                return Fail(source, $"{path}.or must contain at least one predicate.", out error);
+
+            var predicates = new List<WorkflowTriggerPredicate>(dto.Or.Count);
+            for (var i = 0; i < dto.Or.Count; i++)
+            {
+                if (!TryParsePredicate(dto.Or[i], eventType, source, $"{path}.or[{i}]", out var child, out error))
+                    return false;
+                predicates.Add(child!);
+            }
+
+            predicate = new WorkflowTriggerPredicate { Or = predicates };
+            return true;
+        }
+
+        if (dto.Not is not null)
+        {
+            if (!TryParsePredicate(dto.Not, eventType, source, $"{path}.not", out var child, out error))
+                return false;
+
+            predicate = new WorkflowTriggerPredicate { Not = child };
+            return true;
+        }
+
+        return Fail(source, $"{path} declared an unsupported predicate kind.", out error);
+    }
+
+    private static bool TryParseReviewState(string raw, out WorkflowTriggerReviewState state)
+    {
+        switch (Normalize(raw))
+        {
+            case "approved": state = WorkflowTriggerReviewState.Approved; return true;
+            case "changes_requested": state = WorkflowTriggerReviewState.ChangesRequested; return true;
+            case "commented": state = WorkflowTriggerReviewState.Commented; return true;
+            default: state = default; return false;
+        }
+    }
+
+    private static bool TryParseMatchMode(string raw, out WorkflowTriggerMatchMode mode)
+    {
+        switch (Normalize(raw))
+        {
+            case "equals": mode = WorkflowTriggerMatchMode.Equals; return true;
+            case "prefix": mode = WorkflowTriggerMatchMode.Prefix; return true;
+            default: mode = default; return false;
+        }
+    }
+
+    private static bool TryGetGitHubEventType(string eventName, out string eventType)
+    {
+        const string prefix = "github.";
+        if (!eventName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            eventType = string.Empty;
+            return false;
+        }
+
+        var remainder = eventName[prefix.Length..].Trim();
+        if (remainder.Length == 0)
+        {
+            eventType = string.Empty;
+            return false;
+        }
+
+        var separator = remainder.IndexOf('.');
+        eventType = (separator >= 0 ? remainder[..separator] : remainder).Trim().ToLowerInvariant();
+        return eventType.Length > 0;
+    }
+
+    private static bool SupportsEventType(string actualEventType, params string[] supportedEventTypes) =>
+        supportedEventTypes.Any(x => string.Equals(x, actualEventType, StringComparison.OrdinalIgnoreCase));
 
     private static string Normalize(string raw) =>
         raw.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
@@ -420,4 +657,49 @@ internal sealed class TriggerYamlDto
     public int? DayOfMonth { get; set; }
     public string? TimeOfDay { get; set; }
     public string? EventName { get; set; }
+    public List<TriggerPredicateYamlDto>? If { get; set; }
+}
+
+internal sealed class TriggerPredicateYamlDto
+{
+    public TriggerLabelPredicateYamlDto? HasLabel { get; set; }
+    public TriggerLabelPredicateYamlDto? IsNotLabeledWith { get; set; }
+    public TriggerBaseBranchPredicateYamlDto? BaseBranch { get; set; }
+    public TriggerReviewStatePredicateYamlDto? ReviewState { get; set; }
+    public TriggerRefPredicateYamlDto? Ref { get; set; }
+    public TriggerCategoryPredicateYamlDto? Category { get; set; }
+    public TriggerCommentMatchesPredicateYamlDto? CommentMatches { get; set; }
+    public List<TriggerPredicateYamlDto>? Or { get; set; }
+    public TriggerPredicateYamlDto? Not { get; set; }
+}
+
+internal sealed class TriggerLabelPredicateYamlDto
+{
+    public string? Label { get; set; }
+}
+
+internal sealed class TriggerBaseBranchPredicateYamlDto
+{
+    public string? Branch { get; set; }
+}
+
+internal sealed class TriggerReviewStatePredicateYamlDto
+{
+    public string? State { get; set; }
+}
+
+internal sealed class TriggerRefPredicateYamlDto
+{
+    public string? Branch { get; set; }
+    public string? MatchMode { get; set; }
+}
+
+internal sealed class TriggerCategoryPredicateYamlDto
+{
+    public string? Name { get; set; }
+}
+
+internal sealed class TriggerCommentMatchesPredicateYamlDto
+{
+    public string? Pattern { get; set; }
 }

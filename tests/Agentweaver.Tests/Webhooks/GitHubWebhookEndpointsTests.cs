@@ -81,6 +81,57 @@ public sealed class GitHubWebhookEndpointsTests : IClassFixture<GitHubWebhookWeb
           event_name: github.push
         """;
 
+    private const string IssueLabelTriggerYaml = """
+        id: on-bug-triage
+        name: On Bug Triage
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "React to the labeled issue."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+
+        trigger:
+          type: event
+          event_name: github.issues.labeled
+          if:
+            - has_label: { label: "bug" }
+            - has_label: { label: "needs triage" }
+        """;
+
+    private const string IssueCommentTriggerYaml = """
+        id: on-comment-command
+        name: On Comment Command
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "Handle the command."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+
+        trigger:
+          type: event
+          event_name: github.issue_comment.created
+          if:
+            - comment_matches: { pattern: "^/agentweaver:triage$" }
+        """;
+
     private async Task<(ProjectId ProjectId, string WorkingDirectory, string RepoFullName)> SeedProjectAsync(
         string workflowYaml, string? repoFullName = null, string secretValue = WebhookSecret)
     {
@@ -140,6 +191,25 @@ public sealed class GitHubWebhookEndpointsTests : IClassFixture<GitHubWebhookWeb
         {
             action,
             repository = new { full_name = repoFullName },
+        }));
+
+    private static byte[] IssuesPayload(string repoFullName, string action, params string[] labels) =>
+        Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            action,
+            repository = new { full_name = repoFullName },
+            issue = new
+            {
+                labels = labels.Select(x => new { name = x }).ToArray(),
+            },
+        }));
+
+    private static byte[] IssueCommentPayload(string repoFullName, string body, string action = "created") =>
+        Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            action,
+            repository = new { full_name = repoFullName },
+            comment = new { body },
         }));
 
     private static byte[] PushPayload(string repoFullName) =>
@@ -337,6 +407,33 @@ public sealed class GitHubWebhookEndpointsTests : IClassFixture<GitHubWebhookWeb
         var tasks = await ListBacklogAsync(project.Id);
         tasks.Should().ContainSingle();
         tasks.Single().WorkflowOverrideId.Should().Be("on-push");
+    }
+
+    [Fact]
+    public async Task IssuesLabeled_PredicateMatch_FiresWorkflow()
+    {
+        var (projectId, _, repoFullName) = await SeedProjectAsync(IssueLabelTriggerYaml);
+        var body = IssuesPayload(repoFullName, "labeled", "bug", "needs triage");
+
+        var response = await _client.SendAsync(BuildRequest(projectId, "issues", body, Sign(body)));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var tasks = await ListBacklogAsync(projectId);
+        tasks.Should().ContainSingle();
+        tasks.Single().WorkflowOverrideId.Should().Be("on-bug-triage");
+    }
+
+    [Fact]
+    public async Task IssueComment_PatternMismatch_DoesNotForwardRawCommentBody()
+    {
+        var (projectId, _, repoFullName) = await SeedProjectAsync(IssueCommentTriggerYaml);
+        const string rawComment = "/agentweaver:triage extra-secret";
+        var body = IssueCommentPayload(repoFullName, rawComment);
+
+        var response = await _client.SendAsync(BuildRequest(projectId, "issue_comment", body, Sign(body)));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ListBacklogAsync(projectId)).Should().BeEmpty();
     }
 
     [Fact]
