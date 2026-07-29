@@ -1,9 +1,11 @@
 using System.Net;
 using FluentAssertions;
+using Agentweaver.Api.Auth;
+using Agentweaver.Tests.Helpers;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Agentweaver.Api.Auth;
 
 namespace Agentweaver.Tests.Projects;
 
@@ -290,6 +292,36 @@ public sealed class GitHubOrgAuthorizationServiceTests
         result.Should().Be(OrgAuthResult.Allowed,
             "the deprecated AllowedTeam value is folded into the rule list as an OR'd team rule");
     }
+
+    [Fact]
+    public async Task CheckMembershipAsync_LegacyAllowedTeamOverlappingBareOrg_WarnsAndKeepsOrgWideEffectiveRules()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            IsPrivateMembers(req) ? HttpStatusCode.NoContent : HttpStatusCode.NotFound);
+        var logger = new CapturingLogger();
+        var service = BuildService(
+            handler,
+            allowedOrg: "big-org",
+            allowedTeam: "big-org/restricted-team",
+            logger: new TypedLoggerAdapter(logger));
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed,
+            "the overlapping bare-org rule still grants org-wide access under the OR model");
+        service.AllowedEntities.Select(e => e.RuleString).Should().Equal(new[] { "big-org" },
+            "the legacy team value must not be appended as a misleading independent OR rule when a bare-org rule already widens access");
+        handler.RequestUris.Should().NotContain(uri => uri.AbsolutePath.Contains("/teams/"),
+            "the team rule should not be probed because it is excluded from the effective rule set");
+
+        var warning = logger.Entries
+            .Single(e => e.Level == LogLevel.Warning &&
+                         e.Message.Contains("Legacy AND semantics are NOT preserved", StringComparison.Ordinal));
+        warning.Message.Should().Contain("big-org");
+        warning.Message.Should().Contain("restricted-team");
+        warning.Message.Should().Contain("Effective allow rules: [big-org]");
+    }
+
     [Fact]
     public async Task ResolveAsync_ReturnsMatchedEntity_ForMatchingBareOrg()
     {
@@ -529,7 +561,10 @@ public sealed class GitHubOrgAuthorizationServiceTests
         req.RequestUri!.AbsolutePath.Contains("/memberships/", StringComparison.Ordinal);
 
     private static GitHubOrgAuthorizationService BuildService(
-        HttpMessageHandler handler, string? allowedTeam = null, string allowedOrg = "microsoft")
+        HttpMessageHandler handler,
+        string? allowedTeam = null,
+        string allowedOrg = "microsoft",
+        ILogger<GitHubOrgAuthorizationService>? logger = null)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -546,7 +581,7 @@ public sealed class GitHubOrgAuthorizationServiceTests
             config,
             new SingleClientHttpClientFactory(handler),
             new MemoryCache(new MemoryCacheOptions()),
-            NullLogger<GitHubOrgAuthorizationService>.Instance);
+            logger ?? NullLogger<GitHubOrgAuthorizationService>.Instance);
     }
 
     /// <summary>
@@ -595,5 +630,13 @@ public sealed class GitHubOrgAuthorizationServiceTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken) => Task.FromResult(_router(request));
+    }
+
+    private sealed class TypedLoggerAdapter(CapturingLogger inner) : ILogger<GitHubOrgAuthorizationService>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
+        public bool IsEnabled(LogLevel logLevel) => inner.IsEnabled(logLevel);
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            inner.Log(logLevel, eventId, state, exception, formatter);
     }
 }

@@ -60,24 +60,46 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         ILogger<GitHubOrgAuthorizationService> logger)
     {
         var parsed = GitHubOrgList.ParseEntities(configuration["Auth:GitHub:AllowedOrg"], logger).ToList();
+        var seenRules = new HashSet<string>(parsed.Select(e => e.RuleString), StringComparer.OrdinalIgnoreCase);
 
         // Legacy Auth:GitHub:AllowedTeam compat shim. Historically this was an AND-restriction on
-        // top of the org list; under the new rule-based model it is folded in as an ADDITIONAL
-        // OR'd rule (matching the semantic the user explicitly asked for). Warn so operators
-        // migrate to expressing it directly inside Auth:GitHub:AllowedOrg.
+        // top of the org list; under the new rule-based model it is normally folded in as an
+        // ADDITIONAL OR'd rule. The one exception is a dangerous overlap with an already-configured
+        // bare-org rule for the same org: appending the team would misleadingly suggest a narrower
+        // restriction than the effective org-wide access, so we warn loudly and keep the effective
+        // rule set unchanged.
         var legacyTeam = configuration["Auth:GitHub:AllowedTeam"]?.Trim();
         if (!string.IsNullOrWhiteSpace(legacyTeam))
         {
             logger.LogWarning(
                 "Auth:GitHub:AllowedTeam is DEPRECATED under the team-membership authz model. " +
-                "It is being appended to Auth:GitHub:AllowedOrg as an additional OR'd rule " +
+                "It is being evaluated for compatibility against Auth:GitHub:AllowedOrg " +
                 "('{LegacyTeam}'). Please migrate the value into Auth:GitHub:AllowedOrg directly.",
                 legacyTeam);
 
             var legacy = GitHubOrgList.ParseEntities(legacyTeam, logger);
-            var seenRules = new HashSet<string>(parsed.Select(e => e.RuleString), StringComparer.OrdinalIgnoreCase);
             foreach (var e in legacy)
             {
+                var overlapsBareOrgRule = e.IsTeamScoped &&
+                    parsed.Any(existing =>
+                        !existing.IsTeamScoped &&
+                        string.Equals(existing.Org, e.Org, StringComparison.OrdinalIgnoreCase));
+
+                if (overlapsBareOrgRule)
+                {
+                    var bareOrgRule = e.Org;
+                    var teamRule = e.RuleString;
+                    var effectiveRules = FormatRules(parsed);
+                    logger.LogWarning(
+                        $"Auth:GitHub:AllowedTeam value '{legacyTeam}' overlaps a bare-org Auth:GitHub:AllowedOrg rule " +
+                        $"for '{bareOrgRule}'. Legacy AND semantics are NOT preserved under the new OR model: this configuration " +
+                        $"currently grants access to the ENTIRE org '{bareOrgRule}', not just team '{teamRule}'. Effective allow " +
+                        $"rules: [{effectiveRules}]. To restore the narrower team-only restriction, remove the bare-org " +
+                        $"'{bareOrgRule}' entry and keep only '{teamRule}' in Auth:GitHub:AllowedOrg. If org-wide access is " +
+                        "intentional, remove the redundant Auth:GitHub:AllowedTeam setting.");
+                    continue;
+                }
+
                 if (seenRules.Add(e.RuleString))
                     parsed.Add(e);
             }
@@ -98,6 +120,9 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         _cache = cache;
         _logger = logger;
     }
+
+    private static string FormatRules(IEnumerable<AllowedGitHubEntity> entities) =>
+        string.Join(", ", entities.Select(e => e.RuleString));
 
     public bool IsConfigured => _allowedEntities.Count > 0;
 
