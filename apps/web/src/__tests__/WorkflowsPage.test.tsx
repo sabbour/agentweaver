@@ -242,6 +242,31 @@ trigger:
     expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2]).toContain('pattern: ^/agentweaver:rerun$');
   });
 
+  it('preserves values by splitting them into AND rows when Match any of is turned off', async () => {
+    const projectWorkflow = { ...sampleList.workflows[1], valid: true, error: null };
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], projectWorkflow] });
+    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue('id: nightly\nname: Nightly Sweep\nstart: done\nnodes: []\nedges: []\n');
+
+    renderPage('proj-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: /add event/i }));
+    expect(await screen.findByText('Event trigger')).toBeDefined();
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'issue_comment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Match any of' }));
+
+    let commandInputs = screen.getAllByRole('textbox', { name: 'Exact command match' });
+    fireEvent.change(commandInputs[0], { target: { value: '/agentweaver:triage' } });
+    fireEvent.change(commandInputs[1], { target: { value: '/agentweaver:rerun' } });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Match any of' }));
+
+    commandInputs = screen.getAllByRole('textbox', { name: 'Exact command match' });
+    expect(commandInputs).toHaveLength(2);
+    expect((commandInputs[0] as HTMLInputElement).value).toBe('/agentweaver:triage');
+    expect((commandInputs[1] as HTMLInputElement).value).toBe('/agentweaver:rerun');
+  });
+
   it('queues a workflow-bound run from Run now', async () => {
     const runnable = { ...sampleList.workflows[1], valid: true, error: null };
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], runnable] });

@@ -569,6 +569,44 @@ export function WorkflowsPage() {
     }));
   }, []);
 
+  const setConditionMatchAny = useCallback((index: number, checked: boolean) => {
+    setEventTriggerState((prev) => {
+      const target = prev.conditions[index];
+      if (!target) return prev;
+      if (checked) {
+        const nextConditions = prev.conditions.map((condition, conditionIndex) => (
+          conditionIndex === index
+            ? {
+              ...condition,
+              matchAny: true,
+              values: condition.values.length > 1
+                ? condition.values
+                : [condition.values[0] ?? (condition.predicate === 'reviewState' ? REVIEW_STATES[0] : ''), condition.predicate === 'reviewState' ? REVIEW_STATES[0] : ''],
+            }
+            : condition
+        ));
+        return { ...prev, conditions: nextConditions };
+      }
+
+      const preservedValues = target.values.length > 0
+        ? target.values
+        : [target.predicate === 'reviewState' ? REVIEW_STATES[0] : ''];
+      const splitConditions: WorkflowEventCondition[] = preservedValues.map((value) => ({
+        predicate: target.predicate,
+        matchAny: false,
+        values: [value],
+      }));
+      return {
+        ...prev,
+        conditions: [
+          ...prev.conditions.slice(0, index),
+          ...splitConditions,
+          ...prev.conditions.slice(index + 1),
+        ],
+      };
+    });
+  }, []);
+
   if (!projectId) return null;
 
   const workflows = data?.workflows ?? [];
@@ -894,15 +932,7 @@ export function WorkflowsPage() {
                           label="Match any of"
                           checked={condition.matchAny}
                           disabled={savingEventTrigger}
-                          onChange={(_, data) => updateEventCondition(conditionIndex, (current) => ({
-                            ...current,
-                            matchAny: data.checked === true,
-                            values: data.checked === true
-                              ? current.values.length > 1
-                                ? current.values
-                                : [current.values[0] ?? (current.predicate === 'reviewState' ? REVIEW_STATES[0] : ''), current.predicate === 'reviewState' ? REVIEW_STATES[0] : '']
-                              : [current.values[0] ?? (current.predicate === 'reviewState' ? REVIEW_STATES[0] : '')],
-                          }))}
+                          onChange={(_, data) => setConditionMatchAny(conditionIndex, data.checked === true)}
                         />
 
                         <div className={styles.conditionValues}>
