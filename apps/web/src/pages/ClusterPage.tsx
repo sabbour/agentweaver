@@ -258,7 +258,7 @@ export function ClusterPage() {
   const [notAvailable, setNotAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
 
   const formatError = (err: unknown): string =>
