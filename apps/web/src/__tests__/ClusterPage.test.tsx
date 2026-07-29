@@ -43,7 +43,7 @@ const sampleData: ClusterDiagnosticsDto = {
   checks: [
     { name: 'K8s API', status: 'healthy', message: 'Reachable', latencyMs: 5 },
     { name: 'PostgreSQL', status: 'healthy', message: 'Connected (8ms)', latencyMs: 8 },
-    { name: 'GitHub Token', status: 'warning', message: 'Token expires in 2 days', latencyMs: 0 },
+    { name: 'Key Vault', status: 'healthy', message: 'Signing key loaded', latencyMs: 4 },
   ],
   active_agent_pods: [
     { claim_name: 'claim-abc123', pod_name: 'agent-abc123', run_id: 'run-001', status: 'ready', age_seconds: 60 },
@@ -61,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -101,7 +102,7 @@ describe('ClusterPage', () => {
     // Health check rows
     expect(screen.getByText('K8s API')).toBeDefined();
     expect(screen.getByText('PostgreSQL')).toBeDefined();
-    expect(screen.getByText('GitHub Token')).toBeDefined();
+    expect(screen.getByText('Key Vault')).toBeDefined();
 
     // Active agent pods section removed
     expect(screen.queryByText(/Active agent pods/)).toBeNull();
@@ -128,6 +129,16 @@ describe('ClusterPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/API error 500|Internal server error/)).toBeDefined();
+    });
+  });
+
+  it('enables auto-refresh by default', async () => {
+    getClusterMock().mockResolvedValue(sampleData);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect((screen.getByRole('switch', { name: 'Auto-refresh' }) as HTMLInputElement).checked).toBe(true);
     });
   });
 });
