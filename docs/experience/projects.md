@@ -177,7 +177,7 @@ The same model exists in MCP: predefined blueprints are applied by `blueprint_id
 
 Use MCP when an agent or script needs to manage projects without the web UI.
 
-For GitHub-backed MCP project creation, call `project_create` with `origin: "github"` and `source_repository: "owner/repo"`.
+For GitHub-backed MCP project creation, call `project_create` with `origin: "github"` and `source_repository` as either `owner/repo` or a full `https://github.com/owner/repo` URL. The MCP tool normalizes the shorthand to the full HTTPS URL before calling the API.
 
 ### Project tools
 

@@ -25,8 +25,13 @@ public sealed class ProjectToolsTests
         }
     }
 
-    [Fact]
-    public async Task ProjectCreate_ForwardsSourceRepository_WhenProvided()
+    [Theory]
+    [InlineData("sabbour/sabbour.github.io", "https://github.com/sabbour/sabbour.github.io")]
+    [InlineData("https://github.com/sabbour/sabbour.github.io", "https://github.com/sabbour/sabbour.github.io")]
+    [InlineData("sabbour/sabbour.github.io.git", "https://github.com/sabbour/sabbour.github.io.git")]
+    public async Task ProjectCreate_NormalizesSourceRepository_ToFullGitHubHttpsUrl(
+        string sourceRepository,
+        string expectedSourceRepository)
     {
         HttpRequestMessage? capturedRequest = null;
         JsonElement capturedBody = default;
@@ -44,7 +49,7 @@ public sealed class ProjectToolsTests
             "sabbour.me-blog",
             @"C:\workspace\sabbour.me-blog",
             origin: "github",
-            source_repository: "sabbour/sabbour.github.io");
+            source_repository: sourceRepository);
 
         capturedRequest.Should().NotBeNull();
         capturedRequest!.Method.Should().Be(HttpMethod.Post);
@@ -53,7 +58,21 @@ public sealed class ProjectToolsTests
         capturedBody.GetProperty("name").GetString().Should().Be("sabbour.me-blog");
         capturedBody.GetProperty("working_directory").GetString().Should().Be(@"C:\workspace\sabbour.me-blog");
         capturedBody.GetProperty("origin").GetString().Should().Be("github");
-        capturedBody.GetProperty("source_repository").GetString().Should().Be("sabbour/sabbour.github.io");
+        capturedBody.GetProperty("source_repository").GetString().Should().Be(expectedSourceRepository);
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("sabbour/sabbour.github.io", "https://github.com/sabbour/sabbour.github.io")]
+    [InlineData("https://github.com/sabbour/sabbour.github.io.git", "https://github.com/sabbour/sabbour.github.io.git")]
+    [InlineData("  sabbour/sabbour.github.io  ", "https://github.com/sabbour/sabbour.github.io")]
+    [InlineData("git@github.com:sabbour/sabbour.github.io.git", "git@github.com:sabbour/sabbour.github.io.git")]
+    public void NormalizeGitHubSourceRepository_MatchesToolContract(string? sourceRepository, string? expected)
+    {
+        var method = typeof(ProjectTools).GetMethod("NormalizeGitHubSourceRepository", BindingFlags.NonPublic | BindingFlags.Static);
+
+        method.Should().NotBeNull();
+        method!.Invoke(null, [sourceRepository]).Should().Be(expected);
     }
 
     private static McpServerTool BuildTool()

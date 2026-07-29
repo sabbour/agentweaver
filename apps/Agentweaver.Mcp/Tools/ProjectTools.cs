@@ -9,6 +9,7 @@ namespace Agentweaver.Mcp.Tools;
 public sealed class ProjectTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    private const string GitHubHttpsPrefix = "https://github.com/";
 
     [McpServerTool(Name = "project_list"), Description("List all Agentweaver projects.")]
     public async Task<string> ProjectListAsync(CancellationToken ct)
@@ -42,7 +43,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         [Description("Local working directory path")] string working_directory,
         [Description("Inline blueprint object to apply at creation, as a JSON-encoded string (optional; exclusive with blueprint_id)")] string? blueprint = null,
         [Description("Project origin: 'blank' (default) or 'github'")] string? origin = null,
-        [Description("GitHub repository in 'owner/repo' format; required when origin is 'github'")] string? source_repository = null,
+        [Description("GitHub repository in 'owner/repo' shorthand or full 'https://github.com/owner/repo' HTTPS URL format (optional trailing '.git' accepted); required when origin is 'github'. Shorthand is normalized to the full HTTPS URL before calling the API.")] string? source_repository = null,
         [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id = null,
         [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml = null,
         CancellationToken ct = default)
@@ -55,7 +56,8 @@ public sealed class ProjectTools(AgentweaverApiClient api)
                 ["working_directory"] = working_directory,
             };
             if (origin is not null) bodyNode["origin"] = origin;
-            if (source_repository is not null) bodyNode["source_repository"] = source_repository;
+            var normalizedSourceRepository = NormalizeGitHubSourceRepository(source_repository);
+            if (normalizedSourceRepository is not null) bodyNode["source_repository"] = normalizedSourceRepository;
             if (blueprint_id is not null) bodyNode["blueprint_id"] = blueprint_id;
             if (!string.IsNullOrWhiteSpace(blueprint))
             {
@@ -137,6 +139,25 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    private static string? NormalizeGitHubSourceRepository(string? sourceRepository)
+    {
+        if (sourceRepository is null) return null;
+
+        var trimmed = sourceRepository.Trim();
+        if (trimmed.Length == 0) return trimmed;
+        if (trimmed.StartsWith(GitHubHttpsPrefix, StringComparison.OrdinalIgnoreCase)) return trimmed;
+        if (trimmed.Contains("://", StringComparison.Ordinal) || trimmed.Contains('@') || trimmed.Contains(':'))
+            return trimmed;
+
+        var segments = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 2)
+        {
+            return $"{GitHubHttpsPrefix}{segments[0]}/{segments[1]}";
+        }
+
+        return trimmed;
     }
 
 }
