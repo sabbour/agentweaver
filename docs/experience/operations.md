@@ -392,12 +392,12 @@ The page provides:
 
 - **KPI cards** — Active pods, Orphaned pods, CPU used/total, Pending-capacity runs
 - **Quota bars** — CPU and memory usage, color-coded by saturation. Since #217 removed the `ResourceQuota` CPU/memory caps there is no hard limit to fill against, so these bars no longer represent an enforced ceiling; object-count quotas (pods, sandbox claims, PVCs, storage) are the enforced bounds.
-- **Component health table** — 6 checks: Postgres, GitHub token store, Azure Key Vault, namespace quota, warm-pool, Kubernetes API server
+- **Component health table** — 5 checks: Postgres, Azure Key Vault, agent-pod quota headroom, warm-pool, Kubernetes API server
 - **Active agent pods table** — pods currently serving a live run
 - **Orphaned agent pods table** — pods with no matching active run (will be reaped on the next sweep)
-- **Pending-capacity runs table** — **legacy / back-compat**; subtasks recorded in the historical `PendingCapacity` status. Empty for new runs, since Kubernetes now owns scheduling.
+- **Pending-capacity runs table** — subtasks that could not get a sandbox immediately because no warm-pool capacity was free. Zero is healthy. This is also a **legacy / back-compat** surface, so new runs usually leave it empty because Kubernetes now owns scheduling.
 
-When the API is not deployed on AKS (or the cluster diagnostics endpoint returns `404`), the page falls back gracefully and shows a message indicating cluster diagnostics are unavailable.
+The page auto-refreshes every 30 seconds by default. When the API is not deployed on AKS (or the cluster diagnostics endpoint returns `404`), the page falls back gracefully and shows a message indicating cluster diagnostics are unavailable.
 
 > **Full user guide:** see [Cluster page guide](./cluster-page.md) for a walkthrough of each KPI and how to interpret quota warnings.
 > **API reference:** see [Cluster diagnostics reference](../reference/cluster-diagnostics.md) for the full response schema.

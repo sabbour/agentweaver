@@ -226,7 +226,7 @@ sequenceDiagram
 ```
 
 1. **The tool POSTs** `{ target_port }` to `POST /api/runs/{runId}/sandbox/preview`
-   ([`SandboxEndpoints.cs:57`](#source)) and returns the response `preview_url` back to the agent.
+   ([`SandboxEndpoints.cs:60`](#source)) and returns the response `preview_url` back to the agent.
 2. **Authorization** accepts the run's owner **or** the run's own agent callback. The agent callback
    authenticates with the shared service key, which resolves to the hardcoded internal-service identity
    (`ProjectAuthorization.InternalServiceUser` = `"agentweaver-internal"`) or, if configured, the `Auth:User`
@@ -235,17 +235,19 @@ sequenceDiagram
    service identity **without** weakening security — the server-bound `runId` means a service caller can only
    ever act on the run its agent is executing. (Issue #529: this previously checked only the configured
    `Auth:User` value, which no deployment sets, so `start_preview` 403'd for every agent callback in production.)
-3. **The HITL gate** `AgentPreviewGate.RequestApprovalAsync` ([`AgentPreviewGate.cs:85`](#source)) is the
+3. **The HITL gate** `AgentPreviewGate.RequestApprovalAsync` ([`AgentPreviewGate.cs:108`](#source)) is the
    human-in-the-loop seam. It reuses the same `IToolApprovalGate` primitive as `web_fetch`: it emits a
-   `tool.approval_required` card ([`AgentPreviewGate.cs:103`](#source)) and suspends until an operator grants
-   via `POST /api/runs/{runId}/tool-approvals` or the 5-minute window times out.
+   `tool.approval_required` card ([`AgentPreviewGate.cs:131`](#source)) and suspends until an operator grants
+   via `POST /api/runs/{runId}/tool-approvals` or the configured approval window times out (15 minutes by
+   default from `Sandbox:Preview:ApprovalTimeoutMinutes` / `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`; `0` or
+   negative values clamp to 1 minute).
 4. **Auto-approve** short-circuits the wait when any of these is on
-   ([`AgentPreviewGate.cs:75`](#source)): the global `Sandbox:Preview:AutoApprove` config / env
-   `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:125`](#source)), the per-run `AutoApproveTools`
+   ([`AgentPreviewGate.cs:93`](#source)): the global `Sandbox:Preview:AutoApprove` config / env
+   `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:176`](#source)), the per-run `AutoApproveTools`
    operator option, or an existing scoped allow policy. Production stays human-gated (default `false`); the
    flag exists so an automated demo can run unattended.
 5. **On approval** the endpoint runs the **same** `StartPreviewForRunAsync` path
-   ([`SandboxEndpoints.cs:217`](#source)) as the operator route — Gateway-direct preview when enabled,
+   ([`SandboxEndpoints.cs:238`](#source)) as the operator route — Gateway-direct preview when enabled,
    `kubectl` fallback otherwise — and returns `preview_url`.
 
 > **Design note.** The agent tool is a synchronous HTTP callback that must return a URL, so it uses the

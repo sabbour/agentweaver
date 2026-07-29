@@ -15,6 +15,31 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 afterEach(() => cleanup());
 
+describe('RunTimeline layout (overlap regression)', () => {
+  it('pins the timeline root to flex-shrink: 0 so it never collapses under a flex-column scroll parent', () => {
+    // Regression test for the tool-approval overlap bug: when RunTimeline is a flex item in
+    // a flex-column scroll container (the session message scroll region), a shrinkable root
+    // (min-height: 0 + default flex-shrink: 1) collapsed to height 0. Its accordion content
+    // then overflowed visibly and the in-thread "Tool Approval Required" card rendered on
+    // top of it. The root must be flex-shrink: 0 so it always reserves its content height.
+    const model = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Inspect the repo' }),
+      evt(2, 'tool.call', { callId: 'c1', toolName: 'web_fetch', arguments: { url: 'https://example.com' } }),
+      evt(3, 'tool.result', { callId: 'c1', content: 'ok' }),
+      evt(4, 'agent.turn.end', {}),
+    ]);
+
+    render(
+      <Wrapper>
+        <RunTimeline embedded steps={model.steps} running={false} />
+      </Wrapper>,
+    );
+
+    const root = screen.getByTestId('run-timeline');
+    expect(getComputedStyle(root).flexShrink).toBe('0');
+  });
+});
+
 describe('RunTimeline default expansion', () => {
   it('keeps the step count label aligned with the rendered top-level steps after narration collapsing', () => {
     const model = buildRunTimeline([
