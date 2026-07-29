@@ -73,7 +73,7 @@ function isActiveStatus(status: string): boolean {
   return !/(complete|merged|failed|declined|blocked)/i.test(status);
 }
 
-function TracePreview({ runId }: { runId: string }) {
+function TracePreview({ runId, roleByAgent }: { runId: string; roleByAgent: Record<string, string> }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -84,18 +84,41 @@ function TracePreview({ runId }: { runId: string }) {
   }, [runId]);
 
   if (loading) return <Spinner label="Loading trace preview" />;
-  return <TransactionTracePanel runId={runId} subtitle="Recent trace preview. Expand the tree and click a span to inspect its Generative AI properties." />;
+  return (
+    <TransactionTracePanel
+      runId={runId}
+      roleByAgent={roleByAgent}
+      subtitle="Recent trace preview. Expand the tree and click a span to inspect its Generative AI properties."
+    />
+  );
 }
 
 export function ObservabilityTracesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
+  const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
   const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    apiClient.getTeam(projectId)
+      .then((team) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const m of team.members ?? []) {
+          if (m.name && m.role_title) map[m.name] = m.role_title;
+        }
+        setRoleByAgent(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -201,7 +224,7 @@ export function ObservabilityTracesPage() {
                         {expandedRunId === runId ? 'Hide trace' : 'Preview trace'}
                       </Button>
                     </div>
-                    {expandedRunId === runId && <TracePreview runId={runId} />}
+                    {expandedRunId === runId && <TracePreview runId={runId} roleByAgent={roleByAgent} />}
                   </div>
                 </AppCard>
               );
