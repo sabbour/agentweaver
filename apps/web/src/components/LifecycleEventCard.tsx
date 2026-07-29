@@ -1002,7 +1002,7 @@ function ShellApprovalCard({ styles, requestId, commandHash, command, runId, isR
 
   return (
     // SECURITY (Y-3): command and requestId rendered as text — no HTML
-    <div className={styles.approvalCard} role="alert">
+    <div className={styles.approvalCard} role="alert" data-testid="shell-approval-gate">
       <div className={styles.approvalHeading}>
         <WarningFilled className={styles.warningIcon} aria-hidden="true" />
         <Text weight="semibold">Dangerous command — approval required</Text>

@@ -93,6 +93,7 @@ export function renderCaptureScript(plan) {
     '    const approvalCardSources = [',
     '      page.locator(\'[data-testid="session-approval-gate"]\'),',
     '      page.locator(\'[data-testid="assistant-approval-gate"]\'),',
+    '      page.locator(\'[data-testid="shell-approval-gate"]\'),',
     '      page.locator(\'[role="alert"]\').filter({ hasText: \'Tool Approval Required\' }),',
     '    ];',
     '    const getApprovalCardKey = async (card) => card.evaluate((node) => {',

@@ -306,7 +306,7 @@ test('capture script runs and stops the approval watcher around the step loop', 
   assert.ok(screencastStopIdx > watcherStopIdx, 'expected approval watcher shutdown before screencast stop');
 });
 
-test('capture script watches shell approval cards without a heading-text filter on testid gates', () => {
+test('capture script watches approval testid gates without a heading-text filter', () => {
   const src = renderCaptureScript({
     startUrl: 'https://x/y',
     videoPath: 'a.webm',
@@ -314,9 +314,10 @@ test('capture script watches shell approval cards without a heading-text filter 
   });
   assert.ok(src.includes('page.locator(\'[data-testid="session-approval-gate"]\')'), 'expected the session approval gate locator');
   assert.ok(src.includes('page.locator(\'[data-testid="assistant-approval-gate"]\')'), 'expected the assistant approval gate locator');
+  assert.ok(src.includes('page.locator(\'[data-testid="shell-approval-gate"]\')'), 'expected the shell approval gate locator');
   assert.ok(src.includes('page.locator(\'[role="alert"]\').filter({ hasText: \'Tool Approval Required\' })'), 'expected the lifecycle alert branch to stay scoped by heading text');
   assert.ok(
-    !src.includes('.locator(\'[data-testid="session-approval-gate"], [data-testid="assistant-approval-gate"], [role="alert"]\')\n      .filter({ hasText: \'Tool Approval Required\' })'),
+    !src.includes('.locator(\'[data-testid="session-approval-gate"], [data-testid="assistant-approval-gate"], [data-testid="shell-approval-gate"], [role="alert"]\')\n      .filter({ hasText: \'Tool Approval Required\' })'),
     'expected testid-scoped approval gates to no longer require the Tool Approval Required heading',
   );
 });
@@ -336,6 +337,27 @@ test('capture script auto-clicks shell approval cards after the grace period', a
   });
   assert.equal(card.clickedAtMs.length, 1, 'expected the shell approval card to be auto-clicked');
   assert.ok(card.clickedAtMs[0] >= 1000, 'expected auto-click after the configured grace period');
+});
+
+test('capture script auto-clicks timeline shell approval cards after the grace period', async () => {
+  const card = new FakeApprovalCard({
+    text: 'Dangerous command — approval required',
+    buttonName: 'Approve',
+    appearAtMs: 0,
+  });
+  await runCaptureScriptWithCards({
+    plan: {
+      startUrl: 'https://x/y',
+      videoPath: 'a.webm',
+      approvalWatcherGraceMs: 1000,
+      steps: [{ type: 'pause', ms: 2800 }],
+    },
+    locatorCards: {
+      '[data-testid="shell-approval-gate"]': [card],
+    },
+  });
+  assert.equal(card.clickedAtMs.length, 1, 'expected the timeline shell approval card to be auto-clicked');
+  assert.ok(card.clickedAtMs[0] >= 1000, 'expected timeline shell auto-click after the configured grace period');
 });
 
 test('capture script tracks concurrent approval cards with independent grace timers', () => {
