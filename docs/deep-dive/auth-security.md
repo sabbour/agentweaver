@@ -5,13 +5,13 @@
 Agentweaver has three related but distinct security jobs:
 
 1. **Know who is calling.** A request must carry a bearer credential that can be mapped to a GitHub user or an Agentweaver-issued OAuth identity.
-2. **Know whether that user is allowed.** Most non-bootstrap surfaces are restricted to members of a configured GitHub organization, usually `microsoft`, and optionally a team.
+2. **Know whether that user is allowed.** Most non-bootstrap surfaces are restricted to callers who match at least one of a configured list of allow-rules (each rule is either a bare GitHub org, or an org + specific team).
 3. **Let MCP clients authenticate without learning GitHub secrets.** Agentweaver acts as an OAuth 2.1 Authorization Server for MCP clients. GitHub remains the human identity provider; Agentweaver mints short-lived tokens for its own MCP resource.
 
 The design deliberately separates **identity proof** from **authorization policy**:
 
 - GitHub proves the user's identity and can prove org/team membership when GitHub's APIs allow it.
-- Agentweaver enforces local invariants: allowed org, token lifetime, redirect policy, PKCE, refresh-token rotation, revocation, and middleware exemptions.
+- Agentweaver enforces local invariants: the configured allow-rule list, token lifetime, redirect policy, PKCE, refresh-token rotation, revocation, and middleware exemptions.
 - MCP clients receive Agentweaver credentials, not GitHub credentials.
 
 The important rebuild principle is: **never trust a client merely because it reached a route**. Each route should be either explicitly public bootstrap/discovery, or it should pass through bearer-token authentication and org authorization.
@@ -48,7 +48,7 @@ Where this lives:
 
 ## Architecture at a glance
 
-Every request crosses a network-policy boundary into the gateway, then passes through two ordered middlewares: `GitHubTokenAuthMiddleware` resolves identity (Agentweaver JWT validated offline against the `jti` denylist, or a raw GitHub token validated via `GET /user` and cached), and `GitHubOrgAuthorizationMiddleware` enforces org/team membership before any protected route runs. Browser sign-in and the MCP OAuth flow both terminate at GitHub as the human identity provider.
+Every request crosses a network-policy boundary into the gateway, then passes through two ordered middlewares: `GitHubTokenAuthMiddleware` resolves identity (Agentweaver JWT validated offline against the `jti` denylist, or a raw GitHub token validated via `GET /user` and cached), and `GitHubOrgAuthorizationMiddleware` enforces the configured allow-rule list before any protected route runs. Browser sign-in and the MCP OAuth flow both terminate at GitHub as the human identity provider.
 
 ![Architecture at a glance: Browser web UI, MCP client, Direct API caller, default-deny + allowlist NetworkPolicies, Istio gateway / HTTPRoute, AuthEndpoints GitHub sign-in, OAuth 2.1 Authorization Server, GitHubTokenAuthMiddleware, GitHubOrgAuthorizationMiddleware, Protected /api routes, Bearer valid? JWT jti / GitHub /user, Org + team membership, …](../diagrams/auth-security-fig1.png)
 
@@ -162,21 +162,25 @@ Where this lives:
 
 ## GitHub org authorization and the SAML nuance
 
-Identity answers "who are you?" Authorization answers "are you allowed to use this Agentweaver deployment?" For hosted Agentweaver, the primary policy is membership in the configured GitHub organization, usually `microsoft`, with an optional team restriction.
+Identity answers "who are you?" Authorization answers "are you allowed to use this Agentweaver deployment?" For hosted Agentweaver, the primary policy is matching at least one entry in a configured allow-rule list. Each rule is one of:
+
+- **`org`** — a bare GitHub org name. Satisfied by org membership (any tier: public or private).
+- **`org/*`** — an explicit "any team in this org" wildcard. Semantically identical to a bare `org` rule (org membership is sufficient); accepted for readability.
+- **`org/team-slug`** — a specific team within an org. Satisfied only if the caller is a member of that exact team. Team-slug values are defensively normalized (lowercased and space-to-hyphen) so display-name-ish literals like `Azure/AKS PM` still probe the correct GitHub team endpoint (`azure/aks-pm`); a warning is logged whenever normalization changes the input.
+
+A caller is admitted if they satisfy **any one** rule in the list (pure OR across rules). This replaces an earlier two-tier model (single allowed org plus an AND-restricted team); the legacy `Auth:GitHub:AllowedTeam` key is still honored as a deprecated compat shim that is folded into the rule list as an additional OR'd entry (its semantics have therefore changed from AND-restriction to OR-rule — do not rely on it in new deployments).
 
 The authorization middleware runs after bearer authentication. It handles two caller classes differently:
 
-- **Agentweaver OAuth JWT callers:** trust the signed `org` claim only if it equals the configured allowed org. This is safe because org membership was checked when the Authorization Server issued the token and is rechecked on refresh when possible.
-- **Raw GitHub token callers:** use the caller's GitHub token to ask GitHub whether the login is in the allowed org/team.
+- **Agentweaver OAuth JWT callers:** the signed `org` claim carries the canonical **rule string** that was satisfied at token-issuance time (for example `azure/aks-pm` or `microsoft`). The middleware trusts the JWT only if that exact rule is still present in the current allow-rule list (case-insensitive). This prevents grandfathering: a JWT minted while `microsoft` was allowed cannot satisfy a later configuration that only allows `azure/aks-pm`, and vice versa. Org membership was itself checked when the Authorization Server issued the token and is re-checked on refresh via the same rule-resolution path.
+- **Raw GitHub token callers:** use the caller's GitHub token to ask GitHub whether the login satisfies any rule. Rules are evaluated in order; the first `Allowed` short-circuits.
 
-![GitHub org authorization and the SAML nuance: Non-exempt request, Caller context exists?, 401 unauthenticated, Agentweaver OAuth JWT?, JWT org claim matches allowed org?, Allow, 403, Use caller GitHub token + login, Authenticated private org membership check, Team restriction configured?, Unauthenticated public-membership check, 403 retry later; do not cache, …](../diagrams/auth-security-fig3.png)
+![GitHub org authorization and the SAML nuance: Non-exempt request, Caller context exists?, 401 unauthenticated, Agentweaver OAuth JWT?, JWT rule claim still in allow-list?, Allow, 403, For each configured rule (org or org/team) using caller GitHub token, Authenticated private org membership check, Rule has team slug?, Team membership check, Unauthenticated public-membership check, 403 retry later; do not cache, …](../diagrams/auth-security-fig3.png)
 
 <!-- Rendered from ../diagrams/src/auth-security-fig3.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
-
-### The SAML-enforced org problem
 
 For SAML-enforced GitHub organizations, an authenticated API request can fail even for a real member if the token has not been SAML-authorized for that org. This matters because the normal private membership endpoint may return a SAML-related failure instead of a simple "member" or "not member" answer.
 
@@ -191,20 +195,27 @@ The unavoidable trade-off is that private members whose token cannot prove membe
 
 ### Result semantics
 
-- **Allowed:** GitHub proved org membership and, if configured, team membership.
-- **Denied:** GitHub gave a definitive non-member answer.
-- **Org access not granted:** the token is valid but cannot access the org/team private API, commonly because SAML SSO was not authorized.
-- **Inconclusive:** GitHub could not answer reliably because of rate limiting, token failure, network failure, or server error.
+Each rule in the allow-list is resolved independently and produces a per-rule signal (`Allowed`, `Denied`, `OrgAccessNotGranted` / SAML-enforced, or `Inconclusive`). Signals are then aggregated across the list with precedence **Allowed > SAML-enforced > Inconclusive > Denied**:
 
-Only stable answers are cached briefly. Inconclusive answers are never cached, because caching them would turn a transient GitHub problem into a durable denial.
+- **Allowed:** at least one rule resolved to `Allowed` — GitHub proved org membership and, for team-scoped rules, team membership as well.
+- **Denied:** every rule resolved to `Denied` — GitHub gave a definitive non-member answer for each.
+- **Org access not granted:** no rule was `Allowed`, and at least one rule hit a token that could not access the org/team private API (commonly because SAML SSO was not authorized).
+- **Inconclusive:** no rule was `Allowed` or SAML-enforced, and at least one rule could not be answered reliably because of rate limiting, token failure, network failure, or server error.
+
+Only stable per-rule answers contribute to a cacheable overall result. Inconclusive answers are never cached, because caching them would turn a transient GitHub problem into a durable denial. Note that team-scoped rules have no unauthenticated public-membership fallback (GitHub does not expose team membership publicly); a SAML-blocked token evaluating a team-scoped rule can only produce `OrgAccessNotGranted` or `Inconclusive`, never a spurious `Allowed`.
 
 ### Invariants to preserve when rebuilding
 
-- Fail closed if `AllowedOrg` is missing on non-exempt routes.
+- Fail closed if the allow-rule list is missing or empty on non-exempt routes.
+- Parse rules using the shared tokenizer (split, trim, dedupe case-insensitively) and then extract an optional `/team-slug` (or `/*`) suffix; treat unparseable entries as configuration errors, not as silent org-only fallbacks.
+- Defensively normalize team-slug values (lowercase + space-to-hyphen) so display-name-shaped literals still probe the right GitHub endpoint, and log a warning whenever normalization actually changed the input.
+- Aggregate across rules with precedence **Allowed > SAML-enforced > Inconclusive > Denied**; do not let a single `Denied` rule mask a SAML-enforced signal from another rule.
 - Do not let HTTP redirects from GitHub turn into accidental success; membership probes should not auto-follow GitHub redirects.
 - Detect rate limits before classifying `403` as SAML/org denial.
-- Never cache inconclusive authorization decisions.
-- If using JWT org claims, ensure the Authorization Server really enforced org membership before issuing the token.
+- Never cache inconclusive authorization decisions (per-rule or aggregate).
+- Team-scoped rules have no unauthenticated public-membership fallback — do not invent one.
+- If using JWT org claims, ensure the Authorization Server stamps the canonical **rule string** that was satisfied at issuance (not just an org name), and that the middleware re-checks that rule string against the current allow-list on every request (case-insensitive) so config demotions or promotions cannot grandfather in stale JWTs.
+- Treat the legacy `Auth:GitHub:AllowedTeam` key as a deprecated OR'd-in compat shim only; new deployments should express team scoping directly in the rule list.
 
 Where this lives:
 
@@ -215,13 +226,13 @@ Where this lives:
 
 ## Resource ownership authorization
 
-Org authorization answers only whether a caller may use this Agentweaver deployment. It does not grant access to every resource in the deployment. Project, team, run, backlog, workspace, workflow, and memory endpoints still enforce resource ownership in the handler or service layer, typically by loading the resource and checking `caller.Owns(...)` before returning or mutating it.
+Org authorization answers only whether a caller may use this Agentweaver deployment (satisfies at least one configured allow-rule). It does not grant access to every resource in the deployment. Project, team, run, backlog, workspace, workflow, and memory endpoints still enforce resource ownership in the handler or service layer, typically by loading the resource and checking `caller.Owns(...)` before returning or mutating it.
 
 The ownership model is intentionally username-neutral: there is no built-in superuser role derived from a GitHub login, and no GitHub username such as `admin` receives special cross-user access. A caller can act on a resource only when the resource owner matches the authenticated caller identity (or when a feature explicitly creates a resource on behalf of that caller). Non-owners receive `403 Forbidden` or, for existence-hiding reads, `404 Not Found`.
 
 ### Invariants to preserve when rebuilding
 
-- Treat org/team membership as deployment admission, not resource authorization.
+- Treat allow-rule matching as deployment admission, not resource authorization.
 - Use `caller.Owns(...)` or the equivalent owner comparison for every user-owned project, run, team, backlog, and memory resource.
 - Do not introduce username-based superuser bypasses; elevated operational paths should be explicit roles or separate administrative capabilities, not magic GitHub logins.
 
