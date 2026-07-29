@@ -11,7 +11,7 @@ It is available under the **Cluster** nav item in the SYSTEM section of the proj
 ![Cluster page with KPI cards, health checks, sandbox claims, and capacity tables](/screenshots/cluster-page.png)
 
 > 📸 **Screenshot — `cluster-page.png`**
-> *Shows:* the **Cluster** page with Orphaned, Pending capacity, Checks OK, and Warm pool KPI cards plus Health checks, Sandbox claims, orphaned pods, pending capacity, warm pools, and sandbox objects.
+> *Shows:* the **Cluster** page with Orphaned, Pending capacity, Checks OK, and Warm pool KPI cards plus Health checks, Sandbox claims, orphaned pods, pending capacity, and warm pools.
 > *Path:* open a project → click **Cluster** in the SYSTEM section of the left rail → `/projects/:projectId/cluster`.
 
 ## When to use the Cluster page
@@ -35,7 +35,7 @@ The KPI cards at the top of the page summarize the cluster signals the current U
 | **Checks OK** | Healthy checks divided by all reported cluster checks. |
 | **Warm pool** | Ready vs. desired warm sandbox replicas when warm-pool data is available. |
 
-Below the KPIs, the page shows **Health checks**, **Sandbox claims**, **Orphaned agent pods** when present, **Pending capacity**, **Warm pools**, and **Sandbox objects**.
+Below the KPIs, the page shows **Health checks**, **Sandbox claims**, **Orphaned agent pods** when present, **Pending capacity**, and **Warm pools**.
 
 ## Component health table
 
@@ -85,7 +85,9 @@ If orphaned pods are not being cleaned up, check:
 
 ## Pending-capacity runs table
 
-> **Legacy / back-compat.** Kubernetes now owns pod admission and scheduling (issue #217), so new runs never enter `PendingCapacity`. This table stays in the UI only to render historical records; for a live run whose pod is still being scheduled, look for `sandbox.provisioning_pending` heartbeats on the child run rather than an entry here.
+Subtasks that could not get a sandbox immediately because the warm pool had no free capacity appear here until a slot frees up. Zero is healthy: it means every run got a sandbox right away.
+
+> **Legacy / back-compat.** Kubernetes now owns pod admission and scheduling (issue #217), so new runs rarely enter `PendingCapacity`. This table stays in the UI mainly to render historical records; for a live run whose pod is still being scheduled, look for `sandbox.provisioning_pending` heartbeats on the child run rather than an entry here.
 
 Lists coordinator subtasks recorded in the historical `PendingCapacity` status:
 
@@ -109,19 +111,6 @@ Lists every SandboxWarmPool CRD object in the namespace. Each row represents one
 | **Status** | `healthy` when ready equals desired; `warning` when below desired; `critical` when none are ready |
 
 A pool in `warning` or `critical` means new run dispatches fall back to creating an ad-hoc sandbox, which adds latency to run startup.
-
-## Sandbox objects table
-
-Lists all Sandbox CRD objects in the namespace, both warm-pool-managed and ad-hoc per-run sandboxes:
-
-| Column | Meaning |
-|---|---|
-| **Name** | Kubernetes name of the Sandbox object |
-| **Phase** | `standby` (warm, waiting for a claim), `running`, `pending`, or `unknown` |
-| **Ready** | Whether the sandbox pod is ready |
-| **Pod** | Underlying pod name, if scheduled |
-| **Warm pool** | The SandboxWarmPool that owns this sandbox; blank for ad-hoc sandboxes |
-| **Age** | How long the object has existed |
 
 ## Sandbox claims table
 

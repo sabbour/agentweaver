@@ -269,16 +269,14 @@ public sealed class DiagnosticsService
         var podsTask = GetAgentPodInventoryAsync(ct);
         var pendingTask = GetPendingCapacityRunsAsync(ct);
         var warmPoolsTask = GetWarmPoolInventoryAsync(ct);
-        var sandboxesTask = GetSandboxInventoryAsync(ct);
         var claimsTask = GetSandboxClaimInventoryAsync(ct);
 
-        await Task.WhenAll(checksTask, podsTask, pendingTask, warmPoolsTask, sandboxesTask, claimsTask).ConfigureAwait(false);
+        await Task.WhenAll(checksTask, podsTask, pendingTask, warmPoolsTask, claimsTask).ConfigureAwait(false);
 
         var checks = await checksTask.ConfigureAwait(false);
         var (active, orphaned) = await podsTask.ConfigureAwait(false);
         var pending = await pendingTask.ConfigureAwait(false);
         var warmPools = await warmPoolsTask.ConfigureAwait(false);
-        var sandboxes = await sandboxesTask.ConfigureAwait(false);
         var claims = await claimsTask.ConfigureAwait(false);
 
         overallSw.Stop();
@@ -292,7 +290,6 @@ public sealed class DiagnosticsService
             OrphanedAgentPods   = orphaned,
             PendingCapacityRuns = pending,
             WarmPools           = warmPools,
-            SandboxObjects      = sandboxes,
             SandboxClaims       = claims,
         };
     }
@@ -639,87 +636,6 @@ public sealed class DiagnosticsService
     }
 
     /// <summary>
-    /// Lists all Sandbox CRD objects in the namespace. Best-effort: returns empty on any failure.
-    /// </summary>
-    private async Task<IReadOnlyList<SandboxObjectDto>> GetSandboxInventoryAsync(CancellationToken ct)
-    {
-        if (_k8s is null) return Array.Empty<SandboxObjectDto>();
-
-        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
-        try
-        {
-            var list = await _k8s.CustomObjects.ListNamespacedCustomObjectAsync(
-                SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
-                ns, "sandboxes", cancellationToken: ct).ConfigureAwait(false);
-
-            var json = System.Text.Json.JsonSerializer.Serialize(list);
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            var now = DateTimeOffset.UtcNow;
-            var result = new List<SandboxObjectDto>();
-
-            if (!doc.RootElement.TryGetProperty("items", out var items)) return result;
-            foreach (var item in items.EnumerateArray())
-            {
-                var meta = item.TryGetProperty("metadata", out var m) ? m : default;
-                var name = meta.ValueKind != System.Text.Json.JsonValueKind.Undefined && meta.TryGetProperty("name", out var n) ? n.GetString() : null;
-                if (name is null) continue;
-
-                // Phase from status.phase (if present) or Ready condition
-                var st = item.TryGetProperty("status", out var s) ? s : default;
-                var phase = "unknown";
-                var ready = false;
-                if (st.ValueKind != System.Text.Json.JsonValueKind.Undefined)
-                {
-                    if (st.TryGetProperty("phase", out var ph)) phase = ph.GetString() ?? "unknown";
-                    if (st.TryGetProperty("conditions", out var conds) && conds.ValueKind == System.Text.Json.JsonValueKind.Array)
-                    {
-                        foreach (var cond in conds.EnumerateArray())
-                        {
-                            if (cond.TryGetProperty("type", out var ct2) && ct2.GetString() == "Ready" &&
-                                cond.TryGetProperty("status", out var cs) && cs.GetString() == "True")
-                            { ready = true; if (phase == "unknown") phase = "running"; break; }
-                        }
-                    }
-                }
-
-                string? podName = null;
-                if (st.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
-                    st.TryGetProperty("podName", out var pn)) podName = pn.GetString();
-
-                string? templateRef = null;
-                if (item.TryGetProperty("spec", out var sp) && sp.TryGetProperty("sandboxTemplateRef", out var tr) &&
-                    tr.TryGetProperty("name", out var trn)) templateRef = trn.GetString();
-
-                string? warmPool = null;
-                if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
-                    meta.TryGetProperty("labels", out var labels) &&
-                    labels.TryGetProperty("sandbox.x-k8s.io/warm-pool", out var wpl))
-                    warmPool = wpl.GetString();
-
-                double? age = null;
-                if (meta.ValueKind != System.Text.Json.JsonValueKind.Undefined &&
-                    meta.TryGetProperty("creationTimestamp", out var ts) &&
-                    DateTimeOffset.TryParse(ts.GetString(), out var created))
-                    age = (now - created).TotalSeconds;
-
-                result.Add(new SandboxObjectDto
-                {
-                    Name        = name,
-                    Phase       = phase,
-                    Ready       = ready,
-                    PodName     = podName,
-                    TemplateRef = templateRef,
-                    WarmPool    = warmPool,
-                    AgeSeconds  = age,
-                });
-            }
-            return result;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { return Array.Empty<SandboxObjectDto>(); }
-    }
-
-    /// <summary>
     /// Lists all SandboxClaim CRD objects in the namespace. Best-effort: returns empty on any failure.
     /// </summary>
     private async Task<IReadOnlyList<SandboxClaimObjectDto>> GetSandboxClaimInventoryAsync(CancellationToken ct)
@@ -770,13 +686,11 @@ public sealed class DiagnosticsService
                     st.TryGetProperty("sandbox", out var sb) && sb.TryGetProperty("name", out var sbn))
                     boundSandbox = sbn.GetString();
 
-                string? templateRef = null;
                 string? warmPool = null;
                 if (item.TryGetProperty("spec", out var sp))
                 {
-                    if (sp.TryGetProperty("sandboxTemplateRef", out var tr) && tr.TryGetProperty("name", out var trn))
-                        templateRef = trn.GetString();
-                    if (sp.TryGetProperty("warmpool", out var wp)) warmPool = wp.GetString();
+                    if (sp.TryGetProperty("warmPoolRef", out var wpr) && wpr.TryGetProperty("name", out var wprn))
+                        warmPool = wprn.GetString();
                 }
 
                 double? age = null;
@@ -792,7 +706,6 @@ public sealed class DiagnosticsService
                     Ready              = ready,
                     RunId              = runId,
                     BoundSandbox       = string.IsNullOrEmpty(boundSandbox) ? null : boundSandbox,
-                    SandboxTemplateRef = string.IsNullOrEmpty(templateRef) ? null : templateRef,
                     WarmPool           = string.IsNullOrEmpty(warmPool) ? null : warmPool,
                     AgeSeconds         = age,
                 });

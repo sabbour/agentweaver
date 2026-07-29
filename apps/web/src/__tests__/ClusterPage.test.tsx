@@ -53,6 +53,8 @@ const sampleData: ClusterDiagnosticsDto = {
   pending_capacity_runs: [
     { subtask_id: 1, work_plan_id: 10, child_run_id: null, status: 'waiting', reason: 'Insufficient CPU', age_seconds: 30 },
   ],
+  warm_pools: [],
+  sandbox_claims: [],
 };
 
 beforeEach(() => {
@@ -109,7 +111,23 @@ describe('ClusterPage', () => {
 
     // Pending capacity section
     expect(screen.getByText('Pending capacity (1)')).toBeDefined();
+    expect(screen.getByText(/couldn't get a sandbox immediately/i)).toBeDefined();
     expect(screen.getByText('Insufficient CPU')).toBeDefined();
+  });
+
+  it('explains empty pending capacity state', async () => {
+    getClusterMock().mockResolvedValue({
+      ...sampleData,
+      pending_capacity_runs: [],
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('No pending capacity runs')).toBeDefined();
+    });
+
+    expect(screen.getByText(/every run is getting a sandbox immediately/i)).toBeDefined();
   });
 
   it('renders "Not available" bar when API returns 404 (null)', async () => {

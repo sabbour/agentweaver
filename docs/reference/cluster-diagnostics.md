@@ -87,17 +87,6 @@ Standard bearer-token authentication is required. See [API reference → Authent
       "age_seconds": 86400
     }
   ],
-  "sandbox_objects": [
-    {
-      "name": "sandbox-abc123",
-      "phase": "standby",
-      "ready": true,
-      "pod_name": "sandbox-abc123-pod",
-      "template_ref": "agentweaver-agent-host",
-      "warm_pool": "agentweaver-agent-host",
-      "age_seconds": 3600
-    }
-  ],
   "sandbox_claims": [
     {
       "name": "sandboxclaim-xyz789",
@@ -124,9 +113,8 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `namespace_quota` | `NamespaceQuotaDto` | Current CPU and memory consumption vs. the namespace limits. `null` if quota could not be read. |
 | `active_agent_pods` | `AgentPodInfoDto[]` | Agent-host pods with a matching active run record. |
 | `orphaned_agent_pods` | `AgentPodInfoDto[]` | Agent-host pods with no matching active run (candidates for next reaper sweep). |
-| `pending_capacity_runs` | `PendingCapacityRunDto[]` | **Legacy / back-compat.** Coordinator subtasks recorded in the historical `PendingCapacity` status. Kubernetes now owns admission (issue #217), so new runs leave this empty. |
+| `pending_capacity_runs` | `PendingCapacityRunDto[]` | Subtasks that could not get a sandbox immediately because no warm-pool capacity was free. Zero is healthy. This is also a **legacy / back-compat** surface, so new runs usually leave it empty because Kubernetes now owns admission (issue #217). |
 | `warm_pools` | `WarmPoolStatusDto[]` | All SandboxWarmPool CRD objects in the namespace. Empty when the cluster has no warm pools configured. |
-| `sandbox_objects` | `SandboxObjectDto[]` | All Sandbox objects in the namespace, both warm-pool-managed and per-run ad-hoc sandboxes. |
 | `sandbox_claims` | `SandboxClaimObjectDto[]` | All SandboxClaim objects in the namespace. |
 
 ### ComponentHealthDto
@@ -192,20 +180,6 @@ One entry per SandboxWarmPool CRD object in the namespace.
 | `status` | string | `"healthy"` when `ready_replicas == desired_replicas`; `"warning"` when some replicas are ready but below desired; `"critical"` when no replicas are ready. |
 | `age_seconds` | number\|null | Age of the CRD object in seconds. Omitted if unavailable. |
 
-### SandboxObjectDto
-
-One entry per Sandbox object in the namespace. Covers both warm-pool-managed sandboxes and ad-hoc per-run sandboxes.
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | string | Kubernetes name of the Sandbox object. |
-| `phase` | string | `"running"`, `"pending"`, `"standby"`, or `"unknown"`. Standby means the sandbox is pre-warmed and waiting for a claim. |
-| `ready` | boolean | Whether the sandbox pod is ready. |
-| `pod_name` | string\|null | Name of the underlying pod. Omitted if not yet scheduled. |
-| `template_ref` | string\|null | Name of the SandboxTemplate used to create this sandbox. Omitted if not available. |
-| `warm_pool` | string\|null | Name of the SandboxWarmPool that owns this sandbox. `null` for ad-hoc per-run sandboxes. |
-| `age_seconds` | number\|null | Age of the Sandbox object in seconds. Omitted if unavailable. |
-
 ### SandboxClaimObjectDto
 
 One entry per SandboxClaim object in the namespace.
@@ -217,8 +191,7 @@ One entry per SandboxClaim object in the namespace.
 | `ready` | boolean | Whether the claimed sandbox is ready. |
 | `run_id` | string\|null | The run that created this claim. Omitted if not traceable. |
 | `bound_sandbox` | string\|null | Name of the Sandbox object this claim is bound to. `null` when still pending. |
-| `sandbox_template_ref` | string\|null | SandboxTemplate requested by this claim. Omitted if not specified. |
-| `warm_pool` | string\|null | Name of the SandboxWarmPool the bound sandbox belongs to. `null` for ad-hoc claims. |
+| `warm_pool` | string\|null | Name of the SandboxWarmPool requested by this claim via `spec.warmPoolRef.name`. `null` for ad-hoc claims or older objects with no warm-pool reference. |
 | `age_seconds` | number\|null | Age of the SandboxClaim object in seconds. Omitted if unavailable. |
 
 ## Status codes

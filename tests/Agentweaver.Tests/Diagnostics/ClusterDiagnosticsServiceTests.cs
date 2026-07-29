@@ -59,6 +59,19 @@ public sealed class ClusterDiagnosticsServiceTests
     }
 
     [Fact]
+    public async Task GetClusterDiagnosticsAsync_ReadsWarmPoolFromV1Beta1ClaimSpec()
+    {
+        var service = NewClusterService(
+            BuildConfiguration(),
+            ClientFor(ClaimsHandler()));
+
+        var dto = await service.GetClusterDiagnosticsAsync();
+
+        dto.SandboxClaims.Should().ContainSingle();
+        dto.SandboxClaims[0].WarmPool.Should().Be("agentweaver-agent-host");
+    }
+
+    [Fact]
     public async Task GetSystemDiagnosticsAsync_UsesObjectQuotaHeadroom()
     {
         await using var db = await TestSqliteDatabase.CreateAsync();
@@ -140,6 +153,45 @@ public sealed class ClusterDiagnosticsServiceTests
                 }
               }
               """);
+        return handler;
+    }
+
+    private static FakeKubeHandler ClaimsHandler()
+    {
+        var handler = QuotaHandler(150, 200, 150, 200);
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxclaims",
+            """
+            {
+              "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+              "kind": "SandboxClaimList",
+              "items": [
+                {
+                  "metadata": {
+                    "name": "agent-0123456789ab",
+                    "namespace": "agentweaver",
+                    "creationTimestamp": "2026-07-28T12:00:00Z"
+                  },
+                  "spec": {
+                    "warmPoolRef": {
+                      "name": "agentweaver-agent-host"
+                    }
+                  },
+                  "status": {
+                    "sandbox": {
+                      "name": "sandbox-0123456789ab"
+                    },
+                    "conditions": [
+                      {
+                        "type": "Ready",
+                        "status": "True"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """);
         return handler;
     }
 

@@ -23,7 +23,6 @@ import type {
   DetailedHealthCheckDto,
   PendingCapacityRunDto,
   SandboxClaimObjectDto,
-  SandboxObjectDto,
   WarmPoolStatusDto,
 } from '../api/types';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
@@ -131,7 +130,14 @@ function AgentPodsTable({ pods, label }: { pods: AgentPodInfoDto[]; label: strin
 }
 
 function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
-  if (rows.length === 0) return <EmptyState title="No pending capacity runs" />;
+  if (rows.length === 0) {
+    return (
+      <EmptyState
+        title="No pending capacity runs"
+        description="No subtasks are currently queued for capacity — every run is getting a sandbox immediately."
+      />
+    );
+  }
   return (
     <Table aria-label="Pending capacity runs" size="small">
       <TableHeader>
@@ -181,38 +187,6 @@ function WarmPoolsTable({ rows }: { rows: WarmPoolStatusDto[] }) {
             </TableCell>
             <TableCell>{p.ready_replicas} / {p.desired_replicas}</TableCell>
             <TableCell>{formatAge(p.age_seconds)}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
-function SandboxObjectsTable({ rows }: { rows: SandboxObjectDto[] }) {
-  if (rows.length === 0) return <EmptyState title="No sandbox objects" description="Sandbox objects will appear when agent runs are active." />;
-  return (
-    <Table aria-label="Sandbox objects" size="small">
-      <TableHeader>
-        <TableRow>
-          <TableHeaderCell>Name</TableHeaderCell>
-          <TableHeaderCell>Phase</TableHeaderCell>
-          <TableHeaderCell>Ready</TableHeaderCell>
-          <TableHeaderCell>Warm pool</TableHeaderCell>
-          <TableHeaderCell>Age</TableHeaderCell>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((s) => (
-          <TableRow key={s.name}>
-            <TableCell style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}>{s.name}</TableCell>
-            <TableCell>
-              <Badge appearance="tint" color={s.phase === 'running' ? 'success' : s.phase === 'pending' ? 'warning' : 'subtle'}>{s.phase}</Badge>
-            </TableCell>
-            <TableCell>
-              <Badge appearance="tint" color={s.ready ? 'success' : 'warning'}>{s.ready ? 'yes' : 'no'}</Badge>
-            </TableCell>
-            <TableCell style={{ fontSize: tokens.fontSizeBase200 }}>{s.warm_pool ?? '—'}</TableCell>
-            <TableCell>{formatAge(s.age_seconds)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -388,16 +362,15 @@ export function ClusterPage() {
             </PageSection>
           )}
 
-          <PageSection title={`Pending capacity (${data.pending_capacity_runs.length})`}>
+          <PageSection
+            title={`Pending capacity (${data.pending_capacity_runs.length})`}
+            description="Subtasks that couldn't get a sandbox immediately because the warm pool had no free capacity wait here until a slot frees up. Zero is healthy: it means every run got a sandbox right away."
+          >
             <PendingCapacityTable rows={data.pending_capacity_runs} />
           </PageSection>
 
           <PageSection title={`Warm pools (${data.warm_pools?.length ?? 0})`}>
             <WarmPoolsTable rows={data.warm_pools ?? []} />
-          </PageSection>
-
-          <PageSection title={`Sandbox objects (${data.sandbox_objects?.length ?? 0})`}>
-            <SandboxObjectsTable rows={data.sandbox_objects ?? []} />
           </PageSection>
 
           <Label as="p" tone="quiet" className={styles.generated}>
