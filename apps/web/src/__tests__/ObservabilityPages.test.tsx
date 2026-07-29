@@ -80,19 +80,30 @@ beforeEach(() => {
     universe: 'harry-potter',
     members: [
       {
-        name: 'Harry',
-        role_title: 'Backend Dev',
+        name: 'Hermione',
+        role_title: 'Writer',
         charter_path: '',
         status: 'active',
         default_model: 'gpt-5',
         is_named: true,
         is_built_in: false,
       },
+    ],
+    retired_members: [
+      {
+        name: 'Harry',
+        role_title: 'Backend Dev',
+        charter_path: '',
+        status: 'retired',
+        default_model: 'gpt-5',
+        is_named: true,
+        is_built_in: false,
+      },
       {
         name: 'Hermione',
-        role_title: 'Writer',
+        role_title: 'Former Writer',
         charter_path: '',
-        status: 'active',
+        status: 'retired',
         default_model: 'gpt-5',
         is_named: true,
         is_built_in: false,
@@ -150,18 +161,18 @@ describe('observability pages', () => {
     expect(transactionTracePanelSpy).toHaveBeenCalledWith(expect.objectContaining({
       runId: 'coord-run-1',
       roleByAgent: {
-        Harry: 'Backend Dev',
         Hermione: 'Writer',
       },
     }));
   });
 
-  it('passes project team role titles into AgentTokenBreakdown on the agents page', async () => {
+  it('passes active and retired role titles into AgentTokenBreakdown on the agents page', async () => {
     vi.mocked(apiClient.getProjectMetrics).mockResolvedValue({
       throughput: [],
       leaderboard: [],
       agentBreakdown: [
         { agentName: 'Harry', invocationCount: 2, totalTokens: 120, totalNanoAiu: 3000 },
+        { agentName: 'Hermione', invocationCount: 1, totalTokens: 60, totalNanoAiu: 1000 },
       ],
     });
 
