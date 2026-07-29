@@ -31,16 +31,17 @@ public sealed record SystemDiagnosticsDto
     [JsonPropertyName("checks")]             public required IReadOnlyList<DiagnosticsCheckDto> Checks       { get; init; }
 
     /// <summary>
-    /// Agent-pod CPU quota headroom (spec: 24-core namespace quota, 2 CPU per agent pod). Null when
-    /// the API is not running against a Kubernetes backend.
+    /// Agent-pod admission headroom derived from the currently limiting object quota (pods or
+    /// SandboxClaims). Null when the API is not running against a Kubernetes backend.
     /// </summary>
     [JsonPropertyName("agent_pod_quota")]    public AgentPodQuotaDiagnosticDto?            AgentPodQuota    { get; init; }
 }
 
 /// <summary>
-/// Agent-pod CPU quota diagnostic (spec-006). Surfaces whether the namespace ResourceQuota still has
-/// room to start another agent pod, so an exhausted quota is visible in Diagnostics instead of
-/// silently failing every new run.
+/// Agent-pod quota diagnostic (spec-006). Surfaces whether the namespace ResourceQuota still has
+/// room to admit another agent pod by tracking the tighter of the pod and SandboxClaim object
+/// quotas, so an exhausted quota is visible in Diagnostics instead of silently failing every new
+/// run.
 /// </summary>
 public sealed record AgentPodQuotaDiagnosticDto
 {
@@ -49,6 +50,7 @@ public sealed record AgentPodQuotaDiagnosticDto
     [JsonPropertyName("status")] public required string Status { get; init; }
     [JsonPropertyName("used")]   public double?         Used   { get; init; }
     [JsonPropertyName("limit")]  public double?         Limit  { get; init; }
+    /// <summary>The limiting quota bucket: <c>"pods"</c>, <c>"sandboxclaims"</c>, or unknown.</summary>
     [JsonPropertyName("unit")]   public required string Unit   { get; init; }
 }
 
@@ -79,11 +81,11 @@ public sealed record DetailedHealthCheckDto
 
     // ── Optional, check-specific detail (omitted from JSON when null). ──────────────
 
-    /// <summary>Agent-pod quota: CPU cores currently used against the namespace quota.</summary>
+    /// <summary>Agent-pod quota: objects currently used in the limiting quota bucket.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("used")] public double? Used { get; init; }
 
-    /// <summary>Agent-pod quota: hard CPU-core limit configured on the namespace quota.</summary>
+    /// <summary>Agent-pod quota: hard object limit configured on the limiting quota bucket.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("limit")] public double? Limit { get; init; }
 

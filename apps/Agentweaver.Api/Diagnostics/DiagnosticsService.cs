@@ -1,6 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
-using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Sandbox;
@@ -42,17 +42,15 @@ public sealed class DiagnosticsService
     // (local dev / CI), in which case the quota diagnostic reports status "unknown".
     private readonly IKubernetes? _k8s;
 
-    // Optional dependencies for the detailed multi-dependency health suite (Change to Task 3c).
-    // Null in minimal/test hosts — the corresponding check then reports "unknown".
-    private readonly IGitHubTokenStore? _gitHubTokenStore;
-    private readonly ISecretStore? _secretStore;
-
     // Optional agent-host reaper (spec-006): used to enumerate active/orphaned agent pods for the
     // cluster diagnostics view. Null outside Kubernetes — the inventory then comes back empty.
     private readonly IAgentHostReaper? _reaper;
 
-    /// <summary>Namespace ResourceQuota that caps total agent-pod CPU (spec: 24 cores).</summary>
+    /// <summary>Namespace ResourceQuota that enforces AgentHost admission object limits.</summary>
     private const string ResourceQuotaName = "agentweaver-quota";
+    private const string PodQuotaKey = "pods";
+    private const string SandboxClaimQuotaKey =
+        "count/" + SandboxClaimConventions.ClaimPlural + "." + SandboxClaimConventions.ApiGroup;
 
     /// <summary>Key Vault secret probed by the detailed Key Vault health check.</summary>
     private const string KeyVaultProbeSecretName = "mcp-oauth-signing-key";
@@ -72,8 +70,6 @@ public sealed class DiagnosticsService
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
         IKubernetes? k8s = null,
-        IGitHubTokenStore? gitHubTokenStore = null,
-        ISecretStore? secretStore = null,
         IAgentHostReaper? reaper = null)
     {
         _db = db;
@@ -84,8 +80,6 @@ public sealed class DiagnosticsService
         _configuration = configuration;
         _scopeFactory = scopeFactory;
         _k8s = k8s;
-        _gitHubTokenStore = gitHubTokenStore;
-        _secretStore = secretStore;
         _reaper = reaper;
     }
 
@@ -137,11 +131,11 @@ public sealed class DiagnosticsService
     }
 
     /// <summary>
-    /// Reports agent-pod CPU quota headroom from the namespace ResourceQuota
-    /// (<see cref="ResourceQuotaName"/>). Status thresholds (each agent pod needs 2 CPU):
-    /// headroom &gt;= 4 → healthy, 2–4 → warning, &lt; 2 → critical (cannot start a new agent pod).
-    /// Returns <c>null</c> outside Kubernetes and status <c>"unknown"</c> when the quota is missing
-    /// or the read fails — diagnostics must never throw.
+    /// Reports effective agent-pod admission headroom from the namespace ResourceQuota
+    /// (<see cref="ResourceQuotaName"/>). Each new AgentHost consumes one Pod object and one
+    /// SandboxClaim object, so the tighter of those two quota buckets determines whether another
+    /// run can start. Returns <c>null</c> outside Kubernetes and status <c>"unknown"</c> when the
+    /// quota is missing or the read fails — diagnostics must never throw.
     /// </summary>
     private async Task<AgentPodQuotaDiagnosticDto?> CheckAgentPodQuotaAsync(CancellationToken ct)
     {
@@ -155,26 +149,17 @@ public sealed class DiagnosticsService
             var quota = await _k8s.CoreV1.ReadNamespacedResourceQuotaAsync(
                 ResourceQuotaName, ns, cancellationToken: ct).ConfigureAwait(false);
 
-            var usedStr = TryGetQuotaCpu(quota?.Status?.Used);
-            var hardStr = TryGetQuotaCpu(quota?.Status?.Hard);
-
-            if (usedStr is null || hardStr is null ||
-                !KubernetesSandboxExecutor.TryParseCpu(usedStr, out var used) ||
-                !KubernetesSandboxExecutor.TryParseCpu(hardStr, out var hard))
-            {
+            var snapshot = TryGetAgentPodQuotaSnapshot(quota);
+            if (snapshot is null)
                 return UnknownQuota();
-            }
-
-            var headroom = hard - used;
-            var status = headroom >= 4.0 ? "healthy" : headroom >= 2.0 ? "warning" : "critical";
 
             return new AgentPodQuotaDiagnosticDto
             {
                 Name   = "agent_pod_quota",
-                Status = status,
-                Used   = used,
-                Limit  = hard,
-                Unit   = "CPU cores",
+                Status = GetAgentPodQuotaStatus(snapshot.Headroom),
+                Used   = snapshot.Used,
+                Limit  = snapshot.Limit,
+                Unit   = snapshot.LimitingResource,
             };
         }
         catch (OperationCanceledException)
@@ -193,14 +178,67 @@ public sealed class DiagnosticsService
         Status = "unknown",
         Used   = null,
         Limit  = null,
-        Unit   = "CPU cores",
+        Unit   = "pods or sandboxclaims",
     };
 
-    private static string? TryGetQuotaCpu(IDictionary<string, k8s.Models.ResourceQuantity>? map)
+    private static AgentPodQuotaSnapshot? TryGetAgentPodQuotaSnapshot(k8s.Models.V1ResourceQuota? quota)
     {
-        if (map is not null && map.TryGetValue("limits.cpu", out var quantity) && quantity is not null)
-            return quantity.ToString();
-        return null;
+        if (!TryGetQuotaCount(quota?.Status?.Used, PodQuotaKey, out var podUsed) ||
+            !TryGetQuotaCount(quota?.Status?.Hard, PodQuotaKey, out var podLimit) ||
+            !TryGetQuotaCount(quota?.Status?.Used, SandboxClaimQuotaKey, out var sandboxClaimUsed) ||
+            !TryGetQuotaCount(quota?.Status?.Hard, SandboxClaimQuotaKey, out var sandboxClaimLimit))
+            return null;
+
+        var podHeadroom = podLimit - podUsed;
+        var sandboxClaimHeadroom = sandboxClaimLimit - sandboxClaimUsed;
+        var limitingResource = podHeadroom <= sandboxClaimHeadroom ? PodQuotaKey : "sandboxclaims";
+        var used = limitingResource == PodQuotaKey ? podUsed : sandboxClaimUsed;
+        var limit = limitingResource == PodQuotaKey ? podLimit : sandboxClaimLimit;
+
+        return new AgentPodQuotaSnapshot(
+            podUsed,
+            podLimit,
+            sandboxClaimUsed,
+            sandboxClaimLimit,
+            limitingResource,
+            used,
+            limit);
+    }
+
+    private static bool TryGetQuotaCount(
+        IDictionary<string, k8s.Models.ResourceQuantity>? map,
+        string key,
+        out double value)
+    {
+        value = 0;
+        return map is not null &&
+               map.TryGetValue(key, out var quantity) &&
+               quantity is not null &&
+               double.TryParse(
+                   quantity.ToString(),
+                   NumberStyles.Number,
+                   CultureInfo.InvariantCulture,
+                   out value);
+    }
+
+    // The enforced quota buckets default to 200 objects each, and every new AgentHost consumes one
+    // pod plus one SandboxClaim. Once headroom drops into single digits the namespace is close to
+    // admission exhaustion, so we warn there; zero remaining objects means no new run can start.
+    private static string GetAgentPodQuotaStatus(double headroom) =>
+        headroom >= 10 ? "healthy" : headroom >= 1 ? "warning" : "critical";
+
+    private static string FormatAgentPodQuotaMessage(AgentPodQuotaSnapshot snapshot)
+    {
+        var limitingLabel = snapshot.LimitingResource == PodQuotaKey ? "pods" : "sandboxclaims";
+        if (snapshot.Headroom < 1)
+        {
+            return $"no headroom for a new agent pod (pods {snapshot.PodUsed}/{snapshot.PodLimit}, " +
+                   $"sandboxclaims {snapshot.SandboxClaimUsed}/{snapshot.SandboxClaimLimit} used)";
+        }
+
+        return $"{snapshot.Headroom:0} additional agent pod starts available before quota exhaustion " +
+               $"(limited by {limitingLabel}; pods {snapshot.PodUsed}/{snapshot.PodLimit}, " +
+               $"sandboxclaims {snapshot.SandboxClaimUsed}/{snapshot.SandboxClaimLimit} used)";
     }
 
     // -------------------------------------------------------------------------
@@ -223,7 +261,6 @@ public sealed class DiagnosticsService
         // Checks + inventory run concurrently; the inventory tasks are best-effort (never throw).
         var checksTask = Task.WhenAll(
             RunGuardedAsync("postgresql", CheckPostgresAsync, ct),
-            RunGuardedAsync("github_installation_token", CheckGitHubInstallationTokenAsync, ct),
             RunGuardedAsync("key_vault", CheckKeyVaultAsync, ct),
             RunGuardedAsync("agent_pod_quota", CheckAgentPodQuotaDetailedAsync, ct),
             RunGuardedAsync("warm_pool", CheckWarmPoolAsync, ct),
@@ -405,50 +442,6 @@ public sealed class DiagnosticsService
         }
     }
 
-    /// <summary>GitHub Installation token: inspects the STORED token's presence and expiry only (no
-    /// live GitHub call). healthy when present and unexpired; critical when missing or expired
-    /// (agents cannot run).</summary>
-    private async Task<DetailedHealthCheckDto> CheckGitHubInstallationTokenAsync(CancellationToken ct)
-    {
-        var sw = Stopwatch.StartNew();
-        if (_gitHubTokenStore is null)
-        {
-            sw.Stop();
-            return Detailed("github_installation_token", "unknown",
-                "no token store configured", sw.Elapsed.TotalMilliseconds);
-        }
-
-        try
-        {
-            var token = await _gitHubTokenStore.GetTokenAsync(GitHubTokenScope.Installation, ct).ConfigureAwait(false);
-            sw.Stop();
-            var ms = sw.Elapsed.TotalMilliseconds;
-
-            if (token is null || string.IsNullOrEmpty(token.AccessToken))
-                return Detailed("github_installation_token", "critical",
-                    "no installation token stored — agents cannot run", ms);
-
-            if (token.ExpiresAt is { } exp && exp <= DateTimeOffset.UtcNow)
-                return Detailed("github_installation_token", "critical",
-                    $"installation token expired at {exp:O} — agents cannot run", ms);
-
-            var detail = token.ExpiresAt is { } e
-                ? $"installation token valid (expires {e:O})"
-                : "installation token present (no expiry)";
-            return Detailed("github_installation_token", "healthy", detail, ms);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            return Detailed("github_installation_token", "critical",
-                $"token read failed: {ex.Message}", sw.Elapsed.TotalMilliseconds);
-        }
-    }
-
     /// <summary>Key Vault: verifies the CSI-mounted <c>mcp-oauth-signing-key</c> secret was loaded
     /// into configuration (Auth:OAuth:SigningKey). Uses IConfiguration — ISecretStore applies
     /// a "ghtok-" prefix intended for GitHub token storage, not raw KV secret probes.</summary>
@@ -463,8 +456,9 @@ public sealed class DiagnosticsService
             : Detailed("key_vault", "critical", $"secret '{KeyVaultProbeSecretName}' not found", ms));
     }
 
-    /// <summary>Agent-pod CPU quota with subtask PendingCapacity backlog. headroom &gt;= 4 → healthy,
-    /// 2–4 → warning (one pod can still start), &lt; 2 → critical (no new agent pod can start).</summary>
+    /// <summary>Agent-pod object-quota headroom with subtask PendingCapacity backlog. Effective
+    /// headroom is the tighter of the pod and SandboxClaim buckets because each new AgentHost
+    /// consumes one of each.</summary>
     private async Task<DetailedHealthCheckDto> CheckAgentPodQuotaDetailedAsync(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -474,7 +468,7 @@ public sealed class DiagnosticsService
         {
             sw.Stop();
             return Detailed("agent_pod_quota", "unknown", "not running on Kubernetes", sw.Elapsed.TotalMilliseconds)
-                with { Unit = "CPU cores", PendingCount = pendingCount };
+                with { Unit = "pods or sandboxclaims", PendingCount = pendingCount };
         }
 
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
@@ -483,26 +477,28 @@ public sealed class DiagnosticsService
             var quota = await _k8s.CoreV1.ReadNamespacedResourceQuotaAsync(
                 ResourceQuotaName, ns, cancellationToken: ct).ConfigureAwait(false);
 
-            var usedStr = TryGetQuotaCpu(quota?.Status?.Used);
-            var hardStr = TryGetQuotaCpu(quota?.Status?.Hard);
             sw.Stop();
             var ms = sw.Elapsed.TotalMilliseconds;
+            var snapshot = TryGetAgentPodQuotaSnapshot(quota);
 
-            if (usedStr is null || hardStr is null ||
-                !KubernetesSandboxExecutor.TryParseCpu(usedStr, out var used) ||
-                !KubernetesSandboxExecutor.TryParseCpu(hardStr, out var hard))
+            if (snapshot is null)
             {
                 return Detailed("agent_pod_quota", "unknown", "quota missing or unparseable", ms)
-                    with { Unit = "CPU cores", PendingCount = pendingCount };
+                    with { Unit = "pods or sandboxclaims", PendingCount = pendingCount };
             }
 
-            var headroom = hard - used;
-            var status = headroom >= 4.0 ? "healthy" : headroom >= 2.0 ? "warning" : "critical";
-            var msg = status == "critical"
-                ? $"no headroom for a new agent pod ({used}/{hard} CPU used)"
-                : $"{headroom} CPU headroom ({used}/{hard} CPU used)";
-            return Detailed("agent_pod_quota", status, msg, ms)
-                with { Used = used, Limit = hard, Unit = "CPU cores", PendingCount = pendingCount };
+            return Detailed(
+                    "agent_pod_quota",
+                    GetAgentPodQuotaStatus(snapshot.Headroom),
+                    FormatAgentPodQuotaMessage(snapshot),
+                    ms)
+                with
+                {
+                    Used = snapshot.Used,
+                    Limit = snapshot.Limit,
+                    Unit = snapshot.LimitingResource,
+                    PendingCount = pendingCount,
+                };
         }
         catch (OperationCanceledException)
         {
@@ -512,7 +508,7 @@ public sealed class DiagnosticsService
         {
             sw.Stop();
             return Detailed("agent_pod_quota", "unknown", $"quota read failed: {ex.Message}", sw.Elapsed.TotalMilliseconds)
-                with { Unit = "CPU cores", PendingCount = pendingCount };
+                with { Unit = "pods or sandboxclaims", PendingCount = pendingCount };
         }
     }
 
@@ -1286,5 +1282,17 @@ public sealed class DiagnosticsService
         {
             return DateTimeOffset.UtcNow;
         }
+    }
+
+    private sealed record AgentPodQuotaSnapshot(
+        double PodUsed,
+        double PodLimit,
+        double SandboxClaimUsed,
+        double SandboxClaimLimit,
+        string LimitingResource,
+        double Used,
+        double Limit)
+    {
+        public double Headroom => Math.Min(PodLimit - PodUsed, SandboxClaimLimit - SandboxClaimUsed);
     }
 }
