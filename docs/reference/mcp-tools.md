@@ -183,10 +183,10 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 
 | Tool | Description |
 | --- | --- |
-| `workflow_generate` | Generate a new workflow definition from a natural language description. Returns YAML draft — not yet saved. Use workflow_save to persist. The agent can inspect the YAML before saving. |
-| `workflow_get` | Get the full definition of a single workflow by ID, including its nodes, edges, and trigger. |
-| `workflow_save` | Save a workflow YAML to the project workspace. Validates and dry-run binds before saving. Returns the parsed workflow definition. |
-| `workflows_list` | List all discovered workflow definitions for a project, including their validation status and which one is the effective default. |
+| `workflow_generate` | Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. Returns YAML draft — not yet saved. Use workflow_save to persist. The agent can inspect the YAML before saving. |
+| `workflow_get` | Get the full definition of a single workflow by ID, including its nodes, edges, and trigger. MCP has no separate trigger-configure tool yet. |
+| `workflow_save` | Save a workflow YAML to the project workspace. This is the current MCP write path for trigger changes; there is no separate workflow_set_trigger tool. Validates and dry-run binds before saving. Returns the parsed workflow definition. |
+| `workflows_list` | List all discovered workflow definitions for a project, including their validation status, effective default, and any configured trigger. |
 | `workflows_sync` | Re-read the project's workflow definitions from disk, refreshing the in-memory registry. Returns the updated workflow list. |
 
 ## Workspace
