@@ -104,6 +104,26 @@ test('capture script re-installs the overlay bootstrap after every in-plan goto'
   assert.ok(markIdx > reinstallIdx, 'expected the goto activity mark after re-install');
 });
 
+test('capture script runs and stops the approval watcher around the step loop', () => {
+  const src = renderCaptureScript({
+    startUrl: 'https://x/y',
+    videoPath: 'a.webm',
+    steps: [{ type: 'waitText', text: 'done' }],
+  });
+  const screencastIdx = src.indexOf('await page.screencast.start');
+  const watcherStartIdx = src.indexOf('const approvalWatcher = approvalWatcherEnabled ? (async () => {');
+  const tryIdx = src.indexOf('  try {');
+  const clickIdx = src.indexOf("await click(approvalButton, 1.02, 700, true);");
+  const watcherStopIdx = src.indexOf('await approvalWatcher.catch(() => {});');
+  const screencastStopIdx = src.indexOf('await page.screencast.stop().catch(() => {});');
+  assert.ok(screencastIdx > 0, 'expected screencast startup');
+  assert.ok(watcherStartIdx > screencastIdx, 'expected approval watcher after screencast startup');
+  assert.ok(tryIdx > watcherStartIdx, 'expected approval watcher before the step loop try block');
+  assert.ok(clickIdx > watcherStartIdx, 'expected the approval watcher to auto-click through the shared helper');
+  assert.ok(watcherStopIdx > tryIdx, 'expected the approval watcher to be awaited in finally');
+  assert.ok(screencastStopIdx > watcherStopIdx, 'expected approval watcher shutdown before screencast stop');
+});
+
 test('capture script supports eval, waitFor, forced clicks and selector-scoped press', () => {
   const src = renderCaptureScript({
     startUrl: 'https://x/y',
