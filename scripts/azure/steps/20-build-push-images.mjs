@@ -102,12 +102,37 @@ export async function currentTagFor(image, namespace, { kubectl = kubectlDefault
   return kubectl.currentDeploymentTag(image.currentTag.name, namespace);
 }
 
-/** Polls ACR (up to 5 attempts, 2s apart) for the digest a tag currently resolves to. */
+const ACR_TAG_DIGEST_POLL_INITIAL_DELAY_MS = 2_000;
+const ACR_TAG_DIGEST_POLL_MAX_DELAY_MS = 15_000;
+const ACR_TAG_DIGEST_POLL_BUDGET_MS = 5 * 60_000;
+const ACR_TAG_DIGEST_POLL_DELAYS_MS = Object.freeze(buildAcrTagDigestPollDelays());
+
+function buildAcrTagDigestPollDelays() {
+  const delays = [];
+  for (let elapsed = 0, nextDelay = ACR_TAG_DIGEST_POLL_INITIAL_DELAY_MS; elapsed < ACR_TAG_DIGEST_POLL_BUDGET_MS; ) {
+    const delay = Math.min(nextDelay, ACR_TAG_DIGEST_POLL_BUDGET_MS - elapsed);
+    delays.push(delay);
+    elapsed += delay;
+    nextDelay = Math.min(nextDelay * 2, ACR_TAG_DIGEST_POLL_MAX_DELAY_MS);
+  }
+  return delays;
+}
+
+/**
+ * Polls ACR for the digest a tag currently resolves to.
+ *
+ * The large backoff window is deliberate: under concurrent multi-image `az acr import`
+ * load, ACR's `show-manifests` read path has lagged the successful write by minutes in
+ * production, so a short 10s loop causes false "unstamped image" deploy failures.
+ */
 export async function waitForAcrTagDigest(image, tag, cfg, { exec = execDefault, sleep = defaultSleep } = {}) {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  const initialDigest = await acrDigestForTag(image, tag, cfg, { exec });
+  if (initialDigest) return initialDigest;
+
+  for (const delay of ACR_TAG_DIGEST_POLL_DELAYS_MS) {
+    await sleep(delay);
     const digest = await acrDigestForTag(image, tag, cfg, { exec });
     if (digest) return digest;
-    await sleep(2000);
   }
   return null;
 }
