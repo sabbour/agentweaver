@@ -431,8 +431,10 @@ public sealed class GitHubWebhookEndpointsTests : IClassFixture<GitHubWebhookWeb
         var body = IssueCommentPayload(repoFullName, rawComment);
 
         var response = await _client.SendAsync(BuildRequest(projectId, "issue_comment", body, Sign(body)));
+        var responseBody = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        responseBody.Should().NotContain(rawComment);
         (await ListBacklogAsync(projectId)).Should().BeEmpty();
     }
 

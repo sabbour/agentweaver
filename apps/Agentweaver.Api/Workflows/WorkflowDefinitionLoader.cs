@@ -2,7 +2,6 @@ using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using Agentweaver.Squad.Catalog;
-using System.Text.RegularExpressions;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -475,14 +474,8 @@ public static class WorkflowDefinitionLoader
                 return Fail(source, $"{path}.comment_matches is only supported for github.issue_comment events.", out error);
             if (string.IsNullOrWhiteSpace(dto.CommentMatches.Pattern))
                 return Fail(source, $"{path}.comment_matches.pattern is required.", out error);
-            try
-            {
-                _ = new Regex(dto.CommentMatches.Pattern, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
-            }
-            catch (ArgumentException ex)
-            {
-                return Fail(source, $"{path}.comment_matches.pattern is not a valid regex: {ex.Message}", out error);
-            }
+            if (!WorkflowTriggerRegexPolicy.TryValidatePattern(dto.CommentMatches.Pattern, out var regexError))
+                return Fail(source, $"{path}.comment_matches.{regexError}", out error);
 
             predicate = new WorkflowTriggerPredicate
             {

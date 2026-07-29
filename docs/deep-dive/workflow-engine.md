@@ -256,7 +256,9 @@ trigger:
 `comment_matches` preserves the repo's existing webhook trust boundary. The GitHub comment body is
 used only for a fixed regex boolean check. The workflow engine does **not** extract capture groups,
 derive arguments, log the raw text at info level, persist it into backlog metadata, or forward it
-into downstream prompts. The output of the predicate is only "matched" or "did not match."
+into downstream prompts. The output of the predicate is only "matched" or "did not match." Patterns
+are validated against a restricted safe subset at save/load time and executed with .NET's
+non-backtracking regex engine plus a hard timeout.
 
 ## Workflow Library and Generation
 

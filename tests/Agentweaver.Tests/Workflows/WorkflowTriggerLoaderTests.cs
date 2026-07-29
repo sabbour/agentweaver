@@ -308,6 +308,24 @@ public sealed class WorkflowTriggerLoaderTests
     }
 
     [Fact]
+    public void Load_EventTriggerWithCatastrophicBacktrackingShape_Invalid()
+    {
+        var yaml = BaseYaml + """
+
+            trigger:
+              type: event
+              event_name: github.issue_comment.created
+              if:
+                - comment_matches: { pattern: "^(a+)+$" }
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("nested quantifiers");
+    }
+
+    [Fact]
     public void Serialize_ThenReload_RoundTripsScheduleTrigger()
     {
         var result = WorkflowDefinitionLoader.Load(BaseYaml + """

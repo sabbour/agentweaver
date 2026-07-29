@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Agentweaver.Api.Webhooks;
 
 namespace Agentweaver.Api.Workflows;
@@ -9,8 +8,6 @@ namespace Agentweaver.Api.Workflows;
 /// </summary>
 public static class WorkflowTriggerPredicateEvaluator
 {
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
-
     public static bool EvaluateAll(
         IReadOnlyList<WorkflowTriggerPredicate> predicates,
         string eventName,
@@ -74,7 +71,7 @@ public static class WorkflowTriggerPredicateEvaluator
     private static bool MatchesCommentPattern(string pattern, string? commentBody)
     {
         if (string.IsNullOrWhiteSpace(commentBody)) return false;
-        return Regex.IsMatch(commentBody, pattern, RegexOptions.CultureInvariant, RegexTimeout);
+        return WorkflowTriggerRegexPolicy.IsMatch(pattern, commentBody);
     }
 
     private static string ReviewState(WorkflowTriggerReviewState state) => state switch
