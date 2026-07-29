@@ -1,4 +1,11 @@
-import { addNode, AUTHORABLE_WORKFLOW_NODE_TYPES, parseWorkflowYaml, setBranchTarget } from '../utils/workflowYaml';
+import {
+  addNode,
+  AUTHORABLE_WORKFLOW_NODE_TYPES,
+  getEventTrigger,
+  parseWorkflowYaml,
+  setBranchTarget,
+  setEventTrigger,
+} from '../utils/workflowYaml';
 import { describe, expect, it } from 'vitest';
 const baseYaml = `
 id: sample
@@ -83,6 +90,59 @@ edges:
       gate_kind: 'rai',
       kind: 'gate',
       branches: ['revise', 'safety-failed', 'no-changes', 'review'],
+    });
+  });
+
+  it('round-trips an event trigger with OR conditions and exact comment commands', () => {
+    const yaml = setEventTrigger(baseYaml, {
+      event: 'issue_comment',
+      eventName: 'github.issue_comment',
+      conditions: [
+        { predicate: 'commentMatches', values: ['/agentweaver:triage', '/agentweaver:rerun'], matchAny: true },
+      ],
+    });
+
+    expect(yaml).toContain('type: event');
+    expect(yaml).toContain('event_name: github.issue_comment');
+    expect(yaml).toContain('pattern: ^/agentweaver:triage$');
+    expect(yaml).toContain('pattern: ^/agentweaver:rerun$');
+
+    expect(getEventTrigger(yaml)).toEqual({
+      event: 'issue_comment',
+      eventName: 'github.issue_comment',
+      conditions: [
+        { predicate: 'commentMatches', values: ['/agentweaver:triage', '/agentweaver:rerun'], matchAny: true },
+      ],
+    });
+  });
+
+  it('parses event triggers with single-value predicates', () => {
+    const parsed = getEventTrigger(`
+id: triage
+name: Triage
+start: done
+nodes: []
+edges: []
+trigger:
+  type: event
+  event_name: github.pull_request
+  if:
+    - hasLabel:
+        label: agentweaver:triage
+    - baseBranch:
+        branch: main
+    - isNotLabeledWith:
+        label: skip-triage
+`);
+
+    expect(parsed).toEqual({
+      event: 'pull_request',
+      eventName: 'github.pull_request',
+      conditions: [
+        { predicate: 'hasLabel', values: ['agentweaver:triage'], matchAny: false },
+        { predicate: 'baseBranch', values: ['main'], matchAny: false },
+        { predicate: 'isNotLabeledWith', values: ['skip-triage'], matchAny: false },
+      ],
     });
   });
 });

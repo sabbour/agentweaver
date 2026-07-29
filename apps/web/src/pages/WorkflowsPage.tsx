@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import {
   Badge,
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -43,7 +44,14 @@ import { Link, useParams } from 'react-router-dom';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { BLANK_TEMPLATE, WorkflowEditor } from '../components/WorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
-import { setHeaderField, setScheduleTrigger } from '../utils/workflowYaml';
+import {
+  getEventTrigger,
+  setEventTrigger,
+  setHeaderField,
+  setScheduleTrigger,
+  WORKFLOW_EVENT_PREDICATES_BY_EVENT,
+  WORKFLOW_EVENT_TYPES,
+} from '../utils/workflowYaml';
 import {
   EmptyState,
   Label,
@@ -55,6 +63,12 @@ import {
   RichList,
 } from '../components/ui';
 import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
+import type {
+  WorkflowEventCondition,
+  WorkflowEventPredicateType,
+  WorkflowEventTrigger,
+  WorkflowEventType,
+} from '../utils/workflowYaml';
 
 // Spec 010 (FR-039/041) — project Workflows management page, and the reference
 // implementation for the shared UI pattern kit (components/ui). Lists the
@@ -113,12 +127,123 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
   },
+  conditionCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  conditionHeader: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+  },
+  conditionValues: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  conditionValueRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'flex-end',
+  },
+  grow: {
+    flex: 1,
+  },
+  triggerHint: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
 });
 
 type SelectableWorkflow = WorkflowSummaryDto & { id: string };
 
 function isSelectableWorkflow(workflow: WorkflowSummaryDto): workflow is SelectableWorkflow {
   return workflow.valid && Boolean(workflow.id);
+}
+
+const EVENT_LABELS: Record<WorkflowEventType, string> = {
+  issues: 'Issues',
+  issue_comment: 'Issue comment',
+  pull_request: 'Pull request',
+  pull_request_review: 'Pull request review',
+  push: 'Push',
+  release: 'Release',
+  discussion: 'Discussion',
+};
+
+const EVENT_PREDICATE_LABELS: Record<WorkflowEventPredicateType, string> = {
+  hasLabel: 'Has label',
+  isNotLabeledWith: 'Does not have label',
+  baseBranch: 'Base branch',
+  reviewState: 'Review state',
+  ref: 'Ref',
+  category: 'Discussion category',
+  commentMatches: 'Exact command match',
+};
+
+const REVIEW_STATES = ['approved', 'changes_requested', 'commented'] as const;
+
+function defaultEventTrigger(): WorkflowEventTrigger {
+  return {
+    event: 'issues',
+    eventName: 'github.issues',
+    conditions: [],
+  };
+}
+
+function defaultCondition(predicate: WorkflowEventPredicateType): WorkflowEventCondition {
+  return {
+    predicate,
+    values: [predicate === 'reviewState' ? REVIEW_STATES[0] : ''],
+    matchAny: false,
+  };
+}
+
+function conditionValueLabel(predicate: WorkflowEventPredicateType): string {
+  switch (predicate) {
+    case 'hasLabel':
+    case 'isNotLabeledWith':
+      return 'Label';
+    case 'baseBranch':
+      return 'Base branch';
+    case 'reviewState':
+      return 'Review state';
+    case 'ref':
+      return 'Git ref';
+    case 'category':
+      return 'Category';
+    case 'commentMatches':
+      return 'Exact command match';
+  }
+}
+
+function conditionValueHint(predicate: WorkflowEventPredicateType): string | undefined {
+  switch (predicate) {
+    case 'ref':
+      return 'Use the full Git ref, for example refs/heads/main.';
+    case 'commentMatches':
+      return 'Matches the full comment exactly, for example /agentweaver:triage.';
+    default:
+      return undefined;
+  }
+}
+
+function triggerBadgeCopy(workflow: WorkflowSummaryDto): string | null {
+  if (workflow.trigger?.type === 'schedule') {
+    return `${workflow.trigger.interval ?? 'scheduled'}${workflow.trigger.time_of_day ? ` · ${workflow.trigger.time_of_day} UTC` : ''}`;
+  }
+  if (workflow.trigger?.type === 'event') {
+    const eventName = workflow.trigger.event_name?.replace(/^github\./, '') ?? 'event';
+    return `event · ${eventName}`;
+  }
+  return null;
 }
 
 export function WorkflowsPage() {
@@ -148,6 +273,10 @@ export function WorkflowsPage() {
   const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState('monday');
   const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState('1');
   const [savingSchedule, setSavingSchedule] = useState(false);
+  const [eventWorkflow, setEventWorkflow] = useState<WorkflowSummaryDto | null>(null);
+  const [eventTrigger, setEventTriggerState] = useState<WorkflowEventTrigger>(defaultEventTrigger);
+  const [loadingEventTrigger, setLoadingEventTrigger] = useState(false);
+  const [savingEventTrigger, setSavingEventTrigger] = useState(false);
 
   // Graph expansion: one graph open at a time (null = all collapsed).
   const [expandedGraphId, setExpandedGraphId] = useState<string | null>(null);
@@ -300,6 +429,45 @@ export function WorkflowsPage() {
     }
   }, [projectId, scheduleWorkflow, scheduleInterval, scheduleTime, scheduleDayOfWeek, scheduleDayOfMonth]);
 
+  const handleOpenEvent = useCallback(async (wf: WorkflowSummaryDto) => {
+    if (!projectId || !wf.id) return;
+    setLoadingEventTrigger(true);
+    setError(null);
+    try {
+      const yaml = await apiClient.getWorkflowYaml(projectId, wf.id);
+      // TODO(#641): switch to Tank's structured trigger DTO once the workflows list/detail APIs expose event predicates.
+      const parsed = getEventTrigger(yaml);
+      setEventTriggerState(parsed ?? {
+        ...defaultEventTrigger(),
+        event: 'issues',
+        eventName: wf.trigger?.type === 'event' && wf.trigger.event_name ? wf.trigger.event_name : 'github.issues',
+      });
+      setEventWorkflow(wf);
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setLoadingEventTrigger(false);
+    }
+  }, [projectId]);
+
+  const handleSaveEvent = useCallback(async (remove = false) => {
+    if (!projectId || !eventWorkflow?.id) return;
+    setSavingEventTrigger(true);
+    setError(null);
+    try {
+      const yaml = await apiClient.getWorkflowYaml(projectId, eventWorkflow.id);
+      const updatedYaml = setEventTrigger(yaml, remove ? null : eventTrigger);
+      await apiClient.saveWorkflowYaml(projectId, eventWorkflow.id, updatedYaml);
+      setData(await apiClient.listWorkflows(projectId));
+      setEventWorkflow(null);
+      setSyncMessage(remove ? 'Event trigger removed.' : 'Event trigger saved.');
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setSavingEventTrigger(false);
+    }
+  }, [projectId, eventTrigger, eventWorkflow]);
+
   const handleDuplicateBuiltIn = useCallback(async (wf: WorkflowSummaryDto) => {
     if (!projectId || !wf.id) return;
     setDuplicatingWorkflowId(wf.id);
@@ -360,6 +528,47 @@ export function WorkflowsPage() {
     setEditorState(null);
   }, []);
 
+  const updateEventForPicker = useCallback((nextEvent: WorkflowEventType) => {
+    const allowedPredicates = new Set(WORKFLOW_EVENT_PREDICATES_BY_EVENT[nextEvent]);
+    setEventTriggerState((prev) => ({
+      event: nextEvent,
+      eventName: `github.${nextEvent}`,
+      conditions: prev.conditions
+        .filter((condition) => allowedPredicates.has(condition.predicate))
+        .map((condition) => ({
+          ...condition,
+          values: condition.values.length > 0 ? condition.values : [''],
+        })),
+    }));
+  }, []);
+
+  const addEventCondition = useCallback(() => {
+    setEventTriggerState((prev) => {
+      const [firstPredicate] = WORKFLOW_EVENT_PREDICATES_BY_EVENT[prev.event];
+      if (!firstPredicate) return prev;
+      return {
+        ...prev,
+        conditions: [...prev.conditions, defaultCondition(firstPredicate)],
+      };
+    });
+  }, []);
+
+  const updateEventCondition = useCallback((index: number, update: (condition: WorkflowEventCondition) => WorkflowEventCondition) => {
+    setEventTriggerState((prev) => ({
+      ...prev,
+      conditions: prev.conditions.map((condition, conditionIndex) => (
+        conditionIndex === index ? update(condition) : condition
+      )),
+    }));
+  }, []);
+
+  const removeEventCondition = useCallback((index: number) => {
+    setEventTriggerState((prev) => ({
+      ...prev,
+      conditions: prev.conditions.filter((_, conditionIndex) => conditionIndex !== index),
+    }));
+  }, []);
+
   if (!projectId) return null;
 
   const workflows = data?.workflows ?? [];
@@ -405,9 +614,9 @@ export function WorkflowsPage() {
               {wf.id && <Label as="span" className={styles.mono}>{wf.id}</Label>}
               {section === 'active' && <Badge appearance="filled" color="brand">Active</Badge>}
               {wf.is_built_in && <Badge appearance="outline">Built-in</Badge>}
-              {wf.trigger?.type === 'schedule' && (
+              {triggerBadgeCopy(wf) && (
                 <Badge appearance="tint" color="informative">
-                  {`${wf.trigger.interval ?? 'scheduled'}${wf.trigger.time_of_day ? ` · ${wf.trigger.time_of_day} UTC` : ''}`}
+                  {triggerBadgeCopy(wf)}
                 </Badge>
               )}
               {!wf.is_built_in && !wf.trigger && <Badge appearance="outline">Manual only</Badge>}
@@ -479,7 +688,17 @@ export function WorkflowsPage() {
               )}
               {wf.id && !wf.is_built_in && (
                 <Button appearance="subtle" size="small" onClick={() => handleOpenSchedule(wf)}>
-                  {wf.trigger?.type === 'schedule' ? 'Edit schedule' : 'Add schedule'}
+                  {wf.trigger?.type === 'schedule' ? 'Edit schedule' : wf.trigger?.type === 'event' ? 'Replace with schedule' : 'Add schedule'}
+                </Button>
+              )}
+              {wf.id && !wf.is_built_in && (
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  disabled={loadingEventTrigger}
+                  onClick={() => { void handleOpenEvent(wf); }}
+                >
+                  {wf.trigger?.type === 'event' ? 'Edit event' : wf.trigger?.type === 'schedule' ? 'Replace with event' : 'Add event'}
                 </Button>
               )}
             </>
@@ -619,6 +838,174 @@ export function WorkflowsPage() {
     </Dialog>
   );
 
+  const eventPredicateOptions = WORKFLOW_EVENT_PREDICATES_BY_EVENT[eventTrigger.event];
+
+  const eventDialog = (
+    <Dialog open={eventWorkflow !== null} onOpenChange={(_, d) => { if (!savingEventTrigger && !loadingEventTrigger && !d.open) setEventWorkflow(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Event trigger</DialogTitle>
+          <DialogContent>
+            {loadingEventTrigger ? (
+              <Spinner label="Loading event trigger" />
+            ) : (
+              <>
+                <Field label="GitHub event" hint="Pick from the supported webhook events for workflow automation.">
+                  <Select
+                    value={eventTrigger.event}
+                    onChange={(_, d) => updateEventForPicker(d.value as WorkflowEventType)}
+                    disabled={savingEventTrigger}
+                  >
+                    {WORKFLOW_EVENT_TYPES.map((event) => <option key={event} value={event}>{EVENT_LABELS[event]}</option>)}
+                  </Select>
+                </Field>
+
+                {eventPredicateOptions.length === 0 ? (
+                  <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody>Release triggers currently match on the selected event only.</MessageBarBody>
+                  </MessageBar>
+                ) : (
+                  <>
+                    <div style={{ marginTop: tokens.spacingVerticalS }}>
+                      <Label>Conditions</Label>
+                      <div className={styles.triggerHint}>Conditions are ANDed together. Turn on “Match any of” within a row to emit an OR group for that field.</div>
+                    </div>
+
+                    {eventTrigger.conditions.map((condition, conditionIndex) => (
+                      <div key={`${condition.predicate}-${conditionIndex}`} className={styles.conditionCard}>
+                        <div className={styles.conditionHeader}>
+                          <Field label="Condition type" className={styles.grow}>
+                            <Select
+                              value={condition.predicate}
+                              onChange={(_, d) => updateEventCondition(conditionIndex, () => defaultCondition(d.value as WorkflowEventPredicateType))}
+                              disabled={savingEventTrigger}
+                            >
+                              {eventPredicateOptions.map((predicate) => (
+                                <option key={predicate} value={predicate}>{EVENT_PREDICATE_LABELS[predicate]}</option>
+                              ))}
+                            </Select>
+                          </Field>
+                          <Button appearance="subtle" disabled={savingEventTrigger} onClick={() => removeEventCondition(conditionIndex)}>
+                            Remove condition
+                          </Button>
+                        </div>
+
+                        <Checkbox
+                          label="Match any of"
+                          checked={condition.matchAny}
+                          disabled={savingEventTrigger}
+                          onChange={(_, data) => updateEventCondition(conditionIndex, (current) => ({
+                            ...current,
+                            matchAny: data.checked === true,
+                            values: data.checked === true
+                              ? current.values.length > 1
+                                ? current.values
+                                : [current.values[0] ?? (current.predicate === 'reviewState' ? REVIEW_STATES[0] : ''), current.predicate === 'reviewState' ? REVIEW_STATES[0] : '']
+                              : [current.values[0] ?? (current.predicate === 'reviewState' ? REVIEW_STATES[0] : '')],
+                          }))}
+                        />
+
+                        <div className={styles.conditionValues}>
+                          {condition.values.map((value, valueIndex) => (
+                            <div key={valueIndex} className={styles.conditionValueRow}>
+                              <Field
+                                label={conditionValueLabel(condition.predicate)}
+                                hint={conditionValueHint(condition.predicate)}
+                                className={styles.grow}
+                              >
+                                {condition.predicate === 'reviewState' ? (
+                                  <Select
+                                    value={value}
+                                    disabled={savingEventTrigger}
+                                    onChange={(_, d) => updateEventCondition(conditionIndex, (current) => ({
+                                      ...current,
+                                      values: current.values.map((currentValue, currentIndex) => currentIndex === valueIndex ? d.value : currentValue),
+                                    }))}
+                                  >
+                                    {REVIEW_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
+                                  </Select>
+                                ) : (
+                                  <Input
+                                    value={value}
+                                    disabled={savingEventTrigger}
+                                    onChange={(_, d) => updateEventCondition(conditionIndex, (current) => ({
+                                      ...current,
+                                      values: current.values.map((currentValue, currentIndex) => currentIndex === valueIndex ? d.value : currentValue),
+                                    }))}
+                                  />
+                                )}
+                              </Field>
+                              {condition.matchAny && condition.values.length > 1 && (
+                                <Button
+                                  appearance="subtle"
+                                  disabled={savingEventTrigger}
+                                  onClick={() => updateEventCondition(conditionIndex, (current) => ({
+                                    ...current,
+                                    values: current.values.filter((_, currentIndex) => currentIndex !== valueIndex),
+                                  }))}
+                                >
+                                  Remove value
+                                </Button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        {condition.matchAny && (
+                          <div>
+                            <Button
+                              appearance="secondary"
+                              disabled={savingEventTrigger}
+                              onClick={() => updateEventCondition(conditionIndex, (current) => ({
+                                ...current,
+                                values: [...current.values, ''],
+                              }))}
+                            >
+                              Add another value
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    <div style={{ marginTop: tokens.spacingVerticalS }}>
+                      <Button appearance="secondary" disabled={savingEventTrigger} onClick={addEventCondition}>
+                        Add condition
+                      </Button>
+                    </div>
+                  </>
+                )}
+
+                {eventWorkflow?.trigger?.type === 'schedule' && (
+                  <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody>Saving an event trigger replaces this workflow’s existing schedule trigger.</MessageBarBody>
+                  </MessageBar>
+                )}
+              </>
+            )}
+          </DialogContent>
+          <DialogActions>
+            {eventWorkflow?.trigger?.type === 'event' && (
+              <Button appearance="subtle" disabled={savingEventTrigger || loadingEventTrigger} onClick={() => { void handleSaveEvent(true); }}>
+                Remove event
+              </Button>
+            )}
+            <Button appearance="subtle" disabled={savingEventTrigger || loadingEventTrigger} onClick={() => setEventWorkflow(null)}>
+              Cancel
+            </Button>
+            <Button
+              appearance="primary"
+              disabled={savingEventTrigger || loadingEventTrigger || eventTrigger.conditions.some((condition) => condition.values.some((value) => !value.trim()))}
+              onClick={() => { void handleSaveEvent(); }}
+            >
+              {savingEventTrigger ? 'Saving…' : 'Save event'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+
   const scheduleDialog = (
     <Dialog open={scheduleWorkflow !== null} onOpenChange={(_, d) => { if (!savingSchedule && !d.open) setScheduleWorkflow(null); }}>
       <DialogSurface>
@@ -666,6 +1053,7 @@ export function WorkflowsPage() {
       <PageContainer>
         {header}
         {generateDialog}
+        {eventDialog}
         {scheduleDialog}
         {editorState.visual ? (
           <VisualWorkflowEditor
@@ -692,6 +1080,7 @@ export function WorkflowsPage() {
     <PageContainer>
       {header}
       {generateDialog}
+      {eventDialog}
       {scheduleDialog}
 
       {syncMessage && (

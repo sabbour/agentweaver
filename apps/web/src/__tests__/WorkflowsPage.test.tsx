@@ -182,6 +182,66 @@ describe('WorkflowsPage', () => {
     ));
   });
 
+  it('renders an event-trigger badge and loads the configured event editor state', async () => {
+    const eventDriven = {
+      ...sampleList.workflows[1],
+      valid: true,
+      error: null,
+      trigger: { type: 'event' as const, event_name: 'github.issue_comment' },
+    };
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], eventDriven] });
+    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue(`id: nightly
+name: Nightly Sweep
+start: done
+nodes: []
+edges: []
+trigger:
+  type: event
+  event_name: github.issue_comment
+  if:
+    - commentMatches:
+        pattern: ^/agentweaver:triage$
+`);
+
+    renderPage('proj-1');
+
+    expect(await screen.findByText('event · issue_comment')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /edit event/i }));
+    expect(await screen.findByText('Event trigger')).toBeDefined();
+    expect(screen.getByText('Issue comment')).toBeDefined();
+    expect((screen.getByRole('textbox', { name: 'Exact command match' }) as HTMLInputElement).value).toBe('/agentweaver:triage');
+  });
+
+  it('builds OR event conditions and saves them back to YAML', async () => {
+    const projectWorkflow = { ...sampleList.workflows[1], valid: true, error: null };
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], projectWorkflow] });
+    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue('id: nightly\nname: Nightly Sweep\nstart: done\nnodes: []\nedges: []\n');
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
+
+    renderPage('proj-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: /add event/i }));
+    expect(await screen.findByText('Event trigger')).toBeDefined();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'GitHub event' }), { target: { value: 'issue_comment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Match any of' }));
+
+    const commandInputs = screen.getAllByRole('textbox', { name: 'Exact command match' });
+    fireEvent.change(commandInputs[0], { target: { value: '/agentweaver:triage' } });
+    fireEvent.change(commandInputs[1], { target: { value: '/agentweaver:rerun' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save event' }));
+
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalledWith(
+      'proj-1',
+      'nightly',
+      expect.stringContaining('event_name: github.issue_comment'),
+    ));
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2]).toContain('or:');
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2]).toContain('pattern: ^/agentweaver:triage$');
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2]).toContain('pattern: ^/agentweaver:rerun$');
+  });
+
   it('queues a workflow-bound run from Run now', async () => {
     const runnable = { ...sampleList.workflows[1], valid: true, error: null };
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], runnable] });

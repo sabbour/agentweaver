@@ -83,6 +83,56 @@ export interface ParseResult {
   error: string | null;
 }
 
+export const WORKFLOW_EVENT_TYPES = [
+  'issues',
+  'issue_comment',
+  'pull_request',
+  'pull_request_review',
+  'push',
+  'release',
+  'discussion',
+] as const;
+
+export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
+
+export const WORKFLOW_EVENT_PREDICATE_TYPES = [
+  'hasLabel',
+  'isNotLabeledWith',
+  'baseBranch',
+  'reviewState',
+  'ref',
+  'category',
+  'commentMatches',
+] as const;
+
+export type WorkflowEventPredicateType = (typeof WORKFLOW_EVENT_PREDICATE_TYPES)[number];
+
+export interface WorkflowEventCondition {
+  predicate: WorkflowEventPredicateType;
+  values: string[];
+  matchAny: boolean;
+}
+
+export interface WorkflowEventTrigger {
+  event: WorkflowEventType;
+  eventName: string;
+  conditions: WorkflowEventCondition[];
+}
+
+export const WORKFLOW_EVENT_PREDICATES_BY_EVENT: Record<WorkflowEventType, WorkflowEventPredicateType[]> = {
+  issues: ['hasLabel', 'isNotLabeledWith'],
+  issue_comment: ['commentMatches'],
+  pull_request: ['hasLabel', 'isNotLabeledWith', 'baseBranch'],
+  pull_request_review: ['reviewState'],
+  push: ['ref'],
+  release: [],
+  discussion: ['category'],
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function asString(v: unknown): string | undefined {
   if (v === null || v === undefined) return undefined;
   return String(v);
@@ -207,6 +257,177 @@ export function setScheduleTrigger(
     };
     if (trigger.interval === 'weekly' && trigger.dayOfWeek) value.day_of_week = trigger.dayOfWeek;
     if (trigger.interval === 'monthly' && trigger.dayOfMonth) value.day_of_month = trigger.dayOfMonth;
+    doc.contents.set('trigger', value);
+  });
+}
+
+function normalizeEventName(event: WorkflowEventType): string {
+  return `github.${event}`;
+}
+
+function parseEventName(eventName: unknown): WorkflowEventType | null {
+  if (typeof eventName !== 'string' || !eventName.startsWith('github.')) return null;
+  const rawEvent = eventName.slice('github.'.length).split('.')[0];
+  return WORKFLOW_EVENT_TYPES.find((event) => event === rawEvent) ?? null;
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function exactCommandPattern(value: string): string {
+  return `^${escapeRegexLiteral(value)}$`;
+}
+
+function exactCommandFromPattern(pattern: string): string {
+  if (!pattern.startsWith('^') || !pattern.endsWith('$')) return pattern;
+  const body = pattern.slice(1, -1);
+  let unescaped = '';
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch === '\\' && i + 1 < body.length) {
+      unescaped += body[i + 1];
+      i += 1;
+      continue;
+    }
+    unescaped += ch;
+  }
+  return unescaped;
+}
+
+function singleValueCondition(
+  predicate: WorkflowEventPredicateType,
+  value: string | undefined,
+): WorkflowEventCondition | null {
+  if (!value) return null;
+  return {
+    predicate,
+    values: [value],
+    matchAny: false,
+  };
+}
+
+function parseEventCondition(value: unknown): WorkflowEventCondition | null {
+  if (!isRecord(value)) return null;
+
+  if (Array.isArray(value.or)) {
+    const children = value.or.map((entry) => parseEventCondition(entry)).filter((entry): entry is WorkflowEventCondition => entry !== null);
+    if (children.length === 0) return null;
+    const [first, ...rest] = children;
+    if (first.matchAny || rest.some((entry) => entry.matchAny || entry.predicate !== first.predicate || entry.values.length !== 1)) {
+      return null;
+    }
+    return {
+      predicate: first.predicate,
+      values: children.map((entry) => entry.values[0]).filter(Boolean),
+      matchAny: true,
+    };
+  }
+
+  if (isRecord(value.hasLabel)) {
+    return singleValueCondition('hasLabel', asString(value.hasLabel.label));
+  }
+  if (isRecord(value.isNotLabeledWith)) {
+    return singleValueCondition('isNotLabeledWith', asString(value.isNotLabeledWith.label));
+  }
+  if (isRecord(value.baseBranch)) {
+    return singleValueCondition('baseBranch', asString(value.baseBranch.branch));
+  }
+  if (isRecord(value.reviewState)) {
+    return singleValueCondition('reviewState', asString(value.reviewState.state));
+  }
+  if (isRecord(value.ref)) {
+    return singleValueCondition('ref', asString(value.ref.value));
+  }
+  if (isRecord(value.category)) {
+    return singleValueCondition('category', asString(value.category.name));
+  }
+  if (isRecord(value.commentMatches)) {
+    const pattern = asString(value.commentMatches.pattern);
+    return singleValueCondition('commentMatches', pattern ? exactCommandFromPattern(pattern) : undefined);
+  }
+
+  return null;
+}
+
+function serializeEventPredicate(predicate: WorkflowEventPredicateType, value: string): Record<string, unknown> {
+  switch (predicate) {
+    case 'hasLabel':
+      return { hasLabel: { label: value } };
+    case 'isNotLabeledWith':
+      return { isNotLabeledWith: { label: value } };
+    case 'baseBranch':
+      return { baseBranch: { branch: value } };
+    case 'reviewState':
+      return { reviewState: { state: value } };
+    case 'ref':
+      return { ref: { value } };
+    case 'category':
+      return { category: { name: value } };
+    case 'commentMatches':
+      return { commentMatches: { pattern: exactCommandPattern(value) } };
+  }
+}
+
+export function getEventTrigger(text: string): WorkflowEventTrigger | null {
+  let js: Record<string, unknown>;
+  try {
+    const doc = parseDocument(text);
+    if (doc.errors.length > 0) return null;
+    const next = doc.toJS();
+    if (!isRecord(next)) return null;
+    js = next;
+  } catch {
+    return null;
+  }
+
+  const trigger = isRecord(js.trigger) ? js.trigger : null;
+  if (!trigger || trigger.type !== 'event') return null;
+  const event = parseEventName(trigger.event_name);
+  if (!event) return null;
+
+  const rawConditions = Array.isArray(trigger.if) ? trigger.if : [];
+  const conditions = rawConditions
+    .map((entry) => parseEventCondition(entry))
+    .filter((entry): entry is WorkflowEventCondition => entry !== null);
+
+  return {
+    event,
+    eventName: typeof trigger.event_name === 'string' ? trigger.event_name : normalizeEventName(event),
+    conditions,
+  };
+}
+
+/** Set or remove an event trigger while preserving the rest of the workflow document. */
+export function setEventTrigger(text: string, trigger: WorkflowEventTrigger | null): string {
+  return withDoc(text, (doc) => {
+    if (!isMap(doc.contents)) return;
+    if (trigger === null) {
+      doc.contents.delete('trigger');
+      return;
+    }
+
+    const eventName = trigger.eventName.startsWith(`github.${trigger.event}`)
+      ? trigger.eventName
+      : normalizeEventName(trigger.event);
+    const conditions = trigger.conditions
+      .map((condition) => ({
+        ...condition,
+        values: condition.values.map((value) => value.trim()).filter(Boolean),
+      }))
+      .filter((condition) => condition.values.length > 0);
+
+    const serializedConditions = conditions.map((condition) =>
+      condition.matchAny && condition.values.length > 1
+        ? { or: condition.values.map((value) => serializeEventPredicate(condition.predicate, value)) }
+        : serializeEventPredicate(condition.predicate, condition.values[0]),
+    );
+
+    const value: Record<string, unknown> = {
+      type: 'event',
+      event_name: eventName,
+    };
+    if (serializedConditions.length > 0) value.if = serializedConditions;
     doc.contents.set('trigger', value);
   });
 }
