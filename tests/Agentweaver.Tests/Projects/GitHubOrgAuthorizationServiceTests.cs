@@ -63,24 +63,26 @@ public sealed class GitHubOrgAuthorizationServiceTests
     }
 
     // ---------------------------------------------------------------------
-    // 3. 403 on the team endpoint (SAML SSO not authorized) → OrgAccessNotGranted.
-    //    A 403 is the signal that the token is not SAML-authorized for the org;
-    //    the service surfaces it as OrgAccessNotGranted rather than a plain Denied.
+    // 3. Team-scoped rule + team endpoint 403 (SAML SSO enforcement) → OrgAccessNotGranted.
+    //    Under the team-membership authz model, a team-scoped rule surfaces the token-level SAML
+    //    enforcement signal in the same way a bare-org SAML 403 does, so the caller sees the
+    //    actionable "authorize SSO" error rather than a plain denial.
     // ---------------------------------------------------------------------
     [Fact]
-    public async Task CheckMembershipAsync_ReturnsOrgAccessNotGranted_WhenTeamCheckIsForbidden()
+    public async Task CheckMembershipAsync_ReturnsOrgAccessNotGranted_WhenTeamScopedRuleAndTeamCheckIsForbidden()
     {
         var handler = new RoutingHttpMessageHandler(req =>
         {
-            if (IsPrivateMembers(req)) return HttpStatusCode.NoContent;    // member of the org
-            if (IsTeam(req))           return HttpStatusCode.Forbidden;    // SAML SSO enforcement
+            if (IsTeam(req)) return HttpStatusCode.Forbidden;    // SAML SSO enforcement on team endpoint
             return HttpStatusCode.NotFound;
         });
-        var service = BuildService(handler, allowedTeam: "microsoft/cool-team");
+        // Rule list contains ONLY a team-scoped rule — no bare-org rule to short-circuit through.
+        var service = BuildService(handler, allowedOrg: "microsoft/cool-team");
 
         var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
 
-        result.Should().Be(OrgAuthResult.OrgAccessNotGranted);
+        result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
+            "a SAML 403 on the team endpoint under a team-scoped rule must surface the 'authorize SSO' signal");
     }
 
     // ---------------------------------------------------------------------
@@ -152,43 +154,169 @@ public sealed class GitHubOrgAuthorizationServiceTests
         result.Should().Be(OrgAuthResult.OrgAccessNotGranted,
             "a SAML 403 with no confirming public membership should still surface the 'authorize SSO' signal");
     }
+
+    // ---------------------------------------------------------------------
+    // 5a. Team-scoped rule: caller is a team member (team endpoint 200) → Allowed.
     // ---------------------------------------------------------------------
     [Fact]
-    public async Task CheckMembershipAsync_Allows_WhenOrgAndTeamMembershipConfirmed()
+    public async Task CheckMembershipAsync_Allows_WhenTeamScopedRuleAndCallerIsTeamMember()
     {
         var handler = new RoutingHttpMessageHandler(req =>
         {
-            if (IsPrivateMembers(req)) return HttpStatusCode.NoContent;    // org member
-            if (IsTeam(req))           return HttpStatusCode.OK;           // active team member
+            if (IsTeam(req)) return HttpStatusCode.OK;           // active team member
             return HttpStatusCode.NotFound;
         });
-        var service = BuildService(handler, allowedTeam: "microsoft/cool-team");
+        var service = BuildService(handler, allowedOrg: "microsoft/cool-team");
 
         var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
 
         result.Should().Be(OrgAuthResult.Allowed);
         handler.RequestUris.Should().Contain(uri =>
             uri.AbsolutePath == "/orgs/microsoft/teams/cool-team/memberships/octocat");
+        // Team-scoped rules probe ONLY the team endpoint — no public/private-members fallback.
+        handler.RequestUris.Should().NotContain(uri => uri.AbsolutePath.Contains("/members/"));
     }
 
     // ---------------------------------------------------------------------
-    // 5b. Team configured but caller is NOT a team member (404) → Denied,
-    //     even though org membership passed.
+    // 5b. Team-scoped rule: caller is NOT a team member (team endpoint 404) → Denied,
+    //     even if they are a member of the org (org membership alone does not satisfy a team rule).
     // ---------------------------------------------------------------------
     [Fact]
-    public async Task CheckMembershipAsync_Denies_WhenOrgMemberButNotTeamMember()
+    public async Task CheckMembershipAsync_Denies_WhenTeamScopedRuleAndCallerNotInTeam()
     {
         var handler = new RoutingHttpMessageHandler(req =>
         {
-            if (IsPrivateMembers(req)) return HttpStatusCode.NoContent;    // org member
             if (IsTeam(req))           return HttpStatusCode.NotFound;     // NOT a team member
+            if (IsPrivateMembers(req)) return HttpStatusCode.NoContent;    // BUT is an org member
             return HttpStatusCode.NotFound;
         });
-        var service = BuildService(handler, allowedTeam: "microsoft/cool-team");
+        var service = BuildService(handler, allowedOrg: "microsoft/cool-team");
 
         var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
 
         result.Should().Be(OrgAuthResult.Denied);
+    }
+
+    // ---------------------------------------------------------------------
+    // 5c. Mixed rules — bare-org rule matches BEFORE team-scoped rule is even probed. This proves
+    //     the OR aggregation: any rule that matches short-circuits to Allowed.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Allows_WhenMixedRulesAndBareOrgRuleMatches()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            if (IsPrivateMembers(req)) return HttpStatusCode.NoContent;    // bare-org rule confirms first
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso/eng-team");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed);
+        handler.RequestUris.Should().NotContain(uri => uri.AbsolutePath.Contains("/teams/"),
+            "the team-scoped rule must not be probed after the bare-org rule already matched");
+    }
+
+    // ---------------------------------------------------------------------
+    // 5d. Mixed rules — bare-org rule doesn't match, team-scoped rule DOES → Allowed.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Allows_WhenMixedRulesAndTeamScopedRuleMatches()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+        {
+            // Not a member of microsoft (bare rule), but IS a member of contoso/eng-team (team rule).
+            if (IsTeam(req)) return HttpStatusCode.OK;
+            return HttpStatusCode.NotFound;
+        });
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso/eng-team");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed);
+    }
+
+    // ---------------------------------------------------------------------
+    // 5e. `org/*` wildcard is canonicalized to bare-org — behaves identically to `org`.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_Allows_WhenWildcardRuleAndOrgMember()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            IsPrivateMembers(req) ? HttpStatusCode.NoContent : HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft/*");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed);
+        handler.RequestUris.Should().NotContain(uri => uri.AbsolutePath.Contains("/teams/"),
+            "an `org/*` rule must not probe the team endpoint; it is a bare-org rule");
+    }
+
+    // ---------------------------------------------------------------------
+    // 5f. Team display-name with a space (e.g. "AKS PM") is defensively slugified to `aks-pm`
+    //     so the request hits the correct GitHub team-membership endpoint.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_SlugifiesTeamDisplayName_ToLowercaseHyphenated()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            IsTeam(req) ? HttpStatusCode.OK : HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "Azure/AKS PM");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed);
+        handler.RequestUris.Should().Contain(uri =>
+            uri.AbsolutePath == "/orgs/Azure/teams/aks-pm/memberships/octocat",
+            "team display names with uppercase or spaces are slugified to GitHub's lowercase-hyphenated form");
+    }
+
+    // ---------------------------------------------------------------------
+    // 5h. Legacy Auth:GitHub:AllowedTeam shim: when set, its value is appended as an ADDITIONAL
+    //     OR'd rule (deprecation warning is logged). Bare-org rule for microsoft + legacy team
+    //     rule contoso/eng → caller who is only a contoso/eng team member is Allowed.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public async Task CheckMembershipAsync_LegacyAllowedTeamKey_IsAppendedAsAdditionalRule()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            IsTeam(req) ? HttpStatusCode.OK : HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft", allowedTeam: "contoso/eng");
+
+        var result = await service.CheckMembershipAsync("token", "octocat", CancellationToken.None);
+
+        result.Should().Be(OrgAuthResult.Allowed,
+            "the deprecated AllowedTeam value is folded into the rule list as an OR'd team rule");
+    }
+    [Fact]
+    public async Task ResolveAsync_ReturnsMatchedEntity_ForMatchingBareOrg()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            req.RequestUri!.AbsolutePath == "/orgs/contoso/members/octocat"
+                ? HttpStatusCode.NoContent
+                : HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso");
+
+        var decision = await service.ResolveAsync("token", "octocat", CancellationToken.None);
+
+        decision.Result.Should().Be(OrgAuthResult.Allowed);
+        decision.MatchedEntity.Should().NotBeNull();
+        decision.MatchedEntity!.RuleString.Should().Be("contoso");
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ReturnsMatchedEntity_ForMatchingTeamRule()
+    {
+        var handler = new RoutingHttpMessageHandler(req =>
+            IsTeam(req) ? HttpStatusCode.OK : HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "microsoft,contoso/eng-team");
+
+        var decision = await service.ResolveAsync("token", "octocat", CancellationToken.None);
+
+        decision.Result.Should().Be(OrgAuthResult.Allowed);
+        decision.MatchedEntity!.RuleString.Should().Be("contoso/eng-team");
     }
 
     // ---------------------------------------------------------------------
@@ -215,7 +343,9 @@ public sealed class GitHubOrgAuthorizationServiceTests
 
     // ---------------------------------------------------------------------
     // 7. GitHubOrgList.Parse: comma + semicolon + whitespace + case-insensitive dedupe,
-    //    order preserved; empty/whitespace => empty list (fail-closed).
+    //    order preserved; empty/whitespace => empty list (fail-closed). Under the new mixed-list
+    //    model Parse still returns distinct ORG NAMES (for the internal-caller shim); the entity
+    //    parser is exercised via CheckMembership above.
     // ---------------------------------------------------------------------
     [Fact]
     public void GitHubOrgList_Parse_SplitsTrimsDedupesPreservingOrder()
@@ -228,6 +358,41 @@ public sealed class GitHubOrgAuthorizationServiceTests
         GitHubOrgList.Parse("   ").Should().BeEmpty();
         GitHubOrgList.Parse(null).Should().BeEmpty();
         GitHubOrgList.Parse(" , ; ,").Should().BeEmpty();
+    }
+
+    // ---------------------------------------------------------------------
+    // 7b. ParseEntities: mixed bare-org / wildcard / team-scoped entries with the exact syntax
+    //     from the user's request. Trailing `/*` canonicalizes to bare-org; team display names
+    //     with spaces are slugified.
+    // ---------------------------------------------------------------------
+    [Fact]
+    public void GitHubOrgList_ParseEntities_HandlesMixedRuleSyntax()
+    {
+        var entities = GitHubOrgList.ParseEntities("Azure/aks,Azure/AKS PM,azure-management-and-platforms/*");
+
+        entities.Should().HaveCount(3);
+        entities[0].Org.Should().Be("Azure");
+        entities[0].TeamSlug.Should().Be("aks");
+        entities[0].RuleString.Should().Be("azure/aks");
+
+        entities[1].Org.Should().Be("Azure");
+        entities[1].TeamSlug.Should().Be("aks-pm",
+            "team display names with a space are slugified to GitHub's lowercase-hyphenated form");
+        entities[1].RuleString.Should().Be("azure/aks-pm");
+
+        entities[2].Org.Should().Be("azure-management-and-platforms");
+        entities[2].TeamSlug.Should().BeNull(
+            "trailing `/*` is canonicalized to a bare-org rule (any org member satisfies)");
+        entities[2].RuleString.Should().Be("azure-management-and-platforms");
+    }
+
+    [Fact]
+    public void GitHubOrgList_ParseEntities_DedupesOnCanonicalRuleString()
+    {
+        var entities = GitHubOrgList.ParseEntities("microsoft,MICROSOFT/*,microsoft/eng,microsoft/Eng");
+        entities.Should().HaveCount(2);
+        entities[0].RuleString.Should().Be("microsoft");
+        entities[1].RuleString.Should().Be("microsoft/eng");
     }
 
     // ---------------------------------------------------------------------

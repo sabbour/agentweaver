@@ -209,11 +209,11 @@ public sealed class GitHubTokenAuthMiddleware
         var internalKey = _configuration["Auth:ApiKey"];
         if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
         {
-            // With a multi-org allowlist, synthesize the caller against the FIRST allowed org
-            // (deterministic) via the shared parser so the downstream org middleware fast-path passes.
-            // When unconfigured (empty list) leave Org null — fail-closed behavior is unchanged.
-            var allowedOrgs = GitHubOrgList.Parse(_configuration["Auth:GitHub:AllowedOrg"]);
-            var allowedOrg = allowedOrgs.Count > 0 ? allowedOrgs[0] : null;
+            // With a multi-rule allow-list, synthesize the caller against the FIRST rule
+            // (deterministic) so the downstream org middleware fast-path passes. Use the entity's
+            // canonical rule string so an internal caller can satisfy a team-scoped first rule too.
+            var allowedEntities = GitHubOrgList.ParseEntities(_configuration["Auth:GitHub:AllowedOrg"]);
+            var allowedOrg = allowedEntities.Count > 0 ? allowedEntities[0].RuleString : null;
             context.Items[CallerItemKey] = new CallerContext
             {
                 User = "agentweaver-internal",
