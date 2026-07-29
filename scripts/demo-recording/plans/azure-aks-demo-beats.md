@@ -22,7 +22,7 @@ What makes this scenario different from the blueprint demo:
 
 ## Beat 0.1 — Introduction: a real, live external repo
 
-Narration: "Everything in this walkthrough happens against a real, live, public repository — Azure's open-source AKS repo — not a synthetic sandbox. We'll stand up a content team, teach it two new skills through the product's own interface, have it triage and de-duplicate real community issues, and draft a real blog post that ships as a single pull request. Two hard rules hold the whole way through: exactly one pull request is ever opened, and it is never merged; and the triage side stays strictly read-only, reading issues without ever commenting on, labeling, or changing a single one."
+Narration: "Everything in this walkthrough happens against a real, live, public repository — Azure's open-source AKS repo — not a synthetic sandbox. We'll stand up a content team, teach it two new skills through the product's own interface, have it triage and de-duplicate real community issues, and draft a real blog post that ships as a single pull request. Along the way, we'll only open that one pull request — and we won't merge it — while the triage side stays read-only and never writes anything back to GitHub."
 
 ## Beat 1.1 — Create the project from GitHub
 
@@ -54,7 +54,7 @@ Narration: "When the draft lands, we read it before anything ships. The team dis
 
 ## Beat 3.4 — Open the single pull request
 
-Narration: "With the draft reviewed, we open a single pull request against the live Azure AKS repository on its own clearly-named branch. This is the one and only write we make to that repo, and we deliberately leave it open — never merged — as an honest artifact of what the demo produced."
+Narration: "With the draft reviewed, we open a single pull request against the live Azure AKS repository on its own clearly named branch. This is the only write we make to the repo, and we leave the pull request open instead of merging it so you can see exactly what the team produced."
 
 ## Beat 4.1 — Run the triage workflow now
 
@@ -66,7 +66,13 @@ Narration: "The run produces exactly what we asked for: a summary that classifie
 
 ## Beat 4.3 — Verify read-only
 
-Narration: "And critically, we confirm the guardrail held. The triage run only read issues — it never posted a comment, changed a label, or edited anything on the repository. The read-only promise we wrote into the skill and the workflow was kept end to end."
+Narration: "And critically, we confirm the guardrail held. The triage run only read issues — it never posted a comment, changed a label, or edited anything on the repository. Read-only, start to finish."
+
+## Beat 4.4 — See the infrastructure behind it
+
+Narration: "Before we wrap, here's the infrastructure carrying the whole demo. The Cluster page shows the live AKS health behind this staging deployment — quota headroom for agent pods, warm pool readiness, and the current sandbox claims — and it refreshes automatically so you can watch that operational picture stay current in real time."
+
+On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), `waitFor` real rendered diagnostics like `agent_pod_quota`, `Warm pool ready`, and the sandbox-claims table, then hold long enough for the auto-refresh countdown or refreshed timestamp to visibly change while the live quota/warm-pool numbers remain on screen.
 
 ## Beat 5.1 — Outro
 
