@@ -121,9 +121,6 @@ public sealed record ClusterDiagnosticsDto
     /// <summary>All SandboxWarmPool objects in the namespace.</summary>
     [JsonPropertyName("warm_pools")]         public required IReadOnlyList<WarmPoolStatusDto>     WarmPools          { get; init; }
 
-    /// <summary>All Sandbox objects in the namespace (both warm-pool and per-run).</summary>
-    [JsonPropertyName("sandbox_objects")]    public required IReadOnlyList<SandboxObjectDto>      SandboxObjects     { get; init; }
-
     /// <summary>All SandboxClaim objects in the namespace.</summary>
     [JsonPropertyName("sandbox_claims")]     public required IReadOnlyList<SandboxClaimObjectDto> SandboxClaims      { get; init; }
 }
@@ -141,23 +138,6 @@ public sealed record WarmPoolStatusDto
     [JsonPropertyName("age_seconds")]     public double?         AgeSeconds      { get; init; }
 }
 
-/// <summary>Status snapshot for one Sandbox object (the actual sandbox pod container).</summary>
-public sealed record SandboxObjectDto
-{
-    [JsonPropertyName("name")]        public required string Name      { get; init; }
-    /// <summary><c>"running"</c>, <c>"pending"</c>, <c>"standby"</c>, or <c>"unknown"</c>.</summary>
-    [JsonPropertyName("phase")]       public required string Phase     { get; init; }
-    [JsonPropertyName("ready")]       public required bool   Ready     { get; init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonPropertyName("pod_name")]    public string?         PodName   { get; init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonPropertyName("template_ref")] public string?        TemplateRef { get; init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonPropertyName("warm_pool")]   public string?         WarmPool  { get; init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonPropertyName("age_seconds")] public double?         AgeSeconds { get; init; }
-}
-
 /// <summary>Status snapshot for one SandboxClaim object.</summary>
 public sealed record SandboxClaimObjectDto
 {
@@ -169,8 +149,6 @@ public sealed record SandboxClaimObjectDto
     [JsonPropertyName("run_id")]           public string?         RunId          { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("bound_sandbox")]    public string?         BoundSandbox   { get; init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonPropertyName("sandbox_template_ref")] public string?     SandboxTemplateRef { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("warm_pool")]        public string?         WarmPool       { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
