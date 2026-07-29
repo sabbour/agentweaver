@@ -53,7 +53,9 @@ public static class SandboxEndpoints
         // Authorization accepts the run's OWN agent callback (service identity) OR a human owner.
         // The runId is server-bound in the agent's tool closure, so the agent can only ever target
         // its own run. Approval is auto-grantable via SANDBOX_PREVIEW_AUTO_APPROVE / the per-run
-        // AutoApproveTools option so an automated demo can run unattended; prod stays human-gated.
+        // AutoApproveTools option so an automated demo can run unattended; otherwise the wait window
+        // defaults to 15 minutes and can be tuned via SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES /
+        // Sandbox:Preview:ApprovalTimeoutMinutes. Prod stays human-gated.
         // Body: { "target_port": 3000 } (snake_case).
         app.MapPost("/api/runs/{runId}/sandbox/preview", async (
             HttpContext httpContext,
