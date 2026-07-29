@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
@@ -76,6 +76,12 @@ export function ObservabilityAgentsPage() {
         const map: Record<string, string> = {};
         for (const m of team.members ?? []) {
           if (m.name && m.role_title) map[m.name] = m.role_title;
+        }
+        for (const m of team.retired_members ?? []) {
+          const hasActiveEntry = m.name
+            ? Object.keys(map).some((name) => name.toLowerCase() === m.name!.toLowerCase())
+            : false;
+          if (m.name && m.role_title && !hasActiveEntry) map[m.name] = m.role_title;
         }
         setRoleByAgent(map);
       })
