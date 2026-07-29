@@ -774,6 +774,7 @@ public sealed record TeamDto
     [JsonPropertyName("project_name")] public required string ProjectName { get; init; }
     [JsonPropertyName("universe")] public required string Universe { get; init; }
     [JsonPropertyName("members")] public required IReadOnlyList<TeamMemberDto> Members { get; init; }
+    [JsonPropertyName("retired_members")] public IReadOnlyList<TeamMemberDto> RetiredMembers { get; init; } = [];
     [JsonPropertyName("layout")] public required string Layout { get; init; }
     [JsonPropertyName("migration_available")] public required bool MigrationAvailable { get; init; }
 }
