@@ -222,6 +222,7 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get one workflow, including its trigger |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get the workflow's trigger config as structured JSON |
 | `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Replace/create the workflow's trigger config |
+| `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update the workflow's trigger config |
 | `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear the workflow's trigger config |
 | `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
 | `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |

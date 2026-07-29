@@ -79,6 +79,17 @@ public sealed record WorkflowTriggerConfigResponse
     [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
 }
 
+public sealed record WorkflowTriggerPatchRequest
+{
+    [JsonPropertyName("type")] public string? Type { get; init; }
+    [JsonPropertyName("interval")] public string? Interval { get; init; }
+    [JsonPropertyName("day_of_week")] public string? DayOfWeek { get; init; }
+    [JsonPropertyName("day_of_month")] public int? DayOfMonth { get; init; }
+    [JsonPropertyName("time_of_day")] public string? TimeOfDay { get; init; }
+    [JsonPropertyName("event_name")] public string? EventName { get; init; }
+    [JsonPropertyName("if")] public IReadOnlyList<WorkflowTriggerPredicateDto>? If { get; init; }
+}
+
 /// <summary>Response body for GET/POST the project's workflows list.</summary>
 public sealed record WorkflowListResponse
 {
@@ -279,6 +290,29 @@ public static class WorkflowDtoMapper
         EventName = trigger.EventName,
         If = trigger.If?.Select(ToTriggerPredicateYamlDto).ToList(),
     };
+
+    internal static WorkflowTriggerDto MergeTriggerPatch(WorkflowTriggerDto? current, WorkflowTriggerPatchRequest patch)
+    {
+        var type = patch.Type ?? current?.Type;
+        if (string.IsNullOrWhiteSpace(type))
+            throw new ArgumentException("Trigger type is required.", nameof(patch));
+
+        var normalizedType = type.Trim().ToLowerInvariant();
+        var ifPredicates = normalizedType == "schedule"
+            ? []
+            : patch.If ?? current?.If;
+
+        return new WorkflowTriggerDto
+        {
+            Type = type,
+            Interval = patch.Interval ?? current?.Interval,
+            DayOfWeek = patch.DayOfWeek ?? current?.DayOfWeek,
+            DayOfMonth = patch.DayOfMonth ?? current?.DayOfMonth,
+            TimeOfDay = patch.TimeOfDay ?? current?.TimeOfDay,
+            EventName = patch.EventName ?? current?.EventName,
+            If = ifPredicates,
+        };
+    }
 
     private static WorkflowTriggerPredicateDto ToTriggerPredicateDto(WorkflowTriggerPredicate predicate) => new()
     {

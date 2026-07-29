@@ -219,7 +219,7 @@ public static class WorkflowDefinitionYamlSerializer
         if (predicate.Not is { } not)
         {
             sb.Append(firstKeyPrefix).AppendLine("not:");
-            WritePredicate(sb, nestedIndent, nestedIndent + "  ", not);
+            WritePredicate(sb, nestedIndent + "  ", nestedIndent + "    ", not);
             return;
         }
 

@@ -375,4 +375,37 @@ public sealed class WorkflowTriggerLoaderTests
         trigger.If.Should().HaveCount(2);
         trigger.If[1].Or.Should().HaveCount(2);
     }
+
+    [Fact]
+    public void Serialize_ThenReload_RoundTripsNotPredicate_AndStillEvaluates()
+    {
+        var definition = WorkflowDefinitionLoader.Load(BaseYaml + """
+
+            trigger:
+              type: event
+              event_name: github.issues.opened
+              if:
+                - not:
+                    has_label: { label: "blocked" }
+            """, "triage.yaml").Definition!;
+
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(definition);
+        var reloaded = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        reloaded.IsValid.Should().BeTrue(because: reloaded.Error);
+        var predicate = reloaded.Definition!.Trigger!.If.Should().ContainSingle().Subject;
+        predicate.Not.Should().NotBeNull();
+        predicate.Not!.HasLabel!.Label.Should().Be("blocked");
+
+        WorkflowTriggerPredicateEvaluator.EvaluateAll(
+            reloaded.Definition.Trigger.If,
+            reloaded.Definition.Trigger.EventName!,
+            new Agentweaver.Api.Webhooks.GitHubWebhookPayload
+            {
+                Issue = new Agentweaver.Api.Webhooks.GitHubWebhookIssueLike
+                {
+                    Labels = [new Agentweaver.Api.Webhooks.GitHubWebhookLabel { Name = "bug" }],
+                },
+            }).Should().BeTrue();
+    }
 }

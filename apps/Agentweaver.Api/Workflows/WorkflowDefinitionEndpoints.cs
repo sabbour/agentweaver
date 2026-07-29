@@ -130,6 +130,57 @@ public static class WorkflowDefinitionEndpoints
             });
         });
 
+        // PATCH /api/projects/{projectId}/workflows/{workflowId}/trigger — partial trigger update.
+        // Preserves unspecified fields from the current trigger, then validates the merged result
+        // through the same loader path as PUT.
+        app.MapPatch("/api/projects/{projectId}/workflows/{workflowId}/trigger", async (
+            HttpContext httpContext,
+            string projectId,
+            string workflowId,
+            WorkflowTriggerPatchRequest request,
+            IProjectStore projectStore,
+            WorkflowRegistry registry,
+            CancellationToken ct) =>
+        {
+            var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
+            if (error is not null) return error;
+            if (!IsValidWorkflowId(workflowId))
+                return Results.BadRequest(new { error = "Invalid workflow id." });
+            if (request is null)
+                return Results.BadRequest(new { error = "trigger patch is required." });
+
+            var current = registry.Get(project!, workflowId);
+            if (current?.Definition is null) return Results.NotFound();
+
+            WorkflowTriggerDto mergedTriggerDto;
+            try
+            {
+                mergedTriggerDto = WorkflowDtoMapper.MergeTriggerPatch(
+                    current.Definition.Trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(current.Definition.Trigger),
+                    request);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+
+            if (!WorkflowDefinitionLoader.TryParseTrigger(
+                    WorkflowDtoMapper.ToTriggerYamlDto(mergedTriggerDto),
+                    workflowId,
+                    out var trigger,
+                    out var triggerError))
+                return Results.BadRequest(new { error = triggerError ?? "Trigger validation failed." });
+
+            var updatedDefinition = current.Definition with { Trigger = trigger };
+            var persistError = await PersistWorkflowDefinitionAsync(project!, workflowId, updatedDefinition, projectStore, registry, ct);
+            if (persistError is not null) return persistError;
+
+            return Results.Ok(new WorkflowTriggerConfigResponse
+            {
+                Trigger = trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(trigger),
+            });
+        });
+
         // DELETE /api/projects/{projectId}/workflows/{workflowId}/trigger — clear the trigger while
         // preserving the rest of the workflow definition.
         app.MapDelete("/api/projects/{projectId}/workflows/{workflowId}/trigger", async (
