@@ -5,6 +5,188 @@ import { buildKeepSegments, summarizeTrim } from '../lib/pacing.mjs';
 import { classifyZoom } from '../lib/zoom.mjs';
 import { renderCaptureScript } from '../lib/capture-plan.mjs';
 
+class FakeApprovalCard {
+  constructor({ text = 'Tool Approval Required', buttonName = 'Allow once', appearAtMs = 0 } = {}) {
+    this.text = text;
+    this.buttonName = buttonName;
+    this.appearAtMs = appearAtMs;
+    this.clickedAtMs = [];
+    this.dismissed = false;
+    this.node = { dataset: {}, textContent: text };
+  }
+
+  isVisible(nowMs) {
+    return !this.dismissed && nowMs >= this.appearAtMs;
+  }
+}
+
+class FakeApprovalButtonLocator {
+  constructor(card, page) {
+    this.card = card;
+    this.page = page;
+  }
+
+  first() {
+    return this;
+  }
+
+  async isVisible() {
+    return this.card.isVisible(this.page.nowMs);
+  }
+
+  async scrollIntoViewIfNeeded() {}
+
+  async boundingBox() {
+    return { x: 32, y: 24, width: 140, height: 32 };
+  }
+
+  async click() {
+    this.card.clickedAtMs.push(this.page.nowMs);
+    this.card.dismissed = true;
+  }
+}
+
+class FakeApprovalCardLocator {
+  constructor(card, page) {
+    this.card = card;
+    this.page = page;
+  }
+
+  async isVisible() {
+    return this.card.isVisible(this.page.nowMs);
+  }
+
+  getByRole(role, { name } = {}) {
+    assert.equal(role, 'button');
+    assert.match(this.card.buttonName, name);
+    return new FakeApprovalButtonLocator(this.card, this.page);
+  }
+
+  async evaluate(fn) {
+    return fn(this.card.node);
+  }
+}
+
+class FakeApprovalSourceLocator {
+  constructor(cards, page, hasText = null) {
+    this.cards = cards;
+    this.page = page;
+    this.hasText = hasText;
+  }
+
+  filteredCards() {
+    if (!this.hasText) return this.cards;
+    return this.cards.filter((card) => card.text.includes(this.hasText));
+  }
+
+  filter({ hasText }) {
+    return new FakeApprovalSourceLocator(this.cards, this.page, hasText);
+  }
+
+  async count() {
+    return this.filteredCards().length;
+  }
+
+  nth(index) {
+    return new FakeApprovalCardLocator(this.filteredCards()[index], this.page);
+  }
+}
+
+class FakeCapturePage {
+  constructor(locatorCards = {}) {
+    this.locatorCards = locatorCards;
+    this.nowMs = 0;
+    this.currentUrl = 'about:blank';
+    this.mouse = { move: async () => {} };
+    this.screencast = {
+      start: async () => {},
+      stop: async () => {},
+      showOverlay: async () => {},
+    };
+  }
+
+  locator(selector) {
+    return new FakeApprovalSourceLocator(this.locatorCards[selector] ?? [], this);
+  }
+
+  async waitForTimeout(ms) {
+    let remaining = ms;
+    while (remaining > 0) {
+      const advance = Math.min(remaining, 50);
+      this.nowMs += advance;
+      remaining -= advance;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  async addInitScript() {}
+
+  async setViewportSize() {}
+
+  async goto(url) {
+    this.currentUrl = url;
+  }
+
+  async evaluate(arg, data) {
+    if (typeof arg !== 'function') return undefined;
+    return arg(data);
+  }
+
+  async waitForFunction(fn) {
+    return fn();
+  }
+
+  url() {
+    return this.currentUrl;
+  }
+}
+
+async function runCaptureScriptWithCards({ plan, locatorCards }) {
+  const src = renderCaptureScript(plan);
+  const capture = eval(`(${src})`);
+  const page = new FakeCapturePage(locatorCards);
+  const previousNow = Date.now;
+  const previousWindow = globalThis.window;
+  const previousSessionStorage = globalThis.sessionStorage;
+  const previousDocument = globalThis.document;
+  globalThis.window = {
+    sessionStorage: { setItem() {}, removeItem() {} },
+    __demoCursorMove() {},
+    __demoActivityMark() {},
+    __demoZoomFocus() {},
+    __demoZoomReset() {},
+    __demoCursorClick() {},
+    __demoStopActivity() { return []; },
+    __demoGetActivityLog() { return []; },
+  };
+  globalThis.sessionStorage = globalThis.window.sessionStorage;
+  globalThis.document = { body: { innerText: 'done' } };
+  globalThis.__demoApprovalWatcherNextId = 0;
+  Date.now = () => page.nowMs;
+  try {
+    await capture(page);
+    return page;
+  } finally {
+    Date.now = previousNow;
+    if (previousWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = previousWindow;
+    }
+    if (previousSessionStorage === undefined) {
+      delete globalThis.sessionStorage;
+    } else {
+      globalThis.sessionStorage = previousSessionStorage;
+    }
+    if (previousDocument === undefined) {
+      delete globalThis.document;
+    } else {
+      globalThis.document = previousDocument;
+    }
+    delete globalThis.__demoApprovalWatcherNextId;
+  }
+}
+
 test('parseBeatPlan extracts beats and narration', () => {
   const beats = parseBeatPlan(`
 ## Beat 2.5 — Ship it
@@ -122,6 +304,79 @@ test('capture script runs and stops the approval watcher around the step loop', 
   assert.ok(clickIdx > watcherStartIdx, 'expected the approval watcher to auto-click through the shared helper');
   assert.ok(watcherStopIdx > tryIdx, 'expected the approval watcher to be awaited in finally');
   assert.ok(screencastStopIdx > watcherStopIdx, 'expected approval watcher shutdown before screencast stop');
+});
+
+test('capture script watches shell approval cards without a heading-text filter on testid gates', () => {
+  const src = renderCaptureScript({
+    startUrl: 'https://x/y',
+    videoPath: 'a.webm',
+    steps: [{ type: 'waitText', text: 'done' }],
+  });
+  assert.ok(src.includes('page.locator(\'[data-testid="session-approval-gate"]\')'), 'expected the session approval gate locator');
+  assert.ok(src.includes('page.locator(\'[data-testid="assistant-approval-gate"]\')'), 'expected the assistant approval gate locator');
+  assert.ok(src.includes('page.locator(\'[role="alert"]\').filter({ hasText: \'Tool Approval Required\' })'), 'expected the lifecycle alert branch to stay scoped by heading text');
+  assert.ok(
+    !src.includes('.locator(\'[data-testid="session-approval-gate"], [data-testid="assistant-approval-gate"], [role="alert"]\')\n      .filter({ hasText: \'Tool Approval Required\' })'),
+    'expected testid-scoped approval gates to no longer require the Tool Approval Required heading',
+  );
+});
+
+test('capture script auto-clicks shell approval cards after the grace period', async () => {
+  const card = new FakeApprovalCard({ text: 'Command approval required', appearAtMs: 0 });
+  await runCaptureScriptWithCards({
+    plan: {
+      startUrl: 'https://x/y',
+      videoPath: 'a.webm',
+      approvalWatcherGraceMs: 1000,
+      steps: [{ type: 'pause', ms: 2800 }],
+    },
+    locatorCards: {
+      '[data-testid="session-approval-gate"]': [card],
+    },
+  });
+  assert.equal(card.clickedAtMs.length, 1, 'expected the shell approval card to be auto-clicked');
+  assert.ok(card.clickedAtMs[0] >= 1000, 'expected auto-click after the configured grace period');
+});
+
+test('capture script tracks concurrent approval cards with independent grace timers', () => {
+  const src = renderCaptureScript({
+    startUrl: 'https://x/y',
+    videoPath: 'a.webm',
+    steps: [{ type: 'waitText', text: 'done' }],
+  });
+  assert.ok(src.includes('const approvalWatcherFirstSeen = new Map();'), 'expected per-card first-seen tracking');
+  assert.ok(src.includes('const getApprovalCardKey = async (card) => card.evaluate((node) => {'), 'expected stable per-card key generation');
+  assert.ok(src.includes('node.dataset.demoApprovalWatcherId = `demo-approval-${nextId}`;'), 'expected DOM-stamped watcher ids for concurrent cards');
+  assert.ok(src.includes('const visibleApprovalCards = await collectVisibleApprovalCards();'), 'expected each poll tick to collect all visible approval cards');
+  assert.ok(src.includes('const keyedApprovalCards = [];'), 'expected visible cards to be keyed before any clicks happen');
+  assert.ok(src.includes('for (const card of visibleApprovalCards) {'), 'expected each visible card to be processed independently');
+  assert.ok(src.includes('keyedApprovalCards.push({ card, key });'), 'expected newly-seen cards to keep their original first-seen timestamp for this poll');
+  assert.ok(src.includes('for (const { card, key } of keyedApprovalCards) {'), 'expected overdue checks to run after first-seen timestamps are assigned');
+  assert.ok(src.includes('if (!approvalWatcherFirstSeen.has(key)) {'), 'expected new cards to start their own grace timer');
+  assert.ok(src.includes('if (Date.now() - approvalWatcherFirstSeen.get(key) < approvalWatcherGraceMs) continue;'), 'expected grace timing to be evaluated per card');
+  assert.ok(src.includes('approvalWatcherFirstSeen.set(key, Date.now());'), 'expected clicked cards to reset their retry timer independently');
+  assert.ok(src.includes('if (!visibleKeys.has(key)) approvalWatcherFirstSeen.delete(key);'), 'expected stale per-card timers to be cleaned up');
+});
+
+test('capture script auto-clicks concurrent approval cards from their own appearance times', async () => {
+  const firstCard = new FakeApprovalCard({ text: 'Tool Approval Required', appearAtMs: 0 });
+  const secondCard = new FakeApprovalCard({ text: 'Command approval required', appearAtMs: 700 });
+  await runCaptureScriptWithCards({
+    plan: {
+      startUrl: 'https://x/y',
+      videoPath: 'a.webm',
+      approvalWatcherGraceMs: 1000,
+      steps: [{ type: 'pause', ms: 5200 }],
+    },
+    locatorCards: {
+      '[data-testid="session-approval-gate"]': [firstCard, secondCard],
+    },
+  });
+  assert.equal(firstCard.clickedAtMs.length, 1, 'expected the first approval card to be clicked once');
+  assert.equal(secondCard.clickedAtMs.length, 1, 'expected the second approval card to be clicked once');
+  assert.ok(firstCard.clickedAtMs[0] >= 1000, 'expected the first card to honor its own grace period');
+  assert.ok(secondCard.clickedAtMs[0] >= 1700, 'expected the second card to honor its later appearance time');
+  assert.ok(secondCard.clickedAtMs[0] > firstCard.clickedAtMs[0], 'expected the later-appearing card to be clicked after the first card');
 });
 
 test('capture script supports eval, waitFor, forced clicks and selector-scoped press', () => {

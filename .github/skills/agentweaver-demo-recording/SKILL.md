@@ -132,11 +132,13 @@ Notes specific to this app:
   `ref` (e.g. `e39`) over role-based locators to avoid strict-mode violations when
   scripting navigation.
 - `scripts/demo-recording/lib/capture-plan.mjs` now emits a background approval watcher
-  for `Tool Approval Required` cards. It waits briefly (~2.25s) so narrated beats can
-  still call out the human-in-the-loop gate, then auto-clicks the real `Allow once` /
-  `Approve` action if a beat forgot or a second gate appears. Keep explicit gate steps
-  in beats that intentionally show the approval moment; use `plan.disableApprovalWatcher`
-  only if a future capture truly needs a longer unresolved hold on screen.
+  for session/assistant approval gates plus lifecycle alert cards. It waits briefly
+  (~2.25s) so narrated beats can still call out the human-in-the-loop gate, then
+  auto-clicks the real `Allow once` / `Approve` action if a beat forgot or a second gate
+  appears — including shell-command approvals whose heading reads `Command approval
+  required`. Keep explicit gate steps in beats that intentionally show the approval
+  moment; use `plan.disableApprovalWatcher` only if a future capture truly needs a
+  longer unresolved hold on screen.
 - For fully-scripted, narrated recordings with overlays/highlights (the
   `page.screencast.showChapter`/`showOverlay` API), write a `run-code --filename=...`
   script exactly as described in the video-recording reference; the sessionStorage
