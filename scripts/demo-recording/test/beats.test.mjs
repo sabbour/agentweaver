@@ -118,6 +118,7 @@ test('capture script supports eval, waitFor, forced clicks and selector-scoped p
   // eval runs the in-page expression (used e.g. to remove a duplicate list item before capture)
   assert.ok(src.includes("document.querySelector('.dup')?.remove();"), 'expected the eval expression to be emitted');
   assert.ok(src.includes("__demoActivityMark?.('eval')"), 'expected an eval activity mark');
+  assert.ok(src.includes('await page.evaluate(async () =>'), 'expected eval to be wrapped in an async evaluate so snippets may await');
   // waitFor waits on a real element becoming visible (replaces fixed short timeouts)
   assert.ok(src.includes(".waitFor({ state: 'visible', timeout: 45000 })"), 'expected a visible waitFor with the given timeout');
   // forced clicks pass { force: true } through to locator.click
@@ -131,6 +132,15 @@ test('unknown step types are still emitted as nothing (no throw)', () => {
   assert.doesNotThrow(() => renderCaptureScript({
     startUrl: 'https://x/y', videoPath: 'a.webm', steps: [{ type: 'badge', label: 'L', title: 'T' }],
   }));
+});
+
+test('eval accepts a code alias with top-level await', () => {
+  const src = renderCaptureScript({
+    startUrl: 'https://x/y', videoPath: 'a.webm',
+    steps: [{ type: 'eval', code: 'const r = await fetch("/api/x"); await r.json();' }],
+  });
+  assert.ok(src.includes('await page.evaluate(async () =>'), 'expected async eval wrapper');
+  assert.ok(src.includes('const r = await fetch("/api/x");'), 'expected the code snippet to be emitted');
 });
 
 test('activity tracking + capture clears persist across navigations via sessionStorage', () => {
