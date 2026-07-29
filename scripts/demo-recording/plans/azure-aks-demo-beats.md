@@ -13,8 +13,9 @@ What makes this scenario different from the blueprint demo:
 
 - It targets a **real external OSS repo** (`Azure/AKS`), with real community issues and a
   real Docusaurus blog.
-- It **generates two skills through the product UI** (issue-triage and content-authoring),
-  then assigns them to cast agents.
+- It **generates one skill through the product UI** (issue-triage), **imports one from the
+  marketplace** (`conorbronsdon/avoid-ai-writing` for content-authoring), then assigns them
+  to cast agents.
 - It authors a **scheduled, strictly read-only** issue-triage/dedupe workflow via
   *Generate from description*, and runs it live over real issues.
 - It ships a **real blog post as exactly one pull request** against `Azure/AKS`, left
