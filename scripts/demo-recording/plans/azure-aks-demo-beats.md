@@ -23,7 +23,7 @@ What makes this scenario different from the blueprint demo:
 
 ## Beat 0.1 — Introduction: a real, live external repo
 
-Narration: "Everything in this walkthrough happens against a real, live, public repository — Azure's open-source AKS repo — not a synthetic sandbox. We'll stand up a content team, teach it two new skills through the product's own interface, have it triage and de-duplicate real community issues, and draft a real blog post that ships as a single pull request. Along the way, we'll only open that one pull request — and we won't merge it — while the triage side stays read-only and never writes anything back to GitHub."
+Narration: "Everything in this walkthrough happens against a real, live, public repository — Azure's open-source AKS repo — not a synthetic sandbox. We'll stand up a content team, generate a new issue-triage skill in the product, import a marketplace writing skill for content authoring, have the team triage and de-duplicate real community issues, and draft a real blog post that ships as a single pull request. Along the way, we'll only open that one pull request — and we won't merge it — while the triage side stays read-only and never writes anything back to GitHub."
 
 ## Beat 1.1 — Create the project from GitHub
 
@@ -79,4 +79,4 @@ On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), `waitFor` r
 
 ## Beat 5.1 — Outro
 
-Narration: "That's the full loop against a real, live, external open-source repo: we cast a content team, taught it two new skills through the product's own interface, authored a scheduled read-only triage workflow, de-duplicated real community issues into actionable specs, and shipped a real blog post as a single open pull request — without ever merging it or touching a single issue. Same product, same MCP-backed workspace, now proven against the messiness of the real world."
+Narration: "That's the full loop against a real, live, external open-source repo: we cast a content team, generated an issue-triage skill in the product, imported the MIT-licensed `conorbronsdon/avoid-ai-writing` marketplace skill for the writer, authored a scheduled read-only triage workflow, de-duplicated real community issues into actionable specs, and shipped a real blog post as a single open pull request — without ever merging it or touching a single issue. Same product, same MCP-backed workspace, now proven against the messiness of the real world."
