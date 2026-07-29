@@ -20,6 +20,10 @@ function extractBlockers(body) {
 }
 
 export function parseBeatPlan(markdown) {
+  // Normalize CRLF/CR to LF first: the beat file is stored with CRLF line endings in
+  // this repo, but the narration/paragraph regexes below key off "\n\n" — without this
+  // a fresh checkout would silently extract empty narration for every beat.
+  markdown = String(markdown).replace(/\r\n?/g, '\n');
   const matches = Array.from(markdown.matchAll(beatHeadingPattern));
   return matches.map((match, index) => {
     const bodyStart = match.index + match[0].length;

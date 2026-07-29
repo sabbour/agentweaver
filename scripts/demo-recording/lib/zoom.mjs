@@ -87,23 +87,36 @@ export function browserZoomBootstrapSource() {
         root.style.transform = \`translate(\${tx}px, \${ty}px) scale(\${scale})\`;
       };
       window.__demoZoomReset = () => { root.style.transform = 'translate(0px, 0px) scale(1)'; };
-      const startedAt = performance.now();
-      const activity = [];
+      // Activity tracking must survive full-page navigations (page.goto mid-capture):
+      // performance.now() and any in-memory array reset on every new document, which
+      // previously made the post-navigation activity log come back EMPTY — and an empty
+      // log makes the idle-trimmer treat the whole clip as one dead gap and collapse it
+      // to a frozen frame. So anchor timestamps to a wall-clock epoch and persist both
+      // the epoch and the log in sessionStorage (survives same-origin navigation). The
+      // capture bootstrap clears these once at capture start.
+      const EPOCH_KEY = '__demoCaptureEpoch';
+      const LOG_KEY = '__demoActivityLog';
+      let epoch = Number(sessionStorage.getItem(EPOCH_KEY) || 0);
+      if (!epoch) { epoch = Date.now(); try { sessionStorage.setItem(EPOCH_KEY, String(epoch)); } catch (e) {} }
+      const loadLog = () => { try { return JSON.parse(sessionStorage.getItem(LOG_KEY) || '[]'); } catch (e) { return []; } };
+      const saveLog = (log) => { try { sessionStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch (e) {} };
       const pushActivity = (kind, detail = {}) => {
-        const t = Math.max(0, Math.round(performance.now() - startedAt));
-        const previous = activity[activity.length - 1];
-        if (kind === 'mutation' && previous?.kind === 'mutation' && (t - previous.t) < 300) return;
-        activity.push({ kind, t, ...detail });
+        const t = Math.max(0, Date.now() - epoch);
+        const log = loadLog();
+        const previous = log[log.length - 1];
+        if (kind === 'mutation' && previous && previous.kind === 'mutation' && (t - previous.t) < 300) return;
+        log.push({ kind, t, ...detail });
+        saveLog(log);
       };
       pushActivity('capture-ready');
       const observer = new MutationObserver(() => pushActivity('mutation'));
       observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
       window.__demoActivityMark = (kind, detail = {}) => pushActivity(kind, detail);
-      window.__demoGetActivityLog = () => activity.slice();
+      window.__demoGetActivityLog = () => loadLog();
       window.__demoStopActivity = () => {
         observer.disconnect();
         pushActivity('capture-stop');
-        return activity.slice();
+        return loadLog();
       };
     })();
   `;
