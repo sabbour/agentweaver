@@ -110,29 +110,40 @@ public sealed class GitHubOrgAuthorizationMiddleware
             return;
         }
 
-        // T7: callers authenticated via an Agentweaver-minted OAuth access token had org membership
+        // T7: callers authenticated via an Agentweaver-minted OAuth access token had membership
         // enforced by the Authorization Server at token issuance (and re-checked on each refresh).
-        // The token is audience-bound and signature-validated, so we trust its org claim here instead
-        // of making a per-request GitHub org call with a token that is not a GitHub credential.
+        // The token is audience-bound and signature-validated, so we trust its `org` claim — which
+        // under the team-membership authz model carries the CANONICAL RULE STRING that was matched
+        // at issuance (e.g. "azure/aks" for a team-scoped rule, or "microsoft" for a bare-org rule).
+        // We re-check that rule string against the CURRENT allow-list on every request so a config
+        // change (rule removed, or bare-org demoted to team-scoped) invalidates in-flight JWTs.
         if (caller.IsOAuthJwt)
         {
-            // Accept the token if its org claim matches ANY allowed org (membership is satisfied by
-            // membership of any one of the configured orgs). Reuse the service's parsed AllowedOrgs so
-            // the delimited-list split logic lives in exactly one place (GitHubOrgList.Parse).
             var callerOrg = caller.Org;
-            if (!string.IsNullOrWhiteSpace(callerOrg)
-                && _authzService.AllowedOrgs.Any(
-                    o => string.Equals(o, callerOrg, StringComparison.OrdinalIgnoreCase)))
+            if (!string.IsNullOrWhiteSpace(callerOrg))
             {
-                await _next(context).ConfigureAwait(false);
-                return;
+                // Parse the claim back into an entity. A legacy JWT (minted before the
+                // team-membership change) carries a plain org name, which parses as a bare-org
+                // entity — it will only match bare-org entities in the current allow-list, never
+                // a team-scoped entity. This prevents grandfathering a team-scoped rule with a
+                // pre-existing bare-org JWT after a config demotion.
+                var callerEntities = GitHubOrgList.ParseEntities(callerOrg);
+                if (callerEntities.Count == 1)
+                {
+                    var claimed = callerEntities[0];
+                    if (_authzService.AllowedEntities.Any(e => e.Matches(claimed)))
+                    {
+                        await _next(context).ConfigureAwait(false);
+                        return;
+                    }
+                }
             }
 
             _logger.LogWarning(
-                "Access denied for OAuth caller '{Login}': token org claim '{Org}' does not match the required organization.",
+                "Access denied for OAuth caller '{Login}': token rule claim '{Org}' does not match any current allow-rule.",
                 caller.GitHubLogin ?? caller.User, caller.Org);
             await WriteForbiddenAsync(context,
-                "Access denied. OAuth token is not scoped to the required GitHub organization.").ConfigureAwait(false);
+                "Access denied. OAuth token is not scoped to any allowed GitHub organization/team.").ConfigureAwait(false);
             return;
         }
 

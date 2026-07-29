@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agentweaver.Api.Contracts;
 
 namespace Agentweaver.Tests.Casting;
 
@@ -32,6 +33,28 @@ public sealed class TeamManagementTests : IClassFixture<CastingWebApplicationFac
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("Alpha", body, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Lead Architect", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetTeam_ReturnsRetiredAlumniMembersSeparately()
+    {
+        var workingDir = _factory.NewProjectWorkingDirectory();
+
+        using var client = _factory.CreateAuthenticatedClient();
+        var (projectId, wd) = await CreateProjectAsync(client, workingDir);
+
+        SquadTestFixtureHelper.CreateMinimalSquad(wd);
+        SquadTestFixtureHelper.AddRetiredAlumnus(wd, "Harry", "Backend Dev");
+
+        using var response = await client.GetAsync($"/api/projects/{projectId}/team");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var team = await response.Content.ReadFromJsonAsync<TeamDto>();
+        Assert.NotNull(team);
+        Assert.DoesNotContain(team!.Members, m => string.Equals(m.Name, "Harry", StringComparison.OrdinalIgnoreCase));
+        var retired = Assert.Single(team.RetiredMembers, m => string.Equals(m.Name, "Harry", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("Backend Dev", retired.RoleTitle);
+        Assert.Equal("retired", retired.Status);
     }
 
     [Fact]

@@ -33,7 +33,7 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:GitHub:ClientSecret` | none | GitHub OAuth App client secret — required for sign-in |
 | `Auth:GitHub:CallbackUrl` | none | OAuth callback URL registered in the GitHub App (must match exactly) |
 | `Auth:GitHub:FrontendUrl` | none | URL the API redirects to after a successful sign-in |
-| `Auth:GitHub:AllowedOrg` | none | When set, users must belong to this GitHub org to access the API |
+| `Auth:GitHub:AllowedOrg` | none | Comma/semicolon-delimited list of allow-rules. Each rule is one of: `org` (bare org — any member), `org/*` (explicit wildcard, same as bare org), or `org/team-slug` (only that specific team). A caller is allowed if they satisfy ANY rule. Team display names with spaces or uppercase are defensively slugified (e.g. `Azure/AKS PM` is treated as `Azure/aks-pm`). Example: `Azure/aks,Azure/AKS PM,azure-management-and-platforms/*`. |
 | `Auth:GitHub:ScopeProvider` | `caller` | Token scope selection. `caller` isolates credentials per signed-in user; set to `installation` only to revert to the old shared installation scope for single-user local dev. |
 
 Set the OAuth client secret locally with user-secrets:
