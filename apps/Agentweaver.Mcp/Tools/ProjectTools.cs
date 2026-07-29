@@ -36,12 +36,13 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
+    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. When origin is 'github', source_repository is required. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
         [Description("Local working directory path")] string working_directory,
         [Description("Inline blueprint object to apply at creation, as a JSON-encoded string (optional; exclusive with blueprint_id)")] string? blueprint = null,
         [Description("Project origin: 'blank' (default) or 'github'")] string? origin = null,
+        [Description("GitHub repository in 'owner/repo' format; required when origin is 'github'")] string? source_repository = null,
         [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id = null,
         [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml = null,
         CancellationToken ct = default)
@@ -54,6 +55,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
                 ["working_directory"] = working_directory,
             };
             if (origin is not null) bodyNode["origin"] = origin;
+            if (source_repository is not null) bodyNode["source_repository"] = source_repository;
             if (blueprint_id is not null) bodyNode["blueprint_id"] = blueprint_id;
             if (!string.IsNullOrWhiteSpace(blueprint))
             {

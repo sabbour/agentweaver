@@ -171,13 +171,14 @@ Get a project by ID.
 
 ### `project_create`
 
-Create a new project.
+Create a new project, optionally linking a GitHub repository and applying a blueprint.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | yes | Project name |
 | `working_directory` | string | yes | Absolute path to the local working directory |
 | `origin` | string | no | Project origin: `blank` (default) or `github` |
+| `source_repository` | string | no | GitHub repository in `owner/repo` format; required when `origin` is `github` |
 | `blueprint_id` | string | no | Predefined blueprint ID to apply (exclusive with `blueprint`) |
 | `blueprint` | object | no | Inline blueprint JSON object to apply (exclusive with `blueprint_id`) |
 

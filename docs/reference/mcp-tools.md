@@ -116,7 +116,7 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 | Tool | Description |
 | --- | --- |
 | `project_configure` | Configure the AI model provider settings for a project. |
-| `project_create` | Create a new Agentweaver project. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
+| `project_create` | Create a new Agentweaver project. When origin is 'github', source_repository is required. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
 | `project_get` | Get a project by ID. |
 | `project_list` | List all Agentweaver projects. |
