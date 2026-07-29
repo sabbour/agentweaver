@@ -159,11 +159,54 @@ public static class OAuthServerEndpoints
                 if (error is not null)
                     return BadOAuthRequest(error.Error, error.ErrorDescription);
 
-                // The org claim is informational and must be one of the allowed orgs so the
-                // GitHubOrgAuthorizationMiddleware fast-path accepts the minted token. Membership was
-                // already verified upstream; with a multi-org allowlist we stamp the FIRST allowed org
-                // (deterministic, and always in the allowed list) — preserving single-org behavior.
-                var org = GitHubOrgList.Parse(config["Auth:GitHub:AllowedOrg"]).FirstOrDefault();
+                // Under the team-membership authz model the JWT `org` claim carries the CANONICAL
+                // RULE STRING that was matched at broker time — e.g. "azure/aks" for a team-scoped
+                // rule, or "microsoft" for a bare-org rule — so the middleware fast-path can
+                // re-check the rule against the CURRENT allow-list on every request.
+                //
+                // Re-derive the matched rule here (rather than persist it on the auth code) via
+                // orgAuth.ResolveAsync: this reuses the broker's just-populated 5-minute cache, so
+                // there is no extra GitHub round-trip in the common path. If org enforcement isn't
+                // configured, mint with a null claim (unchanged behavior). If configured but the
+                // brokered GitHub token isn't available (edge: token dropped between broker and
+                // token endpoint) we fall back to Denied — deliberately fail closed, because we
+                // cannot re-derive which rule was matched.
+                string? org = null;
+                if (orgAuth.IsConfigured)
+                {
+                    var ghToken = await gitHubTokens
+                        .GetValidAccessTokenAsync(GitHubTokenScope.ForUser(grant!.GithubLogin), ctx.RequestAborted)
+                        .ConfigureAwait(false);
+
+                    if (string.IsNullOrWhiteSpace(ghToken))
+                    {
+                        logger.LogWarning(
+                            "Refused token issuance for {Login}: no valid GitHub token available to " +
+                            "re-derive the matched authz rule. Failing closed.",
+                            grant!.GithubLogin);
+                        return Results.Json(
+                            new { error = "access_denied", error_description = "Org membership could not be re-verified at token issuance." },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
+
+                    var decision = await orgAuth
+                        .ResolveAsync(ghToken, grant.GithubLogin, ctx.RequestAborted)
+                        .ConfigureAwait(false);
+
+                    if (decision.Result != OrgAuthResult.Allowed || decision.MatchedEntity is null)
+                    {
+                        logger.LogWarning(
+                            "Refused token issuance for {Login}: membership re-check returned {Result} " +
+                            "(broker just approved — likely a config change or transient GitHub failure). Failing closed.",
+                            grant.GithubLogin, decision.Result);
+                        return Results.Json(
+                            new { error = "access_denied", error_description = "Org membership could not be re-verified at token issuance." },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
+
+                    org = decision.MatchedEntity.RuleString;
+                }
+
                 var clientId = form["client_id"].ToString();
 
                 var accessToken = tokenService.CreateAccessToken(
@@ -197,6 +240,7 @@ public static class OAuthServerEndpoints
                     return BadOAuthRequest(peek.Error, peek.ErrorDescription ?? "Refresh failed.");
 
                 var peeked = peek.Grant!;
+                string? refreshedRule = null;
 
                 // T4: re-validate org membership on refresh so revoked org access propagates within one
                 // access-token lifetime. FAIL CLOSED (Seraph findings-api-data Alert 3 / findings-auth
@@ -229,9 +273,10 @@ public static class OAuthServerEndpoints
                             statusCode: StatusCodes.Status403Forbidden);
                     }
 
-                    var membership = await orgAuth
-                        .CheckMembershipAsync(gitHubToken, peeked.GithubLogin, ctx.RequestAborted)
+                    var decision = await orgAuth
+                        .ResolveAsync(gitHubToken, peeked.GithubLogin, ctx.RequestAborted)
                         .ConfigureAwait(false);
+                    var membership = decision.Result;
 
                     if (membership is OrgAuthResult.Denied or OrgAuthResult.OrgAccessNotGranted)
                     {
@@ -263,6 +308,12 @@ public static class OAuthServerEndpoints
                             },
                             statusCode: StatusCodes.Status403Forbidden);
                     }
+
+                    // Membership confirmed — stash the freshly-matched rule so the rotated token
+                    // reflects the CURRENT allow-list. If a bare-org rule was demoted to team-scoped
+                    // between issuance and refresh (and the caller is a team member), the new JWT
+                    // will carry the team-scoped rule string.
+                    refreshedRule = decision.MatchedEntity?.RuleString;
                 }
 
                 // Membership confirmed (or org enforcement not configured) — consume the token atomically.
@@ -274,8 +325,13 @@ public static class OAuthServerEndpoints
 
                 var grant = rotation.Grant!;
 
+                // Prefer the freshly-matched rule (post-refresh re-check) so a config demotion is
+                // reflected in the rotated token; fall back to the value persisted at issuance for
+                // deployments where org enforcement is disabled.
+                var mintedRule = refreshedRule ?? grant.Org;
+
                 var accessToken = tokenService.CreateAccessToken(
-                    issuer, audience, grant.Subject, grant.GithubLogin, grant.Org);
+                    issuer, audience, grant.Subject, grant.GithubLogin, mintedRule);
 
                 return Results.Json(new
                 {
