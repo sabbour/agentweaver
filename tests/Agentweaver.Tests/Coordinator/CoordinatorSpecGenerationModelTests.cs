@@ -15,6 +15,7 @@ public sealed class CoordinatorSpecGenerationModelTests
         var options = new GenerationModelOptions();
 
         options.ResolveBlueprintModel().Should().Be(GenerationModelOptions.DefaultModel);
+        options.ResolveSkillModel().Should().Be(GenerationModelOptions.DefaultModel);
         options.ResolveWorkflowModel().Should().Be(GenerationModelOptions.DefaultModel);
         options.ResolveOutcomeSpecModel().Should().Be(GenerationModelOptions.DefaultModel);
     }
@@ -25,6 +26,7 @@ public sealed class CoordinatorSpecGenerationModelTests
         var options = new GenerationModelOptions { Model = "claude-sonnet-4.6" };
 
         options.ResolveBlueprintModel().Should().Be("claude-sonnet-4.6");
+        options.ResolveSkillModel().Should().Be("claude-sonnet-4.6");
         options.ResolveWorkflowModel().Should().Be("claude-sonnet-4.6");
         options.ResolveOutcomeSpecModel().Should().Be("claude-sonnet-4.6");
     }
