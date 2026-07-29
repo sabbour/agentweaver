@@ -185,8 +185,13 @@ public sealed class OAuthRefreshOrgRevalidationTests
         public OrgAuthResult Result { get; set; } = OrgAuthResult.Allowed;
         public bool IsConfigured => true;
         public IReadOnlyList<string> AllowedOrgs => ["microsoft"];
+        public IReadOnlyList<AllowedGitHubEntity> AllowedEntities => [new AllowedGitHubEntity("microsoft", null)];
         public Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct) =>
             Task.FromResult(Result);
+        public Task<OrgMembershipDecision> ResolveAsync(string accessToken, string login, CancellationToken ct) =>
+            Task.FromResult(new OrgMembershipDecision(
+                Result,
+                Result == OrgAuthResult.Allowed ? AllowedEntities[0] : null));
     }
 
     private sealed class StubTokenProvider : IGitHubAccessTokenProvider

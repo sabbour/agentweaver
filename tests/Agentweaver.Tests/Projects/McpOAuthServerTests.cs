@@ -244,8 +244,13 @@ public sealed class McpOAuthServerTests : IDisposable
     {
         public bool IsConfigured => true;
         public IReadOnlyList<string> AllowedOrgs => ["microsoft"];
+        public IReadOnlyList<AllowedGitHubEntity> AllowedEntities => [new AllowedGitHubEntity("microsoft", null)];
         public Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct) =>
             Task.FromResult(result);
+        public Task<OrgMembershipDecision> ResolveAsync(string accessToken, string login, CancellationToken ct) =>
+            Task.FromResult(new OrgMembershipDecision(
+                result,
+                result == OrgAuthResult.Allowed ? AllowedEntities[0] : null));
     }
 
     private sealed class RoutingHandler : HttpMessageHandler
