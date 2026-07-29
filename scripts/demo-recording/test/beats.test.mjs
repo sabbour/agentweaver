@@ -97,6 +97,7 @@ class FakeCapturePage {
     this.locatorCards = locatorCards;
     this.nowMs = 0;
     this.currentUrl = 'about:blank';
+    this.gotoCalls = [];
     this.mouse = { move: async () => {} };
     this.screencast = {
       start: async () => {},
@@ -124,6 +125,7 @@ class FakeCapturePage {
   async setViewportSize() {}
 
   async goto(url) {
+    this.gotoCalls.push(url);
     this.currentUrl = url;
   }
 
@@ -141,10 +143,9 @@ class FakeCapturePage {
   }
 }
 
-async function runCaptureScriptWithCards({ plan, locatorCards }) {
+async function runCaptureScriptOnPage(plan, page) {
   const src = renderCaptureScript(plan);
   const capture = eval(`(${src})`);
-  const page = new FakeCapturePage(locatorCards);
   const previousNow = Date.now;
   const previousWindow = globalThis.window;
   const previousSessionStorage = globalThis.sessionStorage;
@@ -187,6 +188,12 @@ async function runCaptureScriptWithCards({ plan, locatorCards }) {
   }
 }
 
+async function runCaptureScriptWithCards({ plan, locatorCards }) {
+  const page = new FakeCapturePage(locatorCards);
+  await runCaptureScriptOnPage(plan, page);
+  return page;
+}
+
 test('parseBeatPlan extracts beats and narration', () => {
   const beats = parseBeatPlan(`
 ## Beat 2.5 — Ship it
@@ -209,6 +216,19 @@ test('parseBeatPlan handles CRLF line endings and ignores On screen annotations'
   assert.equal(beats[0].narrationSource, 'Put the workflow on a schedule.');
   assert.ok(!beats[0].narrationSource.includes('On screen'), 'On screen annotation must not leak into narration');
   assert.equal(beats[1].narrationSource, 'Trigger it from GitHub.');
+});
+
+test('parseBeatPlan extracts optional capture navigation metadata', () => {
+  const beats = parseBeatPlan(`
+## Beat 1.1 — Create the project
+
+Narration: "Create it."
+
+Start URL: /projects/new
+Fresh navigation: true
+`);
+  assert.equal(beats[0].startUrl, '/projects/new');
+  assert.equal(beats[0].freshNavigation, true);
 });
 
 test('classifyZoom biases detail-heavy beats closer', () => {
@@ -286,6 +306,42 @@ test('capture script re-installs the overlay bootstrap after every in-plan goto'
   assert.ok(markIdx > reinstallIdx, 'expected the goto activity mark after re-install');
 });
 
+test('capture script continues same-page beats unless a fresh navigation is requested', async () => {
+  const page = new FakeCapturePage();
+  await runCaptureScriptOnPage({
+    startUrl: 'https://x/y',
+    videoPath: 'beat-1.webm',
+    steps: [],
+  }, page);
+  await runCaptureScriptOnPage({
+    startUrl: 'https://x/y',
+    videoPath: 'beat-2.webm',
+    steps: [],
+  }, page);
+  await runCaptureScriptOnPage({
+    startUrl: 'https://x/y',
+    freshNavigation: true,
+    videoPath: 'beat-3.webm',
+    steps: [],
+  }, page);
+  assert.deepEqual(page.gotoCalls, ['https://x/y', 'https://x/y']);
+});
+
+test('capture script still navigates when a later beat targets a different startUrl', async () => {
+  const page = new FakeCapturePage();
+  await runCaptureScriptOnPage({
+    startUrl: 'https://x/y',
+    videoPath: 'beat-1.webm',
+    steps: [],
+  }, page);
+  await runCaptureScriptOnPage({
+    startUrl: 'https://x/z',
+    videoPath: 'beat-2.webm',
+    steps: [],
+  }, page);
+  assert.deepEqual(page.gotoCalls, ['https://x/y', 'https://x/z']);
+});
+
 test('capture script runs and stops the approval watcher around the step loop', () => {
   const src = renderCaptureScript({
     startUrl: 'https://x/y',
@@ -294,7 +350,7 @@ test('capture script runs and stops the approval watcher around the step loop', 
   });
   const screencastIdx = src.indexOf('await page.screencast.start');
   const watcherStartIdx = src.indexOf('const approvalWatcher = approvalWatcherEnabled ? (async () => {');
-  const tryIdx = src.indexOf('  try {');
+  const tryIdx = src.indexOf('  try {', watcherStartIdx);
   const clickIdx = src.indexOf("await click(approvalButton, 1.02, 700, true);");
   const watcherStopIdx = src.indexOf('await approvalWatcher.catch(() => {});');
   const screencastStopIdx = src.indexOf('await page.screencast.stop().catch(() => {});');
