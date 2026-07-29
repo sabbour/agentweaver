@@ -223,8 +223,11 @@ public sealed class McpOAuthBrokerStoreTests : IDisposable
     {
         public bool IsConfigured => false;
         public IReadOnlyList<string> AllowedOrgs => [];
+        public IReadOnlyList<AllowedGitHubEntity> AllowedEntities => [];
         public Task<OrgAuthResult> CheckMembershipAsync(string accessToken, string login, CancellationToken ct) =>
             Task.FromResult(OrgAuthResult.NotConfigured);
+        public Task<OrgMembershipDecision> ResolveAsync(string accessToken, string login, CancellationToken ct) =>
+            Task.FromResult(new OrgMembershipDecision(OrgAuthResult.NotConfigured, null));
     }
 
     private sealed class NullHttpClientFactory : IHttpClientFactory

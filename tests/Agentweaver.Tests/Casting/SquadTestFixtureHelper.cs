@@ -27,6 +27,17 @@ public static class SquadTestFixtureHelper
         File.WriteAllText(Path.Combine(agentsDir, "charter.md"),     BuildCharterMd("Alpha", "Lead Architect", projectName));
     }
 
+    public static void AddRetiredAlumnus(
+        string directory,
+        string name = "Harry",
+        string role = "Backend Dev",
+        string projectName = "test-project")
+    {
+        var alumniDir = Path.Combine(directory, ".squad", "agents", "_alumni", Slug(name));
+        Directory.CreateDirectory(alumniDir);
+        File.WriteAllText(Path.Combine(alumniDir, "charter.md"), BuildCharterMd(name, role, projectName));
+    }
+
     /// <summary>
     /// Creates a .squad/ directory with a canonical casting/ subfolder layout.
     /// </summary>
@@ -203,4 +214,7 @@ public static class SquadTestFixtureHelper
         - Does not write production code directly
         - Escalates security concerns to team
         """;
+
+    private static string Slug(string name)
+        => name.Trim().ToLowerInvariant().Replace(' ', '-');
 }
