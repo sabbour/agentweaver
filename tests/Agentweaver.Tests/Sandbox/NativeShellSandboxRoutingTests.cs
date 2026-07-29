@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Threading.Channels;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentTools;
@@ -36,8 +38,9 @@ public sealed class NativeShellSandboxRoutingTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { }
     }
 
-    private static PermissionRequestShell ShellRequest(string command) => new()
+    private static PermissionRequestShell ShellRequest(string command, string toolCallId = "shell-call") => new()
     {
+        ToolCallId = toolCallId,
         FullCommandText = command,
         Intention = "run shell",
         Commands = [],
@@ -72,6 +75,44 @@ public sealed class NativeShellSandboxRoutingTests : IDisposable
     }
 
     [Fact]
+    public async Task CopilotAIAgent_relabels_denied_native_shell_lifecycle_calls_to_run_command()
+    {
+        var executor = SandboxExecutorFactory.CreatePassthrough();
+        using var governance = SandboxGovernance.Create(
+            _root, RunId, executor, SandboxPolicy.Default(_root), NullLogger.Instance);
+        var events = Channel.CreateUnbounded<RunEvent>();
+        var agent = BuildAgent(executor);
+        agent.SetTurnStreamWriter(events.Writer);
+
+        var handler = agent.BuildPermissionHandler(
+            governance, RunId, _root,
+            agent.EmitToolCallOnce,
+            agent.EmitToolErrorOnce,
+            (_, _) => { },
+            runCt: CancellationToken.None);
+
+        agent.ObserveToolExecutionStarted(
+            "shell-call-1",
+            "bash",
+            JsonSerializer.SerializeToElement(new { command = "pwd" }),
+            DateTimeOffset.UtcNow);
+
+        var result = await handler(ShellRequest("pwd", "shell-call-1"), new PermissionInvocation());
+
+        result.Should().BeOfType<PermissionDecisionReject>();
+        var emitted = DrainEvents(events.Reader);
+        emitted.Count(e => e.Type == "tool.call").Should().Be(1);
+
+        var toolCall = JsonSerializer.SerializeToElement(
+            emitted.Single(e => e.Type == "tool.call").Payload);
+        toolCall.GetProperty("toolName").GetString().Should().Be("run_command");
+
+        var toolError = JsonSerializer.SerializeToElement(
+            emitted.Single(e => e.Type == "tool.error").Payload);
+        toolError.GetProperty("errorMessage").GetString().Should().Contain("Native Copilot shell is disabled");
+    }
+
+    [Fact]
     public async Task GitHubCopilotAgentRunner_denies_native_shell()
     {
         var executor = SandboxExecutorFactory.CreatePassthrough();
@@ -91,6 +132,31 @@ public sealed class NativeShellSandboxRoutingTests : IDisposable
         var rejected = result.Should().BeOfType<PermissionDecisionReject>().Subject;
         rejected.Feedback.Should().Contain("sandboxed run_command");
         errors.Should().ContainSingle().Which.Should().Be(rejected.Feedback);
+    }
+
+    [Fact]
+    public async Task CopilotAIAgent_escalates_native_shell_denial_message_after_first_attempt()
+    {
+        var executor = SandboxExecutorFactory.CreatePassthrough();
+        using var governance = SandboxGovernance.Create(
+            _root, RunId, executor, SandboxPolicy.Default(_root), NullLogger.Instance);
+
+        var handler = BuildAgent(executor).BuildPermissionHandler(
+            governance, RunId, _root,
+            emitToolCallOnce: (_, _, _) => { },
+            emitToolErrorOnce: (_, _) => { },
+            emit: (_, _) => { },
+            runCt: CancellationToken.None);
+
+        var first = await handler(ShellRequest("pwd", "shell-call-1"), new PermissionInvocation());
+        var second = await handler(ShellRequest("ls", "shell-call-2"), new PermissionInvocation());
+
+        first.Should().BeOfType<PermissionDecisionReject>().Subject.Feedback.Should()
+            .Be(CopilotAIAgent.BuildNativeShellDenyReason(1));
+        second.Should().BeOfType<PermissionDecisionReject>().Subject.Feedback.Should()
+            .Be(CopilotAIAgent.BuildNativeShellDenyReason(2))
+            .And.Contain("attempt 2")
+            .And.Contain("stop retrying");
     }
 
     [Theory]
@@ -159,6 +225,15 @@ public sealed class NativeShellSandboxRoutingTests : IDisposable
         Redactor: SandboxOutputRedactor.Default,
         Options: new SandboxToolOptions(ShellEnabled: true),
         Logger: NullLogger.Instance);
+
+    private static List<RunEvent> DrainEvents(ChannelReader<RunEvent> reader)
+    {
+        var events = new List<RunEvent>();
+        while (reader.TryRead(out var evt))
+            events.Add(evt);
+
+        return events;
+    }
 
     private sealed class RecordingExecutor(Action<SandboxCommand> onExecute) : ISandboxExecutor
     {
