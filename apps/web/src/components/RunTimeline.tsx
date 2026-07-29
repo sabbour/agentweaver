@@ -45,7 +45,14 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    minHeight: 0,
+    // RunTimeline is a content block whose scrolling is owned by an ancestor (e.g. the
+    // session message scroll region), never itself. When it sits as a flex item inside a
+    // flex-column scroll container, a `min-height: 0` combined with the default
+    // `flex-shrink: 1` let the whole timeline collapse to height 0 under flex pressure —
+    // its accordion content then overflowed visibly and following siblings (the in-thread
+    // tool-approval card) rendered *on top of* it. Pinning `flex-shrink: 0` makes the
+    // timeline always reserve its full content height so nothing overlaps it.
+    flexShrink: 0,
   },
   cotToggle: {
     justifyContent: 'flex-start',
