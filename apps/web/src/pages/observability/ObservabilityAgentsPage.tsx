@@ -60,11 +60,28 @@ export function ObservabilityAgentsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
+  const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
   const [metrics, setMetrics] = useState<ProjectMetricsDto | null>(null);
   const [range, setRange] = useState<TimeRange>('30d');
   const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    apiClient.getTeam(projectId)
+      .then((team) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const m of team.members ?? []) {
+          if (m.name && m.role_title) map[m.name] = m.role_title;
+        }
+        setRoleByAgent(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -167,6 +184,7 @@ export function ObservabilityAgentsPage() {
         <PageSection title="Agent token breakdown" description="Per-agent token and credit breakdown for the selected time range.">
           <AgentTokenBreakdown
             data={breakdown}
+            roleByAgent={roleByAgent}
             title="Agent token breakdown"
             subtitle="Aggregated AI credit and token usage across project runs."
           />
