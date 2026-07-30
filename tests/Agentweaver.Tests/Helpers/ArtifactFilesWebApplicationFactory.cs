@@ -41,6 +41,7 @@ public sealed class ArtifactFilesWebApplicationFactory : WebApplicationFactory<P
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
+                ["Auth:Mode"]                            = "GitHubLegacy",
                 // Primary owner (Auth:ApiKey + Auth:User).
                 ["Auth:ApiKey"]                           = OwnerApiKey,
                 ["Auth:User"]                             = OwnerUser,

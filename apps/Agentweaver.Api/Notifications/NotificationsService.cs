@@ -1,4 +1,5 @@
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -32,28 +33,33 @@ public sealed class NotificationsService
 {
     private readonly IRunStore _runStore;
     private readonly IProjectStore _projectStore;
+    private readonly IProjectRoleAuthorizationService _projectRoles;
     private readonly PendingToolApprovalRunsQuery _pendingApprovalQuery;
     private readonly IBacklogTaskStore _backlogStore;
     private readonly MemoryDbContext _db;
+    private readonly AuthMode _authMode;
 
     public NotificationsService(
         IRunStore runStore,
         IProjectStore projectStore,
+        IProjectRoleAuthorizationService projectRoles,
         PendingToolApprovalRunsQuery pendingApprovalQuery,
         IBacklogTaskStore backlogStore,
-        MemoryDbContext db)
+        MemoryDbContext db,
+        IConfiguration configuration)
     {
         _runStore = runStore;
         _projectStore = projectStore;
+        _projectRoles = projectRoles;
         _pendingApprovalQuery = pendingApprovalQuery;
         _backlogStore = backlogStore;
         _db = db;
+        _authMode = AuthModeResolver.Resolve(configuration);
     }
 
     public async Task<NotificationsResponseDto> GetPendingAsync(CallerContext caller, CancellationToken ct = default)
     {
-        var ownedProjectNames = (await _projectStore.ListAsync(ct).ConfigureAwait(false))
-            .Where(project => caller.Owns(project.Owner))
+        var ownedProjectNames = (await ListVisibleProjectsAsync(caller, ct).ConfigureAwait(false))
             .ToDictionary(project => project.Id.ToString(), project => project.Name, StringComparer.Ordinal);
 
         var awaitingReview = await _runStore.GetByStatusAsync(RunStatus.AwaitingReview, ct).ConfigureAwait(false);
@@ -212,6 +218,19 @@ public sealed class NotificationsService
         }
 
         return notifications;
+    }
+
+    private async Task<IReadOnlyList<Project>> ListVisibleProjectsAsync(CallerContext caller, CancellationToken ct)
+    {
+        var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
+        if (_authMode == AuthMode.GitHubLegacy)
+            return projects.Where(project => caller.Owns(project.Owner)).ToList();
+
+        if (_projectRoles.IsPlatformAdmin(caller))
+            return projects;
+
+        var visibleRoles = await _projectRoles.ListExplicitRolesAsync(caller, ct).ConfigureAwait(false);
+        return projects.Where(project => visibleRoles.ContainsKey(project.Id)).ToList();
     }
 
     private static NotificationDto ToHumanReviewNotification(

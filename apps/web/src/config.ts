@@ -34,6 +34,7 @@ export function resolvePublicApiOrigin(apiUrl = API_URL): string {
 
 export const MCP_URL = `${resolvePublicApiOrigin()}/mcp`;
 export const GITHUB_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/github/authorize`;
+export const ENTRA_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/entra/authorize`;
 
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';
 export const SESSION_LOGIN_STORAGE_KEY = 'agentweaver.sessionLogin';

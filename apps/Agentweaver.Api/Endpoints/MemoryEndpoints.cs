@@ -45,7 +45,7 @@ app.MapGet("/api/projects/{id}/memory", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
 
     IQueryable<AgentMemory> query = memoryDb.AgentMemory.Where(m => m.ProjectId == id);
 
@@ -86,7 +86,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
     var memories = (await memoryDb.AgentMemory
         .Where(m => m.ProjectId == id && m.AgentName == name)
         .Where(m => type == null || m.Type == type)
@@ -117,7 +117,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
     if (string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "type and content are required." });
 
@@ -165,7 +165,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
     var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
     if (memory is null || memory.ProjectId != id || memory.AgentName != name) return Results.NotFound();
     return Results.Ok(new
@@ -188,7 +188,7 @@ app.MapGet("/api/projects/{id}/sessions/current", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
     var session = (await memoryDb.SessionContexts
         .Where(s => s.ProjectId == id && s.EndedAt == null)
         .ToListAsync(ct))
@@ -217,7 +217,7 @@ app.MapPost("/api/projects/{id}/sessions", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
     if (string.IsNullOrWhiteSpace(request.FocusArea))
         return Results.BadRequest(new { error = "focus_area is required." });
 
@@ -278,7 +278,7 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
     var session = (await memoryDb.SessionContexts
         .Where(s => s.ProjectId == id && s.EndedAt == null)
         .ToListAsync(ct))
@@ -318,7 +318,7 @@ app.MapGet("/api/projects/{id}/sessions", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
     var sessions = (await memoryDb.SessionContexts
         .Where(s => s.ProjectId == id)
         .ToListAsync(ct))
@@ -347,7 +347,7 @@ app.MapGet("/api/projects/{id}/sessions/{sessionId}", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
     var session = await memoryDb.SessionContexts
         .AsNoTracking()
         .FirstOrDefaultAsync(s => s.ProjectId == id && s.SessionId == sessionId, ct);
@@ -376,7 +376,7 @@ app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, asy
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
     var session = await memoryDb.SessionContexts
         .FirstOrDefaultAsync(s => s.ProjectId == id && s.SessionId == sessionId && s.EndedAt == null, ct);
     if (session is null) return Results.NotFound();
@@ -409,7 +409,7 @@ app.MapPost("/api/projects/{id}/memory/export", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
 
     var decisionCount = await memoryDb.Decisions.CountAsync(d => d.ProjectId == id && d.Status == "active", ct);
     var inboxCount = await memoryDb.DecisionInbox.CountAsync(e => e.ProjectId == id && e.Status == "pending", ct);
@@ -449,7 +449,7 @@ app.MapPost("/api/projects/{id}/memory/import", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (ProjectAuthorization.RequireOwnership(httpContext, project, configuration) is { } forbid) return forbid;
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
 
     var importer = new Agentweaver.Squad.Memory.SquadMemoryImporter(project.WorkingDirectory);
     var parsed = importer.ScanInboxFiles().ToList();

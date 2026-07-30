@@ -7,6 +7,7 @@
     "dev:open": "node scripts/azure/cli.mjs dev",
     "setup": "node scripts/azure/cli.mjs dev --setup",
     "azure:provision-infra": "node scripts/azure/cli.mjs provision-infra",
+    "azure:setup-entra-app": "node scripts/azure/cli.mjs setup-entra-app",
     "azure:deploy-from-local": "node scripts/azure/cli.mjs deploy-from-local",
     "azure:deploy-from-commit": "node scripts/azure/cli.mjs deploy-from-commit",
     "azure:deploy-from-release": "node scripts/azure/cli.mjs deploy-from-release",
@@ -34,5 +35,5 @@
     "@types/node": "^26.1.1",
     "playwright": "^1.49.0"
   },
-  "version": "0.12.2"
+  "version": "0.13.0"
 }

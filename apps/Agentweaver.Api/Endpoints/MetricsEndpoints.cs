@@ -1,8 +1,11 @@
 using Agentweaver.Api.Metrics;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -27,8 +30,8 @@ public static class MetricsEndpoints
             var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
             if (project is null) return Results.NotFound();
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (!caller.Owns(project.Owner)) return Results.Forbid();
+            var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
 
             var metricsFrom = ParseDateTimeOffset(from);
             var metricsTo = ParseDateTimeOffset(to);
@@ -88,8 +91,8 @@ public static class MetricsEndpoints
             var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
             if (project is null) return Results.NotFound();
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (!caller.Owns(project.Owner)) return Results.Forbid();
+            var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
 
             var metricsFrom = ParseDateTimeOffset(from);
             var metricsTo = ParseDateTimeOffset(to);

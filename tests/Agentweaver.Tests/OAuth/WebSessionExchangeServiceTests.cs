@@ -6,6 +6,7 @@ using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Tests.OAuth;
 
@@ -34,9 +35,21 @@ public class WebSessionExchangeServiceTests : IDisposable
     }
 
     // Each call simulates a distinct replica: its own IServiceScopeFactory / DbContext over the shared DB.
-    private WebSessionExchangeService NewService() =>
+    private WebSessionExchangeService NewService(string authMode = "GitHubLegacy") =>
         new(MemoryDbScopeFactory.ForSqlite(_connectionString),
+            BuildConfig(authMode),
+            NewAuthModeEpochService(authMode),
             NullLogger<WebSessionExchangeService>.Instance);
+
+    private AuthModeEpochService NewAuthModeEpochService(string authMode) =>
+        new(MemoryDbScopeFactory.ForSqlite(_connectionString),
+            BuildConfig(authMode),
+            NullLogger<AuthModeEpochService>.Instance);
+
+    private static IConfiguration BuildConfig(string authMode) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Auth:Mode"] = authMode })
+            .Build();
 
     [Fact]
     public async Task Issue_ThenRedeem_ReturnsTokenAndLogin()
@@ -133,7 +146,7 @@ public class WebSessionExchangeServiceTests : IDisposable
     public async Task ExpiredCode_IsRejected()
     {
         // Seed an already-expired code directly.
-        var expiredCode = WebSessionExchangeService.GenerateOpaqueCode();
+        var expiredCode = WebSessionExchangeService.GenerateOpaqueCode(AuthMode.GitHubLegacy);
         var dbOptions = new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(_connectionString).Options;
         await using (var seedDb = new MemoryDbContext(dbOptions))
         {
@@ -150,6 +163,38 @@ public class WebSessionExchangeServiceTests : IDisposable
         var svc = NewService();
         var (ok, _, _) = await svc.TryRedeemAsync(expiredCode);
         ok.Should().BeFalse("expired codes must be rejected");
+    }
+
+    [Fact]
+    public async Task Redeem_Fails_WhenAuthModeChanged_AfterIssue()
+    {
+        var legacy = NewService("GitHubLegacy");
+        var code = await legacy.IssueAsync("gho_mode_switch", "octocat");
+
+        var entra = NewService("Entra");
+        var (ok, token, login) = await entra.TryRedeemAsync(code);
+
+        ok.Should().BeFalse("switching Auth:Mode must invalidate outstanding web-session exchange codes");
+        token.Should().BeEmpty();
+        login.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OldReplica_CannotIssueOrRedeem_AfterNewReplicaBumpsEpoch()
+    {
+        var legacy = NewService("GitHubLegacy");
+        var code = await legacy.IssueAsync("gho_before_epoch_bump", "octocat");
+
+        var entraEpoch = NewAuthModeEpochService("Entra");
+        await entraEpoch.EnsureInitializedAsync();
+
+        await FluentActions.Invoking(() => legacy.IssueAsync("gho_after_epoch_bump", "octocat"))
+            .Should().ThrowAsync<InvalidOperationException>();
+
+        var (ok, token, login) = await legacy.TryRedeemAsync(code);
+        ok.Should().BeFalse();
+        token.Should().BeEmpty();
+        login.Should().BeEmpty();
     }
 
     public void Dispose() => _keepAlive.Dispose();

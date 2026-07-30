@@ -65,6 +65,21 @@ export async function ffprobeJson(filePath) {
   return JSON.parse(stdout);
 }
 
+export async function ffprobeFrames(filePath) {
+  const exe = resolveBinary('ffprobe');
+  const { stdout } = await runBinary(exe, [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_frames',
+    '-show_entries', 'frame=best_effort_timestamp_time,pkt_pts_time,pkt_duration_time',
+    '-show_streams',
+    '-show_format',
+    '-of', 'json',
+    filePath,
+  ]);
+  return JSON.parse(stdout);
+}
+
 export async function concatWavFiles(inputs, outputPath) {
   const exe = resolveBinary('ffmpeg');
   const listPath = `${outputPath}.concat.txt`;
@@ -172,6 +187,36 @@ export async function syncSegmentToAudio(videoPath, audioPath, outputPath, optio
   }
 
   return { videoDurationMs, audioDurationMs, diffMs, action, outputPath };
+}
+
+function videoEncodingArgs(outputPath) {
+  const extension = path.extname(outputPath).toLowerCase();
+  if (extension === '.webm') return ['-c:v', 'libvpx', '-b:v', '2M'];
+  return ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p'];
+}
+
+export async function renderVideoSegment(videoPath, outputPath, options = {}) {
+  const exe = resolveBinary('ffmpeg');
+  const startMs = Math.max(0, Number(options.startMs ?? 0));
+  const endMs = Math.max(startMs, Number(options.endMs ?? startMs));
+  const playbackRate = Number(options.playbackRate ?? 1);
+  const durationMs = Math.max(0, endMs - startMs);
+  if (!(durationMs > 0)) throw new Error('renderVideoSegment requires endMs > startMs');
+  if (!(playbackRate > 0)) throw new Error('renderVideoSegment requires playbackRate > 0');
+
+  const args = [
+    '-y',
+    '-i', videoPath,
+    '-ss', (startMs / 1000).toFixed(3),
+    '-t', (durationMs / 1000).toFixed(3),
+    '-an',
+  ];
+  if (Math.abs(playbackRate - 1) > 0.01) {
+    args.push('-vf', `setpts=PTS/${playbackRate}`);
+  }
+  args.push(...videoEncodingArgs(outputPath), outputPath);
+  await runBinary(exe, args);
+  return { outputPath, startMs, endMs, playbackRate };
 }
 
 export async function extractFrame(videoPath, outputPath, timestamp) {

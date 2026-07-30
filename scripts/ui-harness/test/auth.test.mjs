@@ -9,6 +9,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 test('detects login redirects and authentication statuses', () => {
   assert.equal(isAuthExpired({ url: 'https://example.staging.test/login' }), true);
+  assert.equal(isAuthExpired({ url: 'https://example.staging.test/auth/entra/authorize' }), true);
+  assert.equal(isAuthExpired({ url: 'https://example.staging.test/auth/entra/callback?code=test' }), true);
   assert.equal(isAuthExpired({ status: 401 }), true);
   assert.equal(isAuthExpired({ url: 'https://example.staging.test/projects' }), false);
 });

@@ -71,9 +71,9 @@ public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
+                ["Auth:Mode"]                            = "GitHubLegacy",
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
-                ["Auth:GitHub:ScopeProvider"]             = "installation",
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
                 ["Auth:GitHub:BaseUrl"]                   = "https://github.com",
                 ["Git:Author:Name"]                       = "Test",
@@ -98,7 +98,7 @@ public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
             RemoveService<IGitHubTokenStore>(services);
             services.AddSingleton<IGitHubTokenStore>(TokenStore);
             RemoveService<IGitHubTokenScopeProvider>(services);
-            services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
+            services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeStub>();
 
             // Replace ProjectGitInitializer with a no-op stub.
             RemoveService<ProjectGitInitializer>(services);
@@ -121,7 +121,10 @@ public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (!disposing) return;
 
-        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
+        var memoryDbPath = SqliteMemoryDbPathResolver.Resolve(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = _dbPath })
+            .Build());
+        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm", memoryDbPath, memoryDbPath + "-wal", memoryDbPath + "-shm" })
         {
             try { File.Delete(p); } catch { /* best effort */ }
         }

@@ -1,12 +1,14 @@
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using LibGit2Sharp;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Skills;
@@ -176,12 +178,14 @@ public sealed class SkillCatalogService
     private readonly IProjectStore _projects;
     private readonly ProjectGitInitializer _gitInit;
     private readonly SkillParser _parser;
+    private readonly IProjectRoleAuthorizationService _projectRoles;
     private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly IGitHubTokenStore _tokenStore;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     private readonly IGitHubSkillTreeClient? _treeClient;
     private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
     private readonly ILogger<SkillCatalogService> _logger;
+    private readonly AuthMode _authMode;
 
     public SkillCatalogService(
         ISkillStore skills,
@@ -193,26 +197,59 @@ public sealed class SkillCatalogService
         ILogger<SkillCatalogService> logger,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         IGitHubSkillTreeClient? treeClient = null,
-        IMarketplaceCatalogIndexer? catalogIndexer = null)
+        IMarketplaceCatalogIndexer? catalogIndexer = null,
+        IProjectRoleAuthorizationService? projectRoles = null,
+        IConfiguration? configuration = null)
     {
         _skills = skills;
         _projects = projects;
         _gitInit = gitInit;
         _parser = parser;
+        _projectRoles = projectRoles ?? new NullProjectRoleAuthorizationService();
         _scopeProvider = scopeProvider;
         _tokenStore = tokenStore;
         _accessTokenProvider = accessTokenProvider;
         _treeClient = treeClient;
         _catalogIndexer = catalogIndexer;
         _logger = logger;
+        _authMode = configuration is null ? AuthMode.GitHubLegacy : AuthModeResolver.Resolve(configuration);
+    }
+
+    public SkillCatalogService(
+        ISkillStore skills,
+        IProjectStore projects,
+        ProjectGitInitializer gitInit,
+        SkillParser parser,
+        IProjectRoleAuthorizationService projectRoles,
+        IGitHubTokenScopeProvider scopeProvider,
+        IGitHubTokenStore tokenStore,
+        IConfiguration configuration,
+        ILogger<SkillCatalogService> logger,
+        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        IGitHubSkillTreeClient? treeClient = null,
+        IMarketplaceCatalogIndexer? catalogIndexer = null)
+        : this(
+            skills,
+            projects,
+            gitInit,
+            parser,
+            scopeProvider,
+            tokenStore,
+            logger,
+            accessTokenProvider,
+            treeClient,
+            catalogIndexer,
+            projectRoles,
+            configuration)
+    {
     }
 
     // ── Catalog reads ───────────────────────────────────────────────────────────
     public async Task<(SkillOutcome Outcome, IReadOnlyList<SkillView>? Value)> ListAsync(
         ProjectId projectId, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Viewer, ct).ConfigureAwait(false);
+        if (project is null)
             return (SkillOutcome.NotFound, null);
 
         var skills = await _skills.ListByProjectAsync(projectId, ct).ConfigureAwait(false);
@@ -230,8 +267,8 @@ public sealed class SkillCatalogService
     public async Task<(SkillOutcome Outcome, Skill? Value)> GetAsync(
         ProjectId projectId, SkillId id, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Viewer, ct).ConfigureAwait(false);
+        if (project is null)
             return (SkillOutcome.NotFound, null);
         var skill = await _skills.GetAsync(projectId, id, ct).ConfigureAwait(false);
         return skill is null ? (SkillOutcome.NotFound, null) : (SkillOutcome.Ok, skill);
@@ -239,8 +276,8 @@ public sealed class SkillCatalogService
 
     public async Task<SkillOutcome> DeleteAsync(ProjectId projectId, SkillId id, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Contributor, ct).ConfigureAwait(false);
+        if (project is null)
             return SkillOutcome.NotFound;
         var removed = await _skills.DeleteAsync(projectId, id, ct).ConfigureAwait(false);
         return removed ? SkillOutcome.Ok : SkillOutcome.NotFound;
@@ -250,8 +287,8 @@ public sealed class SkillCatalogService
     public async Task<SkillOutcome> AssignAsync(
         ProjectId projectId, SkillId skillId, string agentName, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Contributor, ct).ConfigureAwait(false);
+        if (project is null)
             return SkillOutcome.NotFound;
         if (string.IsNullOrWhiteSpace(agentName))
             return SkillOutcome.Invalid;
@@ -265,8 +302,8 @@ public sealed class SkillCatalogService
     public async Task<SkillOutcome> UnassignAsync(
         ProjectId projectId, SkillId skillId, string agentName, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Contributor, ct).ConfigureAwait(false);
+        if (project is null)
             return SkillOutcome.NotFound;
         var removed = await _skills.UnassignAsync(projectId, skillId, agentName.Trim(), ct).ConfigureAwait(false);
         return removed ? SkillOutcome.Ok : SkillOutcome.NotFound;
@@ -276,8 +313,8 @@ public sealed class SkillCatalogService
     public async Task<SkillAcquisitionResult> SyncConnectedRepoAsync(
         ProjectId projectId, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Contributor, ct).ConfigureAwait(false);
+        if (project is null)
             return new SkillAcquisitionResult { Outcome = SkillOutcome.NotFound };
 
         if (!Directory.Exists(project.WorkingDirectory))
@@ -317,8 +354,8 @@ public sealed class SkillCatalogService
     public async Task<(SkillOutcome Outcome, string? Error, IReadOnlyList<SkillCandidateView>? Candidates)> PreviewRepoCandidatesAsync(
         ProjectId projectId, string repoUrl, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Viewer, ct).ConfigureAwait(false);
+        if (project is null)
             return (SkillOutcome.NotFound, null, null);
         if (string.IsNullOrWhiteSpace(repoUrl))
             return (SkillOutcome.Invalid, "Repository URL is required.", null);
@@ -334,7 +371,7 @@ public sealed class SkillCatalogService
             }
             else
             {
-                cloneDir = await CloneToTempAsync(source.CloneUrl!, project.Owner, ct).ConfigureAwait(false);
+                cloneDir = await CloneToTempAsync(source.CloneUrl!, ResolveGitHubPrincipal(caller, project), ct).ConfigureAwait(false);
                 var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(checkoutRef))
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
@@ -363,8 +400,8 @@ public sealed class SkillCatalogService
     public async Task<SkillAcquisitionResult> ImportFromRepoAsync(
         ProjectId projectId, string repoUrl, IReadOnlyList<string>? locations, CallerContext caller, CancellationToken ct, string? marketplaceName = null)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Contributor, ct).ConfigureAwait(false);
+        if (project is null)
             return new SkillAcquisitionResult { Outcome = SkillOutcome.NotFound };
         if (string.IsNullOrWhiteSpace(repoUrl))
             return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = "Repository URL is required." };
@@ -380,7 +417,7 @@ public sealed class SkillCatalogService
             }
             else
             {
-                cloneDir = await CloneToTempAsync(source.CloneUrl!, project.Owner, ct).ConfigureAwait(false);
+                cloneDir = await CloneToTempAsync(source.CloneUrl!, ResolveGitHubPrincipal(caller, project), ct).ConfigureAwait(false);
                 var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(checkoutRef))
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
@@ -553,7 +590,7 @@ public sealed class SkillCatalogService
             // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
             var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
             var index = await _catalogIndexer.GetOrBuildAsync(
-                owner, repo, branch, blobs, submittingUser: project.Owner, parseStrategy: parseStrategy, cts.Token).ConfigureAwait(false);
+                owner, repo, branch, blobs, submittingUser: ResolveGitHubPrincipal(caller, project), parseStrategy: parseStrategy, cts.Token).ConfigureAwait(false);
 
             if (index.Entries.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
@@ -657,7 +694,7 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, project.Owner, cts.Token).ConfigureAwait(false);
+            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, ResolveGitHubPrincipal(caller, project), cts.Token).ConfigureAwait(false);
             var discovered = DiscoverSkills(tempDir, subpath);
             if (discovered.Count == 0)
                 return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
@@ -907,8 +944,8 @@ public sealed class SkillCatalogService
     public async Task<SkillAcquisitionResult> UploadFilesAsync(
         ProjectId projectId, IReadOnlyList<UploadedSkillFile> files, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Contributor, ct).ConfigureAwait(false);
+        if (project is null)
             return new SkillAcquisitionResult { Outcome = SkillOutcome.NotFound };
         if (files.Count == 0)
             return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = "No files were uploaded." };
@@ -929,8 +966,8 @@ public sealed class SkillCatalogService
     public async Task<SkillAcquisitionResult> CreateManualSkillAsync(
         ProjectId projectId, CreateSkillRequestDto request, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ProjectRole.Contributor, ct).ConfigureAwait(false);
+        if (project is null)
             return new SkillAcquisitionResult { Outcome = SkillOutcome.NotFound };
 
         var validation = ValidateCreateRequest(request);
@@ -1384,6 +1421,27 @@ public sealed class SkillCatalogService
             return null; // fall back to unauthenticated clone (public repositories)
         }
     }
+
+    private async Task<Project?> LoadAuthorizedProjectAsync(
+        ProjectId projectId,
+        CallerContext caller,
+        ProjectRole minimumRole,
+        CancellationToken ct)
+    {
+        var project = await _projects.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+            return null;
+
+        if (_authMode == AuthMode.GitHubLegacy)
+            return caller.Owns(project.Owner) ? project : null;
+
+        return await _projectRoles.HasRoleAsync(caller, projectId, minimumRole, ct).ConfigureAwait(false)
+            ? project
+            : null;
+    }
+
+    private string ResolveGitHubPrincipal(CallerContext caller, Project project) =>
+        _authMode == AuthMode.Entra ? caller.User : project.Owner;
 
     private static string? SafeReadText(string path)
     {

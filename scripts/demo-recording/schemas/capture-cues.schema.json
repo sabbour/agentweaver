@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/demo-recording/capture-cues.schema.json",
+  "title": "Agentweaver demo capture cue manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "takeId", "captureStartedAtEpochMs", "cues"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "takeId": { "type": "string", "minLength": 1 },
+    "videoPath": { "type": ["string", "null"] },
+    "captureStartedAtEpochMs": { "type": "integer", "minimum": 0 },
+    "cues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "sequence",
+          "tMs",
+          "receivedAtEpochMs",
+          "url",
+          "source",
+          "coordinateSpace",
+          "rectCssPx",
+          "rectNormalized",
+          "rectStatus"
+        ],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "beatId": { "type": ["string", "null"] },
+          "sequence": { "type": "integer", "minimum": 0 },
+          "tMs": { "type": "number", "minimum": 0 },
+          "pageObservedTimeMs": { "type": "number", "minimum": 0 },
+          "receivedAtEpochMs": { "type": "integer", "minimum": 0 },
+          "url": { "type": "string" },
+          "source": { "type": "object" },
+          "observed": { "type": "object" },
+          "coordinateSpace": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "viewportWidth", "viewportHeight", "devicePixelRatio"],
+            "properties": {
+              "kind": { "const": "browser-viewport-css-pixels" },
+              "viewportWidth": { "type": "number", "exclusiveMinimum": 0 },
+              "viewportHeight": { "type": "number", "exclusiveMinimum": 0 },
+              "devicePixelRatio": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
+          "rectCssPx": { "type": ["object", "null"] },
+          "rectNormalized": { "type": ["object", "null"] },
+          "rectStatus": {
+            "enum": ["captured", "not-requested", "missing-or-not-visible"]
+          }
+        }
+      }
+    }
+  }
+}

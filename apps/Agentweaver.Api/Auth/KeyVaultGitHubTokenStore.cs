@@ -27,7 +27,7 @@ namespace Agentweaver.Api.Auth;
 /// <paramref name="diskMirror"/> so pods that read the shared filesystem file remain
 /// functional in phase-1 (before they are updated to call the API).
 /// </summary>
-public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore
+public sealed class KeyVaultGitHubTokenStore : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore
 {
     private readonly ISecretStore _secretStore;
     private readonly FileSystemGitHubTokenStore? _diskFallback; // lazy migration source
@@ -156,6 +156,109 @@ public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGi
         }
     }
 
+    public async Task<IReadOnlyList<GitHubIdentityLink>> ListLinkedIdentitiesAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+    {
+        var index = await ReadLinkIndexAsync(entraUserId, ct).ConfigureAwait(false);
+        return index.Links
+            .OrderByDescending(x => x.IsDefault)
+            .ThenBy(x => x.LinkedAt)
+            .ToArray();
+    }
+
+    public async Task<GitHubIdentityLink?> GetLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var links = await ListLinkedIdentitiesAsync(entraUserId, ct).ConfigureAwait(false);
+        return links.FirstOrDefault(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal));
+    }
+
+    public async Task<GitHubIdentityLink?> GetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+        => (await ListLinkedIdentitiesAsync(entraUserId, ct).ConfigureAwait(false))
+            .FirstOrDefault(x => x.IsDefault);
+
+    public async Task LinkIdentityAsync(
+        string entraUserId,
+        GitHubToken token,
+        bool isDefault = false,
+        bool? copilotEntitled = null,
+        DateTimeOffset? copilotEntitledCheckedAt = null,
+        CancellationToken ct = default)
+    {
+        var scope = GitHubTokenScope.ForLinkedIdentity(entraUserId, token.Login);
+        await SetAsync(scope, token, ct).ConfigureAwait(false);
+
+        var index = await ReadLinkIndexAsync(entraUserId, ct).ConfigureAwait(false);
+        var links = index.Links.ToDictionary(x => x.GitHubLogin, StringComparer.Ordinal);
+        links.TryGetValue(token.Login, out var existing);
+        var makeDefault = isDefault || links.Count == 0 || (existing?.IsDefault ?? false);
+
+        if (makeDefault)
+        {
+            foreach (var key in links.Keys.ToList())
+                links[key] = links[key] with { IsDefault = false };
+        }
+
+        links[token.Login] = new GitHubIdentityLink(
+            entraUserId,
+            token.Login,
+            scope.Key,
+            makeDefault || (existing?.IsDefault ?? false),
+            existing?.LinkedAt ?? DateTimeOffset.UtcNow,
+            copilotEntitled ?? existing?.CopilotEntitled,
+            copilotEntitledCheckedAt ?? existing?.CopilotEntitledCheckedAt,
+            token.AvatarUrl);
+
+        await WriteLinkIndexAsync(entraUserId, new LinkIndex { Links = links.Values.OrderBy(x => x.GitHubLogin, StringComparer.Ordinal).ToArray() }, ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<bool> SetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var index = await ReadLinkIndexAsync(entraUserId, ct).ConfigureAwait(false);
+        if (!index.Links.Any(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal)))
+            return false;
+
+        await WriteLinkIndexAsync(entraUserId, new LinkIndex
+        {
+            Links = index.Links
+                .Select(x => x with { IsDefault = string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal) })
+                .ToArray()
+        }, ct).ConfigureAwait(false);
+
+        return true;
+    }
+
+    public async Task<bool> UnlinkIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var index = await ReadLinkIndexAsync(entraUserId, ct).ConfigureAwait(false);
+        var removed = index.Links.FirstOrDefault(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal));
+        if (removed is null)
+            return false;
+
+        await SignOutAsync(GitHubTokenScope.ForLinkedIdentity(entraUserId, githubLogin), ct).ConfigureAwait(false);
+
+        var remaining = index.Links
+            .Where(x => !string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal))
+            .ToList();
+        if (removed.IsDefault && remaining.Count > 0)
+            remaining[0] = remaining[0] with { IsDefault = true };
+
+        await WriteLinkIndexAsync(entraUserId, new LinkIndex { Links = remaining.ToArray() }, ct).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task<IDistributedGitHubTokenRefreshLease?> TryAcquireRefreshLeaseAsync(
         GitHubTokenScope scope,
         string owner,
@@ -206,6 +309,31 @@ public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGi
         return null;
     }
 
+    private async Task<LinkIndex> ReadLinkIndexAsync(string entraUserId, CancellationToken ct)
+    {
+        var result = await _secretStore.GetSecretAsync(GitHubTokenScope.ForLinkedIdentityIndex(entraUserId).Key, ct).ConfigureAwait(false);
+        if (!result.Found || string.IsNullOrWhiteSpace(result.Value))
+            return new LinkIndex();
+
+        try
+        {
+            return JsonSerializer.Deserialize<LinkIndex>(result.Value!, _json) ?? new LinkIndex();
+        }
+        catch (Exception)
+        {
+            return new LinkIndex();
+        }
+    }
+
+    private async Task WriteLinkIndexAsync(string entraUserId, LinkIndex index, CancellationToken ct)
+    {
+        await _secretStore.SetSecretAsync(
+            GitHubTokenScope.ForLinkedIdentityIndex(entraUserId).Key,
+            JsonSerializer.Serialize(index, _json),
+            etag: null,
+            ct: ct).ConfigureAwait(false);
+    }
+
     // ── JSON shape ────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -221,6 +349,11 @@ public sealed class KeyVaultGitHubTokenStore : IGitHubTokenStore, IDistributedGi
         [JsonPropertyName("Login")]        public string? Login { get; init; }
         [JsonPropertyName("AvatarUrl")]    public string? AvatarUrl { get; init; }
         [JsonPropertyName("Scopes")]       public string[]? Scopes { get; init; }
+    }
+
+    internal sealed record LinkIndex
+    {
+        [JsonPropertyName("Links")] public GitHubIdentityLink[] Links { get; init; } = [];
     }
 
     private sealed class SecretStoreRefreshLease(ISecretStoreLease inner) : IDistributedGitHubTokenRefreshLease

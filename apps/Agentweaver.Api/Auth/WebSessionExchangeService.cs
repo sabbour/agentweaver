@@ -32,13 +32,19 @@ public sealed class WebSessionExchangeService
     private static readonly TimeSpan CodeLifetime = TimeSpan.FromSeconds(60);
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IConfiguration _configuration;
+    private readonly AuthModeEpochService _authModeEpochService;
     private readonly ILogger<WebSessionExchangeService> _logger;
 
     public WebSessionExchangeService(
         IServiceScopeFactory scopeFactory,
+        IConfiguration configuration,
+        AuthModeEpochService authModeEpochService,
         ILogger<WebSessionExchangeService> logger)
     {
         _scopeFactory = scopeFactory;
+        _configuration = configuration;
+        _authModeEpochService = authModeEpochService;
         _logger = logger;
     }
 
@@ -49,7 +55,10 @@ public sealed class WebSessionExchangeService
     /// </summary>
     public async Task<string> IssueAsync(string accessToken, string login, CancellationToken ct = default)
     {
-        var code = GenerateOpaqueCode();
+        if (!await _authModeEpochService.IsCurrentInstanceActiveAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException("This instance is no longer serving the active auth mode epoch.");
+
+        var code = GenerateOpaqueCode(AuthModeResolver.Resolve(_configuration));
         var expiresAt = DateTimeOffset.UtcNow.Add(CodeLifetime);
 
         using var scope = _scopeFactory.CreateScope();
@@ -98,6 +107,12 @@ public sealed class WebSessionExchangeService
         if (string.IsNullOrWhiteSpace(code))
             return (false, string.Empty, string.Empty);
 
+        if (!await _authModeEpochService.IsCurrentInstanceActiveAsync(ct).ConfigureAwait(false))
+            return (false, string.Empty, string.Empty);
+
+        if (!IsCurrentModeCode(code, AuthModeResolver.Resolve(_configuration)))
+            return (false, string.Empty, string.Empty);
+
         var now = DateTimeOffset.UtcNow;
 
         using var scope = _scopeFactory.CreateScope();
@@ -129,8 +144,13 @@ public sealed class WebSessionExchangeService
         return (true, existing.AccessToken, existing.Login);
     }
 
-    /// <summary>Generates a 256-bit random, URL-safe opaque one-time code.</summary>
-    public static string GenerateOpaqueCode() =>
-        Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-}
+    /// <summary>
+    /// Generates a 256-bit random, URL-safe opaque one-time code prefixed with the issuing auth mode
+    /// so codes become invalid immediately if the deployment switches auth mode before redemption.
+    /// </summary>
+    public static string GenerateOpaqueCode(AuthMode authMode) =>
+        $"{AuthModeResolver.Normalize(authMode)}.{Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32))}";
 
+    private static bool IsCurrentModeCode(string code, AuthMode authMode) =>
+        code.StartsWith($"{AuthModeResolver.Normalize(authMode)}.", StringComparison.Ordinal);
+}

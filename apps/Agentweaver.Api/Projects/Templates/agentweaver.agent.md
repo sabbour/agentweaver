@@ -52,14 +52,14 @@ For ad-hoc runs or workflows that produce a runnable artifact outside a `build_t
   Everything outside the BEGIN/END markers is hand-written and preserved.
 -->
 
-The Agentweaver MCP server exposes **100 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
+The Agentweaver MCP server exposes **102 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
 
 - **Backlog:** `backlog_archive_task`, `backlog_capture_task`, `backlog_decompose_spec`, `backlog_delete_task`, `backlog_edit_task`, `backlog_get_board`, `backlog_get_settings`, `backlog_get_task`, `backlog_get_workflow_stages`, `backlog_move_to_backlog`, `backlog_move_to_ready`, `backlog_reorder_task`, `backlog_set_settings`, `send_all_backlog_to_ready`
 - **Blueprint:** `blueprint_generate`, `list_blueprints`, `validate_blueprint`
 - **Catalog:** `catalog_list_roles`, `catalog_list_scenarios`
 - **Coordinator:** `coordinator_children_get`, `coordinator_outcome_spec_confirm`, `coordinator_outcome_spec_get`, `coordinator_outcome_spec_revise`, `coordinator_start`, `coordinator_steer`, `coordinator_work_plan_get`, `orchestration_topology`
 - **Diagnostics:** `diagnostics_get`, `heartbeat_status`
-- **GitHub Auth:** `github_signin`, `github_signout`, `github_status`
+- **GitHub Auth:** `github_accounts_list`, `github_repos_list`, `github_signin`, `github_signout`, `github_status`
 - **Memory:** `decision_create`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_update`, `memory_export`, `memory_get`, `memory_import`, `memory_list`, `memory_record`, `memory_search`, `session_current`, `session_start`, `session_update`, `squad_decide`
 - **Project:** `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_rename`
 - **Run:** `run_archive`, `run_get_file`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_task`, `run_watch`, `start_preview`

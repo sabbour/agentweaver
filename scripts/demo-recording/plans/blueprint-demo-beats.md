@@ -6,7 +6,9 @@ never-committed script that only ever existed as rendered narration `.txt` outpu
 `recordings/blueprint-demo-final/`.
 
 Each `## Beat X.Y — Title` heading starts a beat. `Narration: "..."` is the voiceover
-script for that beat.
+script for that beat. Optional `Fresh navigation: true` and `Start URL: ...` metadata
+lines let a beat explicitly force a scene-cut reload or declare the route it expects when
+captured as the first beat in a session.
 
 Every beat below is intended to be captured **live** against the deployed staging app.
 **Critical continuity rule:** each beat continues from the live UI state left by the
@@ -20,6 +22,8 @@ reads the `Narration:` line).
 ## Beat 1.1 — Create the project
 
 Narration: "First, I'll create a new project. I'll give it a name and a short description of what we're building."
+
+Fresh navigation: true
 
 On screen: Open **New Project**. Fill in the project name and short description, but do **not** finish creation yet. Leave the same create-project flow open for beat 1.2.
 
@@ -38,6 +42,8 @@ On screen: Open **Agents**, inspect one agent card, and show its role, default m
 ## Beat 2.1 — Frame the product
 
 Narration: "This time I'll describe the product we're building."
+
+Fresh navigation: true
 
 On screen: Starting from the existing project context, open the task/assistant entry point, choose the **Product** workflow or prompt path, enter the Trailhead brief, and submit it.
 
@@ -87,6 +93,8 @@ On screen: From the same project context, open **Decisions** and show a real, no
 
 Narration: "Not everything should run on a schedule — but some things should. I'll set up a weekly dependency sweep, since checking for outdated or vulnerable dependencies is naturally recurring work, regardless of what we're shipping."
 
+Fresh navigation: true
+
 On screen: Open **Workflows**, choose the dependency-sweep workflow, add a weekly schedule, and save it. This beat starts from the project you already created; do not recreate or reclone anything.
 
 ## Beat 3.2 — Trigger bug triage from GitHub
@@ -98,6 +106,8 @@ On screen: Stay in **Workflows**, open the bug-triage workflow, change its trigg
 ## Beat 4.1 — Triage the next issue from chat
 
 Narration: "There's more than one way to work with Agentweaver. I'll open a new issue, this time without a label, and just ask for it directly. I'll start a chat and tell the assistant to triage issue #x."
+
+Fresh navigation: true
 
 On screen: Starting from the same project, create or open the next issue without the trigger label, open an assistant session, and ask it to triage that issue directly.
 
@@ -134,3 +144,5 @@ On screen: End on the run topology that contains the resulting pull request, the
 ## Beat 5.1 — Drive it from your own tools
 
 Narration: "You can drive the exact same workflows from your own tools. In Settings, grab the MCP server URL, then connect clients like Claude Desktop, VS Code, or Copilot CLI. Every capability you saw in the UI today — projects, runs, the board, workflows, blueprints, casting, memory, decisions, sandboxes, diagnostics — is available through that same MCP server, in the same workspace and team context you've been using throughout this demo."
+
+Fresh navigation: true

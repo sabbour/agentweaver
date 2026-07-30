@@ -1,0 +1,81 @@
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { GitHubSignIn } from '../components/GitHubSignIn';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../api/apiClient', () => ({
+  apiClient: {
+    getAuthSession: vi.fn(),
+    listLinkedGitHubAccounts: vi.fn(),
+    getProjectAccessOverview: vi.fn(),
+    setDefaultLinkedGitHubAccount: vi.fn(),
+    setProjectGitHubIdentityOverride: vi.fn(),
+    signOutSession: vi.fn(),
+  },
+}));
+
+afterEach(() => cleanup());
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+    authenticated: true,
+    auth_mode: 'entra',
+    display_name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    login: 'ada',
+    avatar_url: null,
+    entra_object_id: 'entra-1',
+    platform_roles: ['PlatformAdmin'],
+  } as never);
+  vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
+    {
+      login: 'octocat',
+      name: 'Octocat',
+      avatar_url: 'https://example.com/octocat.png',
+      type: 'user',
+      is_default: true,
+      copilot_entitled: true,
+    },
+    {
+      login: 'altcat',
+      name: 'Alt Cat',
+      avatar_url: 'https://example.com/altcat.png',
+      type: 'user',
+      is_default: false,
+      copilot_entitled: false,
+    },
+  ] as never);
+  vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
+    auth_mode: 'entra',
+    platform_roles: ['PlatformAdmin'],
+    current_user_project_role: 'Owner',
+    can_manage_role_assignments: true,
+    can_manage_project_github_identity: true,
+    project_role_assignments: [],
+    github_identity_override_login: null,
+    effective_github_login: 'octocat',
+    effective_github_permission: 'Write',
+  } as never);
+  vi.mocked(apiClient.setProjectGitHubIdentityOverride).mockResolvedValue(undefined as never);
+});
+
+describe('GitHubSignIn', () => {
+  it('shows current account and lets the user switch the current project account', async () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <GitHubSignIn projectId="proj-1" />
+      </AzureFluentProvider>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'GitHub account switcher' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub account switcher' }));
+
+    expect(await screen.findByText('Current GitHub account')).toBeDefined();
+    expect(screen.getByText(/@octocat · Write access/)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /Alt Cat/ }));
+
+    await waitFor(() => expect(apiClient.setProjectGitHubIdentityOverride).toHaveBeenCalledWith('proj-1', 'altcat'));
+  });
+});

@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Auth;
 /// with status="signed-out" so config fallback is suppressed after explicit sign-out.
 /// On non-Windows platforms falls back to InMemoryGitHubTokenStore.
 /// </summary>
-public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
+public sealed class OsCredentialStoreGitHubTokenStore : IMultiIdentityGitHubTokenStore
 {
     private const string TargetPrefix = "Agentweaver.GitHub.";
     private const string TombstoneUsername = "signed-out";
@@ -109,12 +109,139 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         WriteCredential(TargetName(scope), TombstoneUsername, JsonSerializer.Serialize(tombstone));
     }
 
+    public async Task<IReadOnlyList<GitHubIdentityLink>> ListLinkedIdentitiesAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return await _fallback.ListLinkedIdentitiesAsync(entraUserId, ct).ConfigureAwait(false);
+
+        var index = ReadLinkIndex(entraUserId);
+        return index.Links
+            .OrderByDescending(x => x.IsDefault)
+            .ThenBy(x => x.LinkedAt)
+            .ToArray();
+    }
+
+    public async Task<GitHubIdentityLink?> GetLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var links = await ListLinkedIdentitiesAsync(entraUserId, ct).ConfigureAwait(false);
+        return links.FirstOrDefault(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal));
+    }
+
+    public async Task<GitHubIdentityLink?> GetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+        => (await ListLinkedIdentitiesAsync(entraUserId, ct).ConfigureAwait(false))
+            .FirstOrDefault(x => x.IsDefault);
+
+    public async Task LinkIdentityAsync(
+        string entraUserId,
+        GitHubToken token,
+        bool isDefault = false,
+        bool? copilotEntitled = null,
+        DateTimeOffset? copilotEntitledCheckedAt = null,
+        CancellationToken ct = default)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            await _fallback.LinkIdentityAsync(
+                entraUserId,
+                token,
+                isDefault,
+                copilotEntitled,
+                copilotEntitledCheckedAt,
+                ct).ConfigureAwait(false);
+            return;
+        }
+
+        await SetAsync(GitHubTokenScope.ForLinkedIdentity(entraUserId, token.Login), token, ct).ConfigureAwait(false);
+
+        var index = ReadLinkIndex(entraUserId);
+        var links = index.Links.ToDictionary(x => x.GitHubLogin, StringComparer.Ordinal);
+        links.TryGetValue(token.Login, out var existing);
+        var makeDefault = isDefault || links.Count == 0 || (existing?.IsDefault ?? false);
+
+        if (makeDefault)
+        {
+            foreach (var key in links.Keys.ToList())
+                links[key] = links[key] with { IsDefault = false };
+        }
+
+        links[token.Login] = new GitHubIdentityLink(
+            entraUserId,
+            token.Login,
+            GitHubTokenScope.ForLinkedIdentity(entraUserId, token.Login).Key,
+            makeDefault || (existing?.IsDefault ?? false),
+            existing?.LinkedAt ?? DateTimeOffset.UtcNow,
+            copilotEntitled ?? existing?.CopilotEntitled,
+            copilotEntitledCheckedAt ?? existing?.CopilotEntitledCheckedAt,
+            token.AvatarUrl);
+
+        WriteLinkIndex(entraUserId, new LinkIndex { Links = links.Values.OrderBy(x => x.GitHubLogin, StringComparer.Ordinal).ToArray() });
+    }
+
+    public async Task<bool> SetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return await _fallback.SetDefaultLinkedIdentityAsync(entraUserId, githubLogin, ct).ConfigureAwait(false);
+
+        var index = ReadLinkIndex(entraUserId);
+        if (!index.Links.Any(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal)))
+            return false;
+
+        WriteLinkIndex(entraUserId, new LinkIndex
+        {
+            Links = index.Links
+                .Select(x => x with { IsDefault = string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal) })
+                .ToArray()
+        });
+        return true;
+    }
+
+    public async Task<bool> UnlinkIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return await _fallback.UnlinkIdentityAsync(entraUserId, githubLogin, ct).ConfigureAwait(false);
+
+        var index = ReadLinkIndex(entraUserId);
+        var removed = index.Links.FirstOrDefault(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal));
+        if (removed is null)
+            return false;
+
+        await SignOutAsync(GitHubTokenScope.ForLinkedIdentity(entraUserId, githubLogin), ct).ConfigureAwait(false);
+
+        var remaining = index.Links
+            .Where(x => !string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal))
+            .ToList();
+        if (removed.IsDefault && remaining.Count > 0)
+            remaining[0] = remaining[0] with { IsDefault = true };
+
+        WriteLinkIndex(entraUserId, new LinkIndex { Links = remaining.ToArray() });
+        return true;
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
     private static string TargetName(GitHubTokenScope scope) =>
         $"{TargetPrefix}{scope.Key}";
+
+    private static string LinkIndexTargetName(string entraUserId) =>
+        $"{TargetPrefix}links.{NormalizeTargetSegment(entraUserId)}";
+
+    private static string NormalizeTargetSegment(string value) =>
+        string.Concat(value.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_'));
 
     private static string? ReadCredential(string target)
     {
@@ -155,6 +282,25 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         }
     }
 
+    private static LinkIndex ReadLinkIndex(string entraUserId)
+    {
+        var json = ReadCredential(LinkIndexTargetName(entraUserId));
+        if (json is null)
+            return new LinkIndex();
+
+        try
+        {
+            return JsonSerializer.Deserialize<LinkIndex>(json) ?? new LinkIndex();
+        }
+        catch (JsonException)
+        {
+            return new LinkIndex();
+        }
+    }
+
+    private static void WriteLinkIndex(string entraUserId, LinkIndex index) =>
+        WriteCredential(LinkIndexTargetName(entraUserId), "links", JsonSerializer.Serialize(index));
+
     private static byte[] GetBytes(nint ptr, int size)
     {
         var bytes = new byte[size];
@@ -171,6 +317,11 @@ public sealed class OsCredentialStoreGitHubTokenStore : IGitHubTokenStore
         public string? Login { get; init; }
         public string? AvatarUrl { get; init; }
         public string[]? Scopes { get; init; }
+    }
+
+    private sealed record LinkIndex
+    {
+        public GitHubIdentityLink[] Links { get; init; } = [];
     }
 
     private static class NativeMethods

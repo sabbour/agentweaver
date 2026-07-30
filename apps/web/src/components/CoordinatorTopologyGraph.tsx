@@ -282,7 +282,15 @@ function TopologyNodeCard({ data }: NodeProps) {
   return (
     <>
       <PodIndicator podName={node.executionPodName} />
-      <div className={cardClass} role="article" aria-label={`${node.title}: ${sm.label}`}>
+      <div
+        className={cardClass}
+        role="article"
+        aria-label={`${node.title}: ${sm.label}`}
+        data-testid="topology-node"
+        data-node-id={node.id}
+        data-node-kind={node.kind}
+        data-node-status={node.status}
+      >
         <Handle type="target" position={Position.Left} style={handleStyle} />
         <Handle type="source" position={Position.Right} style={handleStyle} />
 
@@ -610,7 +618,7 @@ export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: Coo
   return (
     <>
       <SteerContext.Provider value={openSteer}>
-        <div className={styles.container}>
+        <div className={styles.container} data-testid="coordinator-topology-graph">
           <ReactFlow
             nodes={rfNodes}
             edges={rfEdges}

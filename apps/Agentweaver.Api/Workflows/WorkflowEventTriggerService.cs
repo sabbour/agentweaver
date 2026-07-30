@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Agentweaver.Domain;
+using Agentweaver.Api.Webhooks;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -15,9 +16,9 @@ namespace Agentweaver.Api.Workflows;
 /// <see cref="FireEventAsync"/>: the project-scoped GitHub webhook receiver
 /// (<c>Endpoints.GitHubWebhookEndpoints</c>, HMAC-verified before it reaches here) and the explicit
 /// <c>POST /api/projects/{id}/workflow-events</c> endpoint (<c>Endpoints.WorkflowTriggerEndpoints</c>).
-/// This service treats the event name as an opaque, already-authenticated routing key —
-/// it never receives or interprets raw issue/PR/comment body text, so untrusted GitHub content cannot
-/// reach a prompt through this path.</para>
+/// This service treats the event name as an opaque, already-authenticated routing key. The only raw
+/// user text it may see is <c>comment.body</c> for the boolean-only <c>commentMatches</c> predicate;
+/// that body is never logged, stored, parsed for arguments, or forwarded to any downstream prompt.</para>
 /// </summary>
 public sealed class WorkflowEventTriggerService
 {
@@ -45,11 +46,13 @@ public sealed class WorkflowEventTriggerService
     /// task per matching, valid workflow (WorkflowOverrideId bound). When <paramref name="dedupeKey"/>
     /// is supplied (e.g. a webhook delivery id) a repeated call with the SAME event name + dedupe key
     /// is a no-op, so a retried delivery never double-fires; omitting it means every call fires (the
-    /// caller is the source of dedupe truth for at-most-once delivery semantics). Returns the ids of
-    /// the workflows that fired.
+    /// caller is the source of dedupe truth for at-most-once delivery semantics). When a matching
+    /// event-triggered workflow declares structured predicates in <c>trigger.if</c>, they are
+    /// evaluated against <paramref name="payload"/> before firing. Returns the ids of the workflows
+    /// that fired.
     /// </summary>
     public async Task<IReadOnlyList<string>> FireEventAsync(
-        Project project, string eventName, string? dedupeKey, CancellationToken ct)
+        Project project, string eventName, string? dedupeKey, GitHubWebhookPayload? payload, CancellationToken ct)
     {
         if (project.State != ProjectState.Active) return [];
         if (string.IsNullOrWhiteSpace(eventName)) return [];
@@ -64,6 +67,7 @@ public sealed class WorkflowEventTriggerService
             var def = result.Definition;
             if (def?.Trigger is not { Type: WorkflowTriggerType.Event } trigger) continue;
             if (!string.Equals(trigger.EventName, eventName, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!WorkflowTriggerPredicateEvaluator.EvaluateAll(trigger.If, eventName, payload)) continue;
 
             var idempotencyKey = string.IsNullOrWhiteSpace(dedupeKey)
                 ? $"workflow-event-trigger:{def.Id}:{eventName}:{now:yyyyMMddHHmmssfff}:{Guid.NewGuid():N}"

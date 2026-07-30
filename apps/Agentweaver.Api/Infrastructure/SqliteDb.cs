@@ -615,6 +615,22 @@ public sealed class SqliteDb
 
         CREATE INDEX IF NOT EXISTS idx_projects_state ON projects (state);
 
+        CREATE TABLE IF NOT EXISTS project_role_assignments (
+            project_id       TEXT NOT NULL,
+            principal_id     TEXT NOT NULL,
+            role             TEXT NOT NULL,
+            granted_by       TEXT NOT NULL,
+            granted_at       TEXT NOT NULL,
+            PRIMARY KEY (project_id, principal_id),
+            FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE,
+            CHECK (role IN ('Owner', 'Contributor', 'Viewer'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_project_role_assignments_principal
+            ON project_role_assignments (principal_id);
+        CREATE INDEX IF NOT EXISTS idx_project_role_assignments_project_role
+            ON project_role_assignments (project_id, role);
+
         CREATE TABLE IF NOT EXISTS workflow_runs (
             workflow_run_id  TEXT PRIMARY KEY,
             project_id       TEXT NOT NULL,

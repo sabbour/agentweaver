@@ -272,6 +272,7 @@ internal sealed class GitHubApiWebApplicationFactory : WebApplicationFactory<Pro
                 ["Coordinator:Checkpoints:Path"]         = Path.Combine(_checkpointsPath, "coord"),
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
+                ["Auth:Mode"]                            = "GitHubLegacy",
                 ["Auth:ApiKey"]                          = TestApiKey,
                 ["Auth:User"]                            = TestUser,
                 ["Auth:GitHub:ClientId"]                 = "test-github-client-id",

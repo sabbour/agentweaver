@@ -6,7 +6,9 @@ This is the **single committed source of truth** for the second Agentweaver demo
 blueprint demo. It is parsed by `lib/beats.mjs`'s `loadBeatPlan`.
 
 Each `## Beat X.Y — Title` heading starts a beat. `Narration: "..."` is the voiceover
-script for that beat.
+script for that beat. Optional `Fresh navigation: true` and `Start URL: ...` metadata
+lines let a beat explicitly force a scene-cut reload or declare the route it expects when
+captured as the first beat in a session.
 
 Every beat below is intended to be captured **live** against the deployed staging app.
 **Critical continuity rule:** each beat continues from the live UI state left by the
@@ -39,6 +41,8 @@ On screen: Start on the live `Azure/AKS` repository context inside Agentweaver a
 
 Narration: "I'll point this at the AKS repo. Instead of picking a pre-built blueprint, I'll generate one for what we actually need — managing issues and roadmap work, plus running the blog."
 
+Fresh navigation: true
+
 On screen: In the repo-to-project flow, point Agentweaver at `Azure/AKS`, choose the blueprint-generation path, describe the need for issue triage, roadmap work, and blog/content management, then create the project from that generated blueprint.
 
 ## Beat 1.2 — Meet the cast and import PM skills
@@ -52,17 +56,23 @@ On screen: From the project you just created, open **Skills** and use the live *
 
 Narration: "This workflow does the real work: classify open issues, group the duplicate feature requests together, and for anything not already documented, write a PRD, name it, and review it. I'll generate it from a description and check the graph it built. I'll set it to run weekly — but I can also fire it off a GitHub event instead. Let's add a second trigger: whenever an issue gets labeled `roadmap-review`, run the same workflow."
 
+Fresh navigation: true
+
 On screen: Generate the workflow from a description, inspect the visual editor graph it produces, then stay in the same workflow and add both triggers: a weekly schedule and an event trigger for **Issues** with label `roadmap-review`. Save both from this same workflow editing context.
 
 ## Beat 2.3 — Add the writing skill
 
 Narration: "For the writing itself, I'll pull in a skill built to strip out AI writing tells and assign it to the writer."
 
+Fresh navigation: true
+
 On screen: From the same project, open **Browse marketplaces**, import `avoid-ai-writing`, and assign it to the writer role.
 
 ## Beat 3.1 — Run triage now
 
 Narration: "I'm not waiting until Monday. I'll run triage now."
+
+Fresh navigation: true
 
 On screen: Trigger **Run now** on the issue-triage workflow, stay on the coordinator page, show the topology view, any reviews or requested edits, confirm with **split into subtasks**, follow the run through local completion, and end on the triage report linked to its generated PRDs. Nothing in this beat should write back to `Azure/AKS`.
 
@@ -81,3 +91,5 @@ On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), wait for re
 ## Beat 5.1 — Outro
 
 Narration: "You can drive the exact same workflows from your own tools. In Settings, grab the MCP server URL, then connect clients like Claude Desktop, VS Code, or Copilot CLI. Everything you saw here — generating a blueprint against a live repo, importing skills from GitHub and the marketplace, running scheduled and webhook-triggered triage, producing PRDs and blog drafts, and opening the PR workflow for review — is available through that same MCP server, in the same workspace and team context you've been using throughout this demo."
+
+Fresh navigation: true

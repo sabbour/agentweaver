@@ -691,6 +691,7 @@ public sealed class Spec018PodReleaseWebAppFactory : WebApplicationFactory<Progr
                 ["Coordinator:Checkpoints:Path"]           = _coordCheckpointsPath,
                 ["Testing:BypassGitHubOrgAuthorization"]   = "true",
                 ["Testing:BypassGitHubTokenAuth"]          = "true",
+                ["Auth:Mode"]                              = "GitHubLegacy",
                 ["Auth:ApiKey"]                            = "spec018-test-key",
                 ["Auth:User"]                              = "spec018-test-user",
                 ["Git:Author:Name"]                        = "Test",

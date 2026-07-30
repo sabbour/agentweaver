@@ -152,6 +152,66 @@ public enum WorkflowScheduleInterval
     Monthly,
 }
 
+/// <summary>The allowed pull-request review states for the structured event-trigger predicate DSL.</summary>
+public enum WorkflowTriggerReviewState
+{
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
+/// <summary>The supported string match modes for the <c>ref</c> predicate.</summary>
+public enum WorkflowTriggerMatchMode
+{
+    Equals,
+    Prefix,
+}
+
+/// <summary>A typed predicate in an event trigger's <c>if:</c> list. Exactly one property must be set.</summary>
+public sealed record WorkflowTriggerPredicate
+{
+    public WorkflowTriggerLabelPredicate? HasLabel { get; init; }
+    public WorkflowTriggerLabelPredicate? IsNotLabeledWith { get; init; }
+    public WorkflowTriggerBaseBranchPredicate? BaseBranch { get; init; }
+    public WorkflowTriggerReviewStatePredicate? ReviewState { get; init; }
+    public WorkflowTriggerRefPredicate? Ref { get; init; }
+    public WorkflowTriggerCategoryPredicate? Category { get; init; }
+    public WorkflowTriggerCommentMatchesPredicate? CommentMatches { get; init; }
+    public IReadOnlyList<WorkflowTriggerPredicate> Or { get; init; } = [];
+    public WorkflowTriggerPredicate? Not { get; init; }
+}
+
+public sealed record WorkflowTriggerLabelPredicate
+{
+    public required string Label { get; init; }
+}
+
+public sealed record WorkflowTriggerBaseBranchPredicate
+{
+    public required string Branch { get; init; }
+}
+
+public sealed record WorkflowTriggerReviewStatePredicate
+{
+    public required WorkflowTriggerReviewState State { get; init; }
+}
+
+public sealed record WorkflowTriggerRefPredicate
+{
+    public required string Branch { get; init; }
+    public required WorkflowTriggerMatchMode MatchMode { get; init; }
+}
+
+public sealed record WorkflowTriggerCategoryPredicate
+{
+    public required string Name { get; init; }
+}
+
+public sealed record WorkflowTriggerCommentMatchesPredicate
+{
+    public required string Pattern { get; init; }
+}
+
 /// <summary>
 /// An optional, first-class automation trigger for a workflow (issue #53). When present, a schedule
 /// trigger is evaluated by <c>WorkflowScheduleTriggerService</c> and an event trigger is evaluated by
@@ -186,6 +246,12 @@ public sealed record WorkflowTrigger
     /// webhook receiver) is wired to call it yet — this is the trigger mechanism/interface only.
     /// </summary>
     public string? EventName { get; init; }
+
+    /// <summary>
+    /// Optional, structured event-filter predicate list. A plain array is implicitly ANDed; compound
+    /// logic uses nested <c>or:</c> and <c>not:</c> wrapper predicates. Ignored for schedule triggers.
+    /// </summary>
+    public IReadOnlyList<WorkflowTriggerPredicate> If { get; init; } = [];
 }
 
 /// <summary>

@@ -16,9 +16,10 @@ import type { ReactNode } from 'react';
 
 export interface AppShellProps {
   children: ReactNode;
+  banner?: ReactNode;
 }
 
-export function AppShell({ children }: AppShellProps) {
+export function AppShell({ children, banner }: AppShellProps) {
   const location = useLocation();
 
   // The project id actually present in the route (undefined on global pages).
@@ -85,6 +86,7 @@ export function AppShell({ children }: AppShellProps) {
                 <StartOrchestrationFab currentProjectId={effectiveProjectId} />
               </div>
               <div className="aw-shell-scroll">
+                {banner}
                 {children}
               </div>
             </main>

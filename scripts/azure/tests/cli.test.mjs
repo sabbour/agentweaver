@@ -42,6 +42,14 @@ test("run: routes 'provision-infra' with argv + log", async () => {
   assert.deepEqual(received.argv, ["--skip-postgres"]);
 });
 
+test("run: routes 'setup-entra-app' with argv + log", async () => {
+  let received;
+  const modules = { "setup-entra-app": { run: async (opts) => { received = opts; return { ok: true }; } } };
+  const result = await run(["setup-entra-app", "--app-name", "agentweaver-prod-authn"], { log: noopLog(), modules });
+  assert.equal(result.ok, true);
+  assert.deepEqual(received.argv, ["--app-name", "agentweaver-prod-authn"]);
+});
+
 test("run: routes 'deploy-from-local' by resolving variables first", async () => {
   let receivedCfg;
   let receivedOpts;

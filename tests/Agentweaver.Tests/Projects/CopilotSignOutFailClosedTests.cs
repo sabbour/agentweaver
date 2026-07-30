@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Projects;
 
@@ -137,6 +138,6 @@ public sealed class CopilotSignOutFailClosedTests
             .AddInMemoryCollection(configValues)
             .Build();
 
-        return new GitHubCopilotClientFactory(config, tokenStore, new FixedInstallationScopeProvider());
+        return new GitHubCopilotClientFactory(config, tokenStore, new FixedInstallationScopeStub());
     }
 }

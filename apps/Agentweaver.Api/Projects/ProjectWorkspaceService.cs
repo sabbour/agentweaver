@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Api.Auth;
 using LibGit2Sharp;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
@@ -6,6 +7,7 @@ using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Api.Projects;
 
@@ -56,11 +58,19 @@ public sealed class ProjectWorkspaceService
 
     private readonly IProjectStore _projectStore;
     private readonly IRunStore _runStore;
+    private readonly IProjectRoleAuthorizationService _projectRoles;
+    private readonly AuthMode _authMode;
 
-    public ProjectWorkspaceService(IProjectStore projectStore, IRunStore runStore)
+    public ProjectWorkspaceService(
+        IProjectStore projectStore,
+        IRunStore runStore,
+        IProjectRoleAuthorizationService? projectRoles = null,
+        IConfiguration? configuration = null)
     {
         _projectStore = projectStore;
         _runStore = runStore;
+        _projectRoles = projectRoles ?? new NullProjectRoleAuthorizationService();
+        _authMode = configuration is null ? AuthMode.GitHubLegacy : AuthModeResolver.Resolve(configuration);
     }
 
     /// <summary>
@@ -70,8 +80,8 @@ public sealed class ProjectWorkspaceService
     /// </summary>
     public async Task<WorkspaceRefsResult> ListRefsAsync(ProjectId projectId, CallerContext caller, CancellationToken ct)
     {
-        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ct).ConfigureAwait(false);
+        if (project is null)
             return new WorkspaceRefsResult(WorkspaceOutcome.NotFound, null);
 
         var refs = new List<WorkspaceRef>
@@ -128,8 +138,8 @@ public sealed class ProjectWorkspaceService
     public async Task<WorkspaceListResult> ListWorkspaceAsync(
         ProjectId projectId, CallerContext caller, string? @ref, CancellationToken ct)
     {
-        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ct).ConfigureAwait(false);
+        if (project is null)
             return new WorkspaceListResult(WorkspaceOutcome.NotFound, null);
 
         var resolved = await ResolveRefAsync(project, projectId, @ref, ct).ConfigureAwait(false);
@@ -164,8 +174,8 @@ public sealed class ProjectWorkspaceService
     public async Task<WorkspaceContentResult> GetFileContentAsync(
         ProjectId projectId, CallerContext caller, string path, string? @ref, CancellationToken ct)
     {
-        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null || !caller.Owns(project.Owner))
+        var project = await LoadAuthorizedProjectAsync(projectId, caller, ct).ConfigureAwait(false);
+        if (project is null)
             return new WorkspaceContentResult(WorkspaceOutcome.NotFound, null);
 
         if (!EndpointHelpers.TryValidateRelativePath(path, out var normalizedPath))
@@ -396,4 +406,18 @@ public sealed class ProjectWorkspaceService
     }
 
     private sealed record ResolvedRef(string RepositoryPath, string Branch, string? WorktreeDirectory);
+
+    private async Task<Project?> LoadAuthorizedProjectAsync(ProjectId projectId, CallerContext caller, CancellationToken ct)
+    {
+        var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+            return null;
+
+        if (_authMode == AuthMode.GitHubLegacy)
+            return caller.Owns(project.Owner) ? project : null;
+
+        return await _projectRoles.HasRoleAsync(caller, projectId, ProjectRole.Viewer, ct).ConfigureAwait(false)
+            ? project
+            : null;
+    }
 }

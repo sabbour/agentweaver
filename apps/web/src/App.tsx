@@ -1,5 +1,5 @@
 import { apiClient } from './api/apiClient';
-import { FluentProvider, Spinner, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, FluentProvider, MessageBar, MessageBarBody, Spinner, makeStyles, tokens } from '@fluentui/react-components';
 import { agentweaverLightTheme } from './theme';
 import { AppShell } from './components/shell/AppShell';
 import {
@@ -28,7 +28,7 @@ import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { SessionsPage } from './pages/SessionsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { SignInPage } from './pages/SignInPage';
+import { SignInPage, SignInPageLoading } from './pages/SignInPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { TeamPage } from './pages/TeamPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
@@ -37,6 +37,7 @@ import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { AssistantRoute } from './routes/AssistantRoute';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import type { AuthMode } from './api/types';
 
 const useAppLoadingStyles = makeStyles({
   screen: {
@@ -48,9 +49,19 @@ const useAppLoadingStyles = makeStyles({
   },
 });
 
-function Shell() {
+function Shell({ githubLinkRequired }: { githubLinkRequired: boolean }) {
+  const banner = githubLinkRequired ? (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        You are signed in to Agentweaver, but no GitHub account is linked yet. Link one in Account settings before importing repositories, connecting project repositories, or running GitHub/Copilot actions. Agentweaver no longer uses a shared fallback GitHub token.
+      </MessageBarBody>
+      <Button appearance="secondary" as="a" href="/settings">
+        Open account settings
+      </Button>
+    </MessageBar>
+  ) : undefined;
   return (
-    <AppShell>
+    <AppShell banner={banner}>
       <Routes>
         {/* Global (non-project) destinations */}
         <Route path="/" element={<OverviewPage />} />
@@ -102,52 +113,73 @@ function LegacyProjectSessionsRedirect() {
 function AuthGate() {
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode | undefined>(undefined);
+  const [githubLinkRequired, setGitHubLinkRequired] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     captureSessionAuthFromUrl()
-      .then(() => apiClient.getGitHubAuthStatus())
-      .then((res) => {
+      .then(() => apiClient.getServerInfo())
+      .then(async (serverInfo) => {
         if (cancelled) return;
-        if (res.status === 'signed_in') {
-          const storedLogin = getSessionLogin();
-          if (getSessionToken() && storedLogin && res.login && storedLogin !== res.login) {
-            clearSessionAuth();
-            setSignedIn(false);
-          } else {
-            bindSessionLogin(res.login);
-            setSignedIn(true);
-          }
-        } else {
+        const mode = serverInfo.auth_mode ?? 'github-legacy';
+        setAuthMode(mode);
+        const session = await apiClient.getAuthSession();
+        if (cancelled) return;
+        if (!session.authenticated) {
           clearSessionAuth();
           setSignedIn(false);
+          setGitHubLinkRequired(false);
+          setAuthChecked(true);
+          return;
+        }
+        if (mode === 'github-legacy') {
+          const storedLogin = getSessionLogin();
+          if (getSessionToken() && storedLogin && session.login && storedLogin !== session.login) {
+            clearSessionAuth();
+            setSignedIn(false);
+            setGitHubLinkRequired(false);
+            setAuthChecked(true);
+            return;
+          }
+          bindSessionLogin(session.login);
+        }
+        setSignedIn(true);
+        if (mode === 'entra') {
+          try {
+            const accounts = await apiClient.listLinkedGitHubAccounts();
+            if (!cancelled) setGitHubLinkRequired(accounts.length === 0);
+          } catch {
+            if (!cancelled) setGitHubLinkRequired(false);
+          }
+        } else {
+          setGitHubLinkRequired(false);
         }
         setAuthChecked(true);
       })
       .catch(() => {
-        if (!cancelled) {
-          clearSessionAuth();
-          setSignedIn(false);
-          setAuthChecked(true);
-        }
+        if (cancelled) return;
+        clearSessionAuth();
+        setSignedIn(false);
+        setAuthChecked(true);
       });
     return () => { cancelled = true; };
   }, []);
 
   const loadingStyles = useAppLoadingStyles();
   if (!authChecked) {
-    return (
+    return authMode ? (
       <div className={loadingStyles.screen}>
         <Spinner size="large" />
       </div>
-    );
+    ) : <SignInPageLoading />;
   }
 
   if (!signedIn) {
-    return <SignInPage />;
+    return <SignInPage authMode={authMode} />;
   }
 
-  return <Shell />;
+  return <Shell githubLinkRequired={githubLinkRequired} />;
 }
 
 function App() {

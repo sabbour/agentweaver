@@ -37,7 +37,7 @@ public sealed class ProjectServiceCreateRepositoryTests : IAsyncDisposable
             TestWorkspaceProviders.CreateLocal(),
             gitInit,
             tokenStore,
-            new FixedInstallationScopeProvider(),
+            new FixedInstallationScopeStub(),
             NullLogger<ProjectService>.Instance,
             repositoryClient: repoClient);
 

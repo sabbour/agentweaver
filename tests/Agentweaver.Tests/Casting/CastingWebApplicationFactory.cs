@@ -130,7 +130,10 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
         base.Dispose(disposing);
         if (!disposing) return;
 
-        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
+        var memoryDbPath = SqliteMemoryDbPathResolver.Resolve(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = _dbPath })
+            .Build());
+        foreach (var p in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm", memoryDbPath, memoryDbPath + "-wal", memoryDbPath + "-shm" })
         {
             try { File.Delete(p); } catch { /* best effort */ }
         }
