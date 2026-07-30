@@ -20,6 +20,10 @@ public sealed class PlatformRoleAuthorizationMiddleware
         "/api/version",
         "/auth",
         "/api/auth/config",
+        // The one-time-code session bootstrap is anonymous by design (the opaque code is the
+        // credential) and runs BEFORE any platform role exists, so it must be exempt here exactly as
+        // it is in the bearer-token auth middleware; otherwise Entra web sign-in cannot complete.
+        "/api/auth/session/exchange",
         "/oauth",
         "/.well-known",
         "/openapi",
