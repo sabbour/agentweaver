@@ -16,6 +16,8 @@ import {
   runInteractiveInstaller,
   shouldRunInteractiveInstaller,
   run,
+  validateGithubOrgList,
+  normalizeGithubOrgList,
 } from "../provision-infra.mjs";
 import { NonInteractiveError } from "../lib/prompt.mjs";
 
@@ -32,6 +34,42 @@ function fakeStep(name, calls, result = {}) {
     },
   };
 }
+
+test("validateGithubOrgList: accepts a bare org login", () => {
+  assert.equal(validateGithubOrgList("microsoft"), true);
+});
+
+test("validateGithubOrgList: accepts org/* (explicit wildcard, same as bare org)", () => {
+  assert.equal(validateGithubOrgList("azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: accepts org/team-slug entries, comma-separated", () => {
+  assert.equal(validateGithubOrgList("Azure/aks,Azure/AKS PM,azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: accepts semicolon as a separator too (matches GitHubOrgList.cs)", () => {
+  assert.equal(validateGithubOrgList("Azure/aks;azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: rejects an empty value", () => {
+  assert.match(validateGithubOrgList(""), /Enter at least one/);
+});
+
+test("validateGithubOrgList: rejects an invalid org login", () => {
+  assert.match(validateGithubOrgList("not a valid org!"), /doesn't look like a valid/);
+});
+
+test("validateGithubOrgList: rejects an invalid org before the slash", () => {
+  assert.match(validateGithubOrgList("not a valid org!/team"), /doesn't look like a valid/);
+});
+
+test("normalizeGithubOrgList: trims, drops empties, and rejoins comma-separated", () => {
+  assert.equal(normalizeGithubOrgList(" microsoft , azure/aks ,, "), "microsoft,azure/aks");
+});
+
+test("normalizeGithubOrgList: normalizes semicolon-separated input to comma-separated", () => {
+  assert.equal(normalizeGithubOrgList("Azure/aks;azure-management-and-platforms/*"), "Azure/aks,azure-management-and-platforms/*");
+});
 
 test("parseArgs: recognizes flags and takes values for valued flags", () => {
   const parsed = parseArgs([

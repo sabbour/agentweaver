@@ -206,8 +206,43 @@ Non-interactive (no TTY) never prompts -- missing required fields fail with a cl
 const GITHUB_ORG_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 /**
- * Validates a comma-separated GitHub org allowlist string. Returns `true`
- * when every token is a plausible org login, or an actionable error message
+ * A plausible GitHub team slug/display-name: letters/digits/hyphens/spaces.
+ * apps/Agentweaver.Api/Auth/GitHubOrgList.cs defensively slugifies a display
+ * name with spaces or uppercase (e.g. "AKS PM" -> "aks-pm"), so this is
+ * intentionally looser than a strict lowercase-hyphenated slug check -- we
+ * only need to catch obviously-invalid input here, not enforce the exact
+ * canonical form.
+ */
+const GITHUB_TEAM_RE = /^[A-Za-z0-9][A-Za-z0-9 -]{0,100}$/;
+
+/** Splits on the same delimiters GitHubOrgList.cs uses: ',' and ';'. */
+const GITHUB_ORG_LIST_SEPARATORS = /[,;]/;
+
+/**
+ * True when `entry` is a valid single allow-rule: a bare org login, `org/*`
+ * (explicit wildcard, same as bare org), or `org/team-slug`. Mirrors the
+ * parsing rules in apps/Agentweaver.Api/Auth/GitHubOrgList.cs so the CLI's
+ * validation never rejects a value the backend actually accepts.
+ * @param {string} entry
+ * @returns {boolean}
+ */
+function isValidGithubOrgEntry(entry) {
+  const slashIndex = entry.indexOf("/");
+  if (slashIndex < 0) {
+    return GITHUB_ORG_LOGIN_RE.test(entry);
+  }
+  const org = entry.slice(0, slashIndex).trim();
+  const team = entry.slice(slashIndex + 1).trim();
+  if (!GITHUB_ORG_LOGIN_RE.test(org)) return false;
+  if (team.length === 0 || team === "*") return true;
+  return GITHUB_TEAM_RE.test(team);
+}
+
+/**
+ * Validates a comma/semicolon-separated GitHub allowlist string. Each entry
+ * may be a bare org login, `org/*`, or `org/team-slug` -- the same mixed-list
+ * grammar apps/Agentweaver.Api/Auth/GitHubOrgList.cs parses at runtime.
+ * Returns `true` when every entry is valid, or an actionable error message
  * string otherwise (used both as prompt.text()'s reprompt validator and as a
  * config.mjs field validator for the non-interactive path).
  * @param {string} value
@@ -215,23 +250,23 @@ const GITHUB_ORG_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
  */
 export function validateGithubOrgList(value) {
   const orgs = String(value ?? "")
-    .split(",")
+    .split(GITHUB_ORG_LIST_SEPARATORS)
     .map((o) => o.trim())
     .filter((o) => o.length > 0);
   if (orgs.length === 0) {
-    return "Enter at least one GitHub org login (comma-separated), e.g. 'microsoft' or 'microsoft,azure-management-and-platforms'.";
+    return "Enter at least one GitHub org login (comma-separated), e.g. 'microsoft' or 'microsoft,azure/some-team'.";
   }
-  const invalid = orgs.find((o) => !GITHUB_ORG_LOGIN_RE.test(o));
+  const invalid = orgs.find((o) => !isValidGithubOrgEntry(o));
   if (invalid) {
-    return `'${invalid}' doesn't look like a valid GitHub org login (letters, numbers, hyphens; max 39 characters).`;
+    return `'${invalid}' doesn't look like a valid 'org', 'org/*', or 'org/team-slug' entry (letters, numbers, hyphens; max 39 chars for the org).`;
   }
   return true;
 }
 
-/** Trims/dedupes-empty and rejoins a comma-separated GitHub org allowlist string. */
+/** Trims/dedupes-empty and rejoins a comma/semicolon-separated GitHub org allowlist string. */
 export function normalizeGithubOrgList(value) {
   return String(value ?? "")
-    .split(",")
+    .split(GITHUB_ORG_LIST_SEPARATORS)
     .map((o) => o.trim())
     .filter((o) => o.length > 0)
     .join(",");
