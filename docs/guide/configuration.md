@@ -71,6 +71,18 @@ If your tenant blocks client secrets, leave `Auth:Entra:ClientSecret` unset. Age
 redeem the authorization code with PKCE only, which works with Entra app registrations that
 allow public client flows.
 
+::: tip AKS deploy pipeline wiring
+On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId`/
+`Auth:Entra:RedirectUri` are set from the deploy-time `AUTH_MODE`/`ENTRA_CLIENT_ID`/
+`ENTRA_TENANT_ID` environment variables (mirroring how `GITHUB_ALLOWED_ORG` etc. flow into
+`Auth:GitHub:*` for GitHub mode) — see `scripts/azure/variables.mjs` and
+`k8s/base/api-deployment.yaml`. `Auth:Entra:ClientSecret` (`Auth__Entra__ClientSecret`) is
+deliberately **not** wired through the deploy pipeline: this environment is PKCE-only per the
+tenant policy noted above, so there is no deploy-time env var / ConfigMap key for it. If a
+future tenant allows a confidential-client secret, set `Auth__Entra__ClientSecret` manually via
+the Key Vault CSI `SecretProviderClass`, mirroring the existing `github-client-secret` wiring.
+:::
+
 ### CORS settings
 
 | Key | Default | Purpose |
