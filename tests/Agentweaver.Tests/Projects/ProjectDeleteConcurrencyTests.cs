@@ -46,7 +46,7 @@ public sealed class ProjectDeleteConcurrencyTests : IAsyncDisposable
         return new ProjectService(
             store, TestWorkspaceProviders.CreateLocal(),
             new NoOpGitInitializer(),
-            new InMemoryGitHubTokenStore(), new FixedInstallationScopeProvider(),
+            new InMemoryGitHubTokenStore(), new FixedInstallationScopeStub(),
             NullLogger<ProjectService>.Instance);
     }
 

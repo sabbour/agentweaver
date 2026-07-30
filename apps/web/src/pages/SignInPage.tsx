@@ -1,10 +1,8 @@
-import { Button, makeStyles, Text, tokens } from '@fluentui/react-components';
-import { GITHUB_AUTHORIZE_URL } from '../config';
+import { Button, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { ENTRA_AUTHORIZE_URL, GITHUB_AUTHORIZE_URL } from '../config';
 import { GitHubIcon } from '../components/GitHubIcon';
+import type { AuthMode } from '../api/types';
 
-// Flat, centered sign-in card on a plain neutral background. No marketing copy,
-// no gradients, no decorative badges. Surfaces an OAuth error from the URL and
-// starts the GitHub authorize redirect.
 const useStyles = makeStyles({
   page: {
     minHeight: '100vh',
@@ -15,7 +13,7 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalXXL,
   },
   card: {
-    width: 'min(440px, 100%)',
+    width: 'min(520px, 100%)',
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalL,
@@ -65,13 +63,41 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
   },
+  note: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+  },
+  checklist: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  checklistItem: {
+    color: tokens.colorNeutralForeground2,
+  },
 });
 
-export function SignInPage() {
+export interface SignInPageProps {
+  authMode?: AuthMode;
+}
+
+function authHeading(mode: AuthMode | undefined) {
+  return mode === 'entra' ? 'Sign in with Microsoft Entra ID' : 'Sign in with GitHub';
+}
+
+function authCopy(mode: AuthMode | undefined) {
+  return mode === 'entra'
+    ? 'Start with your Microsoft Entra ID account. After that, link one or more GitHub accounts for repository access and Copilot-backed work.'
+    : 'Use your GitHub account to continue to Agentweaver.';
+}
+
+export function SignInPage({ authMode = 'github-legacy' }: SignInPageProps) {
   const styles = useStyles();
 
   const params = new URLSearchParams(window.location.search);
   const authError = params.get('auth') === 'error' ? (params.get('reason') ?? 'Authentication failed.') : null;
+  const primaryUrl = authMode === 'entra' ? ENTRA_AUTHORIZE_URL : GITHUB_AUTHORIZE_URL;
 
   return (
     <div className={styles.page}>
@@ -82,22 +108,48 @@ export function SignInPage() {
         </div>
 
         <div>
-          <Text as="h1" className={styles.heading}>Sign in</Text>
-          <Text as="p" className={styles.subheading}>Sign in to continue to Agentweaver.</Text>
+          <Text as="h1" className={styles.heading}>{authHeading(authMode)}</Text>
+          <Text as="p" className={styles.subheading}>{authCopy(authMode)}</Text>
         </div>
+
+        {authMode === 'entra' && (
+          <div className={styles.checklist}>
+            <Text className={styles.checklistItem}>1. Sign in to Agentweaver with your Entra ID account.</Text>
+            <Text className={styles.checklistItem}>2. Link at least one GitHub account before importing repositories or running GitHub/Copilot actions.</Text>
+            <Text className={styles.note}>
+              You can still browse Agentweaver before linking GitHub, but GitHub operations no longer use any shared fallback token.
+            </Text>
+          </div>
+        )}
 
         <div className={styles.actions}>
           <Button
             appearance="primary"
-            icon={<GitHubIcon size={20} />}
-            onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}
+            icon={authMode === 'entra' ? undefined : <GitHubIcon size={20} />}
+            onClick={() => { window.location.href = primaryUrl; }}
           >
-            Sign in with GitHub
+            {authMode === 'entra' ? 'Sign in with Microsoft Entra ID' : 'Sign in with GitHub'}
           </Button>
+          {authMode === 'github-legacy' && (
+            <Text className={styles.note}>
+              This deployment signs in directly with GitHub.
+            </Text>
+          )}
           {authError && (
             <Text role="alert" className={styles.error}>{authError}</Text>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function SignInPageLoading() {
+  const styles = useStyles();
+  return (
+    <div className={styles.page}>
+      <div className={styles.card}>
+        <Spinner label="Loading sign-in options" />
       </div>
     </div>
   );

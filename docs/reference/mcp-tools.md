@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **100 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **102 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -85,6 +85,8 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 
 | Tool | Description |
 | --- | --- |
+| `github_accounts_list` | List the current GitHub user account plus the GitHub org accounts reachable through the current GitHub authorization context. |
+| `github_repos_list` | List GitHub repositories for the current GitHub user or for one reachable org account. Omit account to list the authenticated user's repos; pass account to list that org's repos. |
 | `github_signin` | Sign in to GitHub using the device flow. Returns a user code and verification URL. The user must visit the URL and enter the code. Polls until authentication completes or times out. |
 | `github_signout` | Sign out of GitHub authentication. |
 | `github_status` | Check the current GitHub authentication status. |

@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Auth;
 /// Eviction: on <see cref="SetAsync"/> or <see cref="SignOutAsync"/> for the affected scope.
 /// Thread-safe via <see cref="ConcurrentDictionary{TKey,TValue}"/>.
 /// </summary>
-public sealed class CachingGitHubTokenStore : IGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore
+public sealed class CachingGitHubTokenStore : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore
 {
     private static readonly TimeSpan RefreshSkew = TimeSpan.FromSeconds(60);
 
@@ -103,6 +103,55 @@ public sealed class CachingGitHubTokenStore : IGitHubTokenStore, IDistributedGit
         return AcquireLocalRefreshLeaseAsync(scope, ct);
     }
 
+    public Task<IReadOnlyList<GitHubIdentityLink>> ListLinkedIdentitiesAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+        => RequireMultiIdentity().ListLinkedIdentitiesAsync(entraUserId, ct);
+
+    public Task<GitHubIdentityLink?> GetLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+        => RequireMultiIdentity().GetLinkedIdentityAsync(entraUserId, githubLogin, ct);
+
+    public Task<GitHubIdentityLink?> GetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+        => RequireMultiIdentity().GetDefaultLinkedIdentityAsync(entraUserId, ct);
+
+    public async Task LinkIdentityAsync(
+        string entraUserId,
+        GitHubToken token,
+        bool isDefault = false,
+        bool? copilotEntitled = null,
+        DateTimeOffset? copilotEntitledCheckedAt = null,
+        CancellationToken ct = default)
+    {
+        var scope = GitHubTokenScope.ForLinkedIdentity(entraUserId, token.Login);
+        Evict(scope);
+        await RequireMultiIdentity().LinkIdentityAsync(entraUserId, token, isDefault, copilotEntitled, copilotEntitledCheckedAt, ct).ConfigureAwait(false);
+        SetCache(scope, GitHubTokenStatus.SignedIn, token);
+    }
+
+    public async Task<bool> SetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+        => await RequireMultiIdentity().SetDefaultLinkedIdentityAsync(entraUserId, githubLogin, ct).ConfigureAwait(false);
+
+    public async Task<bool> UnlinkIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var scope = GitHubTokenScope.ForLinkedIdentity(entraUserId, githubLogin);
+        Evict(scope);
+        var changed = await RequireMultiIdentity().UnlinkIdentityAsync(entraUserId, githubLogin, ct).ConfigureAwait(false);
+        if (changed)
+            SetCache(scope, GitHubTokenStatus.SignedOut, null);
+        return changed;
+    }
+
     // ── Cache helpers ─────────────────────────────────────────────────────────
 
     private CachedEntry? TryGetCached(GitHubTokenScope scope)
@@ -126,6 +175,10 @@ public sealed class CachingGitHubTokenStore : IGitHubTokenStore, IDistributedGit
     }
 
     private void Evict(GitHubTokenScope scope) => _cache.TryRemove(scope.Key, out _);
+
+    private IMultiIdentityGitHubTokenStore RequireMultiIdentity() =>
+        _inner as IMultiIdentityGitHubTokenStore
+        ?? throw new NotSupportedException("The wrapped GitHub token store does not support multi-identity operations.");
 
     private async Task<IDistributedGitHubTokenRefreshLease?> AcquireLocalRefreshLeaseAsync(
         GitHubTokenScope scope,

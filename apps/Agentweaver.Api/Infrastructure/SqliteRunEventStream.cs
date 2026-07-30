@@ -59,13 +59,11 @@ public sealed class SqliteRunEventStream : IRunEventStream
     {
         _logger = logger;
 
-        // The RunEvents table lives in memory.db (EF Core MemoryDbContext), a separate file from
-        // the main agentweaver.db. Resolve the same path Program.cs uses to register the context.
-        var basePath = configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
-            ? Path.GetDirectoryName(Path.GetFullPath(p))!
-            : AppPaths.DataDirectory;
-        Directory.CreateDirectory(basePath);
-        var memoryDbPath = Path.Combine(basePath, "memory.db");
+        // The RunEvents table lives in the companion SQLite file used by MemoryDbContext. Resolve
+        // the exact same path Program.cs uses so test hosts with distinct Database:Path values do
+        // not collide on a process-wide temp\memory.db sidecar.
+        var memoryDbPath = SqliteMemoryDbPathResolver.Resolve(configuration);
+        Directory.CreateDirectory(Path.GetDirectoryName(memoryDbPath)!);
 
         _connectionString = new SqliteConnectionStringBuilder
         {

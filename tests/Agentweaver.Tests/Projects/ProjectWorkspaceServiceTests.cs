@@ -4,6 +4,7 @@ using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
@@ -84,7 +85,11 @@ public sealed class ProjectWorkspaceServiceTests : IAsyncDisposable
         };
         await runStore.InsertAsync(run);
 
-        var service = new ProjectWorkspaceService(projectStore, runStore);
+        var service = new ProjectWorkspaceService(
+            projectStore,
+            runStore,
+            new OwnerProjectRoles(OwnerUser),
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
         return (service, project.Id, worktree.BranchName);
     }
 
@@ -377,5 +382,19 @@ public sealed class ProjectWorkspaceServiceTests : IAsyncDisposable
             Directory.Delete(path, recursive: true);
         }
         catch { /* best effort */ }
+    }
+
+    private sealed class OwnerProjectRoles(string ownerUser) : IProjectRoleAuthorizationService
+    {
+        public bool IsPlatformAdmin(CallerContext caller) => false;
+
+        public Task<ProjectRole?> GetEffectiveRoleAsync(CallerContext caller, ProjectId projectId, CancellationToken ct = default) =>
+            Task.FromResult<ProjectRole?>(string.Equals(caller.User, ownerUser, StringComparison.Ordinal) ? ProjectRole.Owner : null);
+
+        public Task<bool> HasRoleAsync(CallerContext caller, ProjectId projectId, ProjectRole minimumRole, CancellationToken ct = default) =>
+            Task.FromResult(string.Equals(caller.User, ownerUser, StringComparison.Ordinal));
+
+        public Task<IReadOnlyDictionary<ProjectId, ProjectRole>> ListExplicitRolesAsync(CallerContext caller, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyDictionary<ProjectId, ProjectRole>>(new Dictionary<ProjectId, ProjectRole>());
     }
 }

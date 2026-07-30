@@ -121,6 +121,7 @@ file sealed class SystemRuntimeWebApplicationFactory : WebApplicationFactory<Pro
                 ["Coordinator:Checkpoints:Path"]          = Path.Combine(Path.GetTempPath(), $"aw-sysrt-ccp-{Guid.NewGuid():N}"),
                 ["Testing:BypassGitHubOrgAuthorization"]  = "true",
                 ["Testing:BypassGitHubTokenAuth"]         = "true",
+                ["Auth:Mode"]                             = "GitHubLegacy",
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",

@@ -9,7 +9,7 @@ namespace Agentweaver.Api.Auth;
 /// Writes one JSON file per scope to {DataDirectory}/auth/{scope-key}.json.
 /// File permissions are set to owner-only (0600) on Unix.
 /// </summary>
-public sealed class FileSystemGitHubTokenStore : IGitHubTokenStore
+public sealed class FileSystemGitHubTokenStore : IMultiIdentityGitHubTokenStore
 {
     private readonly string _dir;
     private static readonly JsonSerializerOptions _json = new() { WriteIndented = false };
@@ -105,6 +105,107 @@ public sealed class FileSystemGitHubTokenStore : IGitHubTokenStore
         return Task.CompletedTask;
     }
 
+    public Task<IReadOnlyList<GitHubIdentityLink>> ListLinkedIdentitiesAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+    {
+        var index = ReadLinkIndex(entraUserId);
+        var ordered = index.Links
+            .OrderByDescending(x => x.IsDefault)
+            .ThenBy(x => x.LinkedAt)
+            .Cast<GitHubIdentityLink>()
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<GitHubIdentityLink>>(ordered);
+    }
+
+    public Task<GitHubIdentityLink?> GetLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var link = ReadLinkIndex(entraUserId).Links.FirstOrDefault(x =>
+            string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal));
+        return Task.FromResult<GitHubIdentityLink?>(link);
+    }
+
+    public async Task<GitHubIdentityLink?> GetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        CancellationToken ct = default)
+        => (await ListLinkedIdentitiesAsync(entraUserId, ct).ConfigureAwait(false))
+            .FirstOrDefault(x => x.IsDefault);
+
+    public async Task LinkIdentityAsync(
+        string entraUserId,
+        GitHubToken token,
+        bool isDefault = false,
+        bool? copilotEntitled = null,
+        DateTimeOffset? copilotEntitledCheckedAt = null,
+        CancellationToken ct = default)
+    {
+        var scope = GitHubTokenScope.ForLinkedIdentity(entraUserId, token.Login);
+        await SetAsync(scope, token, ct).ConfigureAwait(false);
+
+        var index = ReadLinkIndex(entraUserId);
+        var links = index.Links.ToDictionary(x => x.GitHubLogin, StringComparer.Ordinal);
+        links.TryGetValue(token.Login, out var existing);
+        var makeDefault = isDefault || links.Count == 0 || (existing?.IsDefault ?? false);
+
+        if (makeDefault)
+        {
+            foreach (var key in links.Keys.ToList())
+                links[key] = links[key] with { IsDefault = false };
+        }
+
+        links[token.Login] = new GitHubIdentityLink(
+            entraUserId,
+            token.Login,
+            scope.Key,
+            makeDefault || (existing?.IsDefault ?? false),
+            existing?.LinkedAt ?? DateTimeOffset.UtcNow,
+            copilotEntitled ?? existing?.CopilotEntitled,
+            copilotEntitledCheckedAt ?? existing?.CopilotEntitledCheckedAt,
+            token.AvatarUrl);
+        WriteLinkIndex(entraUserId, new LinkIndex { Links = links.Values.OrderBy(x => x.GitHubLogin, StringComparer.Ordinal).ToArray() });
+    }
+
+    public Task<bool> SetDefaultLinkedIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var index = ReadLinkIndex(entraUserId);
+        if (!index.Links.Any(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal)))
+            return Task.FromResult(false);
+
+        var updated = index.Links
+            .Select(x => x with { IsDefault = string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal) })
+            .ToArray();
+        WriteLinkIndex(entraUserId, new LinkIndex { Links = updated });
+        return Task.FromResult(true);
+    }
+
+    public async Task<bool> UnlinkIdentityAsync(
+        string entraUserId,
+        string githubLogin,
+        CancellationToken ct = default)
+    {
+        var index = ReadLinkIndex(entraUserId);
+        var removed = index.Links.FirstOrDefault(x => string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal));
+        if (removed is null)
+            return false;
+
+        await SignOutAsync(GitHubTokenScope.ForLinkedIdentity(entraUserId, githubLogin), ct).ConfigureAwait(false);
+
+        var remaining = index.Links
+            .Where(x => !string.Equals(x.GitHubLogin, githubLogin, StringComparison.Ordinal))
+            .ToList();
+        if (removed.IsDefault && remaining.Count > 0)
+            remaining[0] = remaining[0] with { IsDefault = true };
+
+        WriteLinkIndex(entraUserId, new LinkIndex { Links = remaining.ToArray() });
+        return true;
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private string FilePath(GitHubTokenScope scope)
@@ -125,6 +226,27 @@ public sealed class FileSystemGitHubTokenStore : IGitHubTokenStore
         }
     }
 
+    private LinkIndex ReadLinkIndex(string entraUserId)
+    {
+        var path = FilePath(GitHubTokenScope.ForLinkedIdentityIndex(entraUserId));
+        if (!File.Exists(path))
+            return new LinkIndex();
+
+        try
+        {
+            return JsonSerializer.Deserialize<LinkIndex>(File.ReadAllText(path), _json) ?? new LinkIndex();
+        }
+        catch (Exception)
+        {
+            return new LinkIndex();
+        }
+    }
+
+    private void WriteLinkIndex(string entraUserId, LinkIndex index)
+        => WriteFile(
+            FilePath(GitHubTokenScope.ForLinkedIdentityIndex(entraUserId)),
+            JsonSerializer.Serialize(index, _json));
+
     private sealed record StoredCredential
     {
         public string? Status { get; init; }
@@ -134,5 +256,10 @@ public sealed class FileSystemGitHubTokenStore : IGitHubTokenStore
         public string? Login { get; init; }
         public string? AvatarUrl { get; init; }
         public string[]? Scopes { get; init; }
+    }
+
+    private sealed record LinkIndex
+    {
+        public GitHubIdentityLink[] Links { get; init; } = [];
     }
 }

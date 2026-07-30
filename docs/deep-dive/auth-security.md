@@ -16,6 +16,60 @@ The design deliberately separates **identity proof** from **authorization policy
 
 The important rebuild principle is: **never trust a client merely because it reached a route**. Each route should be either explicitly public bootstrap/discovery, or it should pass through bearer-token authentication and org authorization.
 
+## Supported authorization modes (`Auth:Mode`)
+
+Agentweaver now treats **Entra-based authorization mode** and **GitHub-based authorization mode** as two supported deployment choices selected by `Auth:Mode`.
+
+| `Auth:Mode` | Platform sign-in | Platform authorization gate | GitHub's role |
+|---|---|---|---|
+| `Entra` | Single-tenant Microsoft Entra ID | Entra App Roles (`PlatformAdmin`, `ProjectCreator`, `Contributor`, `Viewer`) plus app-native project role assignments (`Owner`, `Contributor`, `Viewer`) | Linked resource-provider identity for repository access, pull requests, and Copilot entitlement |
+| `GitHubLegacy` | GitHub OAuth | GitHub org/team allow-rules plus existing resource ownership checks | Both the platform identity provider and the repository/Copilot identity |
+
+Both modes are supported. Choosing `Entra` does **not** imply a forced cutover for deployments that prefer GitHub-based authorization, and choosing `GitHubLegacy` does **not** block normal operation.
+
+### Entra mode: platform identity, GitHub as a linked provider
+
+In `Auth:Mode=Entra`, Agentweaver separates **platform identity** from **GitHub capability**:
+
+1. The user signs in with a **single-tenant** Entra application.
+2. The ID token establishes the durable platform subject (`oid`) and the user's Tier 1 App Roles.
+3. Agentweaver enforces Tier 1 platform access on every protected request.
+4. Agentweaver then evaluates Tier 2 project/data access from its own database using project-level role assignments keyed by that Entra `oid`.
+5. GitHub accounts are linked **after** platform sign-in so the user can browse repositories, clone/push, open pull requests, and consume GitHub Copilot through one or more linked GitHub tokens.
+
+This produces two different but complementary authorization layers:
+
+- **Tier 1 — platform admission**: `PlatformAdmin`, `ProjectCreator`, `Contributor`, `Viewer`
+- **Tier 2 — project/data authorization**: `Owner`, `Contributor`, `Viewer`
+
+The important invariant is that **GitHub token lookup happens only after the platform user is already authenticated and authorized for the target resource**. A linked GitHub token can expand what repositories or Copilot entitlements the user can reach, but it cannot elevate platform or project authorization by itself.
+
+Just as importantly, **Agentweaver project roles do not grant GitHub rights**. `Owner`, `Contributor`, and `Viewer` govern only Agentweaver-side actions such as viewing project data, triggering runs, or managing project membership. Whether a user can clone, push, open a pull request, or administer a repository depends entirely on the resolved linked GitHub identity's real GitHub permission on that repository.
+
+Switching `Auth:Mode` invalidates existing browser sign-in handshakes immediately: outstanding web session exchange codes are mode-bound and cannot be redeemed after a mode flip, and previously issued bearer tokens from the old mode are rejected by the new mode's request-auth pipeline.
+
+### GitHub-based authorization mode: still fully supported
+
+In `Auth:Mode=GitHubLegacy`, Agentweaver keeps the current GitHub-centered flow:
+
+- GitHub OAuth is the primary sign-in path.
+- GitHub org/team rules remain the platform admission gate.
+- Existing per-resource ownership checks remain in force.
+- GitHub still provides the repository token and GitHub Copilot entitlement.
+
+This mode is not a compatibility shim or a sunset path; it remains a valid deployment choice when GitHub-based authorization is the right operational fit.
+
+### MCP/client implications
+
+The MCP and API surfaces must become **mode-aware**:
+
+- MCP authentication helpers can no longer assume GitHub is always the platform login.
+- In Entra mode, GitHub tooling becomes **linked-account management** plus **linked-token-aware repository access**.
+- Repository listing/import flows must be able to enumerate repositories across the user's linked GitHub identities, not just one token.
+- Project and admin tooling must expose project-role assignment APIs/tooling without relying on GitHub org membership as the only authorization model.
+
+The existing GitHub-focused sections below continue to describe the current GitHub-based path in detail. This section is the conceptual source of truth for the new dual-mode model and for the Entra-mode additions that will be layered onto the current implementation.
+
 ## Threat model and guardrail summary
 
 Agentweaver assumes attackers may:
@@ -421,7 +475,7 @@ GitHub tokens are the credentials Agentweaver uses to act on behalf of a signed-
 Token scopes separate storage domains:
 
 - **per-user scope** for the default web sign-in, hosted/multi-user flows, and brokered MCP refresh-time org checks;
-- **installation scope** only when `Auth:GitHub:ScopeProvider` is explicitly set to `installation`, or for background/system work with no caller.
+- **per-user scope only**; missing caller identity fails closed instead of falling back to a shared installation token.
 
 In AKS, each authenticated user's GitHub token is stored in Azure Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never written to shared storage. The Key Vault token store no longer mirrors tokens to the workspace PVC. Local development may use Windows Credential Manager or per-scope JSON files under the developer data directory, depending on platform. A signed-out tombstone is stored to distinguish "user explicitly signed out" from "never signed in".
 
@@ -590,4 +644,4 @@ The central design rule is: **GitHub proves the human, Agentweaver narrows that 
 
 ## Copilot model-turn token scope guard
 
-Copilot model turns must run with the submitting user's Copilot-entitled GitHub token. `CopilotAIAgent.ResolveTokenScope` now rejects missing user identity and rejects the GitHub App installation scope for model turns (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:398`). This keeps installation tokens available for app/repository operations while preventing them from being used as Copilot model credentials.
+Copilot model turns must run with the submitting user's Copilot-entitled GitHub token. `CopilotAIAgent.ResolveTokenScope` rejects missing user identity and rejects the GitHub App installation scope for model turns (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:398`). The platform no longer treats installation scope as a normal operational fallback; long-running or unattended work must preserve the originating user identity or use a future explicit system identity.

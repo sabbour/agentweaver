@@ -6,9 +6,11 @@ namespace Agentweaver.Api.Auth;
 /// <summary>
 /// Azure Key Vault backed <see cref="ISecretStore"/>.
 /// Secret-name mapping keeps KV names within the ^[0-9a-zA-Z-]+$ constraint:
-///   scope "installation"      → "ghtok-installation"
-///   scope "user:{userId}"     → "ghtok-user--{base32lower-nopad(utf8(userId))}"
-///   other keys                → "ghtok-" + sanitized (letters/digits/hyphens only)
+///   scope "installation"              → "ghtok-installation"
+///   scope "user:{userId}"             → "ghtok-user--{base32lower-nopad(utf8(userId))}"
+///   scope "user-link:{oid}:{login}"   → "ghtok-user-link--{base32lower-nopad(utf8(<suffix>))}"
+///   scope "user-links:{oid}"          → "ghtok-user-links--{base32lower-nopad(utf8(<suffix>))}"
+///   other keys                        → "ghtok-" + sanitized (letters/digits/hyphens only)
 ///
 /// ETag semantics: each KV secret version carries an ETag.  When an ETag is supplied
 /// to <see cref="SetSecretAsync"/>, the current version is read first and the write is
@@ -34,6 +36,18 @@ public sealed class KeyVaultSecretStore : ISecretStore, IAtomicSecretLeaseStore
             var userId = key.Substring(5); // skip "user:"
             var encoded = Base32Lower(System.Text.Encoding.UTF8.GetBytes(userId));
             return "ghtok-user--" + encoded;
+        }
+
+        if (key.StartsWith("user-link:", StringComparison.Ordinal))
+        {
+            var encoded = Base32Lower(System.Text.Encoding.UTF8.GetBytes(key.Substring("user-link:".Length)));
+            return "ghtok-user-link--" + encoded;
+        }
+
+        if (key.StartsWith("user-links:", StringComparison.Ordinal))
+        {
+            var encoded = Base32Lower(System.Text.Encoding.UTF8.GetBytes(key.Substring("user-links:".Length)));
+            return "ghtok-user-links--" + encoded;
         }
 
         // Fallback: replace non-alphanumeric (except hyphen) with hyphens and prefix.

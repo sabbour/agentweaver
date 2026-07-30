@@ -207,6 +207,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
                     ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
                     ["Testing:BypassGitHubOrgAuthorization"] = "true",
                     ["Testing:BypassGitHubTokenAuth"] = "true",
+                    ["Auth:Mode"] = "GitHubLegacy",
                     ["Auth:ApiKey"] = "test-api-key-12345",
                     ["Auth:User"] = "test-user",
                     ["Git:Author:Name"] = "Test",

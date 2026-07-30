@@ -10,16 +10,23 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
+  Select,
   Spinner,
   Switch,
   makeStyles,
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { Branch24Regular, Delete24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
-import { useEffect, useState } from 'react';
+import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { Project, SandboxPolicy, UpdateProjectProviderSettingsRequest } from '../api/types';
+import type {
+  LinkedGitHubAccount,
+  Project,
+  ProjectAccessOverview,
+  SandboxPolicy,
+  UpdateProjectProviderSettingsRequest,
+} from '../api/types';
 import type { ReactElement } from 'react';
 import {
   Body,
@@ -34,7 +41,7 @@ import {
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
-type SectionId = 'general' | 'repository' | 'webhooks' | 'sandbox' | 'danger';
+type SectionId = 'general' | 'access' | 'repository' | 'webhooks' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
@@ -50,6 +57,13 @@ const emptyGenerationModels: GenerationModelState = {
   outcome_spec_generation_model: '',
 };
 
+const AUTH_MODE_LABELS = {
+  entra: 'Entra ID',
+  'github-legacy': 'GitHub',
+} as const;
+
+const DEFAULT_GITHUB_IDENTITY = '__default__';
+
 interface SectionDef {
   id: SectionId;
   label: string;
@@ -64,6 +78,12 @@ const SECTIONS: SectionDef[] = [
     label: 'General',
     description: 'Project name and model overrides.',
     icon: <Settings24Regular />,
+  },
+  {
+    id: 'access',
+    label: 'Access',
+    description: 'Manage project membership and GitHub identity selection.',
+    icon: <People24Regular />,
   },
   {
     id: 'repository',
@@ -93,7 +113,12 @@ const SECTIONS: SectionDef[] = [
 ];
 
 function isSectionId(value: string | null): value is SectionId {
-  return value === 'general' || value === 'repository' || value === 'webhooks' || value === 'sandbox' || value === 'danger';
+  return value === 'general'
+    || value === 'access'
+    || value === 'repository'
+    || value === 'webhooks'
+    || value === 'sandbox'
+    || value === 'danger';
 }
 
 const useStyles = makeStyles({
@@ -223,6 +248,39 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
   },
+  badgeRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  roleList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  roleRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingHorizontalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    flexWrap: 'wrap',
+  },
+  roleIdentity: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  roleActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
 });
 
 export function ProjectSettingsPage() {
@@ -284,6 +342,25 @@ export function ProjectSettingsPage() {
   const [webhookError, setWebhookError] = useState<string | null>(null);
   const [copiedWebhookValue, setCopiedWebhookValue] = useState<'url' | 'secret' | null>(null);
 
+  // Entra access management / per-project GitHub identity.
+  const [accessOverview, setAccessOverview] = useState<ProjectAccessOverview | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [accessError, setAccessError] = useState<string | null>(null);
+  const [principalId, setPrincipalId] = useState('');
+  const [principalDisplayName, setPrincipalDisplayName] = useState('');
+  const [projectRole, setProjectRole] = useState('Viewer');
+  const [savingRoleAssignment, setSavingRoleAssignment] = useState(false);
+  const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
+  const [roleAssignmentSuccess, setRoleAssignmentSuccess] = useState<string | null>(null);
+  const [roleActionKey, setRoleActionKey] = useState<string | null>(null);
+  const [linkedAccounts, setLinkedAccounts] = useState<LinkedGitHubAccount[]>([]);
+  const [linkedAccountsLoading, setLinkedAccountsLoading] = useState(false);
+  const [linkedAccountsError, setLinkedAccountsError] = useState<string | null>(null);
+  const [overrideLogin, setOverrideLogin] = useState(DEFAULT_GITHUB_IDENTITY);
+  const [savingOverride, setSavingOverride] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const [overrideSuccess, setOverrideSuccess] = useState(false);
+
   const formatError = (err: unknown): string =>
     err instanceof ApiError
       ? `API error ${err.status}: ${err.body}`
@@ -313,6 +390,60 @@ export function ProjectSettingsPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [projectId]);
+
+  const refreshAccessOverview = useCallback(async () => {
+    if (!projectId) return;
+    setAccessLoading(true);
+    setAccessError(null);
+    try {
+      // Assumption for Tank's authz rollout: a single access snapshot endpoint returns
+      // the current auth mode, platform-role view, project role assignments, and the
+      // effective/per-project GitHub identity selection for this project.
+      const overview = await apiClient.getProjectAccessOverview(projectId);
+      setAccessOverview(overview);
+      setOverrideLogin(overview.github_identity_override_login ?? DEFAULT_GITHUB_IDENTITY);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setAccessError('Access management is not available on this deployment yet.');
+      } else {
+        setAccessError(formatError(err));
+      }
+      setAccessOverview(null);
+    } finally {
+      setAccessLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    queueMicrotask(() => { void refreshAccessOverview(); });
+  }, [projectId, refreshAccessOverview]);
+
+  useEffect(() => {
+    if (accessOverview?.auth_mode !== 'entra') return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      setLinkedAccountsLoading(true);
+      setLinkedAccountsError(null);
+      void apiClient.listLinkedGitHubAccounts()
+        .then((accounts) => {
+          if (!cancelled) setLinkedAccounts(accounts);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          if (err instanceof ApiError && err.status === 404) {
+            setLinkedAccountsError('Linked GitHub accounts are not available on this deployment yet.');
+          } else {
+            setLinkedAccountsError(formatError(err));
+          }
+          setLinkedAccounts([]);
+        })
+        .finally(() => {
+          if (!cancelled) setLinkedAccountsLoading(false);
+        });
+    });
+    return () => { cancelled = true; };
+  }, [accessOverview?.auth_mode]);
 
   const handleSaveModel = async () => {
     if (!projectId) return;
@@ -475,10 +606,71 @@ export function ProjectSettingsPage() {
     }
   };
 
+  const handleAddRoleAssignment = async () => {
+    if (!projectId || !principalId.trim()) return;
+    setSavingRoleAssignment(true);
+    setRoleAssignmentError(null);
+    setRoleAssignmentSuccess(null);
+    try {
+      await apiClient.createProjectRoleAssignment(projectId, {
+        principal_id: principalId.trim(),
+        display_name: principalDisplayName.trim() || null,
+        email: principalId.includes('@') ? principalId.trim() : null,
+        role: projectRole,
+      });
+      setPrincipalId('');
+      setPrincipalDisplayName('');
+      setProjectRole('Viewer');
+      setRoleAssignmentSuccess('Project member saved.');
+      await refreshAccessOverview();
+    } catch (err) {
+      setRoleAssignmentError(formatError(err));
+    } finally {
+      setSavingRoleAssignment(false);
+    }
+  };
+
+  const handleDeleteRoleAssignment = async (assignmentId: string) => {
+    if (!projectId) return;
+    setRoleActionKey(assignmentId);
+    setRoleAssignmentError(null);
+    setRoleAssignmentSuccess(null);
+    try {
+      await apiClient.deleteProjectRoleAssignment(projectId, assignmentId);
+      setRoleAssignmentSuccess('Project member removed.');
+      await refreshAccessOverview();
+    } catch (err) {
+      setRoleAssignmentError(formatError(err));
+    } finally {
+      setRoleActionKey(null);
+    }
+  };
+
+  const handleSaveGitHubIdentityOverride = async () => {
+    if (!projectId) return;
+    setSavingOverride(true);
+    setOverrideError(null);
+    setOverrideSuccess(false);
+    try {
+      await apiClient.setProjectGitHubIdentityOverride(
+        projectId,
+        overrideLogin === DEFAULT_GITHUB_IDENTITY ? null : overrideLogin,
+      );
+      setOverrideSuccess(true);
+      await refreshAccessOverview();
+    } catch (err) {
+      setOverrideError(formatError(err));
+    } finally {
+      setSavingOverride(false);
+    }
+  };
+
   if (!projectId) return null;
 
   const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
   const activeDef = visibleSections.find((s) => s.id === activeSection) ?? visibleSections[0];
+  const authModeLabel = accessOverview ? AUTH_MODE_LABELS[accessOverview.auth_mode] : 'GitHub';
+  const projectRoleSummary = accessOverview?.current_user_project_role ?? (project?.owner ? `Owner (${project.owner})` : 'Unspecified');
 
   return (
     <PageContainer>
@@ -532,7 +724,8 @@ export function ProjectSettingsPage() {
                 { label: 'Project', value: project.name },
                 { label: 'Working directory', value: project.working_directory ?? 'Not configured' },
                 { label: 'Default provider', value: project.default_provider ?? 'github-copilot' },
-                { label: 'Active section', value: activeDef.label },
+                { label: 'Authentication mode', value: authModeLabel },
+                { label: 'Your project role', value: projectRoleSummary },
               ]} />
             </PageSection>
 
@@ -667,6 +860,212 @@ export function ProjectSettingsPage() {
               </div>
             )}
 
+            {activeSection === 'access' && (
+              <div className={styles.section}>
+                {accessLoading && <Spinner label="Loading access settings" size="extra-tiny" />}
+                {accessError && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>{accessError}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {accessOverview && (
+                  <>
+                    <div className={styles.subBlock}>
+                      <TitleText>Platform access</TitleText>
+                      {accessOverview.auth_mode === 'entra' ? (
+                        <>
+                          <Body as="p" tone="muted">
+                            Platform roles are assigned in Microsoft Entra ID. Agentweaver shows them here for
+                            context, but changes must be made in Entra rather than in this project.
+                          </Body>
+                          <div className={styles.badgeRow}>
+                            {accessOverview.platform_roles.length > 0 ? (
+                              accessOverview.platform_roles.map((role) => (
+                                <Badge key={role} appearance="filled">{role}</Badge>
+                              ))
+                            ) : (
+                              <Label as="span" className={styles.emptyNote}>No Entra platform roles are assigned.</Label>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            This deployment uses GitHub authentication. Project access continues to follow the
+                            current GitHub-based ownership model, so Entra platform-role mapping is inactive here.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </div>
+
+                    <div className={styles.subBlock}>
+                      <TitleText>Project members</TitleText>
+                      {accessOverview.auth_mode === 'entra' ? (
+                        <>
+                          <Body as="p" tone="muted">
+                            Owners, contributors, and viewers are stored in Agentweaver for this project. These roles control Agentweaver actions only; GitHub repository access still depends on the real permission of the linked GitHub account resolved for this project.
+                          </Body>
+                          <div className={styles.roleList}>
+                            {accessOverview.project_role_assignments.length === 0 ? (
+                              <Label as="span" className={styles.emptyNote}>No project role assignments yet.</Label>
+                            ) : (
+                              accessOverview.project_role_assignments.map((assignment) => (
+                                <div key={assignment.assignment_id} className={styles.roleRow}>
+                                  <div className={styles.roleIdentity}>
+                                    <TitleText>{assignment.display_name ?? assignment.email ?? assignment.principal_id}</TitleText>
+                                    <Body tone="muted">
+                                      {assignment.email ?? assignment.principal_id}
+                                    </Body>
+                                    <div className={styles.badgeRow}>
+                                      <Badge appearance="filled">{assignment.role}</Badge>
+                                      <Badge appearance="outline">{assignment.scope}</Badge>
+                                    </div>
+                                  </div>
+                                  {accessOverview.can_manage_role_assignments && (
+                                    <div className={styles.roleActions}>
+                                      <Button
+                                        appearance="subtle"
+                                        disabled={roleActionKey !== null}
+                                        onClick={() => void handleDeleteRoleAssignment(assignment.assignment_id)}
+                                      >
+                                        {roleActionKey === assignment.assignment_id ? 'Removing' : 'Remove'}
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          <Field
+                            label="Add member"
+                            hint="Enter the Entra object ID or email of the person who should receive access."
+                          >
+                            <Input
+                              value={principalId}
+                              placeholder="person@contoso.com"
+                              onChange={(_, data) => setPrincipalId(data.value)}
+                            />
+                          </Field>
+                          <Field
+                            label="Display name (optional)"
+                            hint="Stored for readability until Tank's directory lookup lands."
+                          >
+                            <Input
+                              value={principalDisplayName}
+                              placeholder="Ada Lovelace"
+                              onChange={(_, data) => setPrincipalDisplayName(data.value)}
+                            />
+                          </Field>
+                          <Field label="Role">
+                            <Select value={projectRole} onChange={(_, data) => setProjectRole(data.value)}>
+                              <option value="Owner">Owner</option>
+                              <option value="Contributor">Contributor</option>
+                              <option value="Viewer">Viewer</option>
+                            </Select>
+                          </Field>
+                          <div className={styles.formActions}>
+                            <Button
+                              appearance="primary"
+                              disabled={!accessOverview.can_manage_role_assignments || savingRoleAssignment || !principalId.trim()}
+                              onClick={() => void handleAddRoleAssignment()}
+                            >
+                              {savingRoleAssignment ? 'Saving' : 'Add member'}
+                            </Button>
+                            {savingRoleAssignment && <Spinner size="extra-tiny" aria-hidden="true" />}
+                          </div>
+                        </>
+                      ) : (
+                        <Body as="p" tone="muted">
+                          In GitHub mode, the project continues to rely on the existing single-owner model.
+                          Project role assignments are only used in Entra ID mode.
+                        </Body>
+                      )}
+                      {roleAssignmentError && (
+                        <MessageBar intent="error"><MessageBarBody>{roleAssignmentError}</MessageBarBody></MessageBar>
+                      )}
+                      {roleAssignmentSuccess && (
+                        <MessageBar intent="success"><MessageBarBody>{roleAssignmentSuccess}</MessageBarBody></MessageBar>
+                      )}
+                    </div>
+
+                    <div className={styles.subBlock}>
+                      <TitleText>GitHub identity for this project</TitleText>
+                      {accessOverview.auth_mode === 'entra' ? (
+                        <>
+                          <Body as="p" tone="muted">
+                            Pick a linked GitHub account for this project, or leave it on your default account.
+                            The selected identity controls repository reachability and Copilot entitlement for
+                            project-scoped GitHub actions. Agentweaver does not grant GitHub permissions itself.
+                          </Body>
+                          {project.source_repository && (
+                            <Body as="p" tone="muted">
+                              {accessOverview.effective_github_login
+                                ? `Resolved GitHub access for ${project.source_repository}: @${accessOverview.effective_github_login}${accessOverview.effective_github_permission ? ` (${accessOverview.effective_github_permission} access)` : ''}.`
+                                : `No linked GitHub account is currently resolved for ${project.source_repository}. Link or select one to enable repository operations.`}
+                            </Body>
+                          )}
+                          {accessOverview.github_identity_permissions && accessOverview.github_identity_permissions.length > 0 && (
+                            <div className={styles.badgeRow}>
+                              {accessOverview.github_identity_permissions.map((entry) => (
+                                <Badge key={entry.login} appearance={entry.login === accessOverview.effective_github_login ? 'filled' : 'outline'}>
+                                  @{entry.login}{entry.permission ? ` — ${entry.permission}` : ' — permission unknown'}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                          {linkedAccountsLoading && <Spinner size="extra-tiny" label="Loading linked GitHub accounts" />}
+                          {linkedAccountsError && (
+                            <MessageBar intent="warning">
+                              <MessageBarBody>{linkedAccountsError}</MessageBarBody>
+                            </MessageBar>
+                          )}
+                          {!linkedAccountsLoading && !linkedAccountsError && (
+                            <Field
+                              label="Use GitHub identity"
+                              hint={accessOverview.effective_github_login
+                                ? `Currently effective: @${accessOverview.effective_github_login}`
+                                : 'No linked GitHub identity has been selected yet.'}
+                            >
+                              <Select value={overrideLogin} onChange={(_, data) => setOverrideLogin(data.value)}>
+                                <option value={DEFAULT_GITHUB_IDENTITY}>Default linked account</option>
+                                {linkedAccounts.map((account) => (
+                                  <option key={account.login} value={account.login}>
+                                    @{account.login}{account.is_default ? ' (default)' : ''}
+                                  </option>
+                                ))}
+                              </Select>
+                            </Field>
+                          )}
+                          <div className={styles.formActions}>
+                            <Button
+                              appearance="primary"
+                              disabled={!accessOverview.can_manage_project_github_identity || savingOverride}
+                              onClick={() => void handleSaveGitHubIdentityOverride()}
+                            >
+                              {savingOverride ? 'Saving' : 'Save GitHub identity'}
+                            </Button>
+                            {savingOverride && <Spinner size="extra-tiny" aria-hidden="true" />}
+                          </div>
+                          {overrideError && (
+                            <MessageBar intent="error"><MessageBarBody>{overrideError}</MessageBarBody></MessageBar>
+                          )}
+                          {overrideSuccess && (
+                            <MessageBar intent="success"><MessageBarBody>GitHub identity saved.</MessageBarBody></MessageBar>
+                          )}
+                        </>
+                      ) : (
+                        <Body as="p" tone="muted">
+                          In GitHub mode, this project uses the current signed-in GitHub account directly.
+                          Per-project linked-account overrides are only available in Entra ID mode.
+                        </Body>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             {activeSection === 'repository' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
@@ -674,7 +1073,7 @@ export function ProjectSettingsPage() {
                   <Body as="p" tone="muted">
                     This project was started without a connected GitHub repository, so runs can't
                     open pull requests. Create a new repository (or connect one you own) to enable
-                    publishing.
+                    publishing. Agentweaver now requires a real linked GitHub identity for every GitHub action; there is no shared fallback token.
                   </Body>
                   <div className={styles.formActions}>
                     <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>

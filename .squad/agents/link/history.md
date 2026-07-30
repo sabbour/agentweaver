@@ -32,3 +32,5 @@ Link contributed to the v0.7.11–v0.9.70 release waves, including preview/auth 
 - Determined the preview-sandbox TTL/autoscaler fixes (#560/#564/#570/#571/#574/#575) don't need spec or docs changes — they make already-specified behavior actually work, they don't change the user contract.
 - Wrote a new design-only spec `specs/agent-execution-sandbox/build-images-with-rootless-buildkit.md` for issue #582 (AgentHost rootless-BuildKit image builds on Kubernetes) and linked it from `specs/README.md`; confirmed #452/#453 have no existing spec files to index.
 - Durable lesson: when a docs task says "fix retired model ID X", always check the actual current code default/constant first — a doc that literally quotes a source-code constant's real value should not be "fixed" to a preferred ID without a corresponding code change, or the doc becomes newly inaccurate instead of newly accurate.
+
+- 2026-07-29: Tank finalized the Entra-first/two-tier RBAC direction your bootstrap command is targeting. Keep the Node-based `azure:setup-entra-app` path; expect one follow-up pass to align placeholder app-role labels and docs/config wiring with the final runtime implementation.

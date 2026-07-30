@@ -32,7 +32,7 @@ public sealed class SqliteToPostgresMigrator
     public async Task RunAsync(CancellationToken ct = default)
     {
         var agentweaverDbPath = GetSqlitePath("Database:Path", "agentweaver.db");
-        var memoryDbPath = GetSqlitePath("Database:MemoryPath", "memory.db");
+        var memoryDbPath = Infrastructure.SqliteMemoryDbPathResolver.Resolve(_configuration);
 
         _logger.LogInformation("Starting SQLite → Postgres migration");
         _logger.LogInformation("  agentweaver.db: {Path}", agentweaverDbPath);

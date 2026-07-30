@@ -18,6 +18,11 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
+    getProjectAccessOverview: vi.fn(),
+    listLinkedGitHubAccounts: vi.fn(),
+    createProjectRoleAssignment: vi.fn(),
+    deleteProjectRoleAssignment: vi.fn(),
+    setProjectGitHubIdentityOverride: vi.fn(),
     rotateProjectWebhookSecret: vi.fn(),
     updateProjectProviderSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
@@ -71,6 +76,52 @@ beforeEach(() => {
     allowed_repository_roots: ['C:/demo'],
     destructive_command_patterns: [],
   } as never);
+  vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
+    auth_mode: 'entra',
+    platform_roles: ['PlatformAdmin'],
+    platform_roles_source: 'entra',
+    current_user_project_role: 'Owner',
+    can_manage_role_assignments: true,
+    can_manage_project_github_identity: true,
+    project_role_assignments: [
+      {
+        assignment_id: 'assign-1',
+        principal_id: 'person@contoso.com',
+        display_name: 'Ada Lovelace',
+        email: 'person@contoso.com',
+        role: 'Owner',
+        scope: 'Project:proj-1',
+      },
+    ],
+    github_identity_override_login: null,
+    effective_github_login: 'octocat',
+    effective_github_permission: 'Write',
+    github_identity_permissions: [
+      { login: 'octocat', permission: 'Write', is_default: true },
+      { login: 'altcat', permission: 'Read', is_default: false },
+    ],
+  } as never);
+  vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
+    {
+      login: 'octocat',
+      name: 'Octocat',
+      avatar_url: 'https://example.com/octocat.png',
+      type: 'user',
+      is_default: true,
+      copilot_entitled: true,
+    },
+    {
+      login: 'altcat',
+      name: 'Alt Cat',
+      avatar_url: 'https://example.com/altcat.png',
+      type: 'user',
+      is_default: false,
+      copilot_entitled: false,
+    },
+  ] as never);
+  vi.mocked(apiClient.createProjectRoleAssignment).mockResolvedValue(undefined as never);
+  vi.mocked(apiClient.deleteProjectRoleAssignment).mockResolvedValue(undefined as never);
+  vi.mocked(apiClient.setProjectGitHubIdentityOverride).mockResolvedValue(undefined as never);
 });
 
 afterEach(() => {
@@ -86,6 +137,7 @@ describe('ProjectSettingsPage', () => {
     const rail = screen.getByRole('navigation', { name: 'Settings sections' });
     expect(rail).toBeDefined();
     expect(screen.getByRole('button', { name: /General/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Access/i })).toBeDefined();
     expect(screen.getByRole('button', { name: /Sandbox policy/i })).toBeDefined();
     expect(screen.getByRole('button', { name: /Danger Zone/i })).toBeDefined();
   });
@@ -141,6 +193,49 @@ describe('ProjectSettingsPage', () => {
     expect(blueprint.getAttribute('placeholder')).toBe('Inherit gpt-5.4');
     expect(workflow.value).toBe('claude-sonnet-4.6');
     expect(outcome.value).toBe('');
+  });
+
+  it('shows project members and linked GitHub identity controls on the Access section', async () => {
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
+
+    expect(await screen.findByText('Platform access')).toBeDefined();
+    expect(screen.getByText('Ada Lovelace')).toBeDefined();
+    expect(screen.getByText('Currently effective: @octocat')).toBeDefined();
+    expect(screen.getByText(/octocat — Write/)).toBeDefined();
+  });
+
+  it('adds a project member through Tank role-assignment contract', async () => {
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Add member' }), { target: { value: 'grace@contoso.com' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Display name (optional)' }), { target: { value: 'Grace Hopper' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'Contributor' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
+
+    await waitFor(() => expect(apiClient.createProjectRoleAssignment).toHaveBeenCalledWith('proj-1', {
+      principal_id: 'grace@contoso.com',
+      display_name: 'Grace Hopper',
+      email: 'grace@contoso.com',
+      role: 'Contributor',
+    }));
+  });
+
+  it('saves a per-project GitHub identity override', async () => {
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Use GitHub identity' }), { target: { value: 'altcat' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save GitHub identity' }));
+
+    await waitFor(() => expect(apiClient.setProjectGitHubIdentityOverride).toHaveBeenCalledWith('proj-1', 'altcat'));
   });
 
   it('saves generation model overrides using Tank backend payload shape', async () => {
