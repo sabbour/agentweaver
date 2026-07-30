@@ -77,6 +77,12 @@ public static class WorkflowDefinitionYamlSerializer
             else if (trigger.Type == WorkflowTriggerType.Event)
             {
                 Line(sb, "  event_name", trigger.EventName);
+                if (trigger.If.Count > 0)
+                {
+                    sb.AppendLine("  if:");
+                    foreach (var predicate in trigger.If)
+                        WritePredicate(sb, "    - ", "      ", predicate);
+                }
             }
         }
 
@@ -154,5 +160,87 @@ public static class WorkflowDefinitionYamlSerializer
         WorkflowScheduleInterval.Weekly => "weekly",
         WorkflowScheduleInterval.Monthly => "monthly",
         _ => null,
+    };
+
+    private static void WritePredicate(StringBuilder sb, string firstKeyPrefix, string nestedIndent, WorkflowTriggerPredicate predicate)
+    {
+        if (predicate.HasLabel is { } hasLabel)
+        {
+            sb.Append(firstKeyPrefix).Append("has_label: ").AppendLine(InlineMap(("label", hasLabel.Label)));
+            return;
+        }
+
+        if (predicate.IsNotLabeledWith is { } isNotLabeledWith)
+        {
+            sb.Append(firstKeyPrefix).Append("is_not_labeled_with: ").AppendLine(InlineMap(("label", isNotLabeledWith.Label)));
+            return;
+        }
+
+        if (predicate.BaseBranch is { } baseBranch)
+        {
+            sb.Append(firstKeyPrefix).Append("base_branch: ").AppendLine(InlineMap(("branch", baseBranch.Branch)));
+            return;
+        }
+
+        if (predicate.ReviewState is { } reviewState)
+        {
+            sb.Append(firstKeyPrefix).Append("review_state: ").AppendLine(InlineMap(("state", ReviewState(reviewState.State))));
+            return;
+        }
+
+        if (predicate.Ref is { } refPredicate)
+        {
+            sb.Append(firstKeyPrefix).Append("ref: ").AppendLine(InlineMap(
+                ("branch", refPredicate.Branch),
+                ("match_mode", MatchMode(refPredicate.MatchMode))));
+            return;
+        }
+
+        if (predicate.Category is { } category)
+        {
+            sb.Append(firstKeyPrefix).Append("category: ").AppendLine(InlineMap(("name", category.Name)));
+            return;
+        }
+
+        if (predicate.CommentMatches is { } commentMatches)
+        {
+            sb.Append(firstKeyPrefix).Append("comment_matches: ").AppendLine(InlineMap(("pattern", commentMatches.Pattern)));
+            return;
+        }
+
+        if (predicate.Or.Count > 0)
+        {
+            sb.Append(firstKeyPrefix).AppendLine("or:");
+            foreach (var child in predicate.Or)
+                WritePredicate(sb, nestedIndent + "- ", nestedIndent + "  ", child);
+            return;
+        }
+
+        if (predicate.Not is { } not)
+        {
+            sb.Append(firstKeyPrefix).AppendLine("not:");
+            WritePredicate(sb, nestedIndent + "  ", nestedIndent + "    ", not);
+            return;
+        }
+
+        throw new ArgumentException("Predicate must declare exactly one kind.", nameof(predicate));
+    }
+
+    private static string InlineMap(params (string Key, string Value)[] entries) =>
+        "{ " + string.Join(", ", entries.Select(x => $"{x.Key}: {YamlScalar(x.Value)}")) + " }";
+
+    private static string ReviewState(WorkflowTriggerReviewState state) => state switch
+    {
+        WorkflowTriggerReviewState.Approved => "approved",
+        WorkflowTriggerReviewState.ChangesRequested => "changes_requested",
+        WorkflowTriggerReviewState.Commented => "commented",
+        _ => throw new ArgumentOutOfRangeException(nameof(state), state, null),
+    };
+
+    private static string MatchMode(WorkflowTriggerMatchMode mode) => mode switch
+    {
+        WorkflowTriggerMatchMode.Equals => "equals",
+        WorkflowTriggerMatchMode.Prefix => "prefix",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
     };
 }

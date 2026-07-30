@@ -193,6 +193,141 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
         matchCount.Should().Be(1, "the workflow must appear exactly once, not duplicated");
     }
 
+    [Fact]
+    public async Task PutTriggerConfig_PersistsStructuredPredicates_AndExposesThemViaApi()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow",
+            new { yaml = BlankTemplateYaml });
+
+        var putTrigger = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger",
+            new
+            {
+                type = "event",
+                event_name = "github.pull_request.opened",
+                @if = new object[]
+                {
+                    new
+                    {
+                        or = new object[]
+                        {
+                            new { baseBranch = new { branch = "main" } },
+                            new { baseBranch = new { branch = "release/v1" } },
+                        },
+                    },
+                },
+            });
+
+        putTrigger.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var trigger = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger");
+        trigger.GetProperty("trigger").GetProperty("event_name").GetString().Should().Be("github.pull_request.opened");
+        trigger.GetProperty("trigger").GetProperty("if")[0].GetProperty("or").GetArrayLength().Should().Be(2);
+
+        var detail = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/workflows/my-workflow");
+        detail.GetProperty("trigger").GetProperty("if")[0].GetProperty("or").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task DeleteTriggerConfig_ClearsTrigger()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        var yamlWithTrigger = BlankTemplateYaml + """
+
+            trigger:
+              type: event
+              event_name: github.push
+            """;
+        await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow",
+            new { yaml = yamlWithTrigger });
+
+        var delete = await _client.DeleteAsync($"/api/projects/{projectId}/workflows/my-workflow/trigger");
+
+        delete.StatusCode.Should().Be(HttpStatusCode.OK);
+        var response = await delete.Content.ReadFromJsonAsync<JsonElement>();
+        response.GetProperty("trigger").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var detail = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/workflows/my-workflow");
+        detail.GetProperty("trigger").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task PatchTriggerConfig_PartiallyUpdatesExistingTrigger()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        var yamlWithTrigger = BlankTemplateYaml + """
+
+            trigger:
+              type: event
+              event_name: github.pull_request.opened
+              if:
+                - or:
+                    - base_branch: { branch: "main" }
+                    - base_branch: { branch: "release/v1" }
+            """;
+        await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow",
+            new { yaml = yamlWithTrigger });
+
+        var patch = await _client.PatchAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger",
+            new { event_name = "github.pull_request.synchronize" });
+
+        patch.StatusCode.Should().Be(HttpStatusCode.OK);
+        var trigger = await patch.Content.ReadFromJsonAsync<JsonElement>();
+        trigger.GetProperty("trigger").GetProperty("event_name").GetString().Should().Be("github.pull_request.synchronize");
+        trigger.GetProperty("trigger").GetProperty("if")[0].GetProperty("or").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task PutTriggerConfig_NotPredicate_RoundTripsWithoutLosingWrapper()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow",
+            new { yaml = BlankTemplateYaml });
+
+        var put = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger",
+            new
+            {
+                type = "event",
+                event_name = "github.issues.opened",
+                @if = new object[]
+                {
+                    new
+                    {
+                        not = new
+                        {
+                            hasLabel = new { label = "blocked" },
+                        },
+                    },
+                },
+            });
+
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var trigger = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger");
+        trigger.GetProperty("trigger").GetProperty("if")[0].GetProperty("not").GetProperty("hasLabel").GetProperty("label")
+            .GetString().Should().Be("blocked");
+
+        var yaml = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/workflows/my-workflow/yaml");
+        yaml.GetProperty("yaml").GetString().Should().Contain(
+            """
+              if:
+                - not:
+                    has_label: { label: blocked }
+            """.Replace("\n", Environment.NewLine));
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private async Task<(string ProjectId, string WorkingDirectory)> CreateProjectAsync()

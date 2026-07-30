@@ -132,6 +132,32 @@ trigger:
   event_name: github.issues.opened
 ```
 
+Event triggers can also add a structured `if:` filter list. A plain array is implicitly ANDed; use
+`or:` and `not:` wrappers for compound logic. The v1 predicate vocabulary is intentionally curated:
+
+- `has_label` / `is_not_labeled_with` for `github.issues*` and `github.pull_request*`
+- `base_branch` for `github.pull_request*`
+- `review_state` for `github.pull_request_review*`
+- `ref` (`equals` / `prefix`) for `github.push`
+- `category` for `github.discussion*`
+- `comment_matches` for `github.issue_comment*`
+
+For example, this workflow fires only when a newly added issue label set includes both `bug` and
+`needs triage`:
+
+```yaml
+trigger:
+  type: event
+  event_name: github.issues.labeled
+  if:
+    - has_label: { label: "bug" }
+    - has_label: { label: "needs triage" }
+```
+
+`comment_matches` is intentionally boolean-only: it uses the GitHub comment body only to decide
+match/no-match. Agentweaver does not extract arguments, persist the raw text, or forward the comment
+body into downstream prompts through the trigger path.
+
 ### Generate from description
 
 Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. If the description includes a recurring cadence such as "Every Monday", the draft uses a `schedule` trigger with a cadence like `weekly:monday`. If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL — generation keeps that target repository in the prompt context so the draft acts against the intended repo.
