@@ -22,6 +22,11 @@ The button and follow-up flow depend on the deployment's configured mode:
 - **Entra mode** — sign in with your organization's Entra account first. After your platform session is established, you can link one or more GitHub accounts for repository access and GitHub Copilot.
 - **GitHub-based authorization mode** — sign in with GitHub directly. Once you authorize, GitHub redirects you back and your session is established.
 
+For Entra deployments, the browser sign-in uses authorization code + PKCE. If the tenant allows
+client secrets, Agentweaver can redeem the code as a confidential client; if the tenant blocks
+password credentials, the same flow works without a client secret as long as the Entra app
+registration allows public client flows.
+
 ::: tip One sign-in for everything
 In **Entra mode**, the Entra sign-in grants platform access and your linked GitHub accounts provide repository access and GitHub Copilot entitlement.
 

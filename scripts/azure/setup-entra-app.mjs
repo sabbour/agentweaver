@@ -327,9 +327,13 @@ function printSummary(result, log) {
   log.field("Auth__Entra__TenantId", result.tenantId);
   log.field("Auth__Entra__RedirectUri", result.redirectUris[0] ?? "");
   log.warn(
-    "The server-side sign-in redirect flow is a CONFIDENTIAL web client: create a client "
-    + "secret for this app (e.g. `az ad app credential reset --id " + result.appId + "`) and "
-    + "supply it as Auth__Entra__ClientSecret (Key Vault secret entra-client-secret).");
+    "Auth__Entra__ClientSecret is OPTIONAL. If your tenant allows password credentials and you want "
+    + "confidential-client redemption, create a client secret for this app (for example "
+    + "`az ad app credential reset --id " + result.appId + "`) and supply it as "
+    + "Auth__Entra__ClientSecret (Key Vault secret entra-client-secret). If your tenant blocks "
+    + "client secrets, leave Auth__Entra__ClientSecret unset and make sure the app registration "
+    + "allows public client flows (`isFallbackPublicClient: true`) so Agentweaver can redeem the "
+    + "authorization code with PKCE only.");
 }
 
 export async function run({ argv = [], exec = execDefault, log = logDefault } = {}) {
