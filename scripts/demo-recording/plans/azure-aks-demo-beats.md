@@ -7,7 +7,9 @@ blueprint demo. It is parsed by `lib/beats.mjs`'s `loadBeatPlan`, and its render
 narration drives `cli.mjs synthesize-beats` → capture → `sync-beat` → `assemble-final`.
 
 Each `## Beat X.Y — Title` heading starts a beat. `Narration: "..."` is the voiceover
-script for that beat.
+script for that beat. Optional `Fresh navigation: true` and `Start URL: ...` metadata
+lines let a beat explicitly force a scene-cut reload or declare the route it expects when
+captured as the first beat in a session.
 
 What makes this scenario different from the blueprint demo:
 
@@ -29,6 +31,8 @@ Narration: "Everything in this walkthrough happens against a real, live, public 
 
 Narration: "We start by creating a project straight from GitHub. Paste in the Azure AKS repository, and Agentweaver analyzes it and recommends a blueprint. For this story we pick the Content Authoring blueprint, which packages a small research-and-writing team and a ready-made content workflow. A few seconds later the repo is cloned and the project is live."
 
+Fresh navigation: true
+
 ## Beat 1.2 — Meet the cast
 
 Narration: "Here's the team the blueprint cast for this project. A casting algorithm assigned each role a named agent from a themed universe — a lead researcher, a writer, and an editor — so the team has continuity across every run. Each agent already carries default skills: source-quality research for the researcher, and writing, editing, and fact-checking for the writer and editor."
@@ -37,6 +41,8 @@ Narration: "Here's the team the blueprint cast for this project. A casting algor
 
 Narration: "Skills are reusable guidance you can attach to an agent. Instead of importing one, we'll generate a new skill from a plain description right here in the interface. We describe an issue-triage skill: classify each open issue as a feature request, bug, or question; cluster near-duplicate feature requests into one idea; and write a structured mini-spec for each distinct idea — while staying strictly read-only. Agentweaver drafts the skill, we review it, save it, and assign it to the researcher."
 
+Fresh navigation: true
+
 ## Beat 2.2 — Author the scheduled triage workflow
 
 Narration: "Next we author the workflow that will run that triage. In Workflows, we choose Generate from description and type what we want in plain language: every Monday at nine, read the most recent open issues, classify and de-duplicate the feature requests, and produce a summary report plus a full mini-spec for each distinct idea — read-only, with no comments or label changes on GitHub. Agentweaver drafts the workflow graph and, because we said 'every Monday,' it automatically adds a weekly Monday schedule. We review the generated steps and the schedule trigger, then save it to the project."
@@ -44,6 +50,8 @@ Narration: "Next we author the workflow that will run that triage. In Workflows,
 ## Beat 3.1 — Import the content-authoring skill
 
 Narration: "For writing quality, we don't generate a second skill. Instead, we import a purpose-built open-source skill from the marketplace: Conor Bronsdon's MIT-licensed avoid-ai-writing repo. We add the GitHub source, browse the detected skill, import it into this project's catalog, and assign it to the writer so the draft follows concrete guidance for stripping AI writing tells instead of generic vibes."
+
+Fresh navigation: true
 
 On screen: Open Browse marketplaces, add the `conorbronsdon/avoid-ai-writing` source, browse the detected `avoid-ai-writing` skill, import it, then assign it to Hermione in the project's skill catalog.
 
@@ -63,6 +71,8 @@ Narration: "With the draft reviewed, we open a single pull request against the l
 
 Narration: "Back on the triage side, the workflow is scheduled for Mondays, but we don't have to wait. We trigger it manually with Run now, bounded to the most recent open issues so the live run finishes in a reasonable time. The weekly schedule stays active for next Monday's real run."
 
+Fresh navigation: true
+
 ## Beat 4.2 — Review the triage results
 
 Narration: "The run produces exactly what we asked for: a summary that classifies the issues, clusters of near-duplicate feature requests collapsed into single ideas, and a full mini-spec for each distinct idea — a problem statement, a proposal, scope and non-goals, and links back to the source issues. All of it lives inside Agentweaver as run output, ready for a human to act on."
@@ -80,3 +90,5 @@ On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), `waitFor` r
 ## Beat 5.1 — Outro
 
 Narration: "That's the full loop against a real, live, external open-source repo: we cast a content team, generated an issue-triage skill in the product, imported the MIT-licensed `conorbronsdon/avoid-ai-writing` marketplace skill for the writer, authored a scheduled read-only triage workflow, de-duplicated real community issues into actionable specs, and shipped a real blog post as a single open pull request — without ever merging it or touching a single issue. Same product, same MCP-backed workspace, now proven against the messiness of the real world."
+
+Fresh navigation: true

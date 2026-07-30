@@ -41,7 +41,7 @@ public static class WorkflowTriggerEndpoints
                 return forbid;
 
             var fired = await triggerService.FireEventAsync(
-                project, request.EventName!.Trim(), request.DedupeKey, ct);
+                project, request.EventName!.Trim(), request.DedupeKey, payload: null, ct);
 
             return Results.Ok(new FireWorkflowEventResponse { FiredWorkflowIds = fired });
         });

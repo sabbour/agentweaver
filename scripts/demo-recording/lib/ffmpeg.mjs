@@ -65,6 +65,21 @@ export async function ffprobeJson(filePath) {
   return JSON.parse(stdout);
 }
 
+export async function ffprobeFrames(filePath) {
+  const exe = resolveBinary('ffprobe');
+  const { stdout } = await runBinary(exe, [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_frames',
+    '-show_entries', 'frame=best_effort_timestamp_time,pkt_pts_time,pkt_duration_time',
+    '-show_streams',
+    '-show_format',
+    '-of', 'json',
+    filePath,
+  ]);
+  return JSON.parse(stdout);
+}
+
 export async function concatWavFiles(inputs, outputPath) {
   const exe = resolveBinary('ffmpeg');
   const listPath = `${outputPath}.concat.txt`;

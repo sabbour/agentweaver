@@ -1292,6 +1292,8 @@ export interface WorkflowTriggerDto {
   day_of_month?: number | null;
   time_of_day?: string | null;
   event_name?: string | null;
+  // TODO(#641): replace this loose shape with Tank's dedicated event-predicate DTO once the backend ships it.
+  if?: Array<Record<string, unknown>> | null;
 }
 
 // Response body for GET/POST the project's workflows list.

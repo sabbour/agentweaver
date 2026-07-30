@@ -341,6 +341,8 @@ export function ProjectSettingsPage() {
   const [rotatingWebhookSecret, setRotatingWebhookSecret] = useState(false);
   const [webhookError, setWebhookError] = useState<string | null>(null);
   const [copiedWebhookValue, setCopiedWebhookValue] = useState<'url' | 'secret' | null>(null);
+  const [creatingWebhook, setCreatingWebhook] = useState(false);
+  const [webhookInfo, setWebhookInfo] = useState<{ intent: 'success' | 'warning'; body: string } | null>(null);
 
   // Entra access management / per-project GitHub identity.
   const [accessOverview, setAccessOverview] = useState<ProjectAccessOverview | null>(null);
@@ -595,6 +597,7 @@ export function ProjectSettingsPage() {
     if (!projectId) return;
     setRotatingWebhookSecret(true);
     setWebhookError(null);
+    setWebhookInfo(null);
     setCopiedWebhookValue(null);
     try {
       const result = await apiClient.rotateProjectWebhookSecret(projectId);
@@ -662,6 +665,25 @@ export function ProjectSettingsPage() {
       setOverrideError(formatError(err));
     } finally {
       setSavingOverride(false);
+    }
+  };
+
+  const handleAutoCreateWebhook = async () => {
+    if (!projectId) return;
+    setCreatingWebhook(true);
+    setWebhookError(null);
+    setWebhookInfo(null);
+    try {
+      await apiClient.autoCreateProjectWebhook(projectId);
+      setWebhookInfo({ intent: 'success', body: 'GitHub webhook created.' });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 501) {
+        setWebhookInfo({ intent: 'warning', body: 'Automatic webhook creation is coming soon. Use the manual setup steps below for now.' });
+      } else {
+        setWebhookError(formatError(err));
+      }
+    } finally {
+      setCreatingWebhook(false);
     }
   };
 
@@ -1102,10 +1124,18 @@ export function ProjectSettingsPage() {
                     In GitHub, open your repository’s Settings, then Webhooks, and add this payload URL.
                     Set the content type to <strong>application/json</strong>.
                   </Body>
+                  {webhookInfo && (
+                    <MessageBar intent={webhookInfo.intent}>
+                      <MessageBarBody>{webhookInfo.body}</MessageBarBody>
+                    </MessageBar>
+                  )}
                   <Field label="Payload URL">
                     <Input value={webhookUrl} readOnly />
                   </Field>
                   <div className={styles.formActions}>
+                    <Button appearance="primary" disabled={creatingWebhook} onClick={() => void handleAutoCreateWebhook()}>
+                      {creatingWebhook ? 'Creating webhook' : 'Create webhook automatically'}
+                    </Button>
                     <Button appearance="secondary" onClick={() => void copyWebhookValue(webhookUrl, 'url')}>
                       {copiedWebhookValue === 'url' ? 'Copied URL' : 'Copy URL'}
                     </Button>

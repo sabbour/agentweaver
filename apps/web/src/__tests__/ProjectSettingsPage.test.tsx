@@ -23,6 +23,7 @@ vi.mock('../api/apiClient', () => ({
     createProjectRoleAssignment: vi.fn(),
     deleteProjectRoleAssignment: vi.fn(),
     setProjectGitHubIdentityOverride: vi.fn(),
+    autoCreateProjectWebhook: vi.fn(),
     rotateProjectWebhookSecret: vi.fn(),
     updateProjectProviderSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
@@ -174,6 +175,19 @@ describe('ProjectSettingsPage', () => {
     expect(screen.getByDisplayValue(
       `${resolvePublicApiOrigin(API_URL)}/api/projects/proj-1/webhooks/github`,
     )).toBeDefined();
+  });
+
+  it('shows a coming-soon message for automatic webhook creation', async () => {
+    const { ApiError } = await import('../api/client');
+    vi.mocked(apiClient.autoCreateProjectWebhook).mockRejectedValue(new ApiError(501, 'Automatic GitHub webhook creation is not implemented yet.'));
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create webhook automatically' }));
+
+    await waitFor(() => expect(apiClient.autoCreateProjectWebhook).toHaveBeenCalledWith('proj-1'));
+    expect(await screen.findByText('Automatic webhook creation is coming soon. Use the manual setup steps below for now.')).toBeDefined();
   });
 
   it('uses the browser origin for public URLs when API_URL is the same-origin sentinel', () => {
