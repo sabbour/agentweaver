@@ -21,7 +21,9 @@ vi.mock('../api/apiClient', () => ({
     listProjects: vi.fn(),
     getProject: vi.fn(),
     checkHealth: vi.fn(),
-    getGitHubAuthStatus: vi.fn(),
+    getAuthSession: vi.fn(),
+    listLinkedGitHubAccounts: vi.fn(),
+    getProjectAccessOverview: vi.fn(),
     getNotifications: vi.fn(),
   },
 }));
@@ -85,7 +87,36 @@ beforeEach(() => {
   vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
   vi.mocked(apiClient.getProject).mockResolvedValue(makeProject('proj-1', 'Project One'));
   vi.mocked(apiClient.checkHealth).mockResolvedValue(true);
-  vi.mocked(apiClient.getGitHubAuthStatus).mockResolvedValue({ status: 'signed_in' } as never);
+  vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+    authenticated: true,
+    auth_mode: 'entra',
+    display_name: 'Sabbour',
+    email: 'sabbour@example.com',
+    login: 'sabbour',
+    avatar_url: 'https://example.com/sabbour.png',
+    entra_object_id: 'entra-1',
+    platform_roles: ['PlatformAdmin'],
+  } as never);
+  vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
+    {
+      login: 'octocat',
+      name: 'Octocat',
+      avatar_url: 'https://example.com/octocat.png',
+      type: 'user',
+      is_default: true,
+      copilot_entitled: true,
+    },
+  ] as never);
+  vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
+    auth_mode: 'entra',
+    platform_roles: ['PlatformAdmin'],
+    current_user_project_role: 'Owner',
+    can_manage_role_assignments: true,
+    can_manage_project_github_identity: true,
+    project_role_assignments: [],
+    github_identity_override_login: null,
+    effective_github_login: 'octocat',
+  } as never);
 });
 
 afterEach(() => {
@@ -211,14 +242,20 @@ describe('AppShell navigation', () => {
 
   it('contains realistic dev version badges inside the footer while keeping the full version in the tooltip', async () => {
     vi.spyOn(useAppVersionModule, 'useAppVersion').mockReturnValue('0.12.2-dev+a100e95');
-    vi.mocked(apiClient.getGitHubAuthStatus).mockResolvedValue({
-      status: 'signed_in',
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'sabbour',
+      email: 'sabbour@example.com',
       login: 'sabbour',
+      avatar_url: 'https://example.com/sabbour.png',
+      entra_object_id: 'entra-1',
+      platform_roles: ['PlatformAdmin'],
     } as never);
 
     renderShellAt('/overview');
 
-    expect(await screen.findByText('sabbour')).toBeDefined();
+    expect(await screen.findByText('octocat')).toBeDefined();
     const badgeText = screen.getByText('v0.12.2-dev+a100e95');
     const badge = badgeText.closest('.aw-rail-footer__version') as HTMLElement | null;
     expect(badge).toBeTruthy();

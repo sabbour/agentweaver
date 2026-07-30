@@ -1,7 +1,10 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -33,12 +36,12 @@ public static class WorkflowTriggerEndpoints
             var project = await projectStore.GetAsync(pid, ct);
             if (project is null) return Results.NotFound();
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (!caller.Owns(project.Owner))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid)
+                return forbid;
 
             var fired = await triggerService.FireEventAsync(
-                project, request.EventName!.Trim(), request.DedupeKey, ct);
+                project, request.EventName!.Trim(), request.DedupeKey, payload: null, ct);
 
             return Results.Ok(new FireWorkflowEventResponse { FiredWorkflowIds = fired });
         });

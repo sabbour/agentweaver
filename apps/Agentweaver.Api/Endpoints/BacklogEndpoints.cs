@@ -1,8 +1,11 @@
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Backlog;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -33,7 +36,7 @@ public static class BacklogEndpoints
             if (string.IsNullOrWhiteSpace(request.Title))
                 return Results.BadRequest(new { error = "title is required." });
 
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
@@ -88,7 +91,7 @@ public static class BacklogEndpoints
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Viewer, ct);
             if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
@@ -110,7 +113,7 @@ public static class BacklogEndpoints
                 return Results.BadRequest(new { error = "Invalid id." });
             if (string.IsNullOrWhiteSpace(request.Title))
                 return Results.BadRequest(new { error = "title is required." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             var description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description;
@@ -132,7 +135,7 @@ public static class BacklogEndpoints
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             bool deleted;
@@ -165,7 +168,7 @@ public static class BacklogEndpoints
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
@@ -201,7 +204,7 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             var moved = await backlogStore.MoveAllBacklogToReadyAsync(pid, DateTimeOffset.UtcNow, ct);
@@ -221,7 +224,7 @@ public static class BacklogEndpoints
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
@@ -265,7 +268,7 @@ public static class BacklogEndpoints
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
@@ -307,7 +310,7 @@ public static class BacklogEndpoints
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             var archived = await backlogStore.TryArchiveAsync(pid, tid, DateTimeOffset.UtcNow, ct);
@@ -329,7 +332,7 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Viewer, ct);
             if (auth.Error is not null) return auth.Error;
 
             var board = await boardService.GetBoardAsync(pid, include_terminal_history ?? false, ct);
@@ -347,7 +350,7 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Viewer, ct);
             if (auth.Error is not null) return auth.Error;
 
             var stages = projector.GetStages();
@@ -369,7 +372,7 @@ public static class BacklogEndpoints
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Viewer, ct);
             if (auth.Error is not null) return auth.Error;
             return Results.Ok(MapSettings(auth.Project!));
         });
@@ -387,7 +390,7 @@ public static class BacklogEndpoints
             if (request.MaxReadyPerHeartbeat is < 1 or > 20)
                 return Results.BadRequest(new { error = "max_ready_per_heartbeat must be between 1 and 20." });
 
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ct);
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
             await projectStore.UpdatePickupSettingsAsync(
@@ -442,14 +445,16 @@ public static class BacklogEndpoints
         HttpContext httpContext,
         ProjectId projectId,
         IProjectStore projectStore,
+        ProjectRole minimumRole,
         CancellationToken ct)
     {
         var project = await projectStore.GetAsync(projectId, ct);
         if (project is null) return (Results.NotFound(), null);
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-        if (!caller.Owns(project.Owner))
-            return (Results.StatusCode(StatusCodes.Status403Forbidden), null);
+        var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var forbid = await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
+        if (forbid is not null)
+            return (forbid, null);
 
         return (null, project);
     }

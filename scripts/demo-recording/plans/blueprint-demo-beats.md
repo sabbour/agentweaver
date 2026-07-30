@@ -18,13 +18,17 @@ actions the capture plan must perform (it is ignored by the narration parser, wh
 reads the `Narration:` line). These specs are the reproducible source of truth for the
 behavior fixes applied after the PR #613 review — the per-beat capture JSON under
 `recordings/_scratch/plans/` is generated/environment-specific and intentionally
-gitignored. Two pipeline-wide fixes also apply to every beat: the synthetic cursor now
+gitignored. Optional `Fresh navigation: true` and `Start URL: ...` metadata lines let a
+beat explicitly force a scene-cut reload or declare the route it expects when captured as
+the first beat in a session. Two pipeline-wide fixes also apply to every beat: the synthetic cursor now
 tracks the real post-zoom click coordinates, and camera zoom/pan is only used when a
 target genuinely needs magnifying (scale ≤ 1.02 = no zoom), to cut gratuitous motion.
 
 ## Beat 1.1 — Create the project
 
 Narration: "Start with an empty GitHub repository, paste in the repo URL, and create a new project from it. Once the repository is connected, give the project a name and move straight into setting up the team."
+
+Fresh navigation: true
 
 On screen: This beat OWNS repo-connect + naming only — paste the repo URL, connect it, set the project name, then advance to blueprint selection. It must NOT re-run blueprint selection (that belongs to 1.2), so 1.1 and 1.2 are never captured as near-duplicate segments (fixes the "synced-1-1 and 1-2 are the same video" defect).
 
@@ -43,6 +47,8 @@ On screen: Click an agent (e.g. Deckard) to open its card showing the default mo
 ## Beat 2.1 — Frame the product
 
 Narration: "We start by choosing the software delivery workflow and giving the team a concrete product challenge to solve. Notice the coordinator doesn't just take the request at face value — it drafts an OutcomeSpec: the goal, the desired outcome, the scope, and its assumptions, then picks the best-fit workflow for the job using an LLM pass over all the available workflows and roles, and tells you why it chose this one. You can always override that choice from the Start Task dialog, or just type 'use' and the workflow id. The idea here is Trailhead, a tool that helps groups turn scattered weekend trip planning into one shared plan everyone can agree on. From there, the brief lays out the core positioning, value props, and a simple first landing page experience centered around a 'Plan my first trip' call to action."
+
+Fresh navigation: true
 
 On screen: Choose the software-delivery workflow, enter the Trailhead brief, and show the drafted OutcomeSpec (goal / outcome / scope / assumptions and the workflow-choice rationale). Keep the camera still on the OutcomeSpec content — remove the earlier zoom onto a meaningless empty area (the "zooms on a meaningless area around 00:27" defect); only zoom if it lands on real OutcomeSpec text.
 
@@ -92,6 +98,8 @@ Narration: "Not every run finishes cleanly — that's expected. Runs that fail l
 
 Narration: "Open Workflows and choose the workflow that just completed. From there, add a schedule and pick a daily, weekly, or monthly cadence in UTC so the workflow keeps running automatically on its own. A separate heartbeat also runs continuously in the background, promoting Ready tasks and starting runs up to a configurable concurrency limit — so the board keeps moving even when nobody's watching it."
 
+Fresh navigation: true
+
 On screen: Operate on a legitimate schedulable delivery workflow selected explicitly by name — the capture targets the `software-delivery-copy` workflow (a clone of the completed Software Delivery workflow) via a name-based selector, NOT a positional/first-item selector, so the stray "Copy of Bug Fix" (`bug-fix-copy`) duplicate is never picked up by accident. There is currently no workflow-delete API/UI (see decisions inbox), so the stray `bug-fix-copy` remains visible-but-unused in the list rather than being removed; the schedule dialog is opened and configured (e.g. Weekly / Monday / 09:00 UTC) on the intended `software-delivery-copy` row. Then show the **Heartbeat** page's live service-status UI briefly, navigate to the Board, open **Pickup settings**, and hold on the real `Max Ready items per heartbeat` control so the narration's configurable background pickup/concurrency claim is backed by the actual UI.
 
 ## Beat 3.2 — Trigger it from GitHub
@@ -103,6 +111,8 @@ On screen: After connecting the webhook and pushing the commit, show visible on-
 ## Beat 4.1 — Pivot to the seeded bug
 
 Narration: "We switch to a real issue already tracked in GitHub. On narrower tablet layouts, the welcome banner slides over the 'Plan my first trip' button, making the main action hard to use. Now the repair starts from that existing bug report."
+
+Fresh navigation: true
 
 ## Beat 4.2 — Ask the assistant to triage
 
@@ -135,3 +145,5 @@ Narration: "That closes the loop: from an idea, to a shipped feature, to a merge
 ## Beat 5.1 — Drive it from your own tools
 
 Narration: "You can drive the exact same workflows from your own tools. In Settings, grab the MCP server URL, then connect clients like Claude Desktop, VS Code, or Copilot CLI. Every capability you saw in the UI today — projects, runs, the board, workflows, blueprints, casting, memory, decisions, sandboxes, diagnostics — is available through that same MCP server, in the same workspace and team context you've been using throughout this demo."
+
+Fresh navigation: true

@@ -14,7 +14,17 @@ function authExpired(message) {
 }
 
 export function isAuthExpired({ url = '', status = null } = {}) {
-  return status === 401 || status === 403 || /\/(login|signin|oauth)(?:[/?#]|$)/i.test(String(url));
+  const href = String(url);
+  let pathname = href;
+  try {
+    pathname = new URL(href).pathname;
+  } catch {
+    // Treat non-URL inputs as plain paths and fall through to the regex checks.
+  }
+  return status === 401
+    || status === 403
+    || /\/(login|signin|oauth)(?:[/?#]|$)/i.test(pathname)
+    || /^\/auth\/[^/]+\/(?:authorize|callback)(?:[/?#]|$)/i.test(pathname);
 }
 
 export async function loadStorageState(statePath = DEFAULT_STORAGE_STATE) {

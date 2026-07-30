@@ -69,7 +69,6 @@
 - `scripts/azure/dev.mjs` now includes GitHub OAuth setup guidance, scaffolds `appsettings.Development.json` when needed, and prints a dev-ready summary aligned to the supported npm scripts.
 - The docs home page now includes a local/Azure Quick Start hero block. After rubber-duck approval, the full batch was verified (220/220) and committed/pushed to `origin/main` as `95a855a0`.
 
-
 ---
 
 ## 2026-07-20T12-08-00-07-00 — Release/versioning policy, recovery semantics, and ADR/label governance
@@ -124,7 +123,7 @@
 **Scope source merged:** `link-rename-cluster.md`.
 
 - The configured/documented default AKS cluster name is now `agentweaver-aks` instead of `agentweaver-aks-2`.
-- This is a defaults-only change across active code, tests, params, docs, and diagrams. Historical records and descriptions of past live clusters are not retroactively rewritten.
+- This is a defaults-only change across active code, tests, docs, params, and diagrams. Historical records and descriptions of past live clusters are not retroactively rewritten.
 
 ---
 
@@ -136,7 +135,6 @@
 - Real-sandbox Linux/WSL end-to-end tests should early-exit when the required backend is unavailable instead of trying to dynamically skip through a failure path.
 - Coordinator persistence must retain the direct `MemoryDbContext` RunEvents fallback when `IRunEventStream` is not registered (as in test harness construction), while still preferring durable event-stream append in production.
 - Remaining Windows PodLocal workspace failures are an environment/path-length limitation on this machine, not evidence that the v0.9.71 merge changed pod-local workspace behavior.
-
 
 ---
 
@@ -161,3 +159,200 @@
 - Trigger C was activated deliberately as a strategic room-to-grow choice, not because its prior automatic soak/next-channel metrics threshold was measured as met.
 - `dev` is now the default protected integration branch; normal PRs target it. `release/vX.Y.Z` is an ephemeral soak branch cut from green `dev`, and `main` is stable/published-only, receiving only soaked release promotions or audited emergency hotfixes.
 - The migration updates CI, ruleset documentation, contributor/release guidance, and agent workflow instructions. GitHub ruleset activation for `dev` remains an explicit manual owner action.
+
+---
+
+## 2026-07-29 — Entra-first authentication, authorization, and GitHub-linking design
+
+**Scope sources merged:** `tank-entra-authz-design.md`, `seraph-entra-security-review.md`, `smith-entra-test-questions.md`.
+
+- Agentweaver will adopt **single-tenant Microsoft Entra ID sign-in** as the primary authentication gate and decouple GitHub from platform login.
+- Tier 1 platform access will use Entra App Roles on the Enterprise App; the current implementation target is `PlatformAdmin`, `ProjectCreator`, `Contributor`, and `Viewer`, with `Billing` deferred until a real billing/admin surface exists.
+- Tier 2 project/data access will use app-native RBAC keyed by verified Entra `oid`, with Azure-RBAC-style project assignments for `Owner`, `Contributor`, and `Viewer`.
+- Existing multi-GitHub-account groundwork already in the repo (`GitHubIdentityLink`, `IMultiIdentityGitHubTokenStore`, linked-identity scopes, default/unlink semantics, and store-level tests) is the extension point; do not re-invent it.
+- Security requirements are non-optional: enforce allowed Entra app roles server-side on every protected request, authorize project/resource ownership before any linked-token resolution or use, and cut over hard rather than dual-running legacy GitHub bearer auth beside the new Entra path.
+- Migration should avoid unsafe automatic identity correlation. Preferred flow is first Entra sign-in followed by explicit GitHub relink, with only interactive assisted migration when a trustworthy signed-in proof exists in-session.
+- Open implementation questions remain for endpoint-level role matrices, role-change/revocation semantics, Tier 1 vs Tier 2 precedence, project membership governance, GitHub-linking edge cases, Copilot entitlement probing, and legacy ownership/token migration. Smith should treat those areas as explicitly open until Tank/coordinator resolve them.
+
+---
+
+## 2026-07-29 — Entra bootstrap command stays in the Node Azure toolchain
+
+**Scope source merged:** `link-entra-install-plan.md`.
+
+- The Entra bootstrap will ship as the Node-based Azure toolchain command `scripts/azure/setup-entra-app.mjs`, surfaced as `npm run azure:setup-entra-app`, rather than as a new PowerShell/bash script.
+- The command reconciles a **single-tenant** Entra app registration only, optionally accepts `--service-management-reference <id>` on create, and must remain idempotent when re-run.
+- Reconciliation rules: find by exact display name or explicit `--app-id`, fail if an existing app is not single-tenant, merge redirect URIs without deleting existing ones, patch Agentweaver-managed App Roles through Microsoft Graph, and create the service principal only when missing.
+- Until Tank's final platform-role vocabulary is fully wired, the bootstrap may use stable placeholder coarse roles (`Admin`, `Contributor`, `Viewer`) with `Agentweaver:`-prefixed managed descriptions so a later update can replace them cleanly.
+- The command should print the expected future config surface for downstream wiring: `ENTRA_CLIENT_ID`, `ENTRA_TENANT_ID`, Key Vault secrets `entra-client-id` / `entra-tenant-id`, and appsettings/Kubernetes names `Auth__Entra__ClientId` / `Auth__Entra__TenantId`.
+- Follow-up documentation and deployment/config plumb-through remain pending across the docs, params, k8s manifests, and Azure wiring files that Link enumerated.
+
+
+---
+
+## 2026-07-29T18-19-57+03:00 — Auth mode is a deployment-level switch, with Entra default and GitHubLegacy opt-in
+
+**Scope source merged:** `Tank-auth-mode-becomes-deployment-level-switch-entra-de.md`.
+
+- Agentweaver supports a deployment-level `Auth:Mode = Entra | GitHubLegacy`, defaulting new deployments to `Entra` while keeping `GitHubLegacy` as a supported deprecated opt-in.
+- A running deployment is in exactly one mode at a time; this is not simultaneous dual auth within the same request/session path.
+- `GitHubLegacy` preserves the existing GitHub org/team login gate and single-owner project semantics.
+- `Entra` uses Entra OIDC sign-in, Tier-1 app roles, Tier-2 app-native project role assignments, and GitHub only as a linked-account capability.
+- Deployments must be able to migrate later from `GitHubLegacy` to `Entra` without data loss, but the security invariant remains: no ambiguous dual auth path.
+
+---
+
+## 2026-07-29T19-20-30+03:00 — Foundational Entra/GitHubLegacy auth-mode slice landed with legacy-compatible validation
+
+**Scope source merged:** `Tank-implemented-foundational-entra-githublegacy-auth-m.md`.
+
+- The API now supports deployment-scoped `Auth:Mode = Entra | GitHubLegacy`, defaults new config to Entra, validates Entra bearer tokens against configured tenant/issuer/audience/JWKS, and enforces recognized platform app roles in Entra mode.
+- Legacy-oriented test hosts were updated to opt into `GitHubLegacy` explicitly so existing GitHub/static-auth coverage stays stable while Entra-specific tests verify the new path.
+- Deferred follow-up work from this foundational slice included Tier-2 project role assignments, linked-account CRUD, per-project GitHub identity override, Copilot entitlement probing, repo enumeration across linked identities, and full mode-switch session invalidation.
+
+---
+
+## 2026-07-29T20-40-54+03:00 — Removed shared GitHub-token fallback and formalized GitHub-vs-Agentweaver authorization boundaries
+
+**Scope source merged:** `Tank-removed-runtime-shared-github-scope-fallback-and-c.md`.
+
+- Agentweaver project roles govern only Agentweaver-side actions; they do not grant GitHub authority.
+- Real GitHub success (clone/push/PR/admin) is determined only by the resolved linked GitHub identity's actual repository permission.
+- The runtime installation-scope/shared-token fallback was removed; the app now always resolves caller-linked identity scope and fails closed when no authenticated user identity is available.
+- Any future unattended GitHub automation must use an explicit, auditable linked system identity rather than an implicit shared installation token.
+
+---
+
+## 2026-07-29T21-03-21+03:00 — Web sign-in exchange codes are bound to auth mode, closing cross-mode session handoff gaps
+
+**Scope source merged:** `Tank-bound-web-session-exchange-codes-to-auth-mode-and-.md`.
+
+- Web session exchange codes are now prefixed with the issuing auth mode (`entra` or `githublegacy`).
+- Redeeming an exchange code now fails if its embedded issuing mode does not match the deployment's current `Auth:Mode`.
+- This closes the remaining mode-switch gap: flipping auth mode immediately invalidates outstanding browser sign-in handshakes from the old mode, while old-mode bearer tokens were already rejected by the new mode's request-auth pipeline.
+
+---
+
+## 2026-07-29 — Tier-2 project RBAC uses explicit Entra-oid role assignments with owner-protected membership management
+
+**Scope source merged:** `tank-tier2-rbac.md`.
+
+- Tier-2 project RBAC is implemented with explicit `ProjectRoleAssignment` records keyed by verified Entra `oid`, storing `ProjectId`, `PrincipalId`, `Role`, `GrantedBy`, and `GrantedAt`.
+- Effective access resolves as: `PlatformAdmin` => implicit project `Owner`; otherwise explicit assignment for `(projectId, principalId)`; no assignment means no access.
+- In Entra mode, `Viewer` reads project-scoped resources, `Contributor` mutates project operational/content resources, and `Owner` manages project administration/settings/membership.
+- Membership APIs (list/grant/upsert/revoke) are Owner-or-PlatformAdmin only. Contributors/viewers cannot self-promote.
+- New Entra projects auto-seed the creator as the first explicit `Owner`, and the system blocks revoking/demoting the last explicit `Owner` until another explicit owner exists.
+- Existing pre-RBAC projects may need a migration/backfill plan if they are to be administered in Entra mode without recreation.
+
+---
+
+## 2026-07-29 — Linked GitHub accounts and per-project identity selection ride on the existing multi-identity token-store foundation
+
+**Scope source merged:** `tank-linked-accounts-api.md`.
+
+- The linked-account API reuses the existing `IMultiIdentityGitHubTokenStore` / `GitHubIdentityLink` model as the sole source of truth; no parallel link store or installation-token fallback was introduced.
+- Secondary account linking reuses `/auth/github/callback`, binding OAuth `state` to the current Entra `oid` so the callback links a GitHub identity to that Entra user instead of creating a new primary GitHub session.
+- Added account endpoints under `/api/auth/github-accounts` for list, link, unlink, default selection, and cross-account accessible-repo enumeration.
+- Added per-user per-project GitHub identity overrides plus project endpoints to read/update the effective linked identity for a project.
+- Project override authorization uses Tier-2 RBAC (`Viewer+` read, `Contributor+` write).
+- Cross-account repo enumeration uses each linked account's own GitHub token and reports which login can access each repo plus GitHub-reported effective permission.
+- Copilot entitlement probing is cached on `GitHubIdentityLink` and refreshed only when absent or older than 12 hours.
+- Unlinking a linked login also removes project overrides pointing at that login for the same Entra user so resolution falls back cleanly.
+
+---
+
+## 2026-07-30T00:11:00+03:00 — Trinity UX aligns Entra-first sign-in, linked GitHub accounts, project identity clarity, and quick account switching
+
+**Scope source merged:** `trinity-entra-ui.md`.
+
+- In Entra mode, the sign-in screen now presents Microsoft Entra ID as the only primary sign-in action and explains the two-step model: sign in first, then link GitHub if repository/Copilot work is needed.
+- After Entra sign-in, users with zero linked GitHub accounts see a non-blocking warning that browsing Agentweaver still works but GitHub-backed actions require linking an account.
+- Global Account settings now owns the linked-account lifecycle: link another GitHub account, unlink with impact warnings, and understand default-account / project-override consequences.
+- Project Settings explicitly explains that Agentweaver project roles govern Agentweaver actions only, while actual GitHub success depends on the resolved linked GitHub identity's real repository permission.
+- The GitHub import flow requires at least one linked account in Entra mode and labels repos by which linked account can access them.
+- The shell footer includes a compact GitHub account switcher: current active identity, switch-to-another-account actions, add account, and sign out. In a project context it switches that project's resolved GitHub identity; outside a project it changes the user's default linked account.
+
+
+---
+
+## 2026-07-30 — Last-owner RBAC invariant is now enforced atomically in the persistence layer
+
+**Scope source merged:** `tank-rbac-race-fix.md`.
+
+- The “must retain at least one explicit project owner” rule was moved out of service-layer check-then-write flow and into the role-assignment stores themselves.
+- `IProjectRoleAssignmentStore` now exposes guarded mutation results so service/API layers consume explicit statuses such as `Ok`, `LastOwnerConflict`, and `NotFound` rather than assuming unconditional writes.
+- SQLite now protects owner removal/demotion with `BEGIN IMMEDIATE` plus invariant check and write in the same transaction, preventing concurrent last-owner removals from both succeeding.
+- EF/Postgres-style storage now uses serializable transactions with retry on serialization failure so the invariant is enforced safely across multi-instance deployments.
+- This closes Seraph-5's red RBAC-race finding by making the last-owner guarantee DB-atomic instead of process-local.
+
+---
+
+## 2026-07-30 — Legacy projects in Entra mode use proven-owner lazy backfill, otherwise fail closed
+
+**Scope source merged:** `tank-rbac-backfill.md`.
+
+- Pre-RBAC legacy projects in `Auth:Mode = Entra` now use a hybrid fail-closed backfill strategy.
+- If a legacy project has zero Tier-2 assignments and the caller is a platform admin, the admin may still access it via Tier-1 implicit owner rights and can explicitly assign owners through the normal role-assignment API.
+- If a non-admin Entra caller has a linked GitHub account whose login matches the legacy `Project.Owner`, Agentweaver lazily backfills that caller as the first explicit Tier-2 `Owner` on first access/discovery.
+- Otherwise the project fails closed with a specific `project_unclaimed_in_entra_mode` error instructing the caller to use a platform admin claim flow or link/sign in as the legacy GitHub owner.
+- This preserves legitimate legacy ownership continuity without reintroducing broad fallback or a first-caller-wins escalation path.
+
+---
+
+## 2026-07-30 — Shared auth-mode epoch hardens rolling mode-switch invalidation across pods
+
+**Scope source merged:** `tank-mode-epoch.md`.
+
+- Added a shared singleton `auth_mode_epochs` row in the backing store plus an `AuthModeEpochService` and startup hosted service.
+- On startup, if a process sees a different configured `Auth:Mode` than the persisted shared mode, it atomically flips the mode and increments the shared epoch.
+- Each process keeps its startup `(mode, epoch)` snapshot and checks the shared row on every authenticated API request before honoring any bearer, including test-bypass/internal-key flows. If the process is stale, it rejects with `401` immediately.
+- `WebSessionExchangeService` also checks the shared epoch before issuing or redeeming one-time exchange codes, so old pods cannot keep minting or redeeming legacy-mode handshakes during a rolling restart.
+- This addresses Seraph-5's yellow mode-switch concern by extending invalidation from process-local behavior to cluster-wide rolling transitions without adding a distributed cache/control plane.
+
+
+---
+
+## 2026-07-30 — Auth-mode epoch test failures traced to shared SQLite sidecar path resolution, not the epoch service
+
+**Scope source merged:** `tank-epoch-test-isolation-fix.md`.
+
+- The cross-test-host auth-mode epoch contamination was caused by a `MemoryDbContext` path-resolution bug, not by a static in-process cache inside `AuthModeEpochService`.
+- The SQLite-backed memory sidecar path had been resolving to `<directory-of-Database:Path>\memory.db`, so multiple test hosts using distinct DB filenames in the same temp directory silently shared one physical `memory.db` sidecar.
+- This let one test host's auth-mode epoch row invalidate another host's requests, causing cross-class 401s when Entra and GitHubLegacy fixtures ran together.
+- The fix introduces a shared SQLite memory-sidecar path resolver used by `MemoryDbContext` and `SqliteRunEventStream`: preserve the legacy `agentweaver.db -> memory.db` companion path, but give custom `Database:Path` files distinct per-database sidecars unless `Database:MemoryPath` is explicitly configured.
+- This restores per-test-host isolation while preserving intended same-database epoch sharing semantics for real rolling mode-switch scenarios.
+
+
+---
+
+## 2026-07-30 — PR #640 merge conflicts against `dev` were resolved additively and verified cleanly
+
+**Scope source merged:** `tank-merge-conflict-resolution.md`.
+
+- The three merge conflicts between the Entra authz branch and concurrently landed `dev` workflow-trigger work were resolved additively rather than by choosing one feature line over the other.
+- `WorkflowTriggerEndpoints.cs` kept both the Entra/project-RBAC authorization requirement and `dev`'s workflow-trigger predicate-compatible `FireEventAsync(..., payload: null, ...)` call shape.
+- `ProjectSettingsPage.tsx` kept both the Access-section RBAC/linked-account handlers and `dev`'s automatic-webhook creation UI/state.
+- `ProjectSettingsPage.test.tsx` kept mocks for both the RBAC/linked-account APIs and the new automatic webhook API.
+- Combined verification passed cleanly for the relevant backend slice (`Auth|ProjectRole|Rbac|WorkflowTrigger`: 278 passed, 34 skipped, 0 failed), and the branch was pushed without force-push.
+
+
+---
+
+## 2026-07-30 — Missing Postgres migration added for the shared auth-mode epoch table
+
+**Scope source merged:** `tank-postgres-migration-fix.md`.
+
+- PR #640's shared auth-mode epoch work required matching Postgres EF migration, designer, and model-snapshot updates in `Agentweaver.Api.Migrations.Postgres`, not just the SQLite migration in `apps/Agentweaver.Api/Migrations`.
+- Without that Postgres migration, `AuthModeEpochStartupService` booted into `42P01: relation "auth_mode_epochs" does not exist` as soon as startup/tests queried the table on a Postgres-backed app.
+- The follow-up landed as commit `cb3f2858`; whenever `MemoryDbContext` schema changes, the SQLite and Postgres migration chains must stay in lockstep.
+
+---
+
+## 2026-07-30T04:35:43Z — PR #640 shipped after the final Operator tool-policy fix and staging verification
+
+- After the Postgres migration follow-up, the only remaining CI failure was `OperatorToolApprovalPolicyTests`: `github_accounts_list` and `github_repos_list` were missing from the Operator tool approval policy's ungated classification list.
+- The coordinator added both MCP tools to `packages/Agentweaver.AgentRuntime/OperatorToolApprovalPolicy.cs` in commit `2f54998d`, restoring the intended rule that read-only GitHub account/repo discovery tools stay ungated for Operator runs.
+- With that fix in place, all PR #640 checks were green (`.NET tests`, `Web tests`, `lint`, `docs`, `changeset advisory`, `architecture diagrams`, and `node toolchain`), so the branch was squash-merged into `dev` as `60699a37297c04856c6c3b3f552882778c23adbc`.
+- The merged SHA was then deployed to the operator's staging AKS environment via `npm run azure:deploy-from-commit -- origin/dev` using deployment tag `60699a3`; all four images (`api`, `frontend`, `mcp`, `agent-host`) provenance-matched the source commit.
+- Post-deploy verification passed cleanly: `npm run azure:verify` reported 25/25 checks green against `https://agentweaver.6a67c46fa5c83b0001c97c7c.westus2.staging.aksapp.io/`.
+- Treat this as the closure checkpoint for the Entra ID dual-mode authn/authz overhaul: implementation, CI repair, merge, staging deploy, and live verification all completed on the merged `dev` SHA.

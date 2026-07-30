@@ -1,5 +1,6 @@
 namespace Agentweaver.Api.Security;
 
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Headers;
@@ -12,35 +13,19 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Authenticated caller resolved from the bearer GitHub token. Set on the request by
-/// <see cref="GitHubTokenAuthMiddleware"/> and read by the run endpoints to enforce
-/// per-run ownership.
+/// Authenticated caller attached to the request after bearer-token validation.
 /// </summary>
 public sealed class CallerContext
 {
     public required string User { get; init; }
-
-    /// <summary>
-    /// The signed-in GitHub login for this caller. A run is owned by the caller when its
-    /// <c>SubmittingUser</c> matches EITHER <see cref="User"/> OR this GitHub login.
-    /// </summary>
+    public string? EntraObjectId { get; init; }
+    public string? EntraTenantId { get; init; }
+    public IReadOnlyList<string> PlatformRoles { get; init; } = [];
+    public string? PrimaryPlatformRole { get; init; }
     public string? GitHubLogin { get; init; }
-
-    /// <summary>
-    /// True when this caller was authenticated from an Agentweaver-minted OAuth access token (T7),
-    /// rather than a raw GitHub token or static API key. For these callers org membership was already
-    /// enforced by the Authorization Server at token issuance (and re-checked on refresh), so the
-    /// org-authorization middleware trusts <see cref="Org"/> instead of making a GitHub org call.
-    /// </summary>
     public bool IsOAuthJwt { get; init; }
-
-    /// <summary>The org claim carried by an Agentweaver OAuth access token (T7). Null for other callers.</summary>
     public string? Org { get; init; }
 
-    /// <summary>
-    /// True when this caller owns a resource attributed to <paramref name="ownerUser"/>: it matches
-    /// the principal or the signed-in GitHub login (Ordinal, null-safe).
-    /// </summary>
     public bool Owns(string? ownerUser) =>
         ownerUser is not null &&
         (string.Equals(User, ownerUser, StringComparison.Ordinal) ||
@@ -48,19 +33,9 @@ public sealed class CallerContext
 }
 
 /// <summary>
-/// Validates a GitHub OAuth Bearer token on every API request and attaches the resolved
-/// caller identity. The GitHub /user endpoint is called once and the result is cached for 5 minutes
-/// (keyed by SHA-256 of the token). Non-API routes and health/ping paths are exempt.
-///
-/// Setting <c>Testing:BypassGitHubTokenAuth=true</c> in configuration skips the GitHub call and
-/// maps the bearer token directly to a caller using the <c>Auth:ApiKey/User</c> + <c>Auth:Keys</c>
-/// config (same shape as the API's Auth:Keys registry). For test harnesses only.
-///
-/// SECURITY (F1): the bypass is honored ONLY when <see cref="IHostEnvironment.IsDevelopment"/> is
-/// true, so a stray <c>Testing__BypassGitHubTokenAuth=true</c> env var cannot disable GitHub token
-/// validation in a Production deployment. A complementary startup guard
-/// (<see cref="TestingBypassGuard"/>) fails the process fast if any bypass flag is set under
-/// Production, so the flag can never silently be on in a shared/hosted environment.
+/// Deployment-mode-aware request authentication middleware.
+/// - Entra mode: validates Microsoft Entra bearer JWTs on every request.
+/// - GitHubLegacy mode: preserves the existing GitHub / MCP bearer-token behavior.
 /// </summary>
 public sealed class GitHubTokenAuthMiddleware
 {
@@ -72,8 +47,11 @@ public sealed class GitHubTokenAuthMiddleware
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly McpTokenService _tokenService;
     private readonly IConfiguration _configuration;
+    private readonly EntraAccessTokenValidator _entraTokenValidator;
+    private readonly AuthModeEpochService _authModeEpochService;
     private readonly ILogger<GitHubTokenAuthMiddleware> _logger;
     private readonly bool _bypassForTests;
+    private readonly AuthMode _authMode;
     private readonly Dictionary<string, string> _testApiKeyMap;
 
     public GitHubTokenAuthMiddleware(
@@ -82,6 +60,8 @@ public sealed class GitHubTokenAuthMiddleware
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         IHostEnvironment environment,
+        EntraAccessTokenValidator entraTokenValidator,
+        AuthModeEpochService authModeEpochService,
         McpTokenService tokenService,
         ILogger<GitHubTokenAuthMiddleware> logger)
     {
@@ -90,35 +70,31 @@ public sealed class GitHubTokenAuthMiddleware
         _httpClientFactory = httpClientFactory;
         _tokenService = tokenService;
         _configuration = configuration;
+        _entraTokenValidator = entraTokenValidator;
+        _authModeEpochService = authModeEpochService;
         _logger = logger;
+        _authMode = AuthModeResolver.Resolve(configuration);
 
-        // F1: only honor the test bypass in Development. In any non-Development environment the flag
-        // is ignored regardless of how it was injected (config file, env var, secret). The startup
-        // guard (TestingBypassGuard) additionally hard-fails the process under Production.
         var bypassConfigured = configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth");
         _bypassForTests = environment.IsDevelopment() && bypassConfigured;
 
         if (_bypassForTests)
         {
             _logger.LogCritical(
-                "GitHub token authentication BYPASS is ACTIVE (Testing:BypassGitHubTokenAuth=true, " +
-                "environment={Environment}). All bearer tokens on /api/* are accepted without GitHub " +
-                "validation. This is for local development/test ONLY and must never be enabled in a " +
-                "shared or production deployment.",
+                "GitHub token authentication BYPASS is ACTIVE (Testing:BypassGitHubTokenAuth=true, environment={Environment}).",
                 environment.EnvironmentName);
         }
         else if (bypassConfigured)
         {
             _logger.LogCritical(
-                "Testing:BypassGitHubTokenAuth=true was configured but IGNORED because the environment " +
-                "is '{Environment}' (not Development). GitHub token validation remains enforced.",
+                "Testing:BypassGitHubTokenAuth=true was configured but IGNORED because the environment is '{Environment}'.",
                 environment.EnvironmentName);
         }
 
         _testApiKeyMap = new Dictionary<string, string>(StringComparer.Ordinal);
         if (_bypassForTests)
         {
-            var singleKey  = configuration["Auth:ApiKey"];
+            var singleKey = configuration["Auth:ApiKey"];
             var singleUser = configuration["Auth:User"];
             if (!string.IsNullOrWhiteSpace(singleKey) && !string.IsNullOrWhiteSpace(singleUser))
                 _testApiKeyMap[singleKey] = singleUser;
@@ -126,7 +102,7 @@ public sealed class GitHubTokenAuthMiddleware
             foreach (var entry in configuration.GetSection("Auth:Keys").GetChildren())
             {
                 var token = entry["Token"];
-                var user  = entry["User"];
+                var user = entry["User"];
                 if (!string.IsNullOrWhiteSpace(token) && !string.IsNullOrWhiteSpace(user))
                     _testApiKeyMap[token] = user;
             }
@@ -139,13 +115,8 @@ public sealed class GitHubTokenAuthMiddleware
             || context.Request.Path.Equals("/api/ping", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/version", StringComparison.OrdinalIgnoreCase)
-            // Web sign-in bootstrap: the one-time code redemption is itself the credential
-            // (endpoint is AllowAnonymous). It MUST be reachable without a Bearer token —
-            // it is the call that EXCHANGES the code FOR the token. Without this exemption the
-            // token middleware 401s it before the anonymous endpoint runs → sign-in loop.
             || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
-            // GitHub webhook receiver (issue #53 follow-up): GitHub's delivery carries no Agentweaver
-            // bearer token. Its own HMAC-SHA256 signature check (GitHubWebhookEndpoints) is the auth.
+            || context.Request.Path.Equals("/api/auth/config", StringComparison.OrdinalIgnoreCase)
             || (context.Request.Path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
                 && context.Request.Path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true))
         {
@@ -160,80 +131,96 @@ public sealed class GitHubTokenAuthMiddleware
             return;
         }
 
-        // Test-only bypass: resolve caller from static config key map (no GitHub call).
+        if (!await _authModeEpochService.IsCurrentInstanceActiveAsync(context.RequestAborted).ConfigureAwait(false))
+        {
+            _logger.LogWarning(
+                "Rejecting authenticated request for {Path} because this instance is on a stale auth mode epoch.",
+                context.Request.Path);
+            await WriteUnauthorizedAsync(context).ConfigureAwait(false);
+            return;
+        }
+
         if (_bypassForTests)
         {
             var bypassToken = header[SchemePrefixStr.Length..].Trim();
-            var resolvedUser = _testApiKeyMap.TryGetValue(bypassToken, out var u) ? u : bypassToken;
+            var resolvedUser = _testApiKeyMap.TryGetValue(bypassToken, out var user) ? user : bypassToken;
             var githubLogin = await ResolveSignedInGitHubLoginAsync(context, resolvedUser).ConfigureAwait(false);
-            context.Items[CallerItemKey] = new CallerContext { User = resolvedUser, GitHubLogin = githubLogin };
+            var bypassCaller = new CallerContext { User = resolvedUser, GitHubLogin = githubLogin };
+            SetCaller(context, bypassCaller, BuildClaimsPrincipal(bypassCaller));
             await _next(context).ConfigureAwait(false);
             return;
         }
 
         var token = header[SchemePrefixStr.Length..].Trim();
 
-        // T7: Agentweaver-minted OAuth access token (JWT). Validate offline against the signing key
-        // (iss/aud/exp/RS256) so MCP→API calls carry the real per-user identity instead of collapsing
-        // onto the shared service key (fixes the confused-deputy limitation). A revoked jti is rejected.
-        var issuer = OAuthServerConfig.ResolveIssuer(context, _configuration);
-        var audience = OAuthServerConfig.ResolveAudience(issuer, _configuration);
-        if (_tokenService.TryValidateAccessToken(token, issuer, audience, out var claims) && claims is not null)
+        var internalKey = _configuration["Auth:ApiKey"];
+        if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
         {
-            var refreshStore = context.RequestServices.GetRequiredService<McpRefreshTokenStore>();
-            if (await refreshStore.IsJtiDeniedAsync(claims.Jti, context.RequestAborted).ConfigureAwait(false))
+            var allowedOrg = GitHubOrgList.ParseEntities(_configuration["Auth:GitHub:AllowedOrg"]).FirstOrDefault()?.RuleString;
+            var internalCaller = new CallerContext
+            {
+                User = "agentweaver-internal",
+                GitHubLogin = "agentweaver-internal",
+                IsOAuthJwt = _authMode == AuthMode.GitHubLegacy,
+                Org = _authMode == AuthMode.GitHubLegacy ? allowedOrg : null,
+                PlatformRoles = _authMode == AuthMode.Entra ? [PlatformRoles.PlatformAdmin] : [],
+                PrimaryPlatformRole = _authMode == AuthMode.Entra ? PlatformRoles.PlatformAdmin : null,
+            };
+            SetCaller(context, internalCaller, BuildClaimsPrincipal(internalCaller, isInternal: true));
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
+        if (_authMode == AuthMode.Entra)
+        {
+            var entraClaims = await _entraTokenValidator.ValidateAsync(token, context.RequestAborted).ConfigureAwait(false);
+            if (entraClaims is null)
             {
                 await WriteUnauthorizedAsync(context).ConfigureAwait(false);
                 return;
             }
 
-            context.Items[CallerItemKey] = new CallerContext
+            var caller = new CallerContext
             {
-                User = claims.Subject,
-                GitHubLogin = claims.GitHubLogin,
-                IsOAuthJwt = true,
-                Org = claims.Org,
+                User = entraClaims.ObjectId,
+                EntraObjectId = entraClaims.ObjectId,
+                EntraTenantId = entraClaims.TenantId,
+                PlatformRoles = entraClaims.RecognizedRoles,
+                PrimaryPlatformRole = entraClaims.PrimaryRole,
             };
+            SetCaller(context, caller, BuildClaimsPrincipal(caller, displayName: entraClaims.DisplayName));
             await _next(context).ConfigureAwait(false);
             return;
         }
 
-        // Internal service-to-service: agent loopback calls (RunWorkflowFactory, CoordinatorWorkflowFactory,
-        // BacklogDecomposeService) use the shared API key (Auth:ApiKey = mcp-api-key from Key Vault) as a
-        // Bearer token. The raw hex key is not a JWT and is not a GitHub token, so it must be validated
-        // here before the GitHub /user call — which would always return 401 for a non-GitHub credential.
-        // This path is production-safe: the key is a 32-byte random secret injected via CSI/Key Vault,
-        // not a human credential. Callers authenticated this way are attributed as "agentweaver-internal".
-        // IsOAuthJwt=true + Org=allowedOrg lets GitHubOrgAuthorizationMiddleware skip the GitHub org
-        // membership call (which would always fail for a non-GitHub credential).
-        var internalKey = _configuration["Auth:ApiKey"];
-        if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
+        var issuer = OAuthServerConfig.ResolveIssuer(context, _configuration);
+        var audience = OAuthServerConfig.ResolveAudience(issuer, _configuration);
+        if (_tokenService.TryValidateAccessToken(token, issuer, audience, out var oauthClaims) && oauthClaims is not null)
         {
-            // With a multi-rule allow-list, synthesize the caller against the FIRST rule
-            // (deterministic) so the downstream org middleware fast-path passes. Use the entity's
-            // canonical rule string so an internal caller can satisfy a team-scoped first rule too.
-            var allowedEntities = GitHubOrgList.ParseEntities(_configuration["Auth:GitHub:AllowedOrg"]);
-            var allowedOrg = allowedEntities.Count > 0 ? allowedEntities[0].RuleString : null;
-            context.Items[CallerItemKey] = new CallerContext
+            var refreshStore = context.RequestServices.GetRequiredService<McpRefreshTokenStore>();
+            if (await refreshStore.IsJtiDeniedAsync(oauthClaims.Jti, context.RequestAborted).ConfigureAwait(false))
             {
-                User = "agentweaver-internal",
-                GitHubLogin = "agentweaver-internal",
+                await WriteUnauthorizedAsync(context).ConfigureAwait(false);
+                return;
+            }
+
+            var oauthCaller = new CallerContext
+            {
+                User = oauthClaims.Subject,
+                GitHubLogin = oauthClaims.GitHubLogin,
                 IsOAuthJwt = true,
-                Org = allowedOrg,
+                Org = oauthClaims.Org,
             };
+            SetCaller(context, oauthCaller, BuildClaimsPrincipal(oauthCaller));
             await _next(context).ConfigureAwait(false);
             return;
         }
 
         var cacheKey = ComputeTokenHash(token);
-
         if (!_cache.TryGetValue(cacheKey, out string? login))
         {
             login = await ValidateGitHubTokenAsync(token, context.RequestAborted).ConfigureAwait(false);
-            _cache.Set(
-                cacheKey,
-                login,
-                login is not null ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(30));
+            _cache.Set(cacheKey, login, login is not null ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(30));
         }
 
         if (login is null)
@@ -242,7 +229,8 @@ public sealed class GitHubTokenAuthMiddleware
             return;
         }
 
-        context.Items[CallerItemKey] = new CallerContext { User = login, GitHubLogin = login };
+        var gitHubCaller = new CallerContext { User = login, GitHubLogin = login };
+        SetCaller(context, gitHubCaller, BuildClaimsPrincipal(gitHubCaller));
         await _next(context).ConfigureAwait(false);
     }
 
@@ -300,12 +288,41 @@ public sealed class GitHubTokenAuthMiddleware
         context.Response.ContentType = "application/json";
         await context.Response.WriteAsync("{\"error\":\"unauthorized\"}").ConfigureAwait(false);
     }
+
+    private static void SetCaller(HttpContext context, CallerContext caller, ClaimsPrincipal principal)
+    {
+        context.Items[CallerItemKey] = caller;
+        context.User = principal;
+    }
+
+    private static ClaimsPrincipal BuildClaimsPrincipal(
+        CallerContext caller,
+        bool isInternal = false,
+        string? displayName = null)
+    {
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, caller.User),
+            new("auth_mode", caller.EntraObjectId is not null ? AuthMode.Entra.ToString() : AuthMode.GitHubLegacy.ToString()),
+        };
+
+        if (!string.IsNullOrWhiteSpace(displayName))
+            claims.Add(new Claim(ClaimTypes.Name, displayName));
+        if (!string.IsNullOrWhiteSpace(caller.GitHubLogin))
+            claims.Add(new Claim("gh_login", caller.GitHubLogin));
+        if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
+            claims.Add(new Claim("oid", caller.EntraObjectId));
+        if (!string.IsNullOrWhiteSpace(caller.EntraTenantId))
+            claims.Add(new Claim("tid", caller.EntraTenantId));
+        foreach (var role in caller.PlatformRoles)
+            claims.Add(new Claim(ClaimTypes.Role, role));
+        if (isInternal)
+            claims.Add(new Claim("agentweaver_internal", "true"));
+
+        return new ClaimsPrincipal(new ClaimsIdentity(claims, "Agentweaver"));
+    }
 }
 
-/// <summary>
-/// Backward-compatibility shim: exposes <see cref="GetCaller"/> so existing endpoint code that
-/// references <c>ApiKeyAuthMiddleware.GetCaller(context)</c> continues to compile without changes.
-/// </summary>
 public static class ApiKeyAuthMiddleware
 {
     public static CallerContext GetCaller(HttpContext context) =>

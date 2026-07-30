@@ -72,6 +72,16 @@ public sealed class KeyVaultGitHubTokenStoreTests
     }
 
     [Fact]
+    public void SanitizeKey_LinkedIdentityScope_MapsToDistinctKvSafeName()
+    {
+        var a = KeyVaultSecretStore.SanitizeKey("user-link:00000000-0000-0000-0000-000000000001:alice");
+        var b = KeyVaultSecretStore.SanitizeKey("user-link:00000000-0000-0000-0000-000000000001:bob");
+        a.Should().StartWith("ghtok-user-link--");
+        a.Should().MatchRegex(@"^[0-9a-zA-Z\-]+$");
+        a.Should().NotBe(b);
+    }
+
+    [Fact]
     public void SanitizeKey_UserIds_AreReversible_ViaBase32()
     {
         // Base32Lower is deterministic and collision-free for the byte inputs.
@@ -224,6 +234,44 @@ public sealed class KeyVaultGitHubTokenStoreTests
         var (_, store) = MakeStore();
         var identity = await store.GetIdentityAsync(GitHubTokenScope.Installation);
         identity.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LinkIdentityAsync_RoundTripsMetadataAndDefaultSelection()
+    {
+        var (_, store) = MakeStore();
+        const string entraUserId = "00000000-0000-0000-0000-000000000010";
+
+        await store.LinkIdentityAsync(entraUserId, SampleToken(access: "tok-a", login: "alice"), isDefault: true, copilotEntitled: true);
+        await store.LinkIdentityAsync(entraUserId, SampleToken(access: "tok-b", login: "bob"), copilotEntitled: false);
+
+        var links = await store.ListLinkedIdentitiesAsync(entraUserId);
+        links.Should().HaveCount(2);
+        links.Should().ContainSingle(x => x.GitHubLogin == "alice" && x.IsDefault && x.CopilotEntitled == true);
+        links.Should().ContainSingle(x => x.GitHubLogin == "bob" && !x.IsDefault && x.CopilotEntitled == false);
+
+        var bobToken = await store.GetTokenAsync(GitHubTokenScope.ForLinkedIdentity(entraUserId, "bob"));
+        bobToken.Should().NotBeNull();
+        bobToken!.AccessToken.Should().Be("tok-b");
+    }
+
+    [Fact]
+    public async Task UnlinkIdentityAsync_ReassignsDefaultAndWritesTokenTombstone()
+    {
+        var (_, store) = MakeStore();
+        const string entraUserId = "00000000-0000-0000-0000-000000000011";
+
+        await store.LinkIdentityAsync(entraUserId, SampleToken(access: "tok-a", login: "alice"), isDefault: true);
+        await store.LinkIdentityAsync(entraUserId, SampleToken(access: "tok-b", login: "bob"));
+
+        (await store.UnlinkIdentityAsync(entraUserId, "alice")).Should().BeTrue();
+
+        var defaultLink = await store.GetDefaultLinkedIdentityAsync(entraUserId);
+        defaultLink.Should().NotBeNull();
+        defaultLink!.GitHubLogin.Should().Be("bob");
+
+        var removed = await store.GetAsync(GitHubTokenScope.ForLinkedIdentity(entraUserId, "alice"));
+        removed.Status.Should().Be(GitHubTokenStatus.SignedOut);
     }
 
     // ── ETag precondition failure → re-read and adopt ─────────────────────────

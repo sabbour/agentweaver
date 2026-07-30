@@ -628,6 +628,24 @@ public sealed record ProjectResponse
     [JsonPropertyName("source_blueprint_id")] public string? SourceBlueprintId { get; init; }
     [JsonPropertyName("source_blueprint_type")] public string? SourceBlueprintType { get; init; }
     [JsonPropertyName("allowed_workflow_ids")] public IReadOnlyList<string>? AllowedWorkflowIds { get; init; }
+    [JsonPropertyName("effective_role")] public string? EffectiveRole { get; init; }
+}
+
+/// <summary>Request body for granting or updating a Tier-2 project role assignment.</summary>
+public sealed record UpsertProjectRoleAssignmentRequest
+{
+    [JsonPropertyName("principal_id")] public string? PrincipalId { get; init; }
+    [JsonPropertyName("role")] public string? Role { get; init; }
+}
+
+/// <summary>One explicit project role assignment for the Entra-native Tier-2 RBAC layer.</summary>
+public sealed record ProjectRoleAssignmentResponse
+{
+    [JsonPropertyName("principal_id")] public required string PrincipalId { get; init; }
+    [JsonPropertyName("role")] public required string Role { get; init; }
+    [JsonPropertyName("scope")] public required string Scope { get; init; }
+    [JsonPropertyName("granted_by")] public required string GrantedBy { get; init; }
+    [JsonPropertyName("granted_at")] public required DateTimeOffset GrantedAt { get; init; }
 }
 
 public sealed record CreateProjectRunRequest
@@ -684,6 +702,49 @@ public sealed record GitHubAuthStatusResponse
     [JsonPropertyName("status")] public required string Status { get; init; }   // "signed_in" | "signed_out" | "never_signed_in"
     [JsonPropertyName("login")] public string? Login { get; init; }
     [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
+}
+
+public sealed record BeginGitHubAccountLinkResponse(
+    [property: JsonPropertyName("authorize_url")] string AuthorizeUrl);
+
+public sealed record LinkedGitHubAccountResponse
+{
+    [JsonPropertyName("login")] public required string Login { get; init; }
+    [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
+    [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
+    [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
+    [JsonPropertyName("linked_at")] public required DateTimeOffset LinkedAt { get; init; }
+}
+
+public sealed record UnlinkGitHubAccountResponse(
+    [property: JsonPropertyName("default_login")] string? DefaultLogin);
+
+public sealed record AccessibleGitHubRepositoryResponse
+{
+    [JsonPropertyName("full_name")] public required string FullName { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("private")] public required bool Private { get; init; }
+    [JsonPropertyName("default_branch")] public required string DefaultBranch { get; init; }
+    [JsonPropertyName("html_url")] public string? HtmlUrl { get; init; }
+    [JsonPropertyName("accessible_via_login")] public required string AccessibleViaLogin { get; init; }
+    [JsonPropertyName("permission")] public required string Permission { get; init; }
+}
+
+public sealed record UpdateProjectGitHubIdentityRequest
+{
+    [JsonPropertyName("github_login")] public string? GitHubLogin { get; init; }
+}
+
+public sealed record ProjectGitHubIdentityResponse
+{
+    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("project_override_login")] public string? ProjectOverrideLogin { get; init; }
+    [JsonPropertyName("effective_login")] public string? EffectiveLogin { get; init; }
+    [JsonPropertyName("effective_avatar_url")] public string? EffectiveAvatarUrl { get; init; }
+    [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
+    [JsonPropertyName("is_default")] public bool? IsDefault { get; init; }
+    [JsonPropertyName("linked_at")] public DateTimeOffset? LinkedAt { get; init; }
+    [JsonPropertyName("resolution_source")] public required string ResolutionSource { get; init; }
 }
 
 // -----------------------------------------------------------------------

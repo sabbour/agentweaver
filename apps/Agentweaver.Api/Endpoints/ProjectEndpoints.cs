@@ -24,6 +24,7 @@ using Agentweaver.Squad.Model;
 using Agentweaver.Squad.Squad;
 using Agentweaver.Squad.Analysis;
 using Agentweaver.Squad.Sync;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -69,6 +70,114 @@ app.MapGet("/api/projects/{id}", GetProjectAsync)
         return Task.CompletedTask;
     });
 
+// GET /api/projects/{id}/role-assignments — list explicit Tier-2 project members.
+app.MapGet("/api/projects/{id}/role-assignments", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    ProjectRoleAssignmentService roleAssignments,
+    CancellationToken ct) =>
+{
+    if (!IsEntraMode(httpContext))
+        return Results.NotFound();
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+
+    var assignments = await roleAssignments.ListAsync(projectId, ct);
+    return Results.Ok(assignments.Select(MapProjectRoleAssignment));
+})
+    .WithName("ListProjectRoleAssignments")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Lists the explicit Tier-2 project role assignments for an Entra-authorized project.";
+        return Task.CompletedTask;
+    });
+
+// POST /api/projects/{id}/role-assignments — grant or update a Tier-2 project member role.
+app.MapPost("/api/projects/{id}/role-assignments", async (
+    HttpContext httpContext,
+    string id,
+    UpsertProjectRoleAssignmentRequest request,
+    IProjectStore projectStore,
+    ProjectRoleAssignmentService roleAssignments,
+    CancellationToken ct) =>
+{
+    if (!IsEntraMode(httpContext))
+        return Results.NotFound();
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    if (string.IsNullOrWhiteSpace(request.PrincipalId))
+        return Results.BadRequest(new { error = "principal_id is required." });
+    if (!ProjectRoleExtensions.TryParse(request.Role, out var role))
+        return Results.BadRequest(new { error = "role must be Owner, Contributor, or Viewer." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var result = await roleAssignments.UpsertAsync(
+        projectId,
+        request.PrincipalId.Trim(),
+        role,
+        caller.EntraObjectId ?? caller.User,
+        ct);
+    return result.Status switch
+    {
+        ProjectRoleAssignmentMutationStatus.Ok => Results.Ok(MapProjectRoleAssignment(result.Assignment!)),
+        ProjectRoleAssignmentMutationStatus.LastOwnerConflict => Results.Conflict(new { error = result.Error }),
+        _ => Results.NotFound(),
+    };
+})
+    .WithName("UpsertProjectRoleAssignment")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Grants or updates a Tier-2 project role assignment. Only project Owners or platform admins may call this.";
+        return Task.CompletedTask;
+    });
+
+// DELETE /api/projects/{id}/role-assignments/{principalId} — revoke a Tier-2 project member role.
+app.MapDelete("/api/projects/{id}/role-assignments/{principalId}", async (
+    HttpContext httpContext,
+    string id,
+    string principalId,
+    IProjectStore projectStore,
+    ProjectRoleAssignmentService roleAssignments,
+    CancellationToken ct) =>
+{
+    if (!IsEntraMode(httpContext))
+        return Results.NotFound();
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    if (string.IsNullOrWhiteSpace(principalId))
+        return Results.BadRequest(new { error = "principal_id is required." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
+
+    var result = await roleAssignments.RemoveAsync(projectId, principalId.Trim(), ct);
+    return result.Status switch
+    {
+        ProjectRoleAssignmentMutationStatus.Ok => Results.NoContent(),
+        ProjectRoleAssignmentMutationStatus.LastOwnerConflict => Results.Conflict(new { error = result.Error }),
+        _ => Results.NotFound(),
+    };
+})
+    .WithName("DeleteProjectRoleAssignment")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Revokes one explicit Tier-2 project role assignment. The last explicit Owner cannot be removed until another Owner is granted.";
+        return Task.CompletedTask;
+    });
+
 // PATCH /api/projects/{id} — rename
 app.MapMethods("/api/projects/{id}", ["PATCH"], async (
     HttpContext httpContext,
@@ -85,7 +194,7 @@ app.MapMethods("/api/projects/{id}", ["PATCH"], async (
 
     var view = await projectService.GetViewAsync(projectId, ct);
     if (view is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
     bool updated;
     try { updated = await projectService.RenameAsync(projectId, request.Name!, ct); }
@@ -106,7 +215,7 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
 
     var view = await projectService.GetViewAsync(projectId, ct);
     if (view is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
     if (!IsAllowedModelId(request.DefaultModelGitHubCopilot) ||
         !IsAllowedModelId(request.DefaultModelMicrosoftFoundry) ||
@@ -144,7 +253,7 @@ app.MapPost("/api/projects/{id}/webhook-secret/rotate", async (
 
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
     var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
     var secretKey = project.WebhookSecret ?? $"github-webhook:{projectId}";
@@ -168,7 +277,7 @@ app.MapGet("/api/projects/{id}/github/repository-owners", async (
 
     var view = await projectService.GetViewAsync(projectId, ct);
     if (view is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     IReadOnlyList<GitHubRepositoryOwner> owners;
@@ -209,7 +318,7 @@ app.MapPost("/api/projects/{id}/github/repository", async (
 
     var view = await projectService.GetViewAsync(projectId, ct);
     if (view is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
     if (view.Project.Origin.Kind != ProjectOriginKind.Blank)
         return Results.Conflict(new
@@ -265,7 +374,7 @@ app.MapDelete("/api/projects/{id}", async (
 
     var deleteView = await projectService.GetViewAsync(projectId, ct);
     if (deleteView is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, deleteView.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await RequireProjectRoleAsync(httpContext, deleteView.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
     bool deleted;
     try
@@ -300,7 +409,7 @@ app.MapGet("/api/projects/{id}/runs", async (
 
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
 
     var runs = await runStore.GetRunsByProjectAsync(projectId, includeChildren: include_children ?? false, ct: ct);
     if (!string.IsNullOrWhiteSpace(agent))
@@ -396,6 +505,8 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         IRunStore runStore,
         RunWorkflowRegistry workflowRegistry,
         IProjectStore projectStore,
+        ProjectRoleAssignmentService roleAssignments,
+        IConfiguration configuration,
         IProjectWorkspaceProvider workspaceProvider,
         ILogger<Program> logger,
         CancellationToken ct)
@@ -491,6 +602,27 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                     request.DefaultModelMicrosoftFoundry, caller.User, ct);
             }
 
+            if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra &&
+                !string.IsNullOrWhiteSpace(caller.EntraObjectId ?? caller.User))
+            {
+                try
+                {
+                    await roleAssignments.SeedOwnerAsync(
+                        project.Id,
+                        (caller.EntraObjectId ?? caller.User)!,
+                        caller.EntraObjectId ?? caller.User,
+                        ct);
+                }
+                catch (Exception roleAssignmentEx)
+                {
+                    logger.LogError(roleAssignmentEx,
+                        "Project RBAC bootstrap failed for project {ProjectId}; rolling back project creation",
+                        project.Id);
+                    await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
+                    throw;
+                }
+            }
+
             if (blueprintToApply is not null)
             {
                 try
@@ -529,10 +661,12 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
 
                 var view = await projectService.GetViewAsync(project.Id, ct);
                 if (view is not null)
-                    return Results.Created($"/api/projects/{project.Id}", MapProject(view.Project, view.Available));
+                    return Results.Created(
+                        $"/api/projects/{project.Id}",
+                        await MapProjectAsync(httpContext, view.Project, view.Available, ct));
             }
 
-            return Results.Created($"/api/projects/{project.Id}", MapProject(project, available: true));
+            return Results.Created($"/api/projects/{project.Id}", await MapProjectAsync(httpContext, project, available: true, ct));
         }
         catch (ArgumentException ex)
         {
@@ -566,15 +700,39 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     public static async Task<IResult> ListProjectsAsync(
         HttpContext httpContext,
         ProjectService projectService,
+        IConfiguration configuration,
+        IProjectRoleAuthorizationService projectRoles,
         int? page,
         int? page_size,
         CancellationToken ct)
     {
         var views = await projectService.ListViewsAsync(ct);
-        var projects = views
-            .Where(v => IsProjectOwner(httpContext, v.Project))
-            .Select(v => MapProject(v.Project, v.Available))
-            .ToList();
+        List<ProjectResponse> projects;
+        if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra)
+        {
+            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            if (projectRoles.IsPlatformAdmin(caller))
+            {
+                projects = views
+                    .Select(v => MapProject(v.Project, v.Available, ProjectRole.Owner))
+                    .ToList();
+            }
+            else
+            {
+                var visibleRoles = await projectRoles.ListExplicitRolesAsync(caller, ct).ConfigureAwait(false);
+                projects = views
+                    .Where(v => visibleRoles.ContainsKey(v.Project.Id))
+                    .Select(v => MapProject(v.Project, v.Available, visibleRoles[v.Project.Id]))
+                    .ToList();
+            }
+        }
+        else
+        {
+            projects = views
+                .Where(v => IsProjectOwner(httpContext, v.Project))
+                .Select(v => MapProject(v.Project, v.Available))
+                .ToList();
+        }
         return Results.Ok(Paging.Of(projects, page, page_size));
     }
 
@@ -597,8 +755,8 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
 
         var view = await projectService.GetViewAsync(projectId, ct);
         if (view is null) return Results.NotFound();
-        if (!IsProjectOwner(httpContext, view.Project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-        return Results.Ok(MapProject(view.Project, view.Available));
+        if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+        return Results.Ok(await MapProjectAsync(httpContext, view.Project, view.Available, ct));
     }
 
     /// <summary>
@@ -639,7 +797,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
 
         var project = await projectStore.GetAsync(projectId, ct);
         if (project is null) return Results.NotFound();
-        if (!IsProjectOwner(httpContext, project)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+        if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Contributor, ct) is { } forbid) return forbid;
         if (!IsAllowedModelId(request.ModelId))
             return Results.BadRequest(new { error = "model_id is not allowed." });
 
@@ -706,7 +864,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         return false;
     }
 
-static ProjectResponse MapProject(Project p, bool available) => new()
+static ProjectResponse MapProject(Project p, bool available, ProjectRole? effectiveRole = null) => new()
 {
     ProjectId = p.Id.ToString(),
     Name = p.Name,
@@ -728,6 +886,7 @@ static ProjectResponse MapProject(Project p, bool available) => new()
     SourceBlueprintId = p.SourceBlueprintId,
     SourceBlueprintType = p.SourceBlueprintType,
     AllowedWorkflowIds = p.AllowedWorkflowIds,
+    EffectiveRole = effectiveRole?.ToApiString(),
 };
 
 private static readonly Regex AgentNameSlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
@@ -738,6 +897,43 @@ private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.P
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     return caller.Owns(project.Owner);
 }
+
+private static async Task<ProjectResponse> MapProjectAsync(HttpContext httpContext, Project project, bool available, CancellationToken ct)
+{
+    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+    if (AuthModeResolver.Resolve(configuration) != AuthMode.Entra)
+        return MapProject(project, available);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var roles = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
+    var effectiveRole = await roles.GetEffectiveRoleAsync(caller, project.Id, ct).ConfigureAwait(false);
+    return MapProject(project, available, effectiveRole);
+}
+
+private static async Task<IResult?> RequireProjectRoleAsync(
+    HttpContext httpContext,
+    Project project,
+    ProjectRole minimumRole,
+    CancellationToken ct)
+{
+    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+    return await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
+}
+
+private static bool IsEntraMode(HttpContext httpContext)
+{
+    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+    return AuthModeResolver.Resolve(configuration) == AuthMode.Entra;
+}
+
+private static ProjectRoleAssignmentResponse MapProjectRoleAssignment(ProjectRoleAssignment assignment) => new()
+{
+    PrincipalId = assignment.PrincipalId,
+    Role = assignment.Role.ToApiString(),
+    Scope = assignment.Scope,
+    GrantedBy = assignment.GrantedBy,
+    GrantedAt = assignment.GrantedAt,
+};
 
 private static bool IsAllowedModelId(string? modelId) =>
     string.IsNullOrWhiteSpace(modelId) || AllowedModelRegex.IsMatch(modelId.Trim());

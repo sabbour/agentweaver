@@ -309,7 +309,7 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
 
       {/* Footer: signed-in persona + status dot + version badge */}
       <div className="aw-rail-footer">
-        <GitHubSignIn />
+        <GitHubSignIn projectId={projectId} />
         <div className="aw-rail-footer__meta">
           <StatusDot />
           <Badge

@@ -20,6 +20,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
     private readonly IGitHubOrgAuthorizationService _authzService;
     private readonly ILogger<GitHubOrgAuthorizationMiddleware> _logger;
     private readonly bool _bypassForTests;
+    private readonly AuthMode _authMode;
 
     // Paths that bypass the org/team check entirely.
     private static readonly string[] ExemptPrefixes =
@@ -54,6 +55,7 @@ public sealed class GitHubOrgAuthorizationMiddleware
         _next = next;
         _authzService = authzService;
         _logger = logger;
+        _authMode = AuthModeResolver.Resolve(configuration);
 
         // F1: org-authorization bypass is honored ONLY in Development. In any other environment the
         // flag is ignored so org membership enforcement cannot be silently disabled in production via
@@ -79,6 +81,12 @@ public sealed class GitHubOrgAuthorizationMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
+        if (_authMode != AuthMode.GitHubLegacy)
+        {
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var path = context.Request.Path;
 
         if (IsExempt(path))
