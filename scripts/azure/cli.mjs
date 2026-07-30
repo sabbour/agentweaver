@@ -8,6 +8,7 @@ import * as logDefault from "./lib/log.mjs";
 
 const SUBCOMMANDS = Object.freeze([
   "provision-infra",
+  "setup-entra-app",
   "deploy-from-local",
   "deploy-from-commit",
   "deploy-from-release",
@@ -24,6 +25,7 @@ Usage:
 
 Commands:
   provision-infra      Provision/reconcile Azure infrastructure and perform its initial deployment.
+  setup-entra-app      Create/reconcile the single-tenant Entra app registration used by Agentweaver.
   deploy-from-local    Deploy current local HEAD using a SHA image identifier.
   deploy-from-commit   Deploy an arbitrary exact commit without switching the caller's checkout.
   deploy-from-release  Deploy an existing published vX.Y.Z release.
@@ -68,6 +70,8 @@ export async function run(argv = [], opts = {}) {
     switch (command) {
       case "provision-infra":
         return importFn("./provision-infra.mjs");
+      case "setup-entra-app":
+        return importFn("./setup-entra-app.mjs");
       case "deploy-from-local":
         return importFn("./deploy-from-local.mjs");
       case "deploy-from-commit":

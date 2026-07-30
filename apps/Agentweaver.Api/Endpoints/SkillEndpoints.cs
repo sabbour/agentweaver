@@ -8,6 +8,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -32,7 +33,8 @@ public static class SkillEndpoints
 
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
             var project = await projects.GetAsync(projectId, ct);
-            if (project is null || !caller.Owns(project.Owner)) return Results.NotFound();
+            if (project is null) return Results.NotFound();
+            if (await RequireProjectRoleAsync(http, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
             var blueprint = blueprints.GetPredefinedById(body.BlueprintId);
             if (blueprint is null) return Results.BadRequest(new { error = "Unknown predefined blueprint." });
 
@@ -61,7 +63,8 @@ public static class SkillEndpoints
 
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
             var project = await projects.GetAsync(projectId, ct);
-            if (project is null || !caller.Owns(project.Owner)) return Results.NotFound();
+            if (project is null) return Results.NotFound();
+            if (await RequireProjectRoleAsync(http, project, ProjectRole.Contributor, ct) is { } forbid) return forbid;
             var blueprint = blueprints.GetPredefinedById(body.BlueprintId);
             if (blueprint is null) return Results.BadRequest(new { error = "Unknown predefined blueprint." });
 
@@ -200,7 +203,7 @@ public static class SkillEndpoints
         app.MapGet("/api/projects/{id}/skill-marketplaces", async (
             HttpContext http, string id, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
         {
-            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Viewer, ct);
             if (failure is not null) return failure;
             var list = await sources.ListForProjectAsync(project!.Id, ct);
             return Results.Ok(list.Select(m => new
@@ -219,7 +222,7 @@ public static class SkillEndpoints
         app.MapPost("/api/projects/{id}/skill-marketplaces/sources", async (
             HttpContext http, string id, AddMarketplaceSourceRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
         {
-            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Contributor, ct);
             if (failure is not null) return failure;
             if (body is null || string.IsNullOrWhiteSpace(body.Repository))
                 return Results.BadRequest(new { error = "A GitHub repository URL or owner/repo is required." });
@@ -251,7 +254,7 @@ public static class SkillEndpoints
         app.MapDelete("/api/projects/{id}/skill-marketplaces/sources/{name}", async (
             HttpContext http, string id, string name, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, CancellationToken ct) =>
         {
-            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Contributor, ct);
             if (failure is not null) return failure;
             var outcome = await sources.RemoveSourceAsync(project!.Id, name, ct);
             return outcome == AddSourceOutcome.Ok ? Results.NoContent() : Results.NotFound();
@@ -260,7 +263,7 @@ public static class SkillEndpoints
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/browse", async (
             HttpContext http, string id, string marketplace, MarketplaceBrowseRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
         {
-            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Viewer, ct);
             if (failure is not null) return failure;
             var projectId = project!.Id;
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
@@ -289,7 +292,7 @@ public static class SkillEndpoints
         app.MapPost("/api/projects/{id}/skill-marketplaces/{marketplace}/import", async (
             HttpContext http, string id, string marketplace, MarketplaceImportRequest body, IProjectStore projects, IConfiguration configuration, MarketplaceSourceService sources, SkillCatalogService svc, CancellationToken ct) =>
         {
-            var (failure, project) = await ProjectAuthorization.ResolveOwnedProjectAsync(http, id, projects, configuration, ct);
+            var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Contributor, ct);
             if (failure is not null) return failure;
             var projectId = project!.Id;
             var caller = ApiKeyAuthMiddleware.GetCaller(http);
@@ -508,4 +511,14 @@ public static class SkillEndpoints
     public sealed record SkillDefaultsApplyRequest(
         [property: JsonPropertyName("blueprint_id")] string? BlueprintId,
         [property: JsonPropertyName("digest")] string? Digest);
+
+    private static async Task<IResult?> RequireProjectRoleAsync(
+        HttpContext httpContext,
+        Project project,
+        ProjectRole minimumRole,
+        CancellationToken ct)
+    {
+        var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+        return await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
+    }
 }

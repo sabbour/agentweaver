@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Agentweaver.Api.Backlog;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -7,6 +8,8 @@ using Agentweaver.Api.Projects;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -94,9 +97,8 @@ public static class BacklogDecomposeEndpoints
 
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
+            if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (!caller.Owns(project.Owner))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
 
             // When a ref is supplied, delegate to the ref-aware workspace service.
             var @ref = httpContext.Request.Query["ref"].FirstOrDefault();
@@ -138,8 +140,7 @@ public static class BacklogDecomposeEndpoints
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (!caller.Owns(project.Owner))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Contributor, ct) is { } forbid) return forbid;
 
             string fileContent;
             string normalizedPath;
@@ -157,7 +158,8 @@ public static class BacklogDecomposeEndpoints
                 var run = await runStore.GetAsync(parsedRunId, ct);
                 if (run is null || run.ProjectId != projectId)
                     return Results.NotFound(new { error = "Coordinator run not found for this project." });
-                if (!caller.Owns(run.SubmittingUser))
+                if (AuthModeResolver.Resolve(httpContext.RequestServices.GetRequiredService<IConfiguration>()) == AuthMode.GitHubLegacy
+                    && !caller.Owns(run.SubmittingUser))
                     return Results.StatusCode(StatusCodes.Status403Forbidden);
 
                 var spec = await db.OutcomeSpecs
@@ -399,4 +401,14 @@ public static class BacklogDecomposeEndpoints
 
         return nodes;
     }
-}
+
+        private static async Task<IResult?> RequireProjectRoleAsync(
+            HttpContext httpContext,
+            Project project,
+            ProjectRole minimumRole,
+            CancellationToken ct)
+        {
+            var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            return await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
+        }
+    }

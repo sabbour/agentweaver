@@ -136,6 +136,16 @@ Tools for managing coordinator runs.
 
 GitHub OAuth tools.
 
+Current GitHub MCP helpers cover:
+
+| Tool | Description |
+|------|-------------|
+| `github_status` | Check the current GitHub authentication status. |
+| `github_accounts_list` | List the current GitHub user plus reachable GitHub org accounts. |
+| `github_repos_list` | List repositories for the current GitHub user or a selected reachable org account. |
+| `github_signin` | Start the GitHub device flow sign-in. |
+| `github_signout` | Sign out of GitHub authentication. |
+
 ### Memory
 
 Project memory tools.

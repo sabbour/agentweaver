@@ -3,6 +3,7 @@ using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using k8s;
 using LibGit2Sharp;
+using Microsoft.AspNetCore.Authorization;
 using Agentweaver.Api;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
@@ -225,11 +226,7 @@ else
     // Key Vault deployment. Harmless in single-node/local dev.
     builder.Services.AddSingleton<ISecretStore, InMemorySecretStore>();
 }
-var scopeProviderName = builder.Configuration["Auth:GitHub:ScopeProvider"] ?? "caller";
-if (string.Equals(scopeProviderName, "installation", StringComparison.OrdinalIgnoreCase))
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeProvider>();
-else
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider, CallerTokenScopeProvider>();
+builder.Services.AddSingleton<IGitHubTokenScopeProvider, CallerTokenScopeProvider>();
 builder.Services.AddSingleton<IGitHubAccessTokenProvider, GitHubTokenRefreshService>();
 builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
 builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
@@ -237,9 +234,24 @@ builder.Services.AddHttpClient("github-authz")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddHttpClient("entra-oidc")
+    .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<EntraAccessTokenValidator>();
+builder.Services.AddSingleton<AuthModeEpochService>();
+builder.Services.AddHostedService<AuthModeEpochStartupService>();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("PlatformAccess", policy =>
+        policy.Requirements.Add(new PlatformRoleRequirement()));
+});
+builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHandler>();
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubRepositoryClient, Agentweaver.Api.Github.GitHubRepositoryClient>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
+builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
+builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
+builder.Services.AddScoped<ProjectGitHubIdentityService>();
+builder.Services.AddScoped<LinkedGitHubAccountService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
     Agentweaver.Api.Blueprints.HttpContextAuthenticatedOwnerContext>();
@@ -295,13 +307,20 @@ if (!isWorker)
     {
         builder.Services.AddSingleton<EfProjectStore>();
         builder.Services.AddSingleton<IProjectStore>(sp => sp.GetRequiredService<EfProjectStore>());
+        builder.Services.AddSingleton<EfProjectRoleAssignmentStore>();
+        builder.Services.AddSingleton<IProjectRoleAssignmentStore>(sp => sp.GetRequiredService<EfProjectRoleAssignmentStore>());
     }
     else
     {
         builder.Services.AddSingleton<SqliteProjectStore>();
         builder.Services.AddSingleton<IProjectStore>(sp => sp.GetRequiredService<SqliteProjectStore>());
+        builder.Services.AddSingleton<SqliteProjectRoleAssignmentStore>();
+        builder.Services.AddSingleton<IProjectRoleAssignmentStore>(sp => sp.GetRequiredService<SqliteProjectRoleAssignmentStore>());
     }
 }
+builder.Services.AddSingleton<ILegacyProjectRoleBackfillService, LegacyProjectRoleBackfillService>();
+builder.Services.AddSingleton<IProjectRoleAuthorizationService, ProjectRoleAuthorizationService>();
+builder.Services.AddSingleton<ProjectRoleAssignmentService>();
 builder.Services.AddSingleton<LocalFilesystemWorkspaceProvider>();
 builder.Services.AddSingleton<PersistentVolumeWorkspaceProvider>();
 builder.Services.AddSingleton<IProjectWorkspaceProvider>(sp =>
@@ -770,10 +789,7 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                     npg => npg.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres"));
                 break;
             default: // sqlite
-                var basePath = builder.Configuration["Database:Path"] is string p && !string.IsNullOrWhiteSpace(p)
-                    ? Path.GetDirectoryName(Path.GetFullPath(p))!
-                    : AppPaths.DataDirectory;
-                opts.UseSqlite($"Data Source={Path.Combine(basePath, "memory.db")}",
+                opts.UseSqlite($"Data Source={SqliteMemoryDbPathResolver.Resolve(builder.Configuration)}",
                     b => b.MigrationsAssembly("Agentweaver.Api"));
                 break;
         }
@@ -1021,8 +1037,13 @@ else
 
     app.UseCors();
     app.UseRateLimiter();
+    var authMode = AuthModeResolver.Resolve(app.Configuration);
+    app.Logger.LogInformation("Running in {AuthMode} auth mode.", authMode);
     app.UseMiddleware<GitHubTokenAuthMiddleware>();
-    app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
+    if (authMode == AuthMode.Entra)
+        app.UseMiddleware<PlatformRoleAuthorizationMiddleware>();
+    else
+        app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
 
     // spec-006 (api-harness): serves the OpenAPI document at /openapi/v1.json describing every
     // minimal-API route mapped below (request/response shapes included), so the LLM-driven curl
@@ -1034,6 +1055,7 @@ else
 
     app.MapRunEndpoints();
     app.MapProjectEndpoints();
+    app.MapProjectGitHubIdentityEndpoints();
     app.MapProjectWorkspaceEndpoints();
     app.MapSkillEndpoints();
     app.MapBacklogEndpoints();

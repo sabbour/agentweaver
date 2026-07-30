@@ -1,6 +1,8 @@
 using FluentAssertions;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
@@ -48,7 +50,23 @@ public sealed class SkillCatalogTests : IDisposable
         $"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n";
 
     private static SkillCatalogService DiscoveryService() => new(
-        null!, null!, null!, new SkillParser(), null!, null!, NullLogger<SkillCatalogService>.Instance);
+        null!,
+        null!,
+        null!,
+        new SkillParser(),
+        null!,
+        null!,
+        NullLogger<SkillCatalogService>.Instance,
+        projectRoles: new AllowAllProjectRoles(),
+        configuration: new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
+
+    private sealed class AllowAllProjectRoles : IProjectRoleAuthorizationService
+    {
+        public bool IsPlatformAdmin(CallerContext caller) => false;
+        public Task<ProjectRole?> GetEffectiveRoleAsync(CallerContext caller, ProjectId projectId, CancellationToken ct = default) => Task.FromResult<ProjectRole?>(ProjectRole.Owner);
+        public Task<bool> HasRoleAsync(CallerContext caller, ProjectId projectId, ProjectRole minimumRole, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<IReadOnlyDictionary<ProjectId, ProjectRole>> ListExplicitRolesAsync(CallerContext caller, CancellationToken ct = default) => Task.FromResult<IReadOnlyDictionary<ProjectId, ProjectRole>>(new Dictionary<ProjectId, ProjectRole>());
+    }
 
     // ── Parser ────────────────────────────────────────────────────────────────
 

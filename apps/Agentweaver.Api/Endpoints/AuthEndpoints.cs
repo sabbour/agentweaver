@@ -27,6 +27,43 @@ public static class AuthEndpoints
 {
     public static void MapAuthEndpoints(this WebApplication app)
     {
+app.MapGet("/api/auth/config", (IConfiguration configuration) =>
+{
+    var authMode = AuthModeResolver.Resolve(configuration);
+    var tenantId = configuration["Auth:Entra:TenantId"];
+    var authority = configuration["Auth:Entra:Authority"];
+    if (string.IsNullOrWhiteSpace(authority) && !string.IsNullOrWhiteSpace(tenantId))
+        authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
+
+    return Results.Ok(new
+    {
+        mode = authMode.ToString(),
+        entra = authMode == AuthMode.Entra
+            ? new
+            {
+                client_id = configuration["Auth:Entra:ClientId"],
+                tenant_id = tenantId,
+                authority,
+            }
+            : null,
+    });
+}).AllowAnonymous();
+
+app.MapGet("/api/auth/context", (HttpContext httpContext, IConfiguration configuration) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    return Results.Ok(new
+    {
+        mode = AuthModeResolver.Resolve(configuration).ToString(),
+        user_id = caller.User,
+        github_login = caller.GitHubLogin,
+        entra_object_id = caller.EntraObjectId,
+        entra_tenant_id = caller.EntraTenantId,
+        platform_roles = caller.PlatformRoles,
+        primary_platform_role = caller.PrimaryPlatformRole,
+    });
+});
+
 // GET /auth/github/authorize — begin OAuth redirect flow
 app.MapGet("/auth/github/authorize", async (HttpContext httpContext, GitHubOAuthRedirectService oauthService, CancellationToken ct) =>
 {
@@ -60,6 +97,7 @@ app.MapGet("/auth/github/callback", async (
     string? state,
     string? error,
     GitHubOAuthRedirectService oauthService,
+    LinkedGitHubAccountService linkedAccountService,
     Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService oauthBroker,
     WebSessionExchangeService webSessionExchange,
     IConfiguration configuration,
@@ -90,10 +128,7 @@ app.MapGet("/auth/github/callback", async (
         return Results.Redirect($"{result.RedirectUri}{separator}{query}");
     }
 
-    if (!string.IsNullOrWhiteSpace(error))
-        return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
-
-    if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
+    if (string.IsNullOrWhiteSpace(state))
         return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
 
     // Login-CSRF protection (Seraph findings-auth Alert 6): the `state` returned by GitHub MUST match
@@ -104,6 +139,26 @@ app.MapGet("/auth/github/callback", async (
     OAuthStateCookie.Clear(httpContext);
     if (string.IsNullOrEmpty(boundState) || !OAuthStateCookie.ConstantTimeEquals(boundState, state))
         return Results.Redirect($"{frontendUrl}/?auth=error&reason=state_mismatch");
+
+    if (!string.IsNullOrWhiteSpace(error))
+        return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
+
+    if (string.IsNullOrWhiteSpace(code))
+        return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
+
+    if (await linkedAccountService.IsPendingStateAsync(state, ct).ConfigureAwait(false))
+    {
+        try
+        {
+            var linked = await linkedAccountService.CompleteLinkAsync(code, state, ct).ConfigureAwait(false);
+            return Results.Redirect(
+                $"{frontendUrl}/?auth=github_linked&login={Uri.EscapeDataString(linked.GitHubLogin)}");
+        }
+        catch (Exception ex)
+        {
+            return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
+        }
+    }
 
     try
     {
@@ -137,6 +192,96 @@ app.MapPost("/api/auth/session/exchange", async (
 
     return Results.Ok(new SessionExchangeResponse(accessToken, login));
 }).AllowAnonymous();
+
+app.MapGet("/api/auth/github-accounts", async (
+    HttpContext httpContext,
+    LinkedGitHubAccountService linkedAccountService,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
+        return Results.Conflict(new { error = "Linked GitHub accounts require Entra sign-in." });
+
+    var links = await linkedAccountService.ListLinkedAccountsAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
+    return Results.Ok(links.Select(link => new LinkedGitHubAccountResponse
+    {
+        Login = link.GitHubLogin,
+        AvatarUrl = link.AvatarUrl,
+        IsDefault = link.IsDefault,
+        CopilotEntitled = link.CopilotEntitled,
+        LinkedAt = link.LinkedAt,
+    }));
+});
+
+app.MapPost("/api/auth/github-accounts/link", async (
+    HttpContext httpContext,
+    LinkedGitHubAccountService linkedAccountService,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
+        return Results.Conflict(new { error = "Linked GitHub accounts require Entra sign-in." });
+
+    var authorizeUrl = await linkedAccountService.BeginLinkAuthorizationAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
+    var state = OAuthStateCookie.ExtractState(authorizeUrl);
+    if (state is not null)
+        OAuthStateCookie.Set(httpContext, state);
+
+    return Results.Ok(new BeginGitHubAccountLinkResponse(authorizeUrl));
+});
+
+app.MapDelete("/api/auth/github-accounts/{login}", async (
+    HttpContext httpContext,
+    string login,
+    LinkedGitHubAccountService linkedAccountService,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
+        return Results.Conflict(new { error = "Linked GitHub accounts require Entra sign-in." });
+
+    var result = await linkedAccountService.UnlinkAsync(caller.EntraObjectId!, login, ct).ConfigureAwait(false);
+    if (!result.Removed)
+        return Results.NotFound();
+
+    return Results.Ok(new UnlinkGitHubAccountResponse(result.NewDefaultLogin));
+});
+
+app.MapPut("/api/auth/github-accounts/{login}/default", async (
+    HttpContext httpContext,
+    string login,
+    LinkedGitHubAccountService linkedAccountService,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
+        return Results.Conflict(new { error = "Linked GitHub accounts require Entra sign-in." });
+
+    var changed = await linkedAccountService.SetDefaultAsync(caller.EntraObjectId!, login, ct).ConfigureAwait(false);
+    return changed ? Results.NoContent() : Results.NotFound();
+});
+
+app.MapGet("/api/auth/github-accounts/accessible-repos", async (
+    HttpContext httpContext,
+    LinkedGitHubAccountService linkedAccountService,
+    CancellationToken ct) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
+        return Results.Conflict(new { error = "Linked GitHub accounts require Entra sign-in." });
+
+    var repos = await linkedAccountService.ListAccessibleRepositoriesAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
+    return Results.Ok(repos.Select(repo => new AccessibleGitHubRepositoryResponse
+    {
+        FullName = repo.FullName,
+        Description = repo.Description,
+        Private = repo.Private,
+        DefaultBranch = repo.DefaultBranch,
+        HtmlUrl = repo.HtmlUrl,
+        AccessibleViaLogin = repo.AccessibleViaLogin,
+        Permission = repo.Permission,
+    }));
+});
 
 // POST /api/auth/github/device — start device flow
 app.MapPost("/api/auth/github/device", async (

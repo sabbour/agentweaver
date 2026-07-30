@@ -129,7 +129,9 @@ public static class OperatorToolApprovalPolicy
         "list_project_workspace",
         "list_project_workspace_refs",
 
-        // GitHub auth status (session-scoped, no platform state mutation).
+        // GitHub auth status + read-only account/repo listing (session-scoped, no platform state mutation).
+        "github_accounts_list",
+        "github_repos_list",
         "github_signin",
         "github_signout",
         "github_status",

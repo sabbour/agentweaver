@@ -1,6 +1,9 @@
 using Agentweaver.Api.Diagnostics;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -75,8 +78,9 @@ public static class DiagnosticsEndpoints
             var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
             if (project is null) return Results.NotFound();
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (!caller.Owns(project.Owner)) return Results.Forbid();
+            var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+            if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid)
+                return forbid;
 
             var dto = await service.GetProjectDiagnosticsAsync(project, ct).ConfigureAwait(false);
             return Results.Ok(dto);

@@ -2,11 +2,13 @@ using System.Net;
 using System.Text;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
@@ -402,7 +404,9 @@ public sealed class SkillMarketplaceBrowseTests
         tokenStore,
         NullLogger<SkillCatalogService>.Instance,
         accessTokenProvider: null,
-        treeClient: treeClient);
+        treeClient: treeClient,
+        projectRoles: new AllowAllProjectRoles(),
+        configuration: new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
 
     private static HttpResponseMessage Json(string json) =>
         new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
@@ -487,6 +491,14 @@ public sealed class SkillMarketplaceBrowseTests
     private sealed class InstallationScopeProvider : IGitHubTokenScopeProvider
     {
         public GitHubTokenScope Resolve(string? userId) => GitHubTokenScope.Installation;
+    }
+
+    private sealed class AllowAllProjectRoles : IProjectRoleAuthorizationService
+    {
+        public bool IsPlatformAdmin(CallerContext caller) => false;
+        public Task<ProjectRole?> GetEffectiveRoleAsync(CallerContext caller, ProjectId projectId, CancellationToken ct = default) => Task.FromResult<ProjectRole?>(ProjectRole.Owner);
+        public Task<bool> HasRoleAsync(CallerContext caller, ProjectId projectId, ProjectRole minimumRole, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<IReadOnlyDictionary<ProjectId, ProjectRole>> ListExplicitRolesAsync(CallerContext caller, CancellationToken ct = default) => Task.FromResult<IReadOnlyDictionary<ProjectId, ProjectRole>>(new Dictionary<ProjectId, ProjectRole>());
     }
 
     private sealed class SignedOutTokenStore : IGitHubTokenStore

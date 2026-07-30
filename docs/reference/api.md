@@ -86,6 +86,8 @@ Assistant endpoints back the **Sessions** feature (see [The Assistant and Sessio
 | `GET` | `/api/projects/{id}` | Get a project by id |
 | `PATCH` | `/api/projects/{id}` | Rename a project |
 | `PUT` | `/api/projects/{id}/provider-settings` | Update provider and model defaults |
+| `GET` | `/api/projects/{id}/github-identity` | Get the effective linked GitHub identity for the caller in this project |
+| `PUT` | `/api/projects/{id}/github-identity` | Set or clear the caller's per-project linked GitHub identity override |
 | `DELETE` | `/api/projects/{id}` | Delete a project (record only; cancels active runs) |
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
 | `POST` | `/api/projects/{id}/runs` | Deprecated direct run submission; returns `410 Gone` |
@@ -154,9 +156,16 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/auth/github/device` | Start the GitHub device authorization flow |
 | `POST` | `/api/auth/github/poll` | Poll the device flow for completion |
 | `GET` | `/api/auth/github` | Get current GitHub authentication status |
+| `GET` | `/api/auth/github-accounts` | List the caller's linked GitHub accounts (default flag, avatar, Copilot status, linked time) |
+| `POST` | `/api/auth/github-accounts/link` | Start a second GitHub OAuth round-trip that links another GitHub account to the current Entra user |
+| `DELETE` | `/api/auth/github-accounts/{login}` | Unlink one linked GitHub account; if it was default, the store promotes the next remaining linked account |
+| `PUT` | `/api/auth/github-accounts/{login}/default` | Make a linked GitHub account the caller's default account |
+| `GET` | `/api/auth/github-accounts/accessible-repos` | Enumerate repositories reachable across all linked GitHub accounts, tagged with the login and GitHub-reported permission level |
 | `GET` | `/api/github/accounts` | List the signed-in user's personal account followed by organizations |
 | `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user or selected account |
 | `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
+
+The linked-account and per-project GitHub-identity endpoints are available only in Entra auth mode and require an authenticated caller with an Entra object id. `GET /api/projects/{id}/github-identity` requires project `Viewer` or higher; `PUT /api/projects/{id}/github-identity` requires project `Contributor` or higher. These endpoints surface the real GitHub permissions reported by each linked identity; Agentweaver project roles do not simulate or override GitHub repo rights.
 
 ### Team casting
 

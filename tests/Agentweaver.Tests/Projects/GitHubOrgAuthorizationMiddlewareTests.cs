@@ -131,7 +131,11 @@ public sealed class GitHubOrgAuthorizationMiddlewareTests
     private static GitHubOrgAuthorizationMiddleware BuildMiddleware(RequestDelegate next, string allowedOrg)
     {
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Auth:GitHub:AllowedOrg"] = allowedOrg })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Auth:Mode"] = "GitHubLegacy",
+                ["Auth:GitHub:AllowedOrg"] = allowedOrg,
+            })
             .Build();
 
         var authzService = new GitHubOrgAuthorizationService(

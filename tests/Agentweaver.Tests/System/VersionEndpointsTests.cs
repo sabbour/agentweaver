@@ -117,6 +117,7 @@ file sealed class VersionWebApplicationFactory : WebApplicationFactory<Program>
                 ["Coordinator:Checkpoints:Path"] = Path.Combine(Path.GetTempPath(), $"aw-ver-ccp-{Guid.NewGuid():N}"),
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"] = "true",
+                ["Auth:Mode"] = "GitHubLegacy",
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
                 ["Git:Author:Name"] = "Test",

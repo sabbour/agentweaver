@@ -2,6 +2,8 @@ using System.Text.Encodings.Web;
 using k8s;
 using LibGit2Sharp;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
@@ -1905,7 +1907,7 @@ app.MapGet("/api/sandbox-policy", async (
 {
     if (string.IsNullOrWhiteSpace(repository_path))
         return Results.BadRequest(new { error = "repository_path is required." });
-    var auth = await AuthorizeRepositoryPathAsync(httpContext, repository_path, projectStore, ct);
+    var auth = await AuthorizeRepositoryPathAsync(httpContext, repository_path, projectStore, ProjectRole.Viewer, ct);
     if (auth.Error is not null) return auth.Error;
 
     try
@@ -1930,7 +1932,7 @@ app.MapPut("/api/sandbox-policy", async (
 {
     if (string.IsNullOrWhiteSpace(request.RepositoryPath))
         return Results.BadRequest(new { error = "repository_path is required." });
-    var auth = await AuthorizeRepositoryPathAsync(httpContext, request.RepositoryPath, projectStore, ct);
+    var auth = await AuthorizeRepositoryPathAsync(httpContext, request.RepositoryPath, projectStore, ProjectRole.Contributor, ct);
     if (auth.Error is not null) return auth.Error;
     var validationErrors = ValidateSandboxPolicyRequest(request);
     if (validationErrors.Count > 0)
@@ -2535,6 +2537,7 @@ static async Task<(IResult? Error, Project? Project)> AuthorizeRepositoryPathAsy
     HttpContext httpContext,
     string repositoryPath,
     IProjectStore projectStore,
+    ProjectRole minimumRole,
     CancellationToken ct)
 {
     string canonical;
@@ -2552,9 +2555,10 @@ static async Task<(IResult? Error, Project? Project)> AuthorizeRepositoryPathAsy
 
     if (project is null) return (Results.NotFound(new { error = "repository_path is not a known project workspace." }), null);
 
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    if (!caller.Owns(project.Owner))
-        return (Results.StatusCode(StatusCodes.Status403Forbidden), null);
+    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+    var forbid = await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
+    if (forbid is not null)
+        return (forbid, null);
 
     return (null, project);
 }

@@ -22,6 +22,35 @@ public sealed class GitHubAuthTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
+    [McpServerTool(Name = "github_accounts_list"), Description("List the current GitHub user account plus the GitHub org accounts reachable through the current GitHub authorization context.")]
+    public async Task<string> GitHubAccountsListAsync(CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.GetAsync<JsonElement>("/api/github/accounts", ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "github_repos_list"), Description("List GitHub repositories for the current GitHub user or for one reachable org account. Omit account to list the authenticated user's repos; pass account to list that org's repos.")]
+    public async Task<string> GitHubReposListAsync(
+        [Description("Optional GitHub login to list repositories for. Omit to list the authenticated user's own repositories.")] string? account = null,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var path = string.IsNullOrWhiteSpace(account)
+                ? "/api/github/repos"
+                : $"/api/github/repos?account={Uri.EscapeDataString(account)}";
+            var result = await api.GetAsync<JsonElement>(path, ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
     [McpServerTool(Name = "github_signout"), Description("Sign out of GitHub authentication.")]
     public async Task<string> GitHubSignOutAsync(CancellationToken ct)
     {

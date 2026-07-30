@@ -145,7 +145,6 @@ identity and secrets. The installer's `--skip-oauth-key` flag is only safe when 
 Key Vault secret already exists; otherwise cluster diagnostics report
 `key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
 | `Auth:GitHub:AllowedOrg` | Organization enforced at token issuance (`microsoft`). |
-| `Auth:GitHub:ScopeProvider` | Defaults to `caller` for per-user token isolation. Set to `installation` only to revert to the old shared installation scope for single-user local dev. |
 
 If `Auth:OAuth:SigningKey` is not set, the service generates an **ephemeral** RSA key at startup for
 local development only (a warning is logged). Ephemeral keys do not survive a restart and must not be

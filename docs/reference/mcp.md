@@ -574,6 +574,28 @@ Check the current GitHub authentication status.
 
 ---
 
+### `github_accounts_list`
+
+List the current GitHub user account plus the GitHub org accounts reachable through the current GitHub authorization context.
+
+**Parameters**: none
+
+**Returns**: Array of account objects such as the authenticated user and reachable orgs.
+
+---
+
+### `github_repos_list`
+
+List GitHub repositories for the current GitHub user or for one reachable org account.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `account` | string | no | GitHub login to list repositories for. Omit to list the authenticated user's own repos. |
+
+**Returns**: Array of repository objects (`fullName`, `description`, `private`, `defaultBranch`).
+
+---
+
 ### `github_signin`
 
 Sign in to GitHub using the device flow. The tool initiates the flow and returns the user code and verification URL immediately. The user opens the URL in a browser and enters the code. The tool then polls until the browser step completes and returns a success confirmation, or times out after two minutes.

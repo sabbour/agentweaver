@@ -2,9 +2,11 @@ import { getSessionToken } from '../config';
 import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
+  AccessibleGitHubRepo,
   ApplyBlueprintSkillDefaultsResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
+  AuthSessionResponse,
   AssemblyReviewDecision,
   AssemblyReviewRequest,
   AssemblyReviewResponse,
@@ -21,6 +23,7 @@ import type {
   CommitResponse,
   ConfirmProposalRequest,
   ConnectedRepository,
+  CreateProjectRoleAssignmentRequest,
   CoordinatorChildResponse,
   CreateProjectRepositoryRequest,
   CreateProjectRequest,
@@ -44,6 +47,7 @@ import type {
   PagedRequestOptions,
   PagedResult,
   Project,
+  ProjectAccessOverview,
   RequestChangesResponse,
   RepositoryOwner,
   ReroleRequest,
@@ -86,6 +90,7 @@ import type {
   WorkspaceFileNode,
   WorkspaceNode,
   WorkspaceRefsResponse,
+  LinkedGitHubAccount,
 } from './types';
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
 export interface SkillUploadItem {
@@ -487,8 +492,36 @@ export class AgentweaverApiClient {
     return this.request<GitHubAuthStatusResponse>('GET', '/api/auth/github');
   }
 
+  async getAuthSession(): Promise<AuthSessionResponse> {
+    try {
+      return await this.request<AuthSessionResponse>('GET', '/auth/session');
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status !== 404) throw err;
+      const legacy = await this.getGitHubAuthStatus();
+      return {
+        authenticated: legacy.status === 'signed_in',
+        auth_mode: 'github-legacy',
+        display_name: legacy.login,
+        email: null,
+        login: legacy.login,
+        avatar_url: legacy.avatar_url ?? null,
+        entra_object_id: null,
+        platform_roles: [],
+      };
+    }
+  }
+
   signOutGitHub(): Promise<void> {
     return this.request<void>('POST', '/api/auth/github/sign-out', {});
+  }
+
+  async signOutSession(): Promise<void> {
+    try {
+      await this.request<void>('POST', '/auth/session/sign-out', {});
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status !== 404) throw err;
+      await this.signOutGitHub();
+    }
   }
 
   listGitHubAccounts(): Promise<GitHubAccount[]> {
@@ -500,6 +533,22 @@ export class AgentweaverApiClient {
     return this.request<GitHubRepo[]>('GET', path);
   }
 
+  listLinkedGitHubAccounts(): Promise<LinkedGitHubAccount[]> {
+    return this.request<LinkedGitHubAccount[]>('GET', '/auth/github/linked-accounts');
+  }
+
+  setDefaultLinkedGitHubAccount(login: string): Promise<void> {
+    return this.request<void>('POST', `/auth/github/linked-accounts/${encodeURIComponent(login)}/default`, {});
+  }
+
+  unlinkLinkedGitHubAccount(login: string): Promise<void> {
+    return this.request<void>('DELETE', `/auth/github/linked-accounts/${encodeURIComponent(login)}`);
+  }
+
+  listAccessibleGitHubRepos(): Promise<AccessibleGitHubRepo[]> {
+    return this.request<AccessibleGitHubRepo[]>('GET', '/github/repos/accessible');
+  }
+
   // Post-creation GitHub connection for a currently-unconnected (blank-origin) project.
   listProjectRepositoryOwners(projectId: string): Promise<RepositoryOwner[]> {
     return this.request<RepositoryOwner[]>('GET', `/projects/${encodeURIComponent(projectId)}/github/repository-owners`);
@@ -507,6 +556,24 @@ export class AgentweaverApiClient {
 
   createProjectRepository(projectId: string, req: CreateProjectRepositoryRequest): Promise<ConnectedRepository> {
     return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository`, req);
+  }
+
+  getProjectAccessOverview(projectId: string): Promise<ProjectAccessOverview> {
+    return this.request<ProjectAccessOverview>('GET', `/projects/${encodeURIComponent(projectId)}/access`);
+  }
+
+  createProjectRoleAssignment(projectId: string, req: CreateProjectRoleAssignmentRequest): Promise<void> {
+    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/role-assignments`, req);
+  }
+
+  deleteProjectRoleAssignment(projectId: string, assignmentId: string): Promise<void> {
+    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/role-assignments/${encodeURIComponent(assignmentId)}`);
+  }
+
+  setProjectGitHubIdentityOverride(projectId: string, githubLogin: string | null): Promise<void> {
+    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github/identity`, {
+      github_login: githubLogin,
+    });
   }
 
   // Catalog
