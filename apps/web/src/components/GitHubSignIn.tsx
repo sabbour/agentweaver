@@ -102,12 +102,6 @@ const useStyles = makeStyles({
   accountSecondary: {
     color: tokens.colorNeutralForeground2,
   },
-  login: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
 });
 
 function apiErrorMessage(err: unknown): string {
