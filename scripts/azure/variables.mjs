@@ -58,6 +58,13 @@ export const DEFAULTS = Object.freeze({
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
   GITHUB_ALLOWED_ORG: "microsoft",
+  // NOTE: this is the literal AuthModeResolver.Parse() recognizes for legacy GitHub auth
+  // (apps/Agentweaver.Api/Auth/AuthMode.cs) -- it must be exactly "GitHubLegacy", NOT "GitHub".
+  // Parse() treats any value other than a case-insensitive match of "GitHubLegacy" as Entra, and
+  // appsettings.json's own default is already "Auth:Mode": "Entra". Defaulting AUTH_MODE here to
+  // anything but the exact "GitHubLegacy" string would silently flip every deployment that doesn't
+  // set AUTH_MODE over to Entra mode instead of preserving today's GitHub sign-in behavior.
+  AUTH_MODE: "GitHubLegacy",
 });
 
 /** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
@@ -177,6 +184,14 @@ export async function resolveVariables(options = {}) {
 
   const GITHUB_ALLOWED_ORG = env.GITHUB_ALLOWED_ORG || DEFAULTS.GITHUB_ALLOWED_ORG;
 
+  // Auth:Mode / Auth:Entra:* deploy-time wiring (issue: Entra sign-in endpoints from #653/#658
+  // were never actually enabled on deployed environments). ENTRA_CLIENT_ID/ENTRA_TENANT_ID have no
+  // safe generic default -- unset means "Entra mode misconfigured" -- so they resolve to "" and are
+  // only meaningful when AUTH_MODE=Entra.
+  const AUTH_MODE = env.AUTH_MODE || DEFAULTS.AUTH_MODE;
+  const ENTRA_CLIENT_ID = env.ENTRA_CLIENT_ID || "";
+  const ENTRA_TENANT_ID = env.ENTRA_TENANT_ID || "";
+
   let TENANT_ID = env.TENANT_ID || "";
   if (!TENANT_ID && resolveLive) {
     TENANT_ID = await az.getTenantId();
@@ -227,6 +242,9 @@ export async function resolveVariables(options = {}) {
     KEYVAULT_NAME,
     AGENTHOST_KEYVAULT_URI,
     GITHUB_ALLOWED_ORG,
+    AUTH_MODE,
+    ENTRA_CLIENT_ID,
+    ENTRA_TENANT_ID,
     TENANT_ID,
     IDENTITY_CLIENT_ID,
     AGENTHOST_IDENTITY_CLIENT_ID,
