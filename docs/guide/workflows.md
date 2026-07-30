@@ -85,16 +85,27 @@ For existing project workflows, use **Edit** to open the YAML editor or **Edit v
 
 ## Running and scheduling workflows
 
-Each workflow row shows whether it is **Manual only** or has a schedule, including its UTC cadence. Use **Run now** to queue a Ready task bound to that workflow; it is picked up and shown on the board through the same normal coordinator path as other work.
+Each workflow row shows whether it is **Manual only**, has a **schedule**, or has a GitHub **event** trigger. Use **Run now** to queue a Ready task bound to that workflow; it is picked up and shown on the board through the same normal coordinator path as other work.
 
-For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily, weekly, or monthly at a UTC time. Removing the schedule returns the workflow to manual-only operation.
+For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily, weekly, or monthly at a UTC time. Choose **Add event** or **Edit event** to start the workflow from a curated GitHub webhook event instead. A workflow has exactly one `trigger:` block at a time, so switching from schedule → event (or back again) replaces the previous trigger. Removing the trigger returns the workflow to manual-only operation.
+
+The visual event-trigger editor is intentionally constrained:
+
+- an **event picker** limits you to the supported GitHub event shortlist;
+- the **condition-row builder** only offers predicates valid for the selected event;
+- separate condition rows are **ANDed by default**;
+- the common “match any of these values” case is represented as an `or:` group behind the scenes;
+- advanced nested `or:` / `not:` expressions remain part of the trigger grammar and round-trip through YAML and the structured trigger API even when you author them outside the row builder.
 
 ## Triggering workflows from GitHub
 
 Each GitHub-connected project can receive repository events through its own webhook. Open the
-project's **Settings → Webhooks** page, then select **Generate secret**. Copy the generated value
-immediately: it is shown once only. In your GitHub repository, go to **Settings → Webhooks → Add
-webhook** and configure:
+project's **Settings → Webhooks** page. Agentweaver now keeps the manual setup visible at all
+times, and also shows a **Create webhook automatically** button. That automatic flow is currently
+stubbed as **coming soon**, so the manual steps below remain the active setup path for now.
+
+Select **Generate secret** and copy the generated value immediately: it is shown once only. In your
+GitHub repository, go to **Settings → Webhooks → Add webhook** and configure:
 
 - **Payload URL:** the project-specific URL displayed in Agentweaver:
   `https://your-agentweaver-host/api/projects/<project-id>/webhooks/github`
@@ -110,6 +121,56 @@ An event delivery named by GitHub's `X-GitHub-Event` header fires `github.<event
 `github.push` or `github.issues`). When the payload has an `action`, it also fires the more specific
 `github.<event>.<action>` name, such as `github.issues.opened` or
 `github.pull_request.opened`.
+
+The supported event shortlist is:
+
+| GitHub event | Typical use | Supported predicates |
+|---|---|---|
+| `issues` | Triage or automate issue lifecycle changes | `hasLabel`, `isNotLabeledWith` |
+| `issue_comment` | Slash-command style comment entry points | `commentMatches` |
+| `pull_request` | PR intake, routing, or policy workflows | `hasLabel`, `isNotLabeledWith`, `baseBranch` |
+| `pull_request_review` | Approval / changes-requested flows | `reviewState` |
+| `push` | Branch or tag push automation | `ref` |
+| `release` | Release-published workflows | none in v1 |
+| `discussion` | Discussion-category routing | `category` |
+
+The trigger grammar is curated rather than generic. In the structured trigger API and UI, the
+predicate names are `hasLabel`, `isNotLabeledWith`, `baseBranch`, `reviewState`, `ref`,
+`category`, and `commentMatches`. In saved YAML, the same predicates serialize in snake_case as
+`has_label`, `is_not_labeled_with`, `base_branch`, `review_state`, and `comment_matches`.
+
+An event trigger's `if:` list is an implicit AND. Use `or:` and `not:` wrappers for compound logic:
+
+```yaml
+trigger:
+  type: event
+  event_name: github.pull_request.opened
+  if:
+    - or:
+        - base_branch: { branch: "main" }
+        - base_branch: { branch: "release/v1" }
+    - not:
+        has_label: { label: "blocked" }
+```
+
+For comment-driven automation, use a fixed, pre-validated regex pattern:
+
+```yaml
+trigger:
+  type: event
+  event_name: github.issue_comment.created
+  if:
+    - comment_matches: { pattern: "^/agentweaver:triage$" }
+```
+
+`comment_matches` is boolean-only: it decides fire / no-fire, but Agentweaver does not forward the
+raw comment body into backlog task text or downstream prompts.
+
+The Webhooks settings page always keeps the manual setup path visible. It also includes **Create
+webhook automatically** so the future GitHub-assisted flow can request `write:repo_hook`
+incrementally only when you click it. If the scope request is denied, canceled, or unavailable, the
+page leaves the manual payload URL / secret instructions in place so you never lose the fallback. In
+the current build, the button is still a placeholder and falls back to the same manual instructions.
 
 For example, this project workflow starts whenever an issue is opened:
 
@@ -160,7 +221,15 @@ body into downstream prompts through the trigger path.
 
 ### Generate from description
 
-Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. If the description includes a recurring cadence such as "Every Monday", the draft uses a `schedule` trigger with a cadence like `weekly:monday`. If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL — generation keeps that target repository in the prompt context so the draft acts against the intended repo.
+Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. Trigger generation now covers both recurring schedules and curated GitHub events, so prompts such as “run this every Monday at 09:00 UTC” or “trigger this whenever someone comments `/agentweaver:triage`” produce a first draft with the matching `trigger:` block.
+
+The generator is still preview-first. It teaches the model the workflow schema, the supported
+trigger shapes, and a few-shot set of natural-language → trigger examples, then validates the draft
+with the same loader the runtime uses. If the first draft is malformed, the server allows exactly one
+correction pass before failing closed.
+
+If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL —
+generation keeps that target repository in the prompt context so the draft acts against the intended repo.
 
 The generated workflow is preview-first: Agentweaver opens the YAML draft in the editor and does not write it to `.agentweaver/workflows/` until you save. If validation fails after the server's correction pass, the API returns an error instead of saving a broken workflow.
 

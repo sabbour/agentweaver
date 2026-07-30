@@ -261,12 +261,99 @@ Example trigger payload:
 | `GET` | `/api/projects/{projectId}/workflows` | List workflow definitions |
 | `POST` | `/api/projects/{projectId}/workflows/sync` | Reload workflow definitions from disk |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get a workflow definition |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get a workflow's structured trigger config |
+| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Create or replace a workflow trigger |
+| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear a workflow trigger |
 | `PUT` | `/api/projects/{projectId}/workflows/default` | Set the default workflow |
 | `PUT` | `/api/projects/{projectId}/backlog/tasks/{taskId}/workflow-override` | Set a task workflow override |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/graph` | Get a workflow graph |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/yaml` | Get workflow YAML |
 | `PUT` | `/api/projects/{projectId}/workflows/{workflowId}` | Replace a workflow definition |
 | `POST` | `/api/projects/{projectId}/workflows/generate` | Generate a workflow definition |
+
+### Workflow trigger configuration
+
+Workflow list and detail responses already embed a workflow's `trigger` when one is present. The
+dedicated trigger CRUD endpoints expose the same shape without requiring callers to rewrite the whole
+workflow YAML.
+
+```http
+GET    /api/projects/{projectId}/workflows/{workflowId}/trigger
+PUT    /api/projects/{projectId}/workflows/{workflowId}/trigger
+DELETE /api/projects/{projectId}/workflows/{workflowId}/trigger
+```
+
+- `GET` returns `{ "trigger": <WorkflowTriggerDto|null> }`
+- `PUT` accepts a `WorkflowTriggerDto` as the request body and returns the same wrapper
+- `DELETE` preserves the rest of the workflow definition and returns `{ "trigger": null }`
+
+The JSON contract is intentionally close to workflow YAML:
+
+- top-level trigger keys keep their existing snake_case names such as `event_name`, `day_of_week`,
+  `day_of_month`, and `time_of_day`;
+- nested predicate objects use camelCase keys such as `hasLabel`, `baseBranch`,
+  `commentMatches`, and `matchMode`.
+
+#### Schedule trigger body
+
+```json
+{
+  "type": "schedule",
+  "interval": "weekly",
+  "day_of_week": "monday",
+  "time_of_day": "09:00"
+}
+```
+
+Monthly schedules replace `day_of_week` with `day_of_month` (`1`-`28`). Schedule triggers reject an
+`if` block.
+
+#### Event trigger body
+
+```json
+{
+  "type": "event",
+  "event_name": "github.pull_request.opened",
+  "if": [
+    {
+      "or": [
+        { "baseBranch": { "branch": "main" } },
+        { "baseBranch": { "branch": "release/v1" } }
+      ]
+    },
+    {
+      "not": {
+        "hasLabel": { "label": "blocked" }
+      }
+    }
+  ]
+}
+```
+
+Sibling entries in `if` are ANDed by default. Compound logic uses nested `or` and `not` wrapper
+predicates.
+
+Supported predicate payloads:
+
+| Predicate | JSON shape | Supported GitHub event types |
+| --- | --- | --- |
+| `hasLabel` | `{ "hasLabel": { "label": "bug" } }` | `issues`, `pull_request` |
+| `isNotLabeledWith` | `{ "isNotLabeledWith": { "label": "blocked" } }` | `issues`, `pull_request` |
+| `baseBranch` | `{ "baseBranch": { "branch": "main" } }` | `pull_request` |
+| `reviewState` | `{ "reviewState": { "state": "approved" } }` | `pull_request_review` |
+| `ref` | `{ "ref": { "branch": "refs/heads/main", "matchMode": "equals" } }` | `push` |
+| `category` | `{ "category": { "name": "Ideas" } }` | `discussion` |
+| `commentMatches` | `{ "commentMatches": { "pattern": "^/agentweaver:triage$" } }` | `issue_comment` |
+| `or` | `{ "or": [ ...predicates... ] }` | same as its children |
+| `not` | `{ "not": { ...predicate... } }` | same as its child |
+
+The curated GitHub event shortlist is `issues`, `issue_comment`, `pull_request`,
+`pull_request_review`, `push`, `release`, and `discussion`. `release` currently has no
+event-specific predicates beyond the event name itself.
+
+`commentMatches` accepts a fixed saved pattern only. The backend validates it against a safe regex
+subset, executes it with the non-backtracking engine plus a hard timeout, and exposes only the
+boolean match outcome to the rest of the workflow-firing pipeline.
 
 ### Workspace, diagnostics, and metrics
 

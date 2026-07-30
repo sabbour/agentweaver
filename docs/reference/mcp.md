@@ -1179,6 +1179,18 @@ Get the current coordinator heartbeat service status.
 
 ## Workflows
 
+MCP exposes workflow triggers today in two ways:
+
+- `workflows_list` and `workflow_get` surface the current `trigger` on each workflow, including
+  event predicates when one is configured.
+- `workflow_generate` can draft schedule or event triggers from natural-language descriptions, and
+  `workflow_save` can persist trigger edits by saving the workflow YAML.
+
+There is **no dedicated MCP tool** yet for the structured REST trigger CRUD surface
+(`GET/PUT/DELETE /api/projects/{projectId}/workflows/{workflowId}/trigger`). In MCP, trigger writes
+currently go through full-workflow YAML edits rather than a `workflow_set_trigger` /
+`workflow_configure` helper.
+
 ### `workflows_list`
 
 List all discovered workflow definitions for a project.
@@ -1187,7 +1199,8 @@ List all discovered workflow definitions for a project.
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
 
-**Returns**: Array of workflow summaries with `id`, `name`, `valid`, `validation_errors`, and `is_default`.
+**Returns**: Array of workflow summaries with `id`, `name`, validation state, effective-default
+status, and `trigger` (when configured).
 
 ---
 
@@ -1200,7 +1213,9 @@ Get the full definition of a single workflow by ID.
 | `project_id` | string | yes | Project ID |
 | `workflow_id` | string | yes | Workflow ID |
 
-**Returns**: Full workflow definition with `id`, `name`, `trigger`, `nodes`, and `edges`.
+**Returns**: Full workflow definition with `id`, `name`, `trigger`, `nodes`, and `edges`. For event
+triggers, the returned predicate objects use the same structured shape as the REST API (`hasLabel`,
+`baseBranch`, `commentMatches`, `or`, `not`, and so on).
 
 ---
 
@@ -1218,7 +1233,7 @@ Re-read the project's workflow definitions from disk, refreshing the in-memory r
 
 ### `workflow_generate`
 
-Generate a new workflow YAML **draft** from a natural-language description. Nothing is written to disk — use `workflow_save` to persist (FR-065).
+Generate a new workflow YAML **draft** from a natural-language description. Nothing is written to disk — use `workflow_save` to persist (FR-065). Natural-language trigger inference covers both schedule prompts (“every Monday at 09:00 UTC”) and curated GitHub event prompts (“when someone comments `/agentweaver:triage`”).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1231,7 +1246,7 @@ Generate a new workflow YAML **draft** from a natural-language description. Noth
 
 ### `workflow_save`
 
-Persist a workflow YAML to the project workspace (`.agentweaver/workflows/`). Validates and dry-run binds every node before writing; on success the workflow is immediately coordinator-selectable.
+Persist a workflow YAML to the project workspace (`.agentweaver/workflows/`). Validates and dry-run binds every node before writing; on success the workflow is immediately coordinator-selectable. This is also the current MCP write path for trigger changes.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1239,7 +1254,7 @@ Persist a workflow YAML to the project workspace (`.agentweaver/workflows/`). Va
 | `workflow_id` | string | yes | Workflow ID (must match the `id` in the YAML) |
 | `yaml` | string | yes | Workflow YAML to save |
 
-**Returns**: The full `WorkflowDefinitionDto` (id, nodes, edges, trigger, validation status). Returns `400` on YAML parse errors, an unwired node type, or an `id`/route mismatch.
+**Returns**: The full `WorkflowDefinitionDto` (id, nodes, edges, trigger, validation status). Returns `400` on YAML parse errors, malformed trigger predicates, an unwired node type, or an `id`/route mismatch.
 
 ---
 
