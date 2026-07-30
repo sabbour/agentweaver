@@ -34,7 +34,8 @@ Authenticate through a visible browser exactly once per valid session:
 node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url https://<host>.staging.<domain>
 ```
 
-`login` opens Chromium headfully. Complete OAuth yourself in that visible window, then
+`login` opens Chromium headfully. Complete the visible GitHub or Microsoft Entra sign-in
+yourself in that window, then
 resume Playwright. The command saves the local, git-ignored storage state at
 `scripts/ui-harness/.auth/staging.storageState.json`; it is reused by the remaining
 headless commands. Treat that file as a credential: never print, commit, log, or attach

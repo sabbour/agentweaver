@@ -1,22 +1,42 @@
 import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
 import { loadStorageState, loadSessionStorageSeed } from './auth.mjs';
 
-const GITHUB_OAUTH_ORIGIN = 'https://github.com';
+const DEFAULT_IDENTITY_PROVIDER_ORIGINS = Object.freeze([
+  'https://github.com',
+  'https://login.microsoftonline.com',
+  'https://login.live.com',
+]);
 const GENERATED_PREVIEW_LABEL = /^(?:[a-z]+-){3}[a-z2-7]{26}-preview$/;
 
+function identityProviderOrigins(options = {}) {
+  const configured = Array.isArray(options.identityProviderOrigins)
+    ? options.identityProviderOrigins
+    : [];
+  const origins = new Set(DEFAULT_IDENTITY_PROVIDER_ORIGINS);
+  for (const candidate of configured) {
+    try {
+      origins.add(new URL(candidate).origin);
+    } catch {
+      // Ignore malformed candidates from optional config probing.
+    }
+  }
+  return origins;
+}
+
 // The manual `login` subcommand in tools.mjs is the ONLY caller that ever sets
-// allowGitHubOAuthNavigation, and it only does so for its own human-supervised,
-// headful browser session. A real person can be routed through many github.com
-// paths mid-login beyond the initial OAuth authorize/callback hop -- 2FA
-// challenges, new-device verification, device-flow codes, org SSO, WebAuthn --
-// and GitHub has changed these exact paths over time, so we allow the whole
-// github.com origin here rather than chase an incomplete path allowlist. This
-// is safe specifically because it never applies to the automated/persona-driven
-// action() codepath, which does not (and must not) set this flag, so headless
-// scripted flows remain fully restricted to same-origin navigation.
-function isAllowedGitHubOAuthNavigation(target, options) {
-  return options.allowGitHubOAuthNavigation === true
-    && target.origin === GITHUB_OAUTH_ORIGIN;
+// allowIdentityProviderNavigation, and it only does so for its own
+// human-supervised, headful browser session. A real person can be routed
+// through many identity-provider paths mid-login beyond the initial authorize
+// and callback hops -- GitHub 2FA / device verification / org SSO / WebAuthn,
+// or Entra / Microsoft account MFA and conditional-access detours -- so we
+// allow the whole configured IdP origins here rather than chase an incomplete
+// path allowlist. This is safe specifically because it never applies to the
+// automated/persona-driven action() codepath, which does not (and must not)
+// set this flag, so headless scripted flows remain fully restricted to
+// same-origin navigation.
+function isAllowedIdentityProviderNavigation(target, options = {}) {
+  return options.allowIdentityProviderNavigation === true
+    && identityProviderOrigins(options).has(target.origin);
 }
 
 function isAllowedAgentweaverPreviewNavigation(base, target, options) {
@@ -40,7 +60,7 @@ function guardedUrl(baseUrl, destination, options) {
   assertTargetAllowed(baseUrl, options);
   const base = new URL(baseUrl);
   const target = new URL(destination, base);
-  if (target.origin !== base.origin && isAllowedGitHubOAuthNavigation(target, options)) return target;
+  if (target.origin !== base.origin && isAllowedIdentityProviderNavigation(target, options)) return target;
   if (target.origin !== base.origin && isAllowedAgentweaverPreviewNavigation(base, target, options)) return target;
   assertTargetAllowed(target, options);
   if (target.origin !== base.origin) throw new Error(`refusing cross-origin browser navigation from ${base.origin} to ${target.origin}`);

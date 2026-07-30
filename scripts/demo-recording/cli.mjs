@@ -10,9 +10,9 @@ import {
   getDurationMs,
   trimVideoByActivity,
   syncSegmentToAudio,
-  concatVideos,
 } from './lib/ffmpeg.mjs';
 import { analyzeTake } from './lib/take-analyzer.mjs';
+import { assembleScenarioVideo, renderApprovedDirection } from './lib/compositor.mjs';
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -153,24 +153,15 @@ async function syncBeat(options) {
 // master plan) into one final video. This is the reusable replacement for the
 // old one-off `final-seg*.cjs` scratch-script assembly.
 async function assembleFinal(options) {
-  const beats = await loadBeatPlan(options.plan);
-  const inputs = [];
-  const missing = [];
-  for (const beat of beats) {
-    const segmentPath = path.join(options.segmentsDir, `synced-${beatFileId(beat.id)}.webm`);
-    try {
-      await fs.access(segmentPath);
-      inputs.push(segmentPath);
-    } catch {
-      missing.push(beat.id);
-    }
-  }
-  if (missing.length && options.allowMissing !== 'true') {
-    throw new Error(`Missing synced segments for beats: ${missing.join(', ')}. Pass --allow-missing true to assemble a partial video.`);
-  }
-  await concatVideos(inputs, options.out);
-  const probe = await ffprobeJson(options.out);
-  process.stdout.write(`${JSON.stringify({ out: options.out, includedBeats: inputs.length, missingBeats: missing, durationSec: probe?.format?.duration }, null, 2)}\n`);
+  const result = await assembleScenarioVideo({
+    planPath: options.plan,
+    segmentsDir: options.segmentsDir,
+    outputPath: options.out,
+    allowMissing: options.allowMissing === 'true',
+    segmentPrefix: options.segmentPrefix ?? options['segment-prefix'] ?? 'synced',
+    segmentExtension: options.segmentExtension ?? options['segment-extension'] ?? 'webm',
+  });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
 async function analyzeCapturedTake(options) {
@@ -199,6 +190,35 @@ async function analyzeCapturedTake(options) {
     warningCount: result.analysis.warnings.length,
     analyzedBeats: result.analysis.beats.map((beat) => beat.id),
   }, null, 2)}\n`);
+}
+
+async function renderDirection(options) {
+  const beatId = options.beatId ?? options['beat-id'];
+  const directionPath = options.direction ?? options['direction-json'];
+  const cueManifestPath = options.cues ?? options['cue-manifest'];
+  const required = ['direction', 'video', 'cues', 'audio', 'out'];
+  const values = {
+    direction: directionPath,
+    video: options.video,
+    cues: cueManifestPath,
+    audio: options.audio,
+    out: options.out,
+  };
+  const missing = required.filter((name) => !values[name]);
+  if (missing.length) {
+    throw new Error(`render-direction requires: ${missing.map((name) => `--${name}`).join(', ')}`);
+  }
+  const result = await renderApprovedDirection({
+    directionPath,
+    videoPath: options.video,
+    cueManifestPath,
+    audioPath: options.audio,
+    outputPath: options.out,
+    beatId,
+    toleranceMs: Number(options.toleranceMs ?? options['tolerance-ms'] ?? 150),
+    keepTemp: options.keepTemp === 'true' || options['keep-temp'] === 'true',
+  });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
 const { command, options } = parseArgs(process.argv.slice(2));
@@ -233,6 +253,9 @@ switch (command) {
     break;
   case 'analyze-take':
     await analyzeCapturedTake(options);
+    break;
+  case 'render-direction':
+    await renderDirection(options);
     break;
   default:
     throw new Error(`Unknown command: ${command}`);

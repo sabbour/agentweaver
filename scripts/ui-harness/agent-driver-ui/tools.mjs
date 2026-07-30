@@ -41,6 +41,22 @@ function sessionPath(id) {
   return path.join(SESSIONS, `${id}.json`);
 }
 
+async function resolveIdentityProviderOrigins(baseUrl, guardOptions) {
+  const configuredOrigins = new Set();
+  try {
+    const configUrl = guardedUrl(baseUrl, '/api/auth/config', guardOptions);
+    const response = await fetch(configUrl, { headers: { accept: 'application/json' }, redirect: 'error' });
+    if (response.ok) {
+      const config = await response.json();
+      const authority = config?.entra?.authority;
+      if (authority) configuredOrigins.add(new URL(authority).origin);
+    }
+  } catch {
+    // Keep login resilient when config probing is temporarily unavailable.
+  }
+  return [...configuredOrigins];
+}
+
 async function loadSession(id) {
   if (!id || !existsSync(sessionPath(id))) throw new Error('no active UI session; run init first');
   return JSON.parse(await readFile(sessionPath(id), 'utf8'));
@@ -79,15 +95,18 @@ export function assertApprovalAllowed({ adapterText, decision, gate }) {
 async function login(args) {
   const baseUrl = args['base-url'];
   if (!baseUrl) throw new Error('--base-url is required');
+  const guardOptions = options(args);
+  const identityProviderOrigins = await resolveIdentityProviderOrigins(baseUrl, guardOptions);
   const session = await openBrowserSession({
     baseUrl,
     headless: false,
-    allowGitHubOAuthNavigation: true,
-    ...options(args),
+    allowIdentityProviderNavigation: true,
+    identityProviderOrigins,
+    ...guardOptions,
   });
   try {
     await session.goto('/');
-    console.log('Complete login in the visible Chromium window, then resume Playwright to save the session.');
+    console.log('Complete sign-in in the visible Chromium window, then resume Playwright to save the session.');
     await session.page.pause();
     await ensureAuthDirectory();
     const statePath = args['storage-state'] ?? DEFAULT_STORAGE_STATE;
