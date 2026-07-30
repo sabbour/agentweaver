@@ -24,7 +24,8 @@ namespace Agentweaver.Api.Auth;
 /// access token. The access token (audience = this app's <c>ClientId</c>) is validated and its
 /// identity claims are extracted by reusing <see cref="EntraAccessTokenValidator"/>, the exact same
 /// validator every API request already runs, so the browser-sign-in token and the request-time token
-/// are validated identically. The confidential-client <c>client_secret</c> never leaves the server.
+/// are validated identically. When a client secret is configured the flow redeems as a confidential
+/// client; otherwise it falls back to PKCE-only redemption without any client credential.
 /// </summary>
 public sealed class EntraOAuthRedirectService
 {
@@ -36,6 +37,12 @@ public sealed class EntraOAuthRedirectService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<EntraOAuthRedirectService> _logger;
+
+    private enum ClientAuthenticationMode
+    {
+        None,
+        Secret,
+    }
 
     public EntraOAuthRedirectService(
         IConfiguration configuration,
@@ -79,12 +86,13 @@ public sealed class EntraOAuthRedirectService
     }
 
     /// <summary>
-    /// True when everything required for the server-side confidential-client redirect flow is present:
-    /// ClientId, ClientSecret, a resolvable Authority (TenantId or explicit Authority), and a redirect URI.
+    /// True when everything required for the Entra browser sign-in redirect flow is present:
+    /// ClientId, a resolvable Authority (TenantId or explicit Authority), and a redirect URI.
+    /// ClientSecret is optional because PKCE-only redemption is supported when the Entra app allows
+    /// public client flows.
     /// </summary>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(ClientId)
-        && !string.IsNullOrWhiteSpace(ClientSecret)
         && !string.IsNullOrWhiteSpace(_tokenValidator.Authority)
         && !string.IsNullOrWhiteSpace(RedirectUri);
 
@@ -92,9 +100,10 @@ public sealed class EntraOAuthRedirectService
         !string.IsNullOrWhiteSpace(ClientId) ? ClientId!
         : throw new EntraNotConfiguredException("Auth:Entra:ClientId must be configured.");
 
-    private string RequireClientSecret() =>
-        !string.IsNullOrWhiteSpace(ClientSecret) ? ClientSecret!
-        : throw new EntraNotConfiguredException("Auth:Entra:ClientSecret must be configured for the Entra sign-in redirect flow.");
+    private ClientAuthenticationMode TokenClientAuthenticationMode =>
+        string.IsNullOrWhiteSpace(ClientSecret)
+            ? ClientAuthenticationMode.None
+            : ClientAuthenticationMode.Secret;
 
     private string RequireRedirectUri() =>
         !string.IsNullOrWhiteSpace(RedirectUri) ? RedirectUri!
@@ -221,18 +230,22 @@ public sealed class EntraOAuthRedirectService
 
     private async Task<string> RedeemCodeForAccessTokenAsync(string code, string codeVerifier, CancellationToken ct)
     {
+        var form = new Dictionary<string, string>
+        {
+            ["grant_type"] = "authorization_code",
+            ["client_id"] = RequireClientId(),
+            ["code"] = code,
+            ["redirect_uri"] = RequireRedirectUri(),
+            ["code_verifier"] = codeVerifier,
+            ["scope"] = Scopes,
+        };
+
+        if (TokenClientAuthenticationMode == ClientAuthenticationMode.Secret)
+            form["client_secret"] = ClientSecret!;
+
         using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
         {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "authorization_code",
-                ["client_id"] = RequireClientId(),
-                ["client_secret"] = RequireClientSecret(),
-                ["code"] = code,
-                ["redirect_uri"] = RequireRedirectUri(),
-                ["code_verifier"] = codeVerifier,
-                ["scope"] = Scopes,
-            })
+            Content = new FormUrlEncodedContent(form)
         };
         request.Headers.Accept.ParseAdd("application/json");
 
