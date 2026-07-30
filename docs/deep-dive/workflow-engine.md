@@ -31,7 +31,7 @@ These invariants are the backbone of the workflow engine:
 
 - **Definitions are data, not code.** YAML describes nodes, edges, and metadata. It does not execute directly.
 - **Discovery is server-side.** Clients list, render, and edit workflows, but loading, validation, selection, and binding happen in the API.
-- **Workflows are trigger-agnostic.** How a run starts is tracked separately from what pipeline definition it executes.
+- **Trigger evaluation and workflow execution are separate concerns.** A workflow definition may declare a trigger, but trigger verification/filtering happens before the workflow is selected and bound.
 - **Overrides cannot bypass safety.** A requested workflow id is honored only if it resolves, validates, and binds.
 - **Selection is bounded model authority.** The selector may choose among already-safe candidates; it may not invent ids or bypass availability and validation checks.
 - **Binding fails closed.** A node type, gate, or edge with no known executor mapping aborts the build instead of becoming a no-op.
@@ -215,29 +215,61 @@ All valid workflows in the project's available set are candidates. A backlog tas
 
 Rebuild guidance: treat invocation kind as observability and policy context, not as a candidate gate. If a selected id cannot resolve, validate, or bind, do not "helpfully" run it anyway.
 
-## Event Trigger Predicate DSL
+## Event Trigger Evaluation Pipeline
 
-Event-triggered workflows can further constrain a matched `github.<event>[.<action>]` trigger with a
-small structured `if:` predicate DSL. The design goal is deliberate narrowness: enough expressiveness
-for label, branch, review-state, and comment-command routing, without introducing a general-purpose
-expression language.
+Event-triggered workflows add a narrow routing layer in front of the normal backlog → coordinator
+pickup path. The trigger mechanism is intentionally small:
 
-- A plain `if:` array is implicitly **AND**.
-- `or:` wraps an array of child predicates.
-- `not:` wraps a single child predicate.
-- Predicate validation is fail-closed at workflow load time: malformed shapes, unknown enum values,
-  unsupported event/predicate combinations, and invalid regexes reject the workflow definition.
+1. the project-scoped GitHub webhook endpoint resolves the target project and reads the raw body;
+2. the endpoint verifies the project's HMAC secret **before** it deserializes the JSON payload or
+   evaluates any predicates;
+3. the endpoint normalizes the repository identity and derives one or two event names:
+   `github.<event>` and, when GitHub sent an action, `github.<event>.<action>`;
+4. `WorkflowEventTriggerService` scans the project's valid workflows for `trigger.type: event`,
+   evaluates any `if:` predicates, and creates Ready backlog tasks for the workflows that match;
+5. the coordinator heartbeat claims those Ready tasks through the same accountable path as schedule
+   triggers and manual backlog work.
 
-Current vocabulary:
+That ordering is the trust boundary: unsigned or badly signed deliveries never reach predicate
+evaluation, backlog creation, or prompt assembly.
 
-- `has_label` / `is_not_labeled_with` — `github.issues*`, `github.pull_request*`
-- `base_branch` — `github.pull_request*`
-- `review_state` — `github.pull_request_review*`
-- `ref` (`equals` / `prefix`) — `github.push`
-- `category` — `github.discussion*`
-- `comment_matches` — `github.issue_comment*`
+### Curated predicate DSL
 
-Example:
+The event trigger DSL is deliberately **not** a general expression language. It supports:
+
+- `hasLabel`
+- `isNotLabeledWith`
+- `baseBranch`
+- `reviewState`
+- `ref`
+- `category`
+- `commentMatches`
+- `or`
+- `not`
+
+Sibling entries in `trigger.if` are ANDed by default. `or` and `not` provide the only compound
+logic. Predicate support is event-specific (`reviewState` only for `pull_request_review`, `ref` only
+for `push`, and so on), and invalid event/predicate combinations are rejected when the workflow is
+loaded rather than silently ignored at runtime.
+
+### `commentMatches` privacy and ReDoS boundary
+
+`commentMatches` is the only predicate that inspects raw user-authored text, so it has an explicit
+security boundary:
+
+- the only raw text admitted is the verified `comment.body` string from the GitHub payload;
+- the pattern is fixed in saved workflow configuration — not generated dynamically from the incoming
+  comment;
+- the pattern is validated against a restricted safe subset before the workflow is accepted;
+- runtime matching uses `.NET`'s non-backtracking regex engine plus a hard 200 ms match timeout;
+- match failures, compile errors, and timeouts fail closed to “no match”;
+- only the boolean match result crosses into workflow firing — Agentweaver does not log, persist, or
+  forward the raw comment body into backlog task text or downstream prompts.
+
+This keeps comment-command workflows possible without widening the rest of the engine into a
+free-form text processing surface.
+
+Use snake_case in YAML and camelCase in the structured trigger API/UI. For example:
 
 ```yaml
 trigger:
@@ -247,18 +279,9 @@ trigger:
     - comment_matches: { pattern: "^/agentweaver:triage$" }
     - not:
         or:
-          - comment_matches: { pattern: "^/agentweaver:ignore$" }
+          - has_label: { label: "ignore-bot" }
           - comment_matches: { pattern: "^/agentweaver:skip$" }
 ```
-
-### `comment_matches` security boundary
-
-`comment_matches` preserves the repo's existing webhook trust boundary. The GitHub comment body is
-used only for a fixed regex boolean check. The workflow engine does **not** extract capture groups,
-derive arguments, log the raw text at info level, persist it into backlog metadata, or forward it
-into downstream prompts. The output of the predicate is only "matched" or "did not match." Patterns
-are validated against a restricted safe subset at save/load time and executed with .NET's
-non-backtracking regex engine plus a hard timeout.
 
 ## Workflow Library and Generation
 
@@ -309,6 +332,22 @@ Generation has these rules:
 - The generator validates with the same loader and binder dry-run used by runtime authoring paths.
 - Exactly one correction pass is allowed.
 - The result is a draft; it is not written to `.agentweaver/workflows/` until a save/apply path persists it.
+
+Trigger-aware generation extends that same flow rather than introducing a separate side channel. Both
+create-mode and edit-mode prompts teach the model:
+
+- the schedule trigger schema (`daily` / `weekly` / `monthly`, UTC `time_of_day`, weekly
+  `day_of_week`, monthly `day_of_month`);
+- the curated GitHub event shortlist (`issues`, `issue_comment`, `pull_request`,
+  `pull_request_review`, `push`, `release`, `discussion`);
+- the structured predicate vocabulary and boolean wrappers (`or`, `not`);
+- a few-shot set of natural-language trigger examples such as label-driven issue triage, weekly
+  schedules, and exact comment commands.
+
+The output still goes through the same loader and binder gate as any other generated workflow. A bad
+event name, malformed predicate, or unsafe `commentMatches` pattern triggers the single correction
+pass; if the corrected draft is still invalid, generation fails closed instead of saving a broken
+trigger.
 
 Blueprint generation can also invoke workflow generation when no library workflow is a good process fit. Applying that blueprint writes the generated workflow file, syncs the registry, and makes the workflow selectable.
 
