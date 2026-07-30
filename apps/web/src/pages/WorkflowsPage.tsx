@@ -44,6 +44,7 @@ import { Link, useParams } from 'react-router-dom';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { BLANK_TEMPLATE, WorkflowEditor } from '../components/WorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
+import { setHeaderField, setScheduleTrigger } from '../utils/workflowYaml';
 import {
   getEventTrigger,
   setEventTrigger,
