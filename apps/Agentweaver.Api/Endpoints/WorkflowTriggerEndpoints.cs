@@ -38,7 +38,7 @@ public static class WorkflowTriggerEndpoints
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
 
             var fired = await triggerService.FireEventAsync(
-                project, request.EventName!.Trim(), request.DedupeKey, ct);
+                project, request.EventName!.Trim(), request.DedupeKey, payload: null, ct);
 
             return Results.Ok(new FireWorkflowEventResponse { FiredWorkflowIds = fired });
         });

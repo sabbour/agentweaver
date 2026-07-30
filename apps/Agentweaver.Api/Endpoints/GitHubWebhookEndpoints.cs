@@ -102,7 +102,7 @@ public static class GitHubWebhookEndpoints
             foreach (var eventName in eventNames)
             {
                 var dedupeKey = string.IsNullOrWhiteSpace(deliveryId) ? null : $"{deliveryId}:{eventName}";
-                var fired = await triggerService.FireEventAsync(project, eventName, dedupeKey, ct).ConfigureAwait(false);
+                var fired = await triggerService.FireEventAsync(project, eventName, dedupeKey, payload, ct).ConfigureAwait(false);
                 firedWorkflowIds.AddRange(fired);
             }
 

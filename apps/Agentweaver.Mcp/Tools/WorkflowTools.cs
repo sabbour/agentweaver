@@ -16,7 +16,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    [McpServerTool(Name = "workflows_list"), Description("List all discovered workflow definitions for a project, including their validation status and which one is the effective default.")]
+    [McpServerTool(Name = "workflows_list"), Description("List all discovered workflow definitions for a project, including their validation status, effective default, and any configured trigger.")]
     public async Task<string> WorkflowsListAsync(
         [Description("Project ID")] string project_id,
         CancellationToken ct)
@@ -30,7 +30,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "workflow_get"), Description("Get the full definition of a single workflow by ID, including its nodes, edges, and trigger.")]
+    [McpServerTool(Name = "workflow_get"), Description("Get the full definition of a single workflow by ID, including its nodes, edges, and trigger. MCP has no separate trigger-configure tool yet.")]
     public async Task<string> WorkflowGetAsync(
         [Description("Project ID")] string project_id,
         [Description("Workflow ID")] string workflow_id,
@@ -64,7 +64,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     /// Returns YAML draft — not yet saved. Use workflow_save to persist. The agent can inspect the YAML before saving.
     /// </summary>
     [McpServerTool(Name = "workflow_generate"), Description(
-        "Generate a new workflow definition from a natural language description. " +
+        "Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. " +
         "Returns YAML draft — not yet saved. Use workflow_save to persist. " +
         "The agent can inspect the YAML before saving.")]
     public async Task<string> WorkflowGenerateAsync(
@@ -96,7 +96,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     /// Validates and dry-run binds before saving. Returns the parsed workflow definition.
     /// </summary>
     [McpServerTool(Name = "workflow_save"), Description(
-        "Save a workflow YAML to the project workspace. " +
+        "Save a workflow YAML to the project workspace. This is the current MCP write path for trigger changes; there is no separate workflow_set_trigger tool. " +
         "Validates and dry-run binds before saving. " +
         "Returns the parsed workflow definition.")]
     public async Task<string> WorkflowSaveAsync(
