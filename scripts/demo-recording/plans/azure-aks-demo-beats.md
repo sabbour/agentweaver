@@ -78,7 +78,6 @@ Narration: "Before we wrap, here's the observability behind all of this — live
 
 On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), wait for real rendered diagnostics such as `agent_pod_quota`, `Warm pool ready`, and the sandbox-claims table, then hold long enough for the auto-refresh countdown or refreshed timestamp to visibly change.
 
-<!-- VERIFY WITH USER: reconstructed, not confirmed -->
 ## Beat 5.1 — Outro
 
-Narration: "That's the loop against a real repo: generate the right blueprint, import the skills the team needs, run issue triage on a weekly schedule or a GitHub event, turn distinct ideas into PRDs, and draft a blog post that's ready to open as a pull request when you want it."
+Narration: "You can drive the exact same workflows from your own tools. In Settings, grab the MCP server URL, then connect clients like Claude Desktop, VS Code, or Copilot CLI. Everything you saw here — generating a blueprint against a live repo, importing skills from GitHub and the marketplace, running scheduled and webhook-triggered triage, producing PRDs and blog drafts, and opening the PR workflow for review — is available through that same MCP server, in the same workspace and team context you've been using throughout this demo."
