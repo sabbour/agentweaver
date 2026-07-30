@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- 21e1f4a: Add structured GitHub event-trigger predicates for workflows, including label, branch, review-state, ref, category, and fixed-regex comment matching, plus REST trigger-config endpoints for UI-driven editing.
+- e576c7b: Add a DOM-based demo-recording capture pipeline with semantic cue capture, take analysis, stable topology and trace markup, and a reusable creative-direction skill for future demo videos.
+- 1bbcfa6: Add the missing interactive Entra ID browser sign-in flow: `GET /auth/entra/authorize` and `GET /auth/entra/callback` endpoints implementing the Microsoft identity platform v2.0 authorization-code-with-PKCE flow, with CSRF-protected state, server-side PKCE code_verifier storage, and one-time session-exchange codes (no tokens ever placed in redirect URLs). Also exempts `/api/auth/session/exchange` from platform role authorization so anonymous session bootstrap works in Entra mode.
+- 60699a3: Add Entra ID as a permanent, deployment-level dual-mode authentication and authorization option alongside GitHub-org login: platform App Roles (Tier-1), per-project Owner/Contributor/Viewer RBAC (Tier-2) with an atomic last-owner safeguard, fail-closed backfill for legacy pre-RBAC projects, linked GitHub account management with repo enumeration and Copilot entitlement display, and epoch-based auth-mode invalidation for safe rolling restarts.
+- dffbe9e: Add web UI editing for workflow event triggers with curated GitHub events, typed condition rows, and OR-within-a-field matching. The project webhook settings page now also shows an automatic webhook creation entry point with a clear coming-soon fallback alongside the existing manual setup steps.
+- f32abde: Generalize GitHub authorization from bare-org-only checks to mixed allow rules in
+  `Auth:GitHub:AllowedOrg`, supporting `org`, `org/*`, and `org/team-slug` entries
+  with OR semantics across the configured list.
+
+  Also harden the legacy `Auth:GitHub:AllowedTeam` compatibility shim: when it overlaps
+  with a bare-org rule for the same org, keep the effective rules org-wide, emit a
+  prominent warning that the old AND-style restriction is not preserved, and show the
+  resolved allow-list so operators can migrate to explicit `org/team-slug` rules.
+
+- dffbe9e: Teach workflow generation to emit validated schedule and GitHub event triggers, including structured event predicates and correction-pass recovery for malformed trigger drafts.
+- 6f74bcd: Add a direction-aware demo compositor that renders approved per-beat edits from cue-anchored segments, preserves narration timing, and lets final scenario assembly consume the new rendered beat outputs.
+
+### Patch Changes
+
+- 154c532: Observability now keeps retired Squad members' role titles in the Agent token breakdown so historical usage rows show each agent's real project role instead of a generic AI Assistant label.
+- 91a2466: Stop the in-thread "Tool Approval Required" card from overlapping the agent activity feed on run/orchestration detail views. The run timeline could collapse to zero height under flex pressure inside its scroll container, letting its accordion content overflow visibly and the following approval card render on top of it; the timeline root now reserves its full content height (`flex-shrink: 0`) so sibling content always flows below it.
+- 351dcc8: Fix child/subtask chat timelines collapsing under a single "Step 1" when the run stream only includes raw `report_intent` tool calls by treating those calls as step boundaries in the frontend timeline builder.
+- 6b1cb0e: Fix Cluster diagnostics by removing the false `github_installation_token` alarm, measuring `agent_pod_quota` from the real pod and SandboxClaim object quotas instead of the removed CPU cap, and enabling the Cluster page's 30-second auto-refresh by default.
+- 6c91732: Fix demo-recording approval-banner auto-approve watcher to catch all three approval-card UI surfaces (including ShellApprovalCard) and handle concurrent approval cards independently.
+- 91e06d9: Contain the sidebar footer's alpha version badge so long dev build strings ellipsize inside the pill instead of spilling past it, while preserving enough room to keep short GitHub usernames visible.
+- 1e3f210: Focus the assistant composer after choosing a suggested prompt so Enter can send it immediately.
+- 391afc6: Stop the worker heartbeat reaper from deleting live preview-backed `SandboxClaim`s (#578; supersedes the refuted TTL-renewal hypotheses in #560/#564/#570/#571/#574). Root cause (confirmed via kube-audit attribution to `system:serviceaccount:agentweaver:agentweaver-worker`): `AgentHostReaperService` runs from **worker** pods, but the worker deployment carried no `Sandbox__Preview__*` config, so its `SandboxPreviewService` had a null cluster client and `HasActivePreviewAsync()` permanently false-negated — every orphan sweep deleted the backing claim of a completed/`AssembleReady` child that still had a live preview, killing the preview URL.
+
+  Fix (both angles, complementary):
+
+  - **Config parity** — `k8s/base/worker-deployment.yaml` now mirrors the API deployment's `Sandbox__Preview__Enabled=true` + gateway env, so the worker's DI actually builds an in-cluster client and the reaper can read durable cluster preview state.
+  - **Fail-safe cluster reads** — `SandboxPreviewService.HasActivePreviewAsync`, `RenewBackingClaimTtlAsync`, and `SetBackingPodSafeToEvictAsync` now gate on the presence of a cluster client (`_client is null`) rather than the local `Enabled` provisioning flag, so a live route in cluster state stays authoritative for any process that can see it even if that process is not the one that provisions preview routes.
+  - **RBAC** — the `agentweaver-worker-sandbox` Role now grants read on `httproutes` and `patch` on `sandboxclaims`/`pods` so the worker reaper's preview probe (list HTTPRoutes) and its defer-branch TTL renewal (#560) and safe-to-evict pin (#574) succeed instead of silently 403-ing back into the delete path. The worker still never creates or deletes preview routes — that stays with the API.
+
+  Live verification against staging is pending (the shared staging environment was torn down by the subscription's routine 3-day GC and is being re-provisioned); validated locally via the .NET unit suite.
+
+- a100e95: Materialize the selected workflow YAML into each run worktree so agents can inspect custom workflows inside their sandbox without committing those files into repository history.
+- 4454699: Keep coordinator stories inline when task promotion would otherwise delegate the entire confirmed plan to backlog, so normal coordinator runs still dispatch live subtasks instead of completing with an empty delegated work plan.
+- e9d701a: Raise the default approval timeout for agent-initiated `start_preview` requests from 5 minutes to 15 minutes, and let operators override it with `Sandbox:Preview:ApprovalTimeoutMinutes` or `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`.
+- a325ea9: Fix terminal merge conflicts on Squad bookkeeping files across concurrent coordinator runs (#621). A new project-level `SquadStateConsolidationService` is now the sole writer of the canonical decision ledger — it idempotently drains `.squad/decisions/inbox/*.md` into `.squad/decisions.md` on the project's default branch, decoupled from any run's branch-merge lifecycle. Per-run branch merges now resolve the canonical Squad ledgers (`.squad/decisions.md`, `.squad/agents/*/history.md`, `.squad/identity/now.md`) path-level "ours", so a run's racing copy can no longer produce a human-resolution-required conflict or clobber consolidated content, while genuine conflicts on every other path are still detected.
+- 2eb6ea8: Fix Cluster page diagnostics: the Sandbox claims "Warm pool used" column now reads the live v1beta1 `warmPoolRef.name` field, the permanently empty Sandbox objects section is removed, and Pending capacity now explains that zero means runs are getting a sandbox immediately.
+- b1d2119: Exclude Copilot-created worktree directories from Azure Container Registry build contexts so local deploys do not upload huge accidental tarballs from sibling repo checkouts.
+- fbf2ae1: Fix MCP `project_create` so GitHub-backed project creation can pass `source_repository` instead of failing and falling back to a blank-origin project.
+- 0b93925: Fix denied native Copilot shell attempts showing up in the run activity feed as raw shell tools like `bash` instead of the sandboxed `run_command` label, and make repeated native-shell denials within the same run more explicit so the model stops retrying the disabled tool.
+- 7b9aba5: Allow the UI harness login flow to follow both GitHub OAuth and Microsoft Entra sign-in redirects while keeping automated browser actions same-origin only.
+- c7e8c26: Fix the ObservabilityPages test fixture after the Project type gained three nullable model fields, restoring `apps/web` builds on `dev`.
+- 9e84663: Improve generated skill drafts so they include concrete trigger guidance, step-by-step instructions, and richer examples instead of bland generic boilerplate.
+- 1aed605: Surface active run previews near the top-level run actions so reviewers can open them without digging into the Build & Test step.
+- 9d3b8de: Let dismissed human-review notifications reappear when the same run later requests review again.
+- 7591d9b: Keep the sidebar footer readable by shortening long dev build version badges and preventing them from pushing the signed-in user out of view.
+- 7f1d7ed: Allow GitHub org and repo avatars to load in the Create project from GitHub picker by permitting `https://avatars.githubusercontent.com` in the web app content security policy.
+- e9868bf: Reduce wasted tool-calling round-trips where the model tried the SDK's native shell tool first (always denied) before falling back to the sandboxed `run_command` tool, by adding explicit guidance to the shared agent base prompt to use `run_command` directly.
+- 145b1ae: Fix run timeline steps all rendering as "Step 1" instead of incrementing (Step 1, Step 2, Step 3...) by fixing an off-by-one in the continuation-narration collapse logic that let every size cap be overshot by one merge, allowing a whole run of small continuation-narrated steps ("Now let's...", "Next, I'll...") to fold into a single step.
+- d2a7554: Keep the assistant view's New session action working even when it is clicked from an already-open conversation.
+- 136d7a9: Fix observability trace and agent usage panels so named project agents show their assigned team role titles instead of a generic “AI Assistant” subtitle.
+- 4775ce9: Fix run timeline tool categorization so preview/review-style tool names no longer fall into the generic file-view card.
+
 ## 0.12.2
 
 ### Patch Changes
