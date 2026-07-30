@@ -320,3 +320,38 @@
 - This let one test host's auth-mode epoch row invalidate another host's requests, causing cross-class 401s when Entra and GitHubLegacy fixtures ran together.
 - The fix introduces a shared SQLite memory-sidecar path resolver used by `MemoryDbContext` and `SqliteRunEventStream`: preserve the legacy `agentweaver.db -> memory.db` companion path, but give custom `Database:Path` files distinct per-database sidecars unless `Database:MemoryPath` is explicitly configured.
 - This restores per-test-host isolation while preserving intended same-database epoch sharing semantics for real rolling mode-switch scenarios.
+
+
+---
+
+## 2026-07-30 — PR #640 merge conflicts against `dev` were resolved additively and verified cleanly
+
+**Scope source merged:** `tank-merge-conflict-resolution.md`.
+
+- The three merge conflicts between the Entra authz branch and concurrently landed `dev` workflow-trigger work were resolved additively rather than by choosing one feature line over the other.
+- `WorkflowTriggerEndpoints.cs` kept both the Entra/project-RBAC authorization requirement and `dev`'s workflow-trigger predicate-compatible `FireEventAsync(..., payload: null, ...)` call shape.
+- `ProjectSettingsPage.tsx` kept both the Access-section RBAC/linked-account handlers and `dev`'s automatic-webhook creation UI/state.
+- `ProjectSettingsPage.test.tsx` kept mocks for both the RBAC/linked-account APIs and the new automatic webhook API.
+- Combined verification passed cleanly for the relevant backend slice (`Auth|ProjectRole|Rbac|WorkflowTrigger`: 278 passed, 34 skipped, 0 failed), and the branch was pushed without force-push.
+
+
+---
+
+## 2026-07-30 — Missing Postgres migration added for the shared auth-mode epoch table
+
+**Scope source merged:** `tank-postgres-migration-fix.md`.
+
+- PR #640's shared auth-mode epoch work required matching Postgres EF migration, designer, and model-snapshot updates in `Agentweaver.Api.Migrations.Postgres`, not just the SQLite migration in `apps/Agentweaver.Api/Migrations`.
+- Without that Postgres migration, `AuthModeEpochStartupService` booted into `42P01: relation "auth_mode_epochs" does not exist` as soon as startup/tests queried the table on a Postgres-backed app.
+- The follow-up landed as commit `cb3f2858`; whenever `MemoryDbContext` schema changes, the SQLite and Postgres migration chains must stay in lockstep.
+
+---
+
+## 2026-07-30T04:35:43Z — PR #640 shipped after the final Operator tool-policy fix and staging verification
+
+- After the Postgres migration follow-up, the only remaining CI failure was `OperatorToolApprovalPolicyTests`: `github_accounts_list` and `github_repos_list` were missing from the Operator tool approval policy's ungated classification list.
+- The coordinator added both MCP tools to `packages/Agentweaver.AgentRuntime/OperatorToolApprovalPolicy.cs` in commit `2f54998d`, restoring the intended rule that read-only GitHub account/repo discovery tools stay ungated for Operator runs.
+- With that fix in place, all PR #640 checks were green (`.NET tests`, `Web tests`, `lint`, `docs`, `changeset advisory`, `architecture diagrams`, and `node toolchain`), so the branch was squash-merged into `dev` as `60699a37297c04856c6c3b3f552882778c23adbc`.
+- The merged SHA was then deployed to the operator's staging AKS environment via `npm run azure:deploy-from-commit -- origin/dev` using deployment tag `60699a3`; all four images (`api`, `frontend`, `mcp`, `agent-host`) provenance-matched the source commit.
+- Post-deploy verification passed cleanly: `npm run azure:verify` reported 25/25 checks green against `https://agentweaver.6a67c46fa5c83b0001c97c7c.westus2.staging.aksapp.io/`.
+- Treat this as the closure checkpoint for the Entra ID dual-mode authn/authz overhaul: implementation, CI repair, merge, staging deploy, and live verification all completed on the merged `dev` SHA.
