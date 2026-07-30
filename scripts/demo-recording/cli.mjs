@@ -12,6 +12,7 @@ import {
   syncSegmentToAudio,
   concatVideos,
 } from './lib/ffmpeg.mjs';
+import { analyzeTake } from './lib/take-analyzer.mjs';
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -172,6 +173,34 @@ async function assembleFinal(options) {
   process.stdout.write(`${JSON.stringify({ out: options.out, includedBeats: inputs.length, missingBeats: missing, durationSec: probe?.format?.duration }, null, 2)}\n`);
 }
 
+async function analyzeCapturedTake(options) {
+  const capturePlan = options.capturePlan ?? options['capture-plan'];
+  const activityLog = options.activityLog ?? options['activity-log'];
+  const beatId = options.beatId ?? options['beat-id'];
+  const draftDirection = options.draftDirection ?? options['draft-direction'];
+  const required = ['video', 'capturePlan', 'cues', 'out'];
+  const values = { video: options.video, capturePlan, cues: options.cues, out: options.out };
+  const missing = required.filter((name) => !values[name]);
+  if (missing.length) {
+    throw new Error(`analyze-take requires: ${missing.map((name) => `--${name}`).join(', ')}`);
+  }
+  const result = await analyzeTake({
+    videoPath: options.video,
+    capturePlanPath: capturePlan,
+    cueManifestPath: options.cues,
+    activityLogPath: activityLog,
+    beatId,
+    outputPath: options.out,
+    draftDirectionPath: draftDirection,
+  });
+  process.stdout.write(`${JSON.stringify({
+    out: options.out,
+    draftDirection: result.draftDirectionPath,
+    warningCount: result.analysis.warnings.length,
+    analyzedBeats: result.analysis.beats.map((beat) => beat.id),
+  }, null, 2)}\n`);
+}
+
 const { command, options } = parseArgs(process.argv.slice(2));
 
 switch (command) {
@@ -201,6 +230,9 @@ switch (command) {
     break;
   case 'assemble-final':
     await assembleFinal(options);
+    break;
+  case 'analyze-take':
+    await analyzeCapturedTake(options);
     break;
   default:
     throw new Error(`Unknown command: ${command}`);

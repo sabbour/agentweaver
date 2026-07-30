@@ -32,6 +32,38 @@
             "height": { "type": "integer", "minimum": 1 }
           }
         },
+        "outputBudgetMs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preferred"],
+          "properties": {
+            "minimum": { "type": "integer", "minimum": 0 },
+            "preferred": { "type": "integer", "minimum": 1 },
+            "maximum": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "expectedCues": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "cueOrder": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "intervalCategories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to", "category"],
+            "properties": {
+              "from": { "type": "string", "minLength": 1 },
+              "to": { "type": "string", "minLength": 1 },
+              "category": { "enum": ["action", "wait", "dead-time"] }
+            }
+          }
+        },
         "cueWatchers": {
           "type": "array",
           "items": { "$ref": "#/$defs/cue" }

@@ -259,6 +259,29 @@ Authored or generated after inspecting the take. Contains:
 Keep camera keyframes and speed/edit segments separate. A full-frame wait may accelerate,
 while a zoomed proof moment may remain 1×.
 
+### Take analysis
+
+Run the read-only analyzer after capture and before approving direction:
+
+```text
+node scripts/demo-recording/cli.mjs analyze-take \
+  --video <raw.webm> \
+  --capture-plan <scenario.capture.json> \
+  --cues <capture-cues.json> \
+  --activity-log <activity.json> \
+  --beat-id <beat-id> \
+  --out <take-analysis.json> \
+  --draft-direction <scenario.direction.draft.json>
+```
+
+The analyzer maps DOM cues to actual `ffprobe` frame PTS, warns rather than rejects when
+cues are missing or out of order, flags cue-to-frame drift above 500ms, measures budget
+pressure, and classifies intervals as `action`, `wait`, or `dead-time`. It may seed a
+`draft-suggestion` direction file, but that file is never approved automatically.
+
+Keep action and readable proof legible. Accelerate waits only up to 12× continuously;
+above that, select meaningful activity windows and hard-cut the gaps. Remove dead-time.
+
 ## DOM-only cue detection
 
 The harness observes rendered UI only. Do not tap Agentweaver SSE, coordinator events,

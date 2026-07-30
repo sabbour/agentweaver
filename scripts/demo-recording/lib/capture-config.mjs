@@ -12,6 +12,7 @@ const predicateOperators = new Set([
   'text-matches',
 ]);
 const rectModes = new Set(['matched-element', 'element', 'first-matching', 'union', 'none']);
+const intervalCategories = new Set(['action', 'wait', 'dead-time']);
 
 function fail(message) {
   throw new Error(`Invalid demo capture plan: ${message}`);
@@ -62,6 +63,33 @@ export function validateCaptureConfig(config) {
     beatIds.add(beat.id);
     if (beat.cueWatchers !== undefined && !Array.isArray(beat.cueWatchers)) fail(`${location}.cueWatchers must be an array`);
     if (beat.steps !== undefined && !Array.isArray(beat.steps)) fail(`${location}.steps must be an array`);
+    if (beat.expectedCues !== undefined && !Array.isArray(beat.expectedCues)) fail(`${location}.expectedCues must be an array`);
+    if (beat.cueOrder !== undefined && !Array.isArray(beat.cueOrder)) fail(`${location}.cueOrder must be an array`);
+    for (const [cueIndex, name] of (beat.expectedCues ?? []).entries()) {
+      if (typeof name !== 'string' || !name) fail(`${location}.expectedCues[${cueIndex}] must be a cue name`);
+    }
+    for (const [cueIndex, name] of (beat.cueOrder ?? []).entries()) {
+      if (typeof name !== 'string' || !name) fail(`${location}.cueOrder[${cueIndex}] must be a cue name`);
+    }
+    if (beat.outputBudgetMs !== undefined) {
+      const { minimum = 0, preferred, maximum = Number.POSITIVE_INFINITY } = beat.outputBudgetMs;
+      if (!Number.isInteger(preferred) || preferred < 1) fail(`${location}.outputBudgetMs.preferred must be a positive integer`);
+      if (!Number.isInteger(minimum) || minimum < 0 || minimum > preferred) {
+        fail(`${location}.outputBudgetMs.minimum must be between zero and preferred`);
+      }
+      if ((!Number.isInteger(maximum) && maximum !== Number.POSITIVE_INFINITY) || maximum < preferred) {
+        fail(`${location}.outputBudgetMs.maximum must be at least preferred`);
+      }
+    }
+    if (beat.intervalCategories !== undefined) {
+      if (!Array.isArray(beat.intervalCategories)) fail(`${location}.intervalCategories must be an array`);
+      for (const [intervalIndex, interval] of beat.intervalCategories.entries()) {
+        if (!intervalCategories.has(interval?.category)) {
+          fail(`${location}.intervalCategories[${intervalIndex}].category is unsupported`);
+        }
+        if (!interval?.from || !interval?.to) fail(`${location}.intervalCategories[${intervalIndex}] requires from and to`);
+      }
+    }
 
     const cues = [
       ...(beat.cueWatchers ?? []).map((cue, index) => ({ cue, location: `${location}.cueWatchers[${index}]` })),
