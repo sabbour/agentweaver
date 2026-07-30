@@ -282,7 +282,6 @@ trigger:
           - has_label: { label: "ignore-bot" }
           - comment_matches: { pattern: "^/agentweaver:skip$" }
 ```
-
 ## Workflow Library and Generation
 
 ### Catalog Library
