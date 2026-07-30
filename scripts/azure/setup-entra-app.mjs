@@ -325,6 +325,11 @@ function printSummary(result, log) {
   log.info("Appsettings / Kubernetes env names to mirror later:");
   log.field("Auth__Entra__ClientId", result.appId);
   log.field("Auth__Entra__TenantId", result.tenantId);
+  log.field("Auth__Entra__RedirectUri", result.redirectUris[0] ?? "");
+  log.warn(
+    "The server-side sign-in redirect flow is a CONFIDENTIAL web client: create a client "
+    + "secret for this app (e.g. `az ad app credential reset --id " + result.appId + "`) and "
+    + "supply it as Auth__Entra__ClientSecret (Key Vault secret entra-client-secret).");
 }
 
 export async function run({ argv = [], exec = execDefault, log = logDefault } = {}) {

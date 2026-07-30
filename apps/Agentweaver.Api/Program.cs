@@ -248,6 +248,7 @@ builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHa
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubRepositoryClient, Agentweaver.Api.Github.GitHubRepositoryClient>();
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
+builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
 builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
 builder.Services.AddScoped<ProjectGitHubIdentityService>();

@@ -25,6 +25,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<McpPendingAuthorization> McpPendingAuthorizations => Set<McpPendingAuthorization>();
     public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
     public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
+    public DbSet<EntraOAuthState> EntraOAuthStates => Set<EntraOAuthState>();
     public DbSet<AuthModeEpochRecord> AuthModeEpochs => Set<AuthModeEpochRecord>();
     public DbSet<GitHubAccountLinkStateRecord> GitHubAccountLinkStates => Set<GitHubAccountLinkStateRecord>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
@@ -124,6 +125,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<OAuthState>().HasKey(s => s.State);
         model.Entity<OAuthState>().HasIndex(s => s.ExpiresAt);
+
+        model.Entity<EntraOAuthState>().HasKey(s => s.State);
+        model.Entity<EntraOAuthState>().HasIndex(s => s.ExpiresAt);
 
         model.Entity<AuthModeEpochRecord>(e =>
         {

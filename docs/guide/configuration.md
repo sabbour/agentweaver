@@ -42,6 +42,28 @@ cd apps/Agentweaver.Api
 dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
 ```
 
+When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
+GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
+uses the Microsoft identity platform v2.0 authorization-code-with-PKCE flow and redeems the
+code server-side as a **confidential web client**, so a client secret is required.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:Entra:ClientId` | none | Entra app registration (client) ID — **required** for Entra sign-in |
+| `Auth:Entra:ClientSecret` | none | Entra client secret used to redeem the authorization code at the token endpoint — **required** for the server-side redirect flow |
+| `Auth:Entra:TenantId` | none | Entra tenant ID — **required** unless `Auth:Entra:Authority` is set |
+| `Auth:Entra:Authority` | none | Full authority URL (e.g. `https://login.microsoftonline.com/<tenant>/v2.0`); overrides `TenantId` for authority resolution |
+| `Auth:Entra:RedirectUri` | `http://localhost:5000/auth/entra/callback` | Redirect URI registered on the Entra app; must exactly match the `/auth/entra/callback` URL |
+| `Auth:Entra:Scopes` | `openid profile email <ClientId>/.default` | Space-delimited scopes requested at authorize time. The `<ClientId>/.default` scope yields an access token whose `aud` is the app itself and carries the platform App Roles claim |
+| `Auth:Entra:FrontendUrl` | falls back to `Auth:GitHub:FrontendUrl` then `http://localhost:5173` | URL the API redirects to after a successful (or failed) Entra sign-in |
+
+Set the Entra client secret locally with user-secrets:
+
+```powershell
+cd apps/Agentweaver.Api
+dotnet user-secrets set "Auth:Entra:ClientSecret" "<your-entra-app-client-secret>"
+```
+
 ### CORS settings
 
 | Key | Default | Purpose |

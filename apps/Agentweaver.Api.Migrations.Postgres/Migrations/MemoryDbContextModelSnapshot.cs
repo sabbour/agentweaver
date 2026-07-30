@@ -238,6 +238,25 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("McpRevokedJtis");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.EntraOAuthState", b =>
+                {
+                    b.Property<string>("State")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CodeVerifier")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("State");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("EntraOAuthStates");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthState", b =>
                 {
                     b.Property<string>("State")
