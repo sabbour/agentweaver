@@ -189,6 +189,36 @@ export async function syncSegmentToAudio(videoPath, audioPath, outputPath, optio
   return { videoDurationMs, audioDurationMs, diffMs, action, outputPath };
 }
 
+function videoEncodingArgs(outputPath) {
+  const extension = path.extname(outputPath).toLowerCase();
+  if (extension === '.webm') return ['-c:v', 'libvpx', '-b:v', '2M'];
+  return ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p'];
+}
+
+export async function renderVideoSegment(videoPath, outputPath, options = {}) {
+  const exe = resolveBinary('ffmpeg');
+  const startMs = Math.max(0, Number(options.startMs ?? 0));
+  const endMs = Math.max(startMs, Number(options.endMs ?? startMs));
+  const playbackRate = Number(options.playbackRate ?? 1);
+  const durationMs = Math.max(0, endMs - startMs);
+  if (!(durationMs > 0)) throw new Error('renderVideoSegment requires endMs > startMs');
+  if (!(playbackRate > 0)) throw new Error('renderVideoSegment requires playbackRate > 0');
+
+  const args = [
+    '-y',
+    '-i', videoPath,
+    '-ss', (startMs / 1000).toFixed(3),
+    '-t', (durationMs / 1000).toFixed(3),
+    '-an',
+  ];
+  if (Math.abs(playbackRate - 1) > 0.01) {
+    args.push('-vf', `setpts=PTS/${playbackRate}`);
+  }
+  args.push(...videoEncodingArgs(outputPath), outputPath);
+  await runBinary(exe, args);
+  return { outputPath, startMs, endMs, playbackRate };
+}
+
 export async function extractFrame(videoPath, outputPath, timestamp) {
   const exe = resolveBinary('ffmpeg');
   await runBinary(exe, ['-y', '-ss', timestamp, '-i', videoPath, '-frames:v', '1', outputPath]);

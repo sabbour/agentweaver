@@ -32,8 +32,10 @@ Work in this order:
 2. Author soft output budgets, DOM cue definitions, and framing intent.
 3. Record complete real behavior and generated cue evidence.
 4. Inspect actual cue timestamps, rectangles, frame timing, and dead intervals.
-5. Author the take-specific director cut.
-6. Render, review, and adjust against the real footage.
+5. Run `analyze-take` to produce a draft direction suggestion.
+6. Have a human review/edit/approve the resulting `direction.json`.
+7. Render approved per-beat composites with `render-direction`.
+8. Assemble the scenario with hard-cut-only `assemble-final`, then review and adjust against the real footage.
 
 Do not promise source durations or screen coordinates before runtime-dependent behavior
 has occurred. The final runtime is an editorial constraint; it is not a capture timeout.
@@ -171,9 +173,9 @@ Marketing headlines and accessibility subtitles serve different purposes:
 
 ## Music and sound
 
-Use narration plus a restrained instrumental bed for a sizzle reel. Let music rise in
-nonverbal proof moments and duck beneath narration. Use SFX only for meaningful actions
-such as approval, ready, completion, or selection; avoid cartoon clicks and swooshes.
+For the current locked Agentweaver demo scenarios (blueprint, Azure/AKS, and sizzle),
+use narration only. Do not add background music, SFX beds, or any non-narration audio
+track in capture plans, direction files, or renders.
 
 Choose music with:
 
@@ -185,7 +187,8 @@ Choose music with:
 A 105–120 BPM instrumental electronic/minimal brief is a useful search starting point,
 not a requirement. Measure and cut to the selected track's real accents.
 
-Do not render external music without a license manifest containing at least:
+If a future, explicitly-approved scenario reintroduces music, do not render external
+music without a license manifest containing at least:
 
 ```json
 {
