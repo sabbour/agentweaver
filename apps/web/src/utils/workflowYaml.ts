@@ -324,26 +324,35 @@ function parseEventCondition(value: unknown): WorkflowEventCondition | null {
     };
   }
 
-  if (isRecord(value.hasLabel)) {
-    return singleValueCondition('hasLabel', asString(value.hasLabel.label));
+  const hasLabel = isRecord(value.hasLabel) ? value.hasLabel : isRecord(value.has_label) ? value.has_label : null;
+  if (hasLabel) {
+    return singleValueCondition('hasLabel', asString(hasLabel.label));
   }
-  if (isRecord(value.isNotLabeledWith)) {
-    return singleValueCondition('isNotLabeledWith', asString(value.isNotLabeledWith.label));
+  const isNotLabeledWith = isRecord(value.isNotLabeledWith)
+    ? value.isNotLabeledWith
+    : isRecord(value.is_not_labeled_with)
+      ? value.is_not_labeled_with
+      : null;
+  if (isNotLabeledWith) {
+    return singleValueCondition('isNotLabeledWith', asString(isNotLabeledWith.label));
   }
-  if (isRecord(value.baseBranch)) {
-    return singleValueCondition('baseBranch', asString(value.baseBranch.branch));
+  const baseBranch = isRecord(value.baseBranch) ? value.baseBranch : isRecord(value.base_branch) ? value.base_branch : null;
+  if (baseBranch) {
+    return singleValueCondition('baseBranch', asString(baseBranch.branch));
   }
-  if (isRecord(value.reviewState)) {
-    return singleValueCondition('reviewState', asString(value.reviewState.state));
+  const reviewState = isRecord(value.reviewState) ? value.reviewState : isRecord(value.review_state) ? value.review_state : null;
+  if (reviewState) {
+    return singleValueCondition('reviewState', asString(reviewState.state));
   }
   if (isRecord(value.ref)) {
-    return singleValueCondition('ref', asString(value.ref.value));
+    return singleValueCondition('ref', asString(value.ref.branch) ?? asString(value.ref.value));
   }
   if (isRecord(value.category)) {
     return singleValueCondition('category', asString(value.category.name));
   }
-  if (isRecord(value.commentMatches)) {
-    const pattern = asString(value.commentMatches.pattern);
+  const commentMatches = isRecord(value.commentMatches) ? value.commentMatches : isRecord(value.comment_matches) ? value.comment_matches : null;
+  if (commentMatches) {
+    const pattern = asString(commentMatches.pattern);
     return singleValueCondition('commentMatches', pattern ? exactCommandFromPattern(pattern) : undefined);
   }
 
@@ -353,19 +362,19 @@ function parseEventCondition(value: unknown): WorkflowEventCondition | null {
 function serializeEventPredicate(predicate: WorkflowEventPredicateType, value: string): Record<string, unknown> {
   switch (predicate) {
     case 'hasLabel':
-      return { hasLabel: { label: value } };
+      return { has_label: { label: value } };
     case 'isNotLabeledWith':
-      return { isNotLabeledWith: { label: value } };
+      return { is_not_labeled_with: { label: value } };
     case 'baseBranch':
-      return { baseBranch: { branch: value } };
+      return { base_branch: { branch: value } };
     case 'reviewState':
-      return { reviewState: { state: value } };
+      return { review_state: { state: value } };
     case 'ref':
-      return { ref: { value } };
+      return { ref: { branch: value, match_mode: 'equals' } };
     case 'category':
       return { category: { name: value } };
     case 'commentMatches':
-      return { commentMatches: { pattern: exactCommandPattern(value) } };
+      return { comment_matches: { pattern: exactCommandPattern(value) } };
   }
 }
 

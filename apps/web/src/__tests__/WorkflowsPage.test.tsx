@@ -199,7 +199,7 @@ trigger:
   type: event
   event_name: github.issue_comment
   if:
-    - commentMatches:
+    - comment_matches:
         pattern: ^/agentweaver:triage$
 `);
 

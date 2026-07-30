@@ -127,11 +127,11 @@ trigger:
   type: event
   event_name: github.pull_request
   if:
-    - hasLabel:
+    - has_label:
         label: agentweaver:triage
-    - baseBranch:
+    - base_branch:
         branch: main
-    - isNotLabeledWith:
+    - is_not_labeled_with:
         label: skip-triage
 `);
 
