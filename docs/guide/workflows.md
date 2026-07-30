@@ -89,12 +89,17 @@ Each workflow row shows whether it is **Manual only** or has a schedule, includi
 
 For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily, weekly, or monthly at a UTC time. Removing the schedule returns the workflow to manual-only operation.
 
+Project workflows can also use **Add event** or **Edit event** to configure a GitHub webhook trigger. The event editor offers a curated set of practical GitHub events (`issues`, `issue_comment`, `pull_request`, `pull_request_review`, `push`, `release`, `discussion`) plus typed conditions for that event, such as labels, base branch, review state, ref, discussion category, or an **exact command match** for issue comments. Condition rows are ANDed together by default, and **Match any of** creates an OR group within a single field.
+
 ## Triggering workflows from GitHub
 
 Each GitHub-connected project can receive repository events through its own webhook. Open the
-project's **Settings → Webhooks** page, then select **Generate secret**. Copy the generated value
-immediately: it is shown once only. In your GitHub repository, go to **Settings → Webhooks → Add
-webhook** and configure:
+project's **Settings → Webhooks** page. Agentweaver now keeps the manual setup visible at all
+times, and also shows a **Create webhook automatically** button. That automatic flow is currently
+stubbed as **coming soon**, so the manual steps below remain the active setup path for now.
+
+Select **Generate secret** and copy the generated value immediately: it is shown once only. In your
+GitHub repository, go to **Settings → Webhooks → Add webhook** and configure:
 
 - **Payload URL:** the project-specific URL displayed in Agentweaver:
   `https://your-agentweaver-host/api/projects/<project-id>/webhooks/github`
