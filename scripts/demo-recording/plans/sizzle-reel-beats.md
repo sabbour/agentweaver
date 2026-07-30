@@ -1,164 +1,191 @@
 # Sizzle Reel — Master Beat Plan
 
 This is the **single committed source of truth** for the third Agentweaver demo — the
-short **sizzle reel** assembled from real captured footage taken from the finalized
-blueprint demo and Azure/AKS live-repo demo. It is parsed by `lib/beats.mjs`'s
-`loadBeatPlan`.
+short **sizzle reel** cut together from the already-locked footage plan in
+`blueprint-demo-beats.md` (**Scenario 1**) and `azure-aks-demo-beats.md`
+(**Scenario 2**). It is parsed by `lib/beats.mjs`'s `loadBeatPlan`.
 
 Each `## Beat X.Y — Title` heading starts a beat. `Narration: "..."` is the voiceover
 script for that beat.
 
-This plan is intentionally **editorial, not capture-time predictive**:
+This reel is an **editorial highlight cut**, not a third standalone product walkthrough:
 
 - **No music.**
 - **No dissolves or cross-fades.**
 - Use **hard cuts** or native UI motion only.
-- Every cut should land on a **DOM-grounded visual cue**, not a guessed timestamp or a
-  project-specific backend event.
-- Treat cue timing with the creative-direction skill's lenient policy: preserve action,
-  accelerate waits only when readable, remove dead-time, and tolerate up to about **0.5s**
-  cue drift before treating it as a mismatch.
+- Every cut should land on a **DOM-grounded visual cue**, not a project-specific timer or
+  backend event.
+- Each beat below names the exact **source beat(s)** it is lifted from so the edit stays
+  anchored to the finalized Scenario 1 / Scenario 2 scripts rather than inventing new UI
+  business.
 
-Because this reel is assembled from Scenario 1 and Scenario 2 footage rather than one
-continuous live run, each beat includes a **Continuity** note naming the source beat(s)
-and the DOM-visible state that justifies the cut.
+Because this is assembled from existing capture plans, every beat preserves the source
+beat's locked intent and only trims for pace.
 
-## Beat 0.1 — Hook the viewer
+## Beat 0.1 — Open on the live graph
 
-Narration: "This is Agentweaver — a team of agents working in the open."
+Narration: "This is the topology view — a live graph of every agent involved and how they connect."
 
-DOM cue: Cut in when a live run view is already visible and at least one topology node is visibly active, selected, or changing state.
+Source: Scenario 1 Beat 2.3
 
-On screen: Open on the most visually active topology shot from the finalized footage — moving status, live graph structure, and coordinator context already on screen. Hold just long enough to establish that the work is happening now.
+DOM cue: Cut in only once the topology graph is already rendered and at least one node is visibly active, selected, or changing state.
 
-Continuity: Source footage from Scenario 1 beat 2.3 or Scenario 2 beat 3.1. Start on a fully rendered run page; do not pre-roll through navigation. Hard cut out on the next stable rendered UI state.
+On screen: Open on the strongest live topology shot from the Scenario 1 work-plan run: graph already drawn, coordinator context visible, real motion on screen.
 
-## Beat 1.1 — Create the project
+Continuity: This is a direct lift from Scenario 1 Beat 2.3's topology reveal. Use a hard cold-open straight onto the rendered graph; do not pre-roll through menus or navigation.
 
-Narration: "Start with a project, then point the team at the job."
+## Beat 1.1 — Create from a blueprint
 
-DOM cue: Cut in when the create-project or repo-to-project dialog is fully rendered and the primary form fields are already visible.
+Narration: "Before I create it, I want to start from a blueprint. A blueprint sets up the team roster, the workflows, the review policy, and the sandbox — so I'm not starting from a blank slate."
 
-On screen: Use the cleanest create-project footage from Scenario 2's repo-to-project flow, with the project form, repository target, and blueprint path readable without retyping any setup more than once.
+Source: Scenario 1 Beat 1.2
 
-Continuity: Source footage from Scenario 2 beats 0.1 and 1.1. Cut from the hook to the first fully rendered create-project state; cut out once the project creation confirmation visibly lands.
+DOM cue: Cut in when the create-project flow is already open and the blueprint picker is visible.
 
-## Beat 1.2 — Show the team
+On screen: Use the exact create-project flow from Scenario 1: open create-project state already on screen, switch to the blueprint picker, show **Product and Software Delivery**, then confirm creation.
 
-Narration: "Every role is specialized, and every role starts with the right skills."
+Continuity: Pull only the visually useful section from Scenario 1 Beats 1.1-1.2, but keep the wording and UI action anchored to Beat 1.2. Cut out on the moment project creation visibly lands.
 
-DOM cue: Cut in when the Agents or Skills view is fully loaded and at least one agent card or skill tile is clearly readable.
+## Beat 1.2 — Inspect the cast and browse skills
 
-On screen: Show the roster, then the skills surface — enough to prove role, model, and skill assignment without lingering on any one modal. Prefer the footage that best shows both the team cast and the skill source options.
+Narration: "Every project comes with its own team, and each agent here is specialized — this one's a backend engineer, that one's QA. Agents work from skills — here's Awesome Copilot in the marketplace, with a few I could pull in. I can also generate a skill from a description, or import one I already have."
 
-Continuity: Source footage from Scenario 1 beat 1.3 plus Scenario 2 beat 1.2 or 2.3. Hard cut from project creation once the project shell is visible; cut out on a stable Agents/Skills state rather than mid-modal dismissal.
+Source: Scenario 1 Beat 1.3
 
-## Beat 1.3 — State the goal
+DOM cue: Cut in when the **Agents** page is fully loaded and at least one agent card is readable.
 
-Narration: "Describe the work in plain language."
+On screen: Use the exact Scenario 1 Beat 1.3 sequence: open **Agents**, inspect one agent card, show its role/default model/context window, then go to **Skills** → **Browse marketplaces** → open **Awesome Copilot** → dismiss → open **Generate skill** → dismiss → open **Import skill**.
 
-DOM cue: Cut in when the assistant or task entry surface is focused and the prompt area is visibly ready for input.
+Continuity: Hard cut from project creation to the already-rendered Agents page. This beat intentionally preserves the full locked Beat 1.3 modal tour, with each internal cut landing on a fully rendered dialog or page state.
 
-On screen: Use the live typing shot where the goal or task brief is entered. Keep the start and end of meaningful typing at 1×; if the middle of the typing run is long, trim or accelerate only the repetitive middle.
+## Beat 1.3 — Point it at a live repo
 
-Continuity: Source footage from Scenario 1 beat 2.1 or Scenario 2 beat 1.1. Enter on a ready text field, not during route navigation. Cut out once submission is visibly committed.
+Narration: "I'll point this at the AKS repo. Instead of picking a pre-built blueprint, I'll generate one for what we actually need — managing issues and roadmap work, plus running the blog."
 
-## Beat 2.1 — Confirm the plan
+Source: Scenario 2 Beat 1.1
 
-Narration: "Before the team starts, review the plan and confirm it."
+DOM cue: Cut in when the repo-to-project form is visible and `Azure/AKS` is already present or being entered in the target-repo field.
 
-DOM cue: Cut in when the OutcomeSpec view is rendered and the confirm action is visible or becomes enabled.
+On screen: Lift the strongest portion of Scenario 2 Beat 1.1: `Azure/AKS` target, blueprint-generation path, and the custom brief for issue triage, roadmap work, and blog/content management.
 
-On screen: Show the coordinator's proposed plan, one visible revision or clarification if available, then the final confirm action that unblocks the run.
+Continuity: Hard cut out of the marketplace tour into the live-repo setup. Stay on the same rendered repo-to-project flow; do not widen into unrelated setup.
 
-Continuity: Source footage from Scenario 1 beat 2.2. Hard cut from the typed goal to the first readable OutcomeSpec state; cut out only after the confirmed state is visually acknowledged.
+## Beat 2.1 — Confirm the OutcomeSpec
 
-## Beat 2.2 — Generate the workflow
+Narration: "Before any agent starts working, the coordinator writes up an OutcomeSpec — its understanding of the goal, the assumptions it's making, and what it plans to do. Once it looks right, I confirm it."
 
-Narration: "Workflows are editable, so the team can run the same play again."
+Source: Scenario 1 Beat 2.2
 
-DOM cue: Cut in when the workflow editor graph or trigger configuration is fully rendered and individual nodes or trigger controls are visibly present.
+DOM cue: Cut in when the generated OutcomeSpec is visible and the confirm action is present or about to become enabled.
 
-On screen: Use the Scenario 2 workflow-generation footage: generated graph, workflow structure, then the trigger setup that shows this is a reusable system rather than a one-off run.
+On screen: Show the Scenario 1 Beat 2.2 confirmation loop: readable OutcomeSpec, one visible revision if available, then the final confirm action.
 
-Continuity: Source footage from Scenario 2 beat 2.2 and, if needed, beat 3.1 for the finished workflow state. Hard cut on rendered graph visibility; do not dissolve between editor states.
+Continuity: This beat should feel like a direct compression of Scenario 1 Beat 2.2. Cut out only after the confirmed state is visually acknowledged.
 
-## Beat 2.3 — Watch the graph run
+## Beat 2.2 — Watch deterministic execution
 
-Narration: "Then follow the graph as the work moves from agent to agent."
+Narration: "The coordinator manages the handoffs between them, so tasks run in the right order. Once the subtasks finish, we get the artifacts — spec, plan, UX notes, even marketing copy. Here they are."
 
-DOM cue: Cut in when the topology graph is fully drawn and at least one node or edge is visibly active, expanding, or changing status.
+Source: Scenario 1 Beat 2.3
 
-On screen: Stay full-frame by default so the graph relationships remain readable. If the graph is wider than the viewport, use one restrained DOM-anchored pan between related node clusters instead of repeated zoom churn.
+DOM cue: Cut in when the run has decomposed into subtasks and the live topology graph has fully rendered.
 
-Continuity: Source footage from Scenario 1 beat 2.3 or Scenario 2 beat 3.1. Keep causal actions at 1×, accelerate only readable waits, and hard cut dead gaps rather than pushing beyond the 12× threshold.
+On screen: Use the exact Scenario 1 Beat 2.3 proof sequence: wait for decomposition into subtasks, approve anything that appears, open the live topology graph, inspect a few nodes, return to the run view, and show the generated artifacts landing in real time.
 
-## Beat 2.4 — Open the preview
+Continuity: This is the core execution payoff. Preserve the locked Beat 2.3 causality: decomposition first, topology render second, artifacts visible at the end. Accelerate only readable waits; remove dead-time with hard cuts.
 
-Narration: "When the work produces a real app, open the live preview."
+## Beat 2.3 — Turn artifacts into board work
 
-DOM cue: Cut in when the preview gate, preview button, or preview surface is visibly available; cut out only after the preview is visibly rendered.
+Narration: "Let's turn one of those artifacts into work. I'll add a task to the board for a landing page that matches what we just generated, then move it from Backlog to Ready."
 
-On screen: Show the human approval gate if it is on screen, then the real preview opening and holding long enough to prove the page is running rather than mocked.
+Source: Scenario 1 Beat 2.4
 
-Continuity: Source footage from Scenario 1 beat 2.5 or 4.5. Hard cut in on the first preview-ready state; hard cut out only after the rendered preview settles.
+DOM cue: Cut in when the **Board** is loaded and the target columns are already visible.
 
-## Beat 3.1 — Turn output into work
+On screen: Lift the exact Scenario 1 Beat 2.4 board action: create the landing-page work item once, then drag it from **Backlog** to **Ready**.
 
-Narration: "Artifacts become tasks, and tasks move across the board."
+Continuity: Hard cut from generated artifacts to the board. Keep the card move at 1× because the drag explains the state change.
 
-DOM cue: Cut in when the Board view is fully loaded and at least one column label and task card are visibly present.
+## Beat 2.4 — Open the live preview
 
-On screen: Show the board with a work item being created or moved between columns. Keep the drag or card move at 1× because that visible action explains the state change.
+Narration: "Once one of them starts implementing, I'll follow along — and when it's done, the agent builds and runs the app right there in its sandbox and registers a live preview. I'll open that preview to see the page running for real, not just a mockup."
 
-Continuity: Source footage from Scenario 1 beat 2.4. Cut from preview to board on a stable page render, not while navigation is still animating.
+Source: Scenario 1 Beat 2.5
 
-## Beat 3.2 — Trace the run
+DOM cue: Cut in when the implementation subtask is already visible and the preview approval gate or preview affordance is present.
 
-Narration: "If you need proof, open the trace and inspect what actually happened."
+On screen: Use the exact Scenario 1 Beat 2.5 flow: break the board task down, follow one implementation subtask, approve the preview gate when it appears, then open the live preview after it actually renders.
 
-DOM cue: Cut in when the Observability or Traces view is fully rendered and the span tree is visibly populated.
+Continuity: Cut in at the implementing-task state, not earlier board setup. Hold on the fully rendered preview long enough to prove it is real.
 
-On screen: Use the trace shot that shows the run's span tree, agent activity, model calls, or timing detail. Keep this readable and full-frame; this beat is proof, not scenery.
+## Beat 2.5 — Trace it, don't rush it
 
-Continuity: Source footage from Scenario 1 beat 2.7. Hard cut from the board to a loaded trace view; do not accelerate through the first readable populated trace state.
+Narration: "Let's look at how this actually ran. Every step is traced — here's the sequence of calls, the timing, and where the agent made decisions along the way."
 
-## Beat 3.3 — Put it on a schedule
+Source: Scenario 1 Beat 2.7
 
-Narration: "Some work should run on its own, so schedule it once and keep going."
+DOM cue: Cut in when **Observability → Traces** is fully rendered and the span tree is populated.
 
-DOM cue: Cut in when the workflow schedule or trigger editor is fully visible and the schedule controls are already rendered.
+On screen: Lift the Scenario 1 Beat 2.7 trace shot exactly as locked: open the transaction trace for the run you just completed and stay on the span tree long enough to read the agent, model, and tool activity.
 
-On screen: Show the scheduling surface from the finalized workflow footage, using the shortest readable path from editing the workflow to saving the recurring trigger.
+Continuity: Keep this full-frame and readable. Per the locked source beat, do not rush past the trace and do not zoom through it.
 
-Continuity: Source footage from Scenario 1 beat 3.1 or Scenario 2 beat 2.2. Hard cut on the loaded scheduling UI; cut out once the saved schedule state is visibly confirmed.
+## Beat 3.1 — Wire a scheduled workflow
 
-## Beat 4.1 — Ask from chat
+Narration: "Not everything should run on a schedule — but some things should."
 
-Narration: "You can also hand the next job to the assistant directly."
+Source: Scenario 1 Beat 3.1
 
-DOM cue: Cut in when the assistant session is open and the composer is visibly ready, or when the submitted prompt and reply are both already on screen.
+DOM cue: Cut in when the **Workflows** page is loaded and the dependency-sweep workflow is visible.
 
-On screen: Use the shortest readable assistant sequence: ask for the next task, show the request in context, then hold on the assistant's visible response or kickoff state.
+On screen: Show the Scenario 1 Beat 3.1 weekly schedule setup: open the dependency-sweep workflow, add a weekly schedule, and save it.
 
-Continuity: Source footage from Scenario 1 beats 4.1 and 4.2. Keep the beginning and end of typing at 1×; cut away once the assistant's response is visibly established.
+Continuity: This beat sets up the contrast for the next trigger beat. Keep only the schedule-editing proof, not extra navigation.
 
-## Beat 4.2 — Review the result
+## Beat 3.2 — Wire GitHub to kick off triage
 
-Narration: "When the work is ready, review the change before it moves forward."
+Narration: "Here's a workflow that should only run when something happens on GitHub. I want this one to fire on issues, specifically when it gets labeled `agentweaver:triage` — I'll build that condition instead of typing it as text. I'll create an issue, add the label, and watch triage kick off."
 
-DOM cue: Cut in when a review gate, diff view, PR banner, or resulting pull request surface is visibly rendered.
+Source: Scenario 1 Beat 3.2
 
-On screen: Use the cleanest review-result footage available: file diff, approval gate, or PR-ready state. Show enough of the review surface to prove human approval stays in the loop.
+DOM cue: Cut in when the bug-triage workflow trigger editor is rendered and the GitHub event controls are visible.
 
-Continuity: Source footage from Scenario 1 beats 2.6 and 4.7, or Scenario 2 beat 3.2. Hard cut in on the fully rendered review state; cut out once the approved or PR-ready result is visible.
+On screen: Lift the exact Scenario 1 Beat 3.2 sequence: open the bug-triage workflow, switch trigger from schedule to GitHub event, choose **Issues** with label `agentweaver:triage` in the condition builder, show webhook creation UI, then demonstrate the label being added and the run appearing.
 
-## Beat 5.1 — Close on the shared surface
+Continuity: This is a direct highlight of the locked webhook-trigger beat. Use hard cuts between the workflow editor, GitHub action, and the run appearing, each on a DOM-confirmed rendered state.
 
-Narration: "The same workspace is available in the UI, through workflows, and from your own tools."
+## Beat 4.1 — Triage from chat instead
 
-DOM cue: Cut in when the Settings or MCP connection surface is fully rendered and the connection details area is visibly present.
+Narration: "There's more than one way to work with Agentweaver. I'll open a new issue, this time without a label, and just ask for it directly. I'll start a chat and tell the assistant to triage issue #x. The assistant reviews the GitHub issue, outlines a minimal fix with a focused test plan, and kicks off a Bug Fix workflow."
 
-On screen: End on the settings-based connection surface that proves the same project and team context can be reached from external clients. Hold the final frame steady long enough to read before the end fade-to-black.
+Source: Scenario 1 Beats 4.1-4.2
 
-Continuity: Source footage from Scenario 1 beat 5.1 or Scenario 2 beat 5.1. This is the only place where a final fade-to-black is acceptable, because it closes the video rather than blending two product states.
+DOM cue: Cut in when the assistant session is open and the composer is ready, or when the issue and the chat entry point are both already visible.
+
+On screen: Combine the locked Scenario 1 Beats 4.1-4.2 flow: create or open the next issue without the trigger label, start an assistant session, ask it to triage that issue directly, then hold on the assistant response / Bug Fix workflow kickoff long enough to prove chat is another control surface.
+
+Continuity: Hard cut from the webhook-triggered run to the assistant-session kickoff. Keep the typed request readable at the start and end, then cut out once the workflow kickoff is visibly established.
+
+## Beat 4.2 — Show the PR in the run, then on GitHub
+
+Narration: "The result shows up right in the run — here's the pull request as part of the topology. And here it is on GitHub, ready for review."
+
+Source: Scenario 1 Beat 4.7
+
+DOM cue: Cut in when the run topology containing the PR is visible; cut out only after the actual PR page is open on GitHub.
+
+On screen: Use the full Scenario 1 Beat 4.7 close-the-loop shot: end on the run topology that contains the resulting pull request, then open that same pull request on GitHub.
+
+Continuity: This is the payoff for the webhook/chat triage sequence. Keep the hard cut from in-product PR evidence to the GitHub PR opening aligned to the DOM-visible PR surface, not a timed dissolve.
+
+## Beat 5.1 — End on the MCP surface
+
+Narration: "You can drive the exact same workflows from your own tools. In Settings, grab the MCP server URL, then connect clients like Claude Desktop, VS Code, or Copilot CLI."
+
+Source: Scenario 1 Beat 5.1 and Scenario 2 Beat 5.1
+
+DOM cue: Cut in when **Settings** is fully rendered and the MCP server URL area is visible.
+
+On screen: End on the shared locked outro used by both demos: show the Settings page, the MCP server URL, and the cross-tool control-surface claim.
+
+Continuity: Close on the rendered MCP settings surface and allow only the final fade-to-black after the last readable frame, since that ends the reel rather than blending two product states.
