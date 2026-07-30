@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/demo-recording/take-analysis.schema.json",
+  "title": "Agentweaver demo take analysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "takeId", "policy", "frameTimeline", "cueMappings", "beats", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "takeId": { "type": "string", "minLength": 1 },
+    "videoPath": { "type": ["string", "null"] },
+    "sourceHashes": { "type": "object" },
+    "policy": {
+      "type": "object",
+      "required": ["intervalCategories", "missingCueMode", "cueFrameToleranceMs", "maximumContinuousRate"],
+      "properties": {
+        "intervalCategories": {
+          "const": ["action", "wait", "dead-time"]
+        },
+        "missingCueMode": { "const": "warn-and-continue" },
+        "cueFrameToleranceMs": { "const": 500 },
+        "maximumContinuousRate": { "const": 12 }
+      }
+    },
+    "frameTimeline": { "type": "object" },
+    "cueMappings": { "type": "array" },
+    "beats": { "type": "array" },
+    "warnings": { "type": "array" }
+  }
+}
