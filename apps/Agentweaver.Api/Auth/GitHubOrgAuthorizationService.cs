@@ -138,6 +138,14 @@ public sealed class GitHubOrgAuthorizationService : IGitHubOrgAuthorizationServi
         if (_allowedEntities.Count == 0)
             return new OrgMembershipDecision(OrgAuthResult.NotConfigured, null);
 
+        // `*` is an explicit operator opt-in to unrestricted organization
+        // membership. OAuth authentication has already happened before this
+        // authorization service is called, so no GitHub membership probe is
+        // required (or meaningful) for this rule.
+        var globalWildcard = _allowedEntities.FirstOrDefault(entity => entity.IsGlobalWildcard);
+        if (globalWildcard is not null)
+            return new OrgMembershipDecision(OrgAuthResult.Allowed, globalWildcard);
+
         // Cache key incorporates ALL allowed rules deterministically (canonical rule strings joined
         // with '|') so a config change to the rule list cannot collide with a previously-cached
         // decision for the login.

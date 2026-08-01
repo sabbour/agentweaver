@@ -62,3 +62,20 @@ test("rule: renders a labelled divider containing the label", async () => {
   assert.ok(out.includes("Section"));
   assert.match(out, /─+/);
 });
+
+test("withTiming: emits start and elapsed completion lines", async () => {
+  let now = 1_000;
+  const out = await captureStdout(async () => {
+    const result = await log.withTiming(
+      "ACR build agentweaver-api:v1.2.3",
+      async () => {
+        now = 2_550;
+        return "done";
+      },
+      { now: () => now },
+    );
+    assert.equal(result, "done");
+  });
+  assert.match(out, /ACR build agentweaver-api:v1\.2\.3\.\.\./);
+  assert.match(out, /completed in 1\.6s/);
+});

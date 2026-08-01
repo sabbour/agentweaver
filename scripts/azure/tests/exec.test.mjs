@@ -38,6 +38,20 @@ test("run: rejects with ExecError when the binary does not exist on PATH (no all
   await assert.rejects(run(DEFINITELY_MISSING_BINARY, ["--version"]), /Failed to spawn/);
 });
 
+test("run: opt-in timeout terminates the local process and never retries it", async () => {
+  await assert.rejects(
+    run(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeoutMs: 25 }),
+    /timed out after 25ms; remote operation state is unknown and was not retried/,
+  );
+});
+
+test("capture: timeout remains an indeterminate failure even with allowFailure", async () => {
+  await assert.rejects(
+    capture(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { timeoutMs: 25, allowFailure: true }),
+    /timed out after 25ms; remote operation state is unknown and was not retried/,
+  );
+});
+
 test("resolveExecutable('openssl'): falls back to Git for Windows' bundled usr/bin/openssl.exe when not on PATH directly", {
   skip: process.platform !== "win32" ? "Windows-only fallback path" : false,
 }, () => {

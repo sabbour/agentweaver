@@ -13,9 +13,11 @@ import path from "node:path";
 import {
   parseArgs,
   HELP_TEXT,
+  normalizeGithubOrgList,
   runInteractiveInstaller,
   shouldRunInteractiveInstaller,
   run,
+  validateGithubOrgList,
 } from "../provision-infra.mjs";
 import { NonInteractiveError } from "../lib/prompt.mjs";
 
@@ -32,6 +34,42 @@ function fakeStep(name, calls, result = {}) {
     },
   };
 }
+
+test("validateGithubOrgList: accepts a bare org login", () => {
+  assert.equal(validateGithubOrgList("microsoft"), true);
+});
+
+test("validateGithubOrgList: accepts org/* (explicit wildcard, same as bare org)", () => {
+  assert.equal(validateGithubOrgList("azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: accepts org/team-slug entries, comma-separated", () => {
+  assert.equal(validateGithubOrgList("Azure/aks,Azure/AKS PM,azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: accepts semicolon as a separator too (matches GitHubOrgList.cs)", () => {
+  assert.equal(validateGithubOrgList("Azure/aks;azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: rejects an empty value", () => {
+  assert.match(validateGithubOrgList(""), /Enter at least one/);
+});
+
+test("validateGithubOrgList: rejects an invalid org login", () => {
+  assert.match(validateGithubOrgList("not a valid org!"), /doesn't look like a valid/);
+});
+
+test("validateGithubOrgList: rejects an invalid org before the slash", () => {
+  assert.match(validateGithubOrgList("not a valid org!/team"), /doesn't look like a valid/);
+});
+
+test("normalizeGithubOrgList: trims, drops empties, and rejoins comma-separated", () => {
+  assert.equal(normalizeGithubOrgList(" microsoft , azure/aks ,, "), "microsoft,azure/aks");
+});
+
+test("normalizeGithubOrgList: normalizes semicolon-separated input to comma-separated", () => {
+  assert.equal(normalizeGithubOrgList("Azure/aks;azure-management-and-platforms/*"), "Azure/aks,azure-management-and-platforms/*");
+});
 
 test("parseArgs: recognizes flags and takes values for valued flags", () => {
   const parsed = parseArgs([
@@ -62,6 +100,17 @@ test("parseArgs: throws on unknown argument", () => {
 test("parseArgs: -h/--help sets help", () => {
   assert.equal(parseArgs(["--help"]).help, true);
   assert.equal(parseArgs(["-h"]).help, true);
+});
+
+test("GitHub org validator: accepts the bare global wildcard alongside existing org/team forms", () => {
+  assert.equal(validateGithubOrgList("*"), true);
+  assert.equal(validateGithubOrgList("*,microsoft,Azure/AKS PM;contoso/*"), true);
+  assert.equal(normalizeGithubOrgList(" * ; microsoft, Azure/AKS PM "), "*,microsoft,Azure/AKS PM");
+});
+
+test("GitHub org validator: rejects malformed wildcard forms", () => {
+  assert.match(validateGithubOrgList("*/team"), /doesn't look like a valid/);
+  assert.match(validateGithubOrgList("**"), /doesn't look like a valid/);
 });
 
 test("HELP_TEXT: mentions key flags", () => {

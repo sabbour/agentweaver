@@ -154,6 +154,21 @@ test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID env overrides 
   assert.equal(vars.ENTRA_TENANT_ID, "66666666-7777-8888-9999-000000000000");
 });
 
+test("resolveVariables: forwards opt-in ACR CLI timeout settings", async () => {
+  const vars = await resolveVariables({
+    env: {
+      KEYVAULT_NAME: TEST_KEYVAULT_NAME,
+      ACR_BUILD_TIMEOUT_MS: "1800000",
+      ACR_IMPORT_TIMEOUT_MS: "600000",
+    },
+    repoRoot: FAKE_REPO_ROOT,
+    resolveLive: false,
+    gitShortSha: async () => "deadbee",
+  });
+  assert.equal(vars.ACR_BUILD_TIMEOUT_MS, "1800000");
+  assert.equal(vars.ACR_IMPORT_TIMEOUT_MS, "600000");
+});
+
 test("resolveVariables: env overrides beat defaults for every field", async () => {
   const vars = await resolveVariables({
     env: {

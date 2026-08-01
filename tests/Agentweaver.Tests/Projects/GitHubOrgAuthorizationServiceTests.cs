@@ -23,6 +23,19 @@ namespace Agentweaver.Tests.Projects;
 /// </summary>
 public sealed class GitHubOrgAuthorizationServiceTests
 {
+    [Fact]
+    public async Task CheckMembershipAsync_AllowsWithoutOrgLookup_WhenGlobalWildcardRuleIsConfigured()
+    {
+        var handler = new RoutingHttpMessageHandler(_ => HttpStatusCode.NotFound);
+        var service = BuildService(handler, allowedOrg: "*");
+
+        var decision = await service.ResolveAsync("token", "octocat", CancellationToken.None);
+
+        decision.Result.Should().Be(OrgAuthResult.Allowed);
+        decision.MatchedEntity!.RuleString.Should().Be("*");
+        handler.RequestUris.Should().BeEmpty("the global wildcard must not probe a fictitious '*' organization");
+    }
+
     // ---------------------------------------------------------------------
     // 1. Authorized member: private members endpoint returns 204 → Allowed.
     // ---------------------------------------------------------------------
