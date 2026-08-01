@@ -18,3 +18,5 @@
 - Verified that GitHub Merge Queue is unavailable on the current personal-account repository, which materially changed the trade-off analysis.
 - The settled durable outcome is still protected `main` only: every change via PR, required `.NET tests` / `Node toolchain tests` / `Web tests` / `Docs build`, squash-only merge, automatic branch deletion, narrow audited admin bypass, and release tagging from the exact green merged SHA.
 - Key cross-agent learning: tags already provide the immutable published-release boundary, so Agentweaver does not need extra long-lived branch tiers unless future maintenance-line or organization-level Merge Queue realities change.
+
+2026-07-31T03:40:59+03:00 — Publish-apps exploration completed discussion-only. Morpheus confirmed publish is legal only as a declarative post-approval tail node converged by a reconciler, and rejected mapping coordinator runs onto OpenAI Responses/Conversations.

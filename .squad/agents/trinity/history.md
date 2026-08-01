@@ -19,3 +19,12 @@
 - Updated the frontend to refresh coordinator artifacts from run-stream events and added typed notification badges for human-review and tool-approval actions.
 
 - 2026-07-29: Verified `trinity-4` via combined full build + batch validation (solution build 0 errors; backend tests 3082 passed / 108 skipped / 7 pre-existing Docker-env failures; frontend lint clean; frontend tests 929/930 passed with 1 pre-existing unrelated `SkillsPage.test.tsx` failure). Work remains pending final security review before commit/PR.
+
+## 2026-07-31T02:54:19.830+03:00 — Cross-agent publishing-apps spec exploration synthesis
+
+- Opus 5 analysis batch supersedes the earlier default-model Link/Seraph/Tank/Trinity run for this topic.
+- Four unresolved cross-agent conflicts remain for the spec owner: (1) Link's phase-1 shared `agentweaver-published` namespace versus Seraph's per-project `aw-published-{projectId}` isolation; (2) Link's same-ACR published/* prefix and scope maps versus Seraph's preference for a separate generated-image registry to avoid platform-image pull exposure; (3) whether published apps may reach the Agentweaver API at all — Seraph's phase-1 default-deny/no API path conflicts with Trinity/Tank workflow projection flavor (b), which needs a scoped OAuth client to invoke/read workflow runs; (4) default revision behavior — Tank recommends pinned immutable snapshots, while product may still need an explicit tracked-head/regenerate path.
+- Hard blockers: #582 rootless BuildKit must land before phase-1 publish, and WorkflowDefinition lacks declared inputs/outputs so workflow projection apps cannot be schema-driven yet.
+
+
+2026-07-31T03:40:59+03:00 — Publish-apps exploration completed discussion-only. Trinity separated living reports/projection apps from generic dashboards and OpenAI-compatible chat, identified workflow I/O schema as the high-leverage prerequisite, and framed blueprints as the distribution product.

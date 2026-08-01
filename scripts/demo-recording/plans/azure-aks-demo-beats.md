@@ -70,7 +70,7 @@ On screen: From the same project, open **Browse marketplaces**, import `avoid-ai
 
 ## Beat 3.1 — Run triage now
 
-Narration: "I'm not waiting until Monday. I'll run triage now."
+Narration: "With the writer equipped, rather than wait for the configured weekly triage schedule, I'll run the workflow now."
 
 Fresh navigation: true
 
@@ -78,7 +78,7 @@ On screen: Trigger **Run now** on the issue-triage workflow, stay on the coordin
 
 ## Beat 3.2 — Draft the blog post locally
 
-Narration: "This one's not tied to the specs we just generated — it's a standalone post on multi-agent orchestration on AKS, researched against sabbour.me/agentweaver. I'll keep this local. If I approved it here, it would open straight up as a pull request against the repo — but I'm leaving that step alone for now."
+Narration: "I'm trying to research and write a post on multi-agent orchestration on AKS, using sabbour.me/agentweaver as the source. I'll keep this local. If I approved it here, it would open straight up as a pull request against the repo — but I'm leaving that step alone for now."
 
 On screen: Start the content-authoring task from the same project context, let the draft complete, and show the real approve-to-open-PR notification or banner without clicking through.
 

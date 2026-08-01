@@ -34,3 +34,12 @@ Link contributed to the v0.7.11–v0.9.70 release waves, including preview/auth 
 - Durable lesson: when a docs task says "fix retired model ID X", always check the actual current code default/constant first — a doc that literally quotes a source-code constant's real value should not be "fixed" to a preferred ID without a corresponding code change, or the doc becomes newly inaccurate instead of newly accurate.
 
 - 2026-07-29: Tank finalized the Entra-first/two-tier RBAC direction your bootstrap command is targeting. Keep the Node-based `azure:setup-entra-app` path; expect one follow-up pass to align placeholder app-role labels and docs/config wiring with the final runtime implementation.
+
+## 2026-07-31T02:54:19.830+03:00 — Cross-agent publishing-apps spec exploration synthesis
+
+- Opus 5 analysis batch supersedes the earlier default-model Link/Seraph/Tank/Trinity run for this topic.
+- Four unresolved cross-agent conflicts remain for the spec owner: (1) Link's phase-1 shared `agentweaver-published` namespace versus Seraph's per-project `aw-published-{projectId}` isolation; (2) Link's same-ACR published/* prefix and scope maps versus Seraph's preference for a separate generated-image registry to avoid platform-image pull exposure; (3) whether published apps may reach the Agentweaver API at all — Seraph's phase-1 default-deny/no API path conflicts with Trinity/Tank workflow projection flavor (b), which needs a scoped OAuth client to invoke/read workflow runs; (4) default revision behavior — Tank recommends pinned immutable snapshots, while product may still need an explicit tracked-head/regenerate path.
+- Hard blockers: #582 rootless BuildKit must land before phase-1 publish, and WorkflowDefinition lacks declared inputs/outputs so workflow projection apps cannot be schema-driven yet.
+
+
+2026-07-31T03:40:59+03:00 — Publish-apps exploration completed discussion-only. Link's topology findings fed the working decision: separate generated-image registry, scoped public API access, and per-project namespaces despite Gateway/RBAC costs; no repo/spec changes.
