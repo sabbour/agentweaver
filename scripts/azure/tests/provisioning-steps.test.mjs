@@ -119,15 +119,6 @@ test("10-create-cluster: run() creates RG/ACR/cluster/node pools when absent, an
     nginxIdx !== -1 && createCall.args[nginxIdx + 1] === "None",
     "az aks create must pass --app-routing-default-nginx-controller None",
   );
-  const approutingUpdateCall = exec.calls.run.find(
-    (c) => c.cmd === "az" && c.args[0] === "aks" && c.args[1] === "approuting" && c.args[2] === "update",
-  );
-  assert.ok(approutingUpdateCall, "expected an 'az aks approuting update' call");
-  const nginxUpdateIdx = approutingUpdateCall.args.indexOf("--nginx");
-  assert.ok(
-    nginxUpdateIdx !== -1 && approutingUpdateCall.args[nginxUpdateIdx + 1] === "None",
-    "az aks approuting update must pass --nginx None",
-  );
 });
 
 test("10-create-cluster: skips resource creation when everything already exists", async () => {
@@ -144,10 +135,6 @@ test("10-create-cluster: skips resource creation when everything already exists"
   assert.ok(!runCommands.some((c) => c.startsWith("az group create")));
   assert.ok(!runCommands.some((c) => c.startsWith("az acr create")));
   assert.ok(!runCommands.some((c) => c.startsWith("az aks create")));
-  assert.ok(
-    exec.calls.run.some((c) => c.cmd === "az" && c.args[0] === "aks" && c.args[1] === "approuting" && c.args[2] === "update"),
-    "existing clusters should still reconcile app routing nginx to None",
-  );
 });
 
 // -------------------- 15-setup-identity.mjs --------------------

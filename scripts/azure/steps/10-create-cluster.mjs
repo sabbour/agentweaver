@@ -196,21 +196,6 @@ export async function run(cfg, opts = {}) {
       "none",
     ]);
   }
-  log.info("Ensuring App Routing default nginx controller is disabled (Gateway API / istio only)...");
-  await exec.run("az", [
-    "aks",
-    "approuting",
-    "update",
-    "--resource-group",
-    cfg.RESOURCE_GROUP,
-    "--name",
-    cfg.CLUSTER_NAME,
-    "--nginx",
-    "None",
-    "--output",
-    "none",
-  ]);
-
   log.info("");
   log.info("Fetching kubeconfig...");
   await exec.run("az", [
