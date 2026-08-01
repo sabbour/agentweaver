@@ -108,7 +108,7 @@ Run only the suite(s) relevant to what you changed:
 dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 
 # Node.js provisioning/deployment/release toolchain
-node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
+node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
 
 # Web frontend (Vitest)
 npm --prefix apps/web run test
@@ -135,7 +135,7 @@ as passing for required-status-checks purposes:
 | Job | What it runs | Gating | Runs when |
 |---|---|---|---|
 | `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
-| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs` | Blocking — must pass | `scripts/azure/**` or `scripts/changesets/**` changed |
+| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs` | Blocking — must pass | `scripts/azure/**`, `scripts/changesets/**` or `scripts/ci/**` changed |
 | `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass | `apps/web/**` changed |
 | `Web lint` | `npm --prefix apps/web run lint` | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
@@ -148,6 +148,31 @@ is **active**, so admission is mechanical: direct pushes to `dev` are rejected a
 merges are blocked until the branch is current and the required checks are green.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
+
+### Container image publishing
+
+The [`Publish images` workflow](.github/workflows/publish-images.yml) builds the four
+Agentweaver container images and publishes them to GitHub's container/artifact registry
+(`ghcr.io/<owner>/agentweaver-{api,frontend,mcp,agent-host}`). It never deploys
+anything — Azure/AKS deployment stays with the `npm run azure:*` toolchain.
+
+The image list is not restated in the workflow: the plan job derives its build matrix
+from [`scripts/azure/image-spec.mjs`](scripts/azure/image-spec.mjs) (the deploy
+toolchain's single source of truth) through
+[`scripts/ci/ghcr-plan.mjs`](scripts/ci/ghcr-plan.mjs), which is unit-tested by the
+`Node toolchain tests` job. Triggers map to the branch topology above:
+
+- push to `dev` → `:sha-<short>` and `:dev`
+- push to `release/vX.Y.Z` → `:sha-<short>` and `:rc-X.Y.Z`
+- push to `main` → `:sha-<short>` and `:main`
+- a published GitHub Release → `:sha-<short>`, `:X.Y.Z`, `:vX.Y.Z`, and `:latest`
+  (`:latest` is skipped for prereleases)
+- manual `workflow_dispatch` on any ref (an arbitrary commit) → `:sha-<short>` only,
+  with an optional build-only dry run that skips the push
+
+Every build publishes the immutable `sha-<short>` tag, so any image is addressable by
+the exact commit it was built from — the same identifier model
+`npm run azure:deploy-from-local` and `azure:deploy-from-commit` use.
 
 ## Opening a pull request
 

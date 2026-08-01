@@ -110,6 +110,26 @@ Before deleting the release branch, create a short-lived branch from current
 npm run release:sync-dev -- <release-preparation-sha>
 ```
 
+## Published container images
+
+Alongside the Azure/ACR deployment path, every stage of the branch topology also
+publishes container images to GitHub's container/artifact registry via the
+[`Publish images` workflow](.github/workflows/publish-images.yml):
+
+| Trigger | Tags applied to each `ghcr.io/<owner>/agentweaver-*` image |
+|---|---|
+| Push to `dev` | `sha-<short>`, `dev` |
+| Push to `release/vX.Y.Z` | `sha-<short>`, `rc-X.Y.Z` |
+| Push to `main` | `sha-<short>`, `main` |
+| Published GitHub Release `vX.Y.Z` | `sha-<short>`, `X.Y.Z`, `vX.Y.Z`, `latest` (not for prereleases) |
+| Manual run on any ref | `sha-<short>` |
+
+Release images are published from the `release: published` event, i.e. as a
+consequence of `npm run release:publish`, so the tag, the GitHub Release, and the
+`vX.Y.Z` images all describe the same exact `main` SHA. Publishing images is
+independent of deployment: `azure:deploy-from-release` still builds/retags and ships
+into the configured Azure environment.
+
 ## Local and infrastructure deployment
 
 Use `azure:provision-infra` for first/full idempotent infrastructure setup. Its
