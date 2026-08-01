@@ -215,6 +215,21 @@ test("buildImage: az acr build invocation includes --build-arg IMAGE_TAG and GIT
   assert.ok(digestCalls > 0);
 });
 
+test("buildImage: forwards an opt-in local ACR build timeout without retrying", async () => {
+  const image = getImage("agentweaver-mcp");
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => args.includes("show-manifests")
+      ? { stdout: "sha256:" + "a".repeat(64), stderr: "", code: 0 }
+      : { stdout: "", stderr: "", code: 0 },
+  });
+  const git = { revParseCommit: async () => "prov-commit-sha", currentGitSha: async () => ({ full: "fullsha" }) };
+  await buildImage(image, "v1.2.3", "targetcommit", { ...CFG, ACR_BUILD_TIMEOUT_MS: "1800000" }, { exec, git });
+
+  const buildCall = exec.calls.run.find((call) => call.args.includes("build"));
+  assert.equal(buildCall.opts.timeoutMs, "1800000");
+  assert.equal(exec.calls.run.filter((call) => call.args.includes("build")).length, 1);
+});
+
 test("acrDigestForTag/waitForAcrTagDigest: retries then returns null when the tag never resolves", async () => {
   const exec = fakeExec({ captureImpl: async () => ({ stdout: "", stderr: "", code: 0 }) });
   const sleeps = [];

@@ -4,6 +4,7 @@ namespace Agentweaver.Api.Auth;
 /// A single parsed rule from the <c>Auth:GitHub:AllowedOrg</c> config value under the new
 /// mixed-list model. A rule is one of:
 ///
+///   • <c>*</c>              — any authenticated GitHub identity satisfies.
 ///   • <c>org</c>            — <see cref="TeamSlug"/> is null; bare-org membership satisfies.
 ///   • <c>org/*</c>          — parser canonicalizes to bare-org (<see cref="TeamSlug"/> null).
 ///   • <c>org/team-slug</c>  — <see cref="TeamSlug"/> is the (slugified) team slug; only that team's membership satisfies.
@@ -17,6 +18,9 @@ namespace Agentweaver.Api.Auth;
 /// </summary>
 public sealed record AllowedGitHubEntity(string Org, string? TeamSlug)
 {
+    /// <summary>True when this is the global any-organization wildcard.</summary>
+    public bool IsGlobalWildcard => TeamSlug is null && Org == "*";
+
     /// <summary>True when this rule requires membership of a specific team (not just the org).</summary>
     public bool IsTeamScoped => TeamSlug is not null;
 

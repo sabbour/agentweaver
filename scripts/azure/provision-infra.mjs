@@ -219,14 +219,16 @@ const GITHUB_TEAM_RE = /^[A-Za-z0-9][A-Za-z0-9 -]{0,100}$/;
 const GITHUB_ORG_LIST_SEPARATORS = /[,;]/;
 
 /**
- * True when `entry` is a valid single allow-rule: a bare org login, `org/*`
- * (explicit wildcard, same as bare org), or `org/team-slug`. Mirrors the
- * parsing rules in apps/Agentweaver.Api/Auth/GitHubOrgList.cs so the CLI's
- * validation never rejects a value the backend actually accepts.
+ * True when `entry` is a valid single allow-rule: `*` (all organizations), a
+ * bare org login, `org/*` (explicit organization wildcard), or
+ * `org/team-slug`. Mirrors the parsing rules in
+ * apps/Agentweaver.Api/Auth/GitHubOrgList.cs so the CLI's validation never
+ * rejects a value the backend actually accepts.
  * @param {string} entry
  * @returns {boolean}
  */
 function isValidGithubOrgEntry(entry) {
+  if (entry === "*") return true;
   const slashIndex = entry.indexOf("/");
   if (slashIndex < 0) {
     return GITHUB_ORG_LOGIN_RE.test(entry);
@@ -240,8 +242,9 @@ function isValidGithubOrgEntry(entry) {
 
 /**
  * Validates a comma/semicolon-separated GitHub allowlist string. Each entry
- * may be a bare org login, `org/*`, or `org/team-slug` -- the same mixed-list
- * grammar apps/Agentweaver.Api/Auth/GitHubOrgList.cs parses at runtime.
+ * may be `*`, a bare org login, `org/*`, or `org/team-slug` -- the same
+ * mixed-list grammar apps/Agentweaver.Api/Auth/GitHubOrgList.cs parses at
+ * runtime.
  * Returns `true` when every entry is valid, or an actionable error message
  * string otherwise (used both as prompt.text()'s reprompt validator and as a
  * config.mjs field validator for the non-interactive path).
@@ -258,7 +261,7 @@ export function validateGithubOrgList(value) {
   }
   const invalid = orgs.find((o) => !isValidGithubOrgEntry(o));
   if (invalid) {
-    return `'${invalid}' doesn't look like a valid 'org', 'org/*', or 'org/team-slug' entry (letters, numbers, hyphens; max 39 chars for the org).`;
+    return `'${invalid}' doesn't look like a valid '*', 'org', 'org/*', or 'org/team-slug' entry (letters, numbers, hyphens; max 39 chars for the org).`;
   }
   return true;
 }

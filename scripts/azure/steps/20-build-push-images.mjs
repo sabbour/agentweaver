@@ -105,6 +105,10 @@ export async function currentTagFor(image, namespace, { kubectl = kubectlDefault
 const ACR_TAG_DIGEST_POLL_INITIAL_DELAY_MS = 2_000;
 const ACR_TAG_DIGEST_POLL_MAX_DELAY_MS = 15_000;
 const ACR_TAG_DIGEST_POLL_BUDGET_MS = 5 * 60_000;
+// `show-manifests` is read-only, so bounding this local CLI query cannot
+// duplicate a build/import. A query timeout simply counts as "not visible
+// yet" and the existing bounded backoff continues.
+const ACR_QUERY_TIMEOUT_MS = 60_000;
 const ACR_TAG_DIGEST_POLL_DELAYS_MS = Object.freeze(buildAcrTagDigestPollDelays());
 
 function buildAcrTagDigestPollDelays() {
@@ -159,7 +163,7 @@ export async function acrDigestForTag(image, tag, cfg, { exec = execDefault } = 
         "--output",
         "tsv",
       ],
-      { allowFailure: true },
+      { allowFailure: true, timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS },
     );
     const first = stdout
       .split(/\r?\n/)
@@ -194,7 +198,10 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
     return { image, tag: provTag, commit: resolvedCommit, dryRun: true };
   }
 
-  const sourceDigest = await waitForAcrTagDigest(image, tag, cfg, { exec });
+  const sourceDigest = await log.withTiming(
+    `Waiting for ACR digest ${image}:${tag}`,
+    () => waitForAcrTagDigest(image, tag, cfg, { exec }),
+  );
   if (!sourceDigest) {
     throw new Error(`source image ${image}:${tag} never resolved to a digest in ACR; refusing to stamp unverifiable provenance`);
   }
@@ -212,23 +219,28 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
     return { image, tag: provTag, commit: resolvedCommit };
   }
 
-  await exec.capture("az", [
-    "acr",
-    "import",
-    "--name",
-    cfg.ACR_NAME,
-    "--resource-group",
-    cfg.RESOURCE_GROUP,
-    "--source",
-    `${cfg.ACR_LOGIN_SERVER}/${image}@${sourceDigest}`,
-    "--image",
-    `${image}:${provTag}`,
-    "--force",
-    "--output",
-    "none",
-  ]);
+  await log.withTiming(`ACR provenance import ${image}:${provTag}`, () =>
+    exec.capture("az", [
+      "acr",
+      "import",
+      "--name",
+      cfg.ACR_NAME,
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--source",
+      `${cfg.ACR_LOGIN_SERVER}/${image}@${sourceDigest}`,
+      "--image",
+      `${image}:${provTag}`,
+      "--force",
+      "--output",
+      "none",
+    ], { timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined }),
+  );
 
-  const stampedDigest = await waitForAcrTagDigest(image, provTag, cfg, { exec });
+  const stampedDigest = await log.withTiming(
+    `Waiting for ACR digest ${image}:${provTag}`,
+    () => waitForAcrTagDigest(image, provTag, cfg, { exec }),
+  );
   if (!stampedDigest) {
     throw new Error(`provenance tag ${image}:${provTag} did not appear in ACR after import; refusing to ship unstamped image`);
   }
@@ -247,10 +259,13 @@ export async function stampProvenance(image, tag, commit, cfg, { exec = execDefa
   // later `az acr import --force` against the *same* tag now fails loudly
   // instead of silently overwriting it, which is the desired behavior: a
   // given commit's provenance tag should only ever point at one digest.
-  const lockResult = await exec.capture(
-    "az",
-    ["acr", "repository", "update", "--name", cfg.ACR_NAME, "--image", `${image}:${provTag}`, "--write-enabled", "false"],
-    { allowFailure: true },
+  const lockResult = await log.withTiming(
+    `ACR provenance lock ${image}:${provTag}`,
+    () => exec.capture(
+      "az",
+      ["acr", "repository", "update", "--name", cfg.ACR_NAME, "--image", `${image}:${provTag}`, "--write-enabled", "false"],
+      { allowFailure: true, timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined },
+    ),
   );
   if (lockResult.code !== 0) {
     log.warn(`  could not lock provenance tag ${image}:${provTag} as read-only: ${lockResult.stderr}`);
@@ -271,21 +286,23 @@ export async function retagImage(image, sourceTag, targetTag, cfg, { exec = exec
     log.info(`  [dry-run] Would run az acr import for ${image}:${sourceTag} -> ${targetTag}`);
     return;
   }
-  await exec.capture("az", [
-    "acr",
-    "import",
-    "--name",
-    cfg.ACR_NAME,
-    "--resource-group",
-    cfg.RESOURCE_GROUP,
-    "--source",
-    `${cfg.ACR_LOGIN_SERVER}/${image}:${sourceTag}`,
-    "--image",
-    `${image}:${targetTag}`,
-    "--force",
-    "--output",
-    "none",
-  ]);
+  await log.withTiming(`ACR retag ${image}:${sourceTag} -> ${targetTag}`, () =>
+    exec.capture("az", [
+      "acr",
+      "import",
+      "--name",
+      cfg.ACR_NAME,
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--source",
+      `${cfg.ACR_LOGIN_SERVER}/${image}:${sourceTag}`,
+      "--image",
+      `${image}:${targetTag}`,
+      "--force",
+      "--output",
+      "none",
+    ], { timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined }),
+  );
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${targetTag}`);
 }
 
@@ -306,7 +323,7 @@ export async function buildImage(imageSpec, tag, commit, cfg, { exec = execDefau
     return;
   }
 
-  await exec.run(
+  await log.withTiming(`ACR build ${image}:${tag}`, () => exec.run(
     "az",
     [
       "acr",
@@ -324,8 +341,8 @@ export async function buildImage(imageSpec, tag, commit, cfg, { exec = execDefau
       "none",
       ".",
     ],
-    { cwd: cfg.repoRoot },
-  );
+    { cwd: cfg.repoRoot, timeoutMs: cfg.ACR_BUILD_TIMEOUT_MS || undefined },
+  ));
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${tag}`);
   // Also tag as latest-release so it always points at the most recently built version.
   await retagImage(image, tag, "latest-release", cfg, { exec });
@@ -369,11 +386,11 @@ export async function prepareFrontendDist(cfg, { exec = execDefault } = {}) {
   }
   log.info("--- Building local frontend assets for agentweaver-frontend ---");
   const webDir = path.join(cfg.repoRoot, "apps", "web");
-  await exec.run("npm", ["ci", "--legacy-peer-deps"], { cwd: webDir });
-  await exec.run("npm", ["run", "build"], {
+  await log.withTiming("Frontend dependency install", () => exec.run("npm", ["ci", "--legacy-peer-deps"], { cwd: webDir }));
+  await log.withTiming("Frontend asset build", () => exec.run("npm", ["run", "build"], {
     cwd: webDir,
     env: { VITE_API_URL: "", VITE_API_KEY: "" },
-  });
+  }));
   stashFrontendNodeModules(cfg.repoRoot);
 }
 
@@ -436,15 +453,17 @@ export async function planImage(imageSpec, targetCommit, cfg, { git = gitDefault
 async function executePlan(plan, targetCommit, cfg, deps) {
   const { exec = execDefault, git = gitDefault } = deps;
   const image = plan.image.name;
-  if (plan.action === "build") {
-    log.info(`  [build]  ${image} (${plan.reason})`);
-    await buildImage(plan.image, plan.targetTag, targetCommit, cfg, { exec, git });
-  } else {
-    log.info(`  [retag]  ${image} (${plan.reason})`);
-    await retagImage(image, plan.sourceTag, plan.targetTag, cfg, { exec });
-    await stampProvenance(image, plan.targetTag, plan.sourceCommit, cfg, { exec, git });
-  }
-  return { image, tag: plan.targetTag };
+  return log.withTiming(`${plan.action === "build" ? "Image build lifecycle" : "Image retag lifecycle"} ${image}:${plan.targetTag}`, async () => {
+    if (plan.action === "build") {
+      log.info(`  [build]  ${image} (${plan.reason})`);
+      await buildImage(plan.image, plan.targetTag, targetCommit, cfg, { exec, git });
+    } else {
+      log.info(`  [retag]  ${image} (${plan.reason})`);
+      await retagImage(image, plan.sourceTag, plan.targetTag, cfg, { exec });
+      await stampProvenance(image, plan.targetTag, plan.sourceCommit, cfg, { exec, git });
+    }
+    return { image, tag: plan.targetTag };
+  });
 }
 
 /**
@@ -479,6 +498,11 @@ export async function run(cfg, deps = {}) {
   for (const imageSpec of IMAGES) {
     plans.push(await planImage(imageSpec, targetCommit, resolvedCfg, { git, kubectl }));
   }
+  const planSummary = plans.reduce(
+    (summary, plan) => ({ ...summary, [plan.action]: (summary[plan.action] ?? 0) + 1 }),
+    {},
+  );
+  log.info(`Image plan: ${planSummary.build ?? 0} build, ${planSummary.retag ?? 0} retag.`);
 
   const needsFrontendDist = await shouldPrepareFrontendDist(targetCommit, resolvedCfg, { git, kubectl });
   if (needsFrontendDist) {

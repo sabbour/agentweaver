@@ -90,6 +90,30 @@ npm run azure:provision-infra -- --resource-group agentweaver-rg --cluster-name 
 Config precedence: flags > env > params file > detected defaults > prompt.
 Optional flags: `--skip-postgres`, `--skip-oauth-key`, `--image-tag <tag>`.
 
+### GitHub organization allowlist
+
+`GITHUB_ALLOWED_ORG` accepts comma- or semicolon-separated rules: `*` (all
+organizations), `org`, `org/*`, or `org/team-slug`. Use `*` only for a trusted
+internal deployment where unrestricted GitHub organization membership is the
+intended sign-in policy.
+
+### Image-build progress and optional Azure CLI limits
+
+The installer prints elapsed time for frontend preparation, each image
+lifecycle, and each ACR build/import/provenance operation. ACR manifest reads
+are bounded to 60 seconds because they are read-only and safely retried by the
+existing visibility poll. To bound a local Azure CLI process for a mutating
+operation, explicitly set one or both environment variables:
+
+```powershell
+$env:ACR_BUILD_TIMEOUT_MS = "1800000"  # 30 minutes
+$env:ACR_IMPORT_TIMEOUT_MS = "600000"  # 10 minutes
+```
+
+These limits are opt-in and do not retry a timed-out build or import: a local
+CLI timeout leaves the remote operation's state unknown. Inspect the target
+ACR tag/digest before deciding whether a manual retry is safe.
+
 ### Deploying local work to an existing environment
 
 ```bash

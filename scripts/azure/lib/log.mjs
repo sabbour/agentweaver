@@ -82,6 +82,36 @@ export function command(cmdLine) {
 
 export const isColorEnabled = () => colorEnabled;
 
+/** Formats elapsed milliseconds compactly for operation progress output. */
+export function formatDuration(elapsedMs) {
+  if (elapsedMs < 1_000) return `${Math.max(0, Math.round(elapsedMs))}ms`;
+  return `${(elapsedMs / 1_000).toFixed(elapsedMs < 10_000 ? 1 : 0)}s`;
+}
+
+/**
+ * Runs an async operation while emitting a concise start/completion duration.
+ * Unlike withProgress(), this is useful for concurrent ACR operations where
+ * individual elapsed times are more useful than a terminal spinner.
+ *
+ * @template T
+ * @param {string} label Human-readable operation description.
+ * @param {() => Promise<T>} task Async operation.
+ * @param {{ now?: () => number }} [options] Injectable clock for tests.
+ * @returns {Promise<T>}
+ */
+export async function withTiming(label, task, { now = Date.now } = {}) {
+  const startedAt = now();
+  info(`${label}...`);
+  try {
+    const result = await task();
+    ok(`${label} completed in ${formatDuration(now() - startedAt)}`);
+    return result;
+  } catch (error) {
+    info(`${label} failed after ${formatDuration(now() - startedAt)}`);
+    throw error;
+  }
+}
+
 const boxChars = { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" };
 
 /**
