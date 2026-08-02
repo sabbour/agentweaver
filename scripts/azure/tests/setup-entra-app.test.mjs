@@ -7,6 +7,24 @@ function noopLog() {
   return { info: rec(), section: rec(), field: rec(), ok: rec(), skip: rec(), warn: rec(), error: rec(), debug: rec(), command: rec(), banner: rec() };
 }
 
+function captureLog() {
+  const entries = [];
+  const push = (level) => (...args) => entries.push([level, ...args]);
+  return {
+    entries,
+    banner: push("banner"),
+    command: push("command"),
+    debug: push("debug"),
+    error: push("error"),
+    field: push("field"),
+    info: push("info"),
+    ok: push("ok"),
+    section: push("section"),
+    skip: push("skip"),
+    warn: push("warn"),
+  };
+}
+
 test("parseArgs: recognizes app-name, app-id, repeated redirect-uri, and service-management-reference", () => {
   const parsed = parseArgs([
     "--app-name",
@@ -186,4 +204,43 @@ test("run: reusing an already-matching app is idempotent", async () => {
   assert.ok(!commands.some((entry) => entry.includes("update") && entry.includes("web-redirect-uris")));
   assert.ok(!commands.some((entry) => entry.includes("rest") && entry.includes("PATCH")));
   assert.ok(!commands.some((entry) => entry.includes("sp") && entry.includes("create")));
+});
+
+test("run: summary explains PKCE-only fallback when client secrets are blocked", async () => {
+  const log = captureLog();
+  const app = {
+    appId: "11111111-1111-1111-1111-111111111111",
+    appRoles: DEFAULT_APP_ROLES,
+    displayName: "agentweaver-authn",
+    id: "33333333-3333-3333-3333-333333333333",
+    signInAudience: "AzureADMyOrg",
+    web: { redirectUris: ["http://localhost:5000/auth/entra/callback"] },
+  };
+  const sp = {
+    appId: app.appId,
+    displayName: app.displayName,
+    id: "44444444-4444-4444-4444-444444444444",
+  };
+
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture(cmd, args) {
+      const joined = args.join(" ");
+      if (joined.includes("account show")) return { code: 0, stdout: "72f988bf-86f1-41af-91ab-2d7cd011db47\n", stderr: "" };
+      if (joined.includes("ad app list --display-name")) return { code: 0, stdout: JSON.stringify([app]), stderr: "" };
+      if (joined.includes("ad app show --id")) return { code: 0, stdout: JSON.stringify(app), stderr: "" };
+      if (joined.includes("ad sp show --id")) return { code: 0, stdout: JSON.stringify(sp), stderr: "" };
+      throw new Error(`Unexpected capture: ${joined}`);
+    },
+  };
+
+  const result = await run({ argv: [], exec, log });
+
+  assert.equal(result.ok, true);
+  const warning = log.entries.filter(([level]) => level === "warn").map(([, message]) => String(message)).join("\n");
+  assert.match(warning, /Auth__Entra__ClientSecret is OPTIONAL/);
+  assert.match(warning, /isFallbackPublicClient: true/);
+  assert.match(warning, /PKCE only/);
 });

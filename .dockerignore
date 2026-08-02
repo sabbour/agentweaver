@@ -38,5 +38,7 @@ docs
 # Large non-runtime directories
 **/node_modules
 .worktrees
+worktrees
+recordings
 .squad
 .specify

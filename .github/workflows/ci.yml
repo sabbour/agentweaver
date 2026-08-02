@@ -8,7 +8,7 @@ name: CI
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
 #   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
-#   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
+#   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
 #   - npm --prefix apps/web run test
 #   - npm --prefix apps/web run lint
 #   - npm run docs:build
@@ -74,6 +74,7 @@ jobs:
             node-toolchain:
               - 'scripts/azure/**'
               - 'scripts/changesets/**'
+              - 'scripts/ci/**'
               - '.github/workflows/**'
             docs:
               - 'docs/**'
@@ -131,7 +132,7 @@ jobs:
       # The scripts/azure toolchain uses only Node built-ins (no dependencies),
       # so there is nothing to install -- run the built-in test runner directly.
       - name: Run Node toolchain tests
-        run: node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs
+        run: node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
 
   web-tests:
     name: Web tests

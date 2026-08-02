@@ -10,12 +10,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { clearSecrets, redact, REDACTED_MARKER } from "../lib/secret.mjs";
 import {
   parseArgs,
   HELP_TEXT,
+  normalizeGithubOrgList,
   runInteractiveInstaller,
   shouldRunInteractiveInstaller,
   run,
+  validateGithubOrgList,
 } from "../provision-infra.mjs";
 import { NonInteractiveError } from "../lib/prompt.mjs";
 
@@ -32,6 +35,42 @@ function fakeStep(name, calls, result = {}) {
     },
   };
 }
+
+test("validateGithubOrgList: accepts a bare org login", () => {
+  assert.equal(validateGithubOrgList("microsoft"), true);
+});
+
+test("validateGithubOrgList: accepts org/* (explicit wildcard, same as bare org)", () => {
+  assert.equal(validateGithubOrgList("azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: accepts org/team-slug entries, comma-separated", () => {
+  assert.equal(validateGithubOrgList("Azure/aks,Azure/AKS PM,azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: accepts semicolon as a separator too (matches GitHubOrgList.cs)", () => {
+  assert.equal(validateGithubOrgList("Azure/aks;azure-management-and-platforms/*"), true);
+});
+
+test("validateGithubOrgList: rejects an empty value", () => {
+  assert.match(validateGithubOrgList(""), /Enter at least one/);
+});
+
+test("validateGithubOrgList: rejects an invalid org login", () => {
+  assert.match(validateGithubOrgList("not a valid org!"), /doesn't look like a valid/);
+});
+
+test("validateGithubOrgList: rejects an invalid org before the slash", () => {
+  assert.match(validateGithubOrgList("not a valid org!/team"), /doesn't look like a valid/);
+});
+
+test("normalizeGithubOrgList: trims, drops empties, and rejoins comma-separated", () => {
+  assert.equal(normalizeGithubOrgList(" microsoft , azure/aks ,, "), "microsoft,azure/aks");
+});
+
+test("normalizeGithubOrgList: normalizes semicolon-separated input to comma-separated", () => {
+  assert.equal(normalizeGithubOrgList("Azure/aks;azure-management-and-platforms/*"), "Azure/aks,azure-management-and-platforms/*");
+});
 
 test("parseArgs: recognizes flags and takes values for valued flags", () => {
   const parsed = parseArgs([
@@ -50,6 +89,25 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
   assert.equal(parsed.flags.GITHUB_CLIENT_SECRET, "shh");
 });
 
+test("parseArgs: recognizes GHCR import flags", () => {
+  const parsed = parseArgs([
+    "--image-source",
+    "ghcr",
+    "--ghcr-ref=v0.15.0",
+    "--ghcr-token",
+    "topsecret",
+    "--force",
+  ]);
+  assert.equal(parsed.flags.IMAGE_SOURCE, "ghcr");
+  assert.equal(parsed.flags.GHCR_REF, "v0.15.0");
+  assert.equal(parsed.flags.GHCR_TOKEN, "topsecret");
+  assert.equal(parsed.flags.FORCE, true);
+});
+
+test("parseArgs: rejects ghcr-owner overrides so GHCR owner is always derived from origin", () => {
+  assert.throws(() => parseArgs(["--ghcr-owner", "sabbour"]), /Unknown argument/);
+});
+
 test("parseArgs: --params-file / --config both set paramsFile", () => {
   assert.equal(parseArgs(["--params-file", "a.json"]).paramsFile, "a.json");
   assert.equal(parseArgs(["--config=b.json"]).paramsFile, "b.json");
@@ -64,9 +122,22 @@ test("parseArgs: -h/--help sets help", () => {
   assert.equal(parseArgs(["-h"]).help, true);
 });
 
+test("GitHub org validator: accepts the bare global wildcard alongside existing org/team forms", () => {
+  assert.equal(validateGithubOrgList("*"), true);
+  assert.equal(validateGithubOrgList("*,microsoft,Azure/AKS PM;contoso/*"), true);
+  assert.equal(normalizeGithubOrgList(" * ; microsoft, Azure/AKS PM "), "*,microsoft,Azure/AKS PM");
+});
+
+test("GitHub org validator: rejects malformed wildcard forms", () => {
+  assert.match(validateGithubOrgList("*/team"), /doesn't look like a valid/);
+  assert.match(validateGithubOrgList("**"), /doesn't look like a valid/);
+});
+
 test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--skip-postgres/);
   assert.match(HELP_TEXT, /--params-file/);
+  assert.match(HELP_TEXT, /--image-source <source>/);
+  assert.match(HELP_TEXT, /--ghcr-ref <ref>/);
   assert.match(HELP_TEXT, /dev --setup/);
 });
 
@@ -152,6 +223,133 @@ test("run: non-interactive path resolves config from flags and env, then delegat
   );
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");
+});
+
+test("run: ghcr image-source resolves derived owner and passes GHCR config through to the image step", async () => {
+  clearSecrets();
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls, {
+      expectedImageDigests: { "agentweaver-api": "sha256:" + "a".repeat(64) },
+      importedImageSources: {
+        "agentweaver-api": {
+          digest: "sha256:" + "a".repeat(64),
+          sourceCommit: "b".repeat(40),
+          sourceRef: "v0.15.0",
+        },
+      },
+    }),
+    verifyProvenance: fakeStep("verifyProvenance", calls, { ok: true }),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, { HOST: "agentweaver.example.com", GATEWAY_IP: "1.2.3.4" }),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 10, fail: 0 }),
+  };
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture(cmd, args) {
+      if (cmd === "git" && args.join(" ") === "config --get remote.origin.url") {
+        return { stdout: "https://github.com/sabbour/agentweaver.git", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  };
+  const resolveVariablesFn = async () => ({
+    RESOURCE_GROUP: "my-rg",
+    CLUSTER_NAME: "my-cluster",
+    ACR_NAME: "myacr",
+    ACR_LOGIN_SERVER: "myacr.azurecr.io",
+    LOCATION: "westus2",
+    KEYVAULT_NAME: "my-kv",
+    NAMESPACE: "agentweaver",
+    IMAGE_TAG: "v0.15.0",
+    AGENTHOST_IMAGE_TAG: "v0.15.0",
+  });
+
+  await run({
+    argv: [
+      "--image-source",
+      "ghcr",
+      "--ghcr-ref",
+      "v0.15.0",
+      "--github-client-id",
+      "id-123",
+      "--github-client-secret",
+      "oauthsecret",
+      "--ghcr-token",
+      "ghcrsecret",
+    ],
+    env: { GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" },
+    prompt: { isInteractive: () => false },
+    exec,
+    log: noopLog(),
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  const buildCall = calls.find((c) => c.step === "buildImages");
+  assert.equal(buildCall.cfg.IMAGE_SOURCE, "ghcr");
+  assert.equal(buildCall.cfg.GHCR_REF, "v0.15.0");
+  assert.equal(buildCall.cfg.GHCR_OWNER, "sabbour");
+  assert.equal(buildCall.cfg.GHCR_REPOSITORY, "agentweaver");
+  assert.equal(buildCall.cfg.GHCR_TOKEN, "ghcrsecret");
+  const verifyCall = calls.find((c) => c.step === "verifyProvenance");
+  assert.equal(verifyCall.cfg.IMPORTED_IMAGE_SOURCES["agentweaver-api"].sourceRef, "v0.15.0");
+  assert.equal(redact("ghcrsecret"), REDACTED_MARKER);
+  clearSecrets();
+});
+
+test("run: IMAGE_SOURCE=ghcr requires GHCR_REF", async () => {
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture(cmd, args) {
+      if (cmd === "git" && args.join(" ") === "config --get remote.origin.url") {
+        return { stdout: "https://github.com/sabbour/agentweaver.git", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  };
+  await assert.rejects(
+    run({
+      argv: ["--image-source", "ghcr", "--github-client-id", "id", "--github-client-secret", "secret"],
+      env: {},
+      prompt: { isInteractive: () => false },
+      exec,
+      log: noopLog(),
+      resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
+    }),
+    /GHCR_REF is required/,
+  );
+});
+
+test("run: IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner cannot be overridden", async () => {
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture() {
+      return { stdout: "", stderr: "", code: 1 };
+    },
+  };
+  await assert.rejects(
+    run({
+      argv: ["--image-source", "ghcr", "--ghcr-ref", "v0.15.0", "--github-client-id", "id", "--github-client-secret", "secret"],
+      env: {},
+      prompt: { isInteractive: () => false },
+      exec,
+      log: noopLog(),
+      resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
+    }),
+    /requires a GitHub origin remote/i,
+  );
 });
 
 test("run: outputs summary includes the GitHub OAuth callback URL derived from the Gateway host", async () => {

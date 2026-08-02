@@ -60,6 +60,7 @@ import * as logDefault from "./lib/log.mjs";
 import * as azDefault from "./lib/az.mjs";
 import * as promptDefault from "./lib/prompt.mjs";
 import { registerSecret } from "./lib/secret.mjs";
+import { resolveGitHubRepository } from "./lib/github.mjs";
 import { resolveConfig, loadParamsFile } from "./lib/config.mjs";
 import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT } from "./variables.mjs";
 
@@ -85,9 +86,11 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
 
 /**
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
- * Recognizes: --skip-postgres, --skip-oauth-key, --image-tag <tag>
- * (or --image-tag=<tag>), --params-file/--config <path>, --resource-group,
- * --cluster-name, --acr-name, --location, --keyvault-name, --namespace,
+ * Recognizes: --skip-postgres, --skip-oauth-key, --force,
+ * --image-tag <tag>, --image-source <acr-build|ghcr>, --ghcr-ref <ref>,
+ * --ghcr-token <token> (or =value forms),
+ * --params-file/--config <path>, --resource-group, --cluster-name,
+ * --acr-name, --location, --keyvault-name, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
  */
 export function parseArgs(argv = []) {
@@ -110,11 +113,25 @@ export function parseArgs(argv = []) {
       flags.SKIP_POSTGRES = true;
     } else if (arg === "--skip-oauth-key") {
       flags.SKIP_OAUTH_KEY = true;
+    } else if (arg === "--force") {
+      flags.FORCE = true;
     } else if (arg === "-h" || arg === "--help") {
       help = true;
     } else if (arg === "--image-tag" || arg.startsWith("--image-tag=")) {
       const { value, consumed } = takeValue(i, "--image-tag");
       flags.IMAGE_TAG = value;
+      i += consumed;
+    } else if (arg === "--image-source" || arg.startsWith("--image-source=")) {
+      const { value, consumed } = takeValue(i, "--image-source");
+      flags.IMAGE_SOURCE = value;
+      i += consumed;
+    } else if (arg === "--ghcr-ref" || arg.startsWith("--ghcr-ref=")) {
+      const { value, consumed } = takeValue(i, "--ghcr-ref");
+      flags.GHCR_REF = value;
+      i += consumed;
+    } else if (arg === "--ghcr-token" || arg.startsWith("--ghcr-token=")) {
+      const { value, consumed } = takeValue(i, "--ghcr-token");
+      flags.GHCR_TOKEN = value;
       i += consumed;
     } else if (arg === "--params-file" || arg === "--config" || arg.startsWith("--params-file=") || arg.startsWith("--config=")) {
       const { value, consumed } = takeValue(i, "--params-file");
@@ -176,7 +193,11 @@ Local dev environment setup (no Azure) lives under 'dev --setup' instead:
 Flags:
   --skip-postgres             Skip Postgres provisioning (17-provision-postgres).
   --skip-oauth-key            Skip MCP OAuth signing key provisioning (16-provision-oauth-signing-key).
+  --force                     Allow GHCR import to overwrite an existing target ACR tag if the digest differs.
   --image-tag <tag>           Use this image tag instead of the derived default.
+  --image-source <source>     Image source: 'acr-build' (default) or 'ghcr'.
+  --ghcr-ref <ref>            Required with --image-source ghcr; only accepts immutable refs (vX.Y.Z or sha-<hex>).
+  --ghcr-token <token>        Optional GHCR registry token for private-package import; NEVER echoed/logged.
   --params-file <path>        JSON/JSONC params file (see scripts/azure/params.example.json).
   --config <path>             Alias for --params-file.
   --resource-group <name>
@@ -198,6 +219,8 @@ Config precedence: flags > env > params-file > detected defaults > prompt.
 Non-interactive (no TTY) never prompts -- missing required fields fail with a clear error.
 `;
 
+const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
+
 /**
  * A plausible GitHub org login: starts with an alphanumeric, up to 39 chars
  * total, letters/digits/hyphens only. Matches GitHub's own login constraints
@@ -206,8 +229,46 @@ Non-interactive (no TTY) never prompts -- missing required fields fail with a cl
 const GITHUB_ORG_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 /**
- * Validates a comma-separated GitHub org allowlist string. Returns `true`
- * when every token is a plausible org login, or an actionable error message
+ * A plausible GitHub team slug/display-name: letters/digits/hyphens/spaces.
+ * apps/Agentweaver.Api/Auth/GitHubOrgList.cs defensively slugifies a display
+ * name with spaces or uppercase (e.g. "AKS PM" -> "aks-pm"), so this is
+ * intentionally looser than a strict lowercase-hyphenated slug check -- we
+ * only need to catch obviously-invalid input here, not enforce the exact
+ * canonical form.
+ */
+const GITHUB_TEAM_RE = /^[A-Za-z0-9][A-Za-z0-9 -]{0,100}$/;
+
+/** Splits on the same delimiters GitHubOrgList.cs uses: ',' and ';'. */
+const GITHUB_ORG_LIST_SEPARATORS = /[,;]/;
+
+/**
+ * True when `entry` is a valid single allow-rule: `*` (all organizations), a
+ * bare org login, `org/*` (explicit organization wildcard), or
+ * `org/team-slug`. Mirrors the parsing rules in
+ * apps/Agentweaver.Api/Auth/GitHubOrgList.cs so the CLI's validation never
+ * rejects a value the backend actually accepts.
+ * @param {string} entry
+ * @returns {boolean}
+ */
+function isValidGithubOrgEntry(entry) {
+  if (entry === "*") return true;
+  const slashIndex = entry.indexOf("/");
+  if (slashIndex < 0) {
+    return GITHUB_ORG_LOGIN_RE.test(entry);
+  }
+  const org = entry.slice(0, slashIndex).trim();
+  const team = entry.slice(slashIndex + 1).trim();
+  if (!GITHUB_ORG_LOGIN_RE.test(org)) return false;
+  if (team.length === 0 || team === "*") return true;
+  return GITHUB_TEAM_RE.test(team);
+}
+
+/**
+ * Validates a comma/semicolon-separated GitHub allowlist string. Each entry
+ * may be `*`, a bare org login, `org/*`, or `org/team-slug` -- the same
+ * mixed-list grammar apps/Agentweaver.Api/Auth/GitHubOrgList.cs parses at
+ * runtime.
+ * Returns `true` when every entry is valid, or an actionable error message
  * string otherwise (used both as prompt.text()'s reprompt validator and as a
  * config.mjs field validator for the non-interactive path).
  * @param {string} value
@@ -215,23 +276,23 @@ const GITHUB_ORG_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
  */
 export function validateGithubOrgList(value) {
   const orgs = String(value ?? "")
-    .split(",")
+    .split(GITHUB_ORG_LIST_SEPARATORS)
     .map((o) => o.trim())
     .filter((o) => o.length > 0);
   if (orgs.length === 0) {
-    return "Enter at least one GitHub org login (comma-separated), e.g. 'microsoft' or 'microsoft,azure-management-and-platforms'.";
+    return "Enter at least one GitHub org login (comma-separated), e.g. 'microsoft' or 'microsoft,azure/some-team'.";
   }
-  const invalid = orgs.find((o) => !GITHUB_ORG_LOGIN_RE.test(o));
+  const invalid = orgs.find((o) => !isValidGithubOrgEntry(o));
   if (invalid) {
-    return `'${invalid}' doesn't look like a valid GitHub org login (letters, numbers, hyphens; max 39 characters).`;
+    return `'${invalid}' doesn't look like a valid '*', 'org', 'org/*', or 'org/team-slug' entry (letters, numbers, hyphens; max 39 chars for the org).`;
   }
   return true;
 }
 
-/** Trims/dedupes-empty and rejoins a comma-separated GitHub org allowlist string. */
+/** Trims/dedupes-empty and rejoins a comma/semicolon-separated GitHub org allowlist string. */
 export function normalizeGithubOrgList(value) {
   return String(value ?? "")
-    .split(",")
+    .split(GITHUB_ORG_LIST_SEPARATORS)
     .map((o) => o.trim())
     .filter((o) => o.length > 0)
     .join(",");
@@ -246,6 +307,23 @@ function buildSchema({ prompt, az }) {
     LOCATION: { default: DEFAULTS.LOCATION },
     KEYVAULT_NAME: { default: PROVISION_KEYVAULT_NAME_SUGGESTION },
     NAMESPACE: { default: DEFAULTS.NAMESPACE },
+    IMAGE_SOURCE: {
+      default: "acr-build",
+      validate: (value) => (
+        IMAGE_SOURCE_VALUES.includes(String(value))
+          ? undefined
+          : `IMAGE_SOURCE must be one of: ${IMAGE_SOURCE_VALUES.join(", ")}.`
+      ),
+    },
+    GHCR_REF: {
+      validate: (value, config) => {
+        if (config.IMAGE_SOURCE !== "ghcr") return undefined;
+        return value ? undefined : "GHCR_REF is required when IMAGE_SOURCE=ghcr.";
+      },
+    },
+    GHCR_TOKEN: {
+      secret: true,
+    },
     GITHUB_CLIENT_ID: {
       required: true,
       prompt: () => prompt.text("GitHub OAuth client ID"),
@@ -442,8 +520,14 @@ export async function run(opts = {}) {
     Object.assign(flags, collected);
   }
 
+  const githubRepo = await resolveGitHubRepository({ repoRoot, exec }).catch(() => null);
+  const ghcrOwner = githubRepo?.owner ?? "";
+  const ghcrRepository = githubRepo?.repo ?? "";
   const schema = buildSchema({ prompt, az });
   const config = await resolveConfig(schema, { flags, env, paramsFile });
+  if (config.IMAGE_SOURCE === "ghcr" && (!ghcrOwner || !ghcrRepository)) {
+    throw new Error("IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner/repository can be derived automatically.");
+  }
 
   log.info("");
   log.section("Resolved deploy configuration");
@@ -453,6 +537,11 @@ export async function run(opts = {}) {
   log.field("Location", config.LOCATION);
   log.field("Key Vault", config.KEYVAULT_NAME);
   log.field("Namespace", config.NAMESPACE);
+  log.field("Image source", config.IMAGE_SOURCE);
+  if (config.IMAGE_SOURCE === "ghcr") {
+    log.field("GHCR owner", ghcrOwner);
+    log.field("GHCR ref", config.GHCR_REF);
+  }
   log.field("GitHub OAuth client ID", config.GITHUB_CLIENT_ID);
   log.field("Allowed GitHub org(s)", config.GITHUB_ALLOWED_ORG);
 
@@ -471,7 +560,18 @@ export async function run(opts = {}) {
   let cfg = await (typeof log.withProgress === "function"
     ? log.withProgress("Resolving deploy configuration", resolveCfg)
     : resolveCfg());
-  cfg = { ...cfg, GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET, repoRoot };
+  cfg = {
+    ...cfg,
+    IMAGE_SOURCE: config.IMAGE_SOURCE,
+    GHCR_REF: config.GHCR_REF,
+    GHCR_OWNER: ghcrOwner,
+    GHCR_REPOSITORY: ghcrRepository,
+    GHCR_TOKEN: config.GHCR_TOKEN,
+    FORCE: Boolean(flags.FORCE),
+    GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
+    GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
+    repoRoot,
+  };
 
   log.step(1, 10, "Creating cluster (ACR + AKS)");
   await createCluster.run(cfg, { exec, log });
@@ -484,7 +584,18 @@ export async function run(opts = {}) {
   // any later step needs it -- mirrors install.sh's explicit `az identity
   // show` capture immediately after 15-setup-identity.sh.
   cfg = await resolveVariablesFn({ env: { ...env, ...envOverride }, repoRoot });
-  cfg = { ...cfg, GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET, repoRoot };
+  cfg = {
+    ...cfg,
+    IMAGE_SOURCE: config.IMAGE_SOURCE,
+    GHCR_REF: config.GHCR_REF,
+    GHCR_OWNER: ghcrOwner,
+    GHCR_REPOSITORY: ghcrRepository,
+    GHCR_TOKEN: config.GHCR_TOKEN,
+    FORCE: Boolean(flags.FORCE),
+    GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
+    GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
+    repoRoot,
+  };
 
   log.step(3, 10, "Provisioning monitoring");
   await provisionMonitoring.run(cfg, { exec, log });
@@ -505,6 +616,11 @@ export async function run(opts = {}) {
 
   log.step(6, 10, "Building and pushing images");
   const buildResult = await buildImages.run(cfg, { exec });
+  cfg = {
+    ...cfg,
+    EXPECTED_IMAGE_DIGESTS: buildResult.expectedImageDigests ?? undefined,
+    IMPORTED_IMAGE_SOURCES: buildResult.importedImageSources ?? undefined,
+  };
 
   log.step(7, 10, "Ensuring A2A mTLS certificates");
   await genA2aMtlsCerts.run(cfg, { exec, log, repoRoot });
@@ -532,6 +648,10 @@ export async function run(opts = {}) {
   log.field("Namespace", cfg.NAMESPACE);
   log.field("Image tag", cfg.IMAGE_TAG);
   log.field("AgentHost image tag", cfg.AGENTHOST_IMAGE_TAG);
+  log.field("Image source", cfg.IMAGE_SOURCE);
+  if (cfg.IMAGE_SOURCE === "ghcr") {
+    log.field("GHCR ref", cfg.GHCR_REF);
+  }
   log.field("Allowed GitHub org(s)", cfg.GITHUB_ALLOWED_ORG);
   log.field("Gateway host", deployResult?.HOST ?? "<unknown>");
   log.field("Gateway IP", deployResult?.GATEWAY_IP ?? "<unknown>");

@@ -168,6 +168,33 @@ public sealed class EntraSignInEndpointsTests
         var contextJson = JsonDocument.Parse(await contextResp.Content.ReadAsStringAsync());
         contextJson.RootElement.GetProperty("entra_object_id").GetString()
             .Should().Be(factory.SignedInObjectId);
+        factory.LastTokenRequestForm.Should().NotBeNull();
+        factory.LastTokenRequestForm!.Should().ContainKey("client_secret")
+            .WhoseValue.Should().Be(EntraSignInWebApplicationFactory.ClientSecretValue);
+    }
+
+    [Fact]
+    public async Task Callback_WithoutClientSecret_UsesPkceOnlyTokenRedemption()
+    {
+        await using var factory = new EntraSignInWebApplicationFactory(includeClientSecret: false);
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        var authorizeResp = await client.GetAsync("/auth/entra/authorize");
+        authorizeResp.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        var state = OAuthStateCookie.ExtractState(authorizeResp.Headers.Location!.ToString());
+        state.Should().NotBeNullOrEmpty();
+
+        var callbackReq = new HttpRequestMessage(HttpMethod.Get,
+            $"/auth/entra/callback?code=test-authorization-code&state={Uri.EscapeDataString(state!)}");
+        callbackReq.Headers.Add("Cookie", $"{EntraOAuthStateCookie.Name}={state}");
+        var callbackResp = await client.SendAsync(callbackReq);
+
+        callbackResp.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        callbackResp.Headers.Location!.ToString().Should().Contain("auth=success");
+
+        factory.LastTokenRequestForm.Should().NotBeNull();
+        factory.LastTokenRequestForm!.Should().ContainKey("code_verifier");
+        factory.LastTokenRequestForm.Should().NotContainKey("client_secret");
     }
 
     private static string? ExtractQueryValue(string url, string key)

@@ -33,7 +33,7 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:GitHub:ClientSecret` | none | GitHub OAuth App client secret — required for sign-in |
 | `Auth:GitHub:CallbackUrl` | none | OAuth callback URL registered in the GitHub App (must match exactly) |
 | `Auth:GitHub:FrontendUrl` | none | URL the API redirects to after a successful sign-in |
-| `Auth:GitHub:AllowedOrg` | none | Comma/semicolon-delimited list of allow-rules. Each rule is one of: `org` (bare org — any member), `org/*` (explicit wildcard, same as bare org), or `org/team-slug` (only that specific team). A caller is allowed if they satisfy ANY rule. Team display names with spaces or uppercase are defensively slugified (e.g. `Azure/AKS PM` is treated as `Azure/aks-pm`). Example: `Azure/aks,Azure/AKS PM,azure-management-and-platforms/*`. |
+| `Auth:GitHub:AllowedOrg` | none | Comma/semicolon-delimited list of allow-rules. Each rule is one of: `*` (all organizations), `org` (bare org — any member), `org/*` (explicit organization wildcard), or `org/team-slug` (only that specific team). A caller is allowed if they satisfy ANY rule. Team display names with spaces or uppercase are defensively slugified (e.g. `Azure/AKS PM` is treated as `Azure/aks-pm`). Example: `Azure/aks,Azure/AKS PM,azure-management-and-platforms/*`. |
 
 Set the OAuth client secret locally with user-secrets:
 
@@ -44,25 +44,44 @@ dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secre
 
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
-uses the Microsoft identity platform v2.0 authorization-code-with-PKCE flow and redeems the
-code server-side as a **confidential web client**, so a client secret is required.
+uses the Microsoft identity platform v2.0 authorization-code-with-PKCE flow. Agentweaver
+redeems the code server-side and supports both a confidential-client variant (when
+`Auth:Entra:ClientSecret` is configured) and a PKCE-only variant (when the Entra app allows
+public client flows and no client secret is configured).
 
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `Auth:Entra:ClientId` | none | Entra app registration (client) ID — **required** for Entra sign-in |
-| `Auth:Entra:ClientSecret` | none | Entra client secret used to redeem the authorization code at the token endpoint — **required** for the server-side redirect flow |
+| `Auth:Entra:ClientSecret` | none | Optional Entra client secret for confidential-client token redemption. Omit it when the tenant blocks password credentials and the app registration has public client flows enabled (`isFallbackPublicClient: true`) |
 | `Auth:Entra:TenantId` | none | Entra tenant ID — **required** unless `Auth:Entra:Authority` is set |
 | `Auth:Entra:Authority` | none | Full authority URL (e.g. `https://login.microsoftonline.com/<tenant>/v2.0`); overrides `TenantId` for authority resolution |
 | `Auth:Entra:RedirectUri` | `http://localhost:5000/auth/entra/callback` | Redirect URI registered on the Entra app; must exactly match the `/auth/entra/callback` URL |
 | `Auth:Entra:Scopes` | `openid profile email <ClientId>/.default` | Space-delimited scopes requested at authorize time. The `<ClientId>/.default` scope yields an access token whose `aud` is the app itself and carries the platform App Roles claim |
 | `Auth:Entra:FrontendUrl` | falls back to `Auth:GitHub:FrontendUrl` then `http://localhost:5173` | URL the API redirects to after a successful (or failed) Entra sign-in |
 
-Set the Entra client secret locally with user-secrets:
+If your tenant allows password credentials and you want confidential-client redemption, set
+the Entra client secret locally with user-secrets:
 
 ```powershell
 cd apps/Agentweaver.Api
 dotnet user-secrets set "Auth:Entra:ClientSecret" "<your-entra-app-client-secret>"
 ```
+
+If your tenant blocks client secrets, leave `Auth:Entra:ClientSecret` unset. Agentweaver will
+redeem the authorization code with PKCE only, which works with Entra app registrations that
+allow public client flows.
+
+::: tip AKS deploy pipeline wiring
+On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId`/
+`Auth:Entra:RedirectUri` are set from the deploy-time `AUTH_MODE`/`ENTRA_CLIENT_ID`/
+`ENTRA_TENANT_ID` environment variables (mirroring how `GITHUB_ALLOWED_ORG` etc. flow into
+`Auth:GitHub:*` for GitHub mode) — see `scripts/azure/variables.mjs` and
+`k8s/base/api-deployment.yaml`. `Auth:Entra:ClientSecret` (`Auth__Entra__ClientSecret`) is
+deliberately **not** wired through the deploy pipeline: this environment is PKCE-only per the
+tenant policy noted above, so there is no deploy-time env var / ConfigMap key for it. If a
+future tenant allows a confidential-client secret, set `Auth__Entra__ClientSecret` manually via
+the Key Vault CSI `SecretProviderClass`, mirroring the existing `github-client-secret` wiring.
+:::
 
 ### CORS settings
 
