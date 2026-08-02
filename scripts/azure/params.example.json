@@ -38,6 +38,7 @@
   "GITHUB_CLIENT_SECRET": "",
 
   // Optional overrides.
+  // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.
   "IMAGE_TAG": "",
   "SKIP_POSTGRES": false,
   "SKIP_OAUTH_KEY": false
