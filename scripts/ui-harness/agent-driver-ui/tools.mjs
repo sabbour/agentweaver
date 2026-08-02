@@ -110,9 +110,14 @@ async function login(args) {
     ...guardOptions,
   });
   try {
-    await session.goto('/');
-    console.log('Complete sign-in in the visible Microsoft Edge window, then resume Playwright to save the session.');
-    await session.page.pause();
+    // Login may immediately cross several Entra redirects, so don't wait for the SPA's
+    // DOM to finish loading before letting the human see and complete the sign-in flow.
+    await session.page.goto(session.baseUrl, { waitUntil: 'commit' });
+    console.log('Complete sign-in in the visible Microsoft Edge window. The harness will save the session automatically after Agentweaver returns from Entra.');
+    await session.page.waitForFunction(
+      () => window.sessionStorage.getItem('agentweaver.sessionToken') !== null,
+      { timeout: Number(args['login-timeout'] ?? 300_000) },
+    );
     await ensureAuthDirectory();
     const statePath = args['storage-state'] ?? DEFAULT_STORAGE_STATE;
     await session.context.storageState({ path: statePath });
@@ -144,6 +149,7 @@ async function action(args) {
     baseUrl: session.baseUrl,
     storageState: session.storageState,
     headless: true,
+    browserChannel: args['browser-channel'],
     allowAgentweaverPreviewNavigation: command === 'open-preview',
     ...options(args),
   });
@@ -167,6 +173,8 @@ async function action(args) {
     }
     else if (command === 'capture') await runtime.goto(args.path ?? '/');
     else throw new Error(`unsupported command "${command}"`);
+    const settleMs = Number(args['settle-ms'] ?? 0);
+    if (Number.isFinite(settleMs) && settleMs > 0) await runtime.page.waitForTimeout(settleMs);
     const step = await captureTurn({
       page: runtime.page, capture, directory: path.join(ROOT, 'transcripts-ui', session.id), id: session.steps.length + 1,
       intent: args.thought ?? null, action: command, target: { testId: args['test-id'], role: args.role, name: args.name },

@@ -11,7 +11,7 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs init --persona jordan --base-u
 ```
 
 `login` is the only headful step. Complete the visible GitHub or Microsoft Entra sign-in
-manually, resume Playwright, and the
+manually in Microsoft Edge; the harness detects Agentweaver's authenticated session and saves the
 local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry stops
 with `AUTH_EXPIRED`; the harness never automates reauthentication. Targets are
 restricted to localhost/staging unless both `--allow-prod` and `--confirm-production`

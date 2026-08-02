@@ -34,9 +34,9 @@ Authenticate through a visible browser exactly once per valid session:
 node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url https://<host>.staging.<domain>
 ```
 
-`login` opens Chromium headfully. Complete the visible GitHub or Microsoft Entra sign-in
-yourself in that window, then
-resume Playwright. The command saves the local, git-ignored storage state at
+`login` opens Microsoft Edge headfully. Complete the visible GitHub or Microsoft Entra sign-in
+yourself in that window. The command detects Agentweaver's authenticated session and saves the
+local, git-ignored storage state at
 `scripts/ui-harness/.auth/staging.storageState.json`; it is reused by the remaining
 headless commands. Treat that file as a credential: never print, commit, log, or attach
 it to evidence. The harness never automates reauthentication. On `AUTH_EXPIRED`, run
@@ -59,6 +59,9 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --
 node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <sessionId> --text "<text>"
 node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId> --path /<path>
 ```
+
+Pass `--settle-ms <milliseconds>` to `goto` or `capture` when a deployed SPA needs time
+to finish rendering before evidence is captured.
 
 To open an Agentweaver sandbox preview returned by the UI, use the dedicated
 preview action:
