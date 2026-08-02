@@ -7,8 +7,10 @@ import {
   resolveVariables,
   deriveImageTag,
   validateImageTag,
+  validateQualifiedImageReference,
   resolveKeyvaultName,
   InvalidImageTagError,
+  InvalidImageReferenceError,
   MissingRequiredVariableError,
   DEFAULTS,
 } from "../variables.mjs";
@@ -34,6 +36,17 @@ test("validateImageTag: accepts a v-prefixed semver tag", () => {
 test("validateImageTag: rejects anything else", () => {
   assert.throws(() => validateImageTag("my-branch", "IMAGE_TAG"), InvalidImageTagError);
   assert.throws(() => validateImageTag("1.2.3", "IMAGE_TAG"), InvalidImageTagError); // missing 'v' prefix
+});
+
+test("validateQualifiedImageReference: accepts tag and digest forms with an explicit registry", () => {
+  assert.doesNotThrow(() => validateQualifiedImageReference("ghcr.io/someuser/agentweaver-api:v1.2.3", "IMAGE_API"));
+  assert.doesNotThrow(() => validateQualifiedImageReference("docker.io/someuser/agentweaver-mcp@sha256:" + "a".repeat(64), "IMAGE_MCP"));
+});
+
+test("validateQualifiedImageReference: rejects shorthand or malformed refs", () => {
+  assert.throws(() => validateQualifiedImageReference("agentweaver-api:v1.2.3", "IMAGE_API"), InvalidImageReferenceError);
+  assert.throws(() => validateQualifiedImageReference("ghcr.io/someuser/agentweaver-api", "IMAGE_API"), InvalidImageReferenceError);
+  assert.throws(() => validateQualifiedImageReference("ghcr.io/someuser/agentweaver-api@sha256:1234", "IMAGE_API"), InvalidImageReferenceError);
 });
 
 test("deriveImageTag: env IMAGE_TAG takes precedence over git", async () => {
@@ -185,6 +198,10 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
       KATA_POOL_NAME: "customkata",
       APP_POOL_NAME: "customapp",
       IMAGE_TAG: "v2.0.0",
+      IMAGE_API: "ghcr.io/custom/agentweaver-api:v2.0.0",
+      IMAGE_FRONTEND: "ghcr.io/custom/agentweaver-frontend:v2.0.0",
+      IMAGE_MCP: "ghcr.io/custom/agentweaver-mcp:v2.0.0",
+      IMAGE_AGENT_HOST: "ghcr.io/custom/agentweaver-agent-host:v2.0.0",
     },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
@@ -202,6 +219,10 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
   assert.equal(vars.KATA_POOL_NAME, "customkata");
   assert.equal(vars.APP_POOL_NAME, "customapp");
   assert.equal(vars.IMAGE_TAG, "v2.0.0");
+  assert.equal(vars.IMAGE_API, "ghcr.io/custom/agentweaver-api:v2.0.0");
+  assert.equal(vars.IMAGE_FRONTEND, "ghcr.io/custom/agentweaver-frontend:v2.0.0");
+  assert.equal(vars.IMAGE_MCP, "ghcr.io/custom/agentweaver-mcp:v2.0.0");
+  assert.equal(vars.IMAGE_AGENT_HOST, "ghcr.io/custom/agentweaver-agent-host:v2.0.0");
 });
 
 test("resolveVariables: resolveLive=false skips az entirely (no Azure needed for tests)", async () => {
@@ -305,5 +326,18 @@ test("resolveVariables: AGENTHOST_IMAGE_TAG explicit override is validated indep
         gitShortSha: async () => "deadbee",
       }),
     InvalidImageTagError,
+  );
+});
+
+test("resolveVariables: validates custom image refs when supplied via env", async () => {
+  await assert.rejects(
+    () =>
+      resolveVariables({
+        env: { IMAGE_TAG: "v1.0.0", IMAGE_API: "agentweaver-api:v1.0.0", KEYVAULT_NAME: TEST_KEYVAULT_NAME },
+        repoRoot: FAKE_REPO_ROOT,
+        resolveLive: false,
+        gitShortSha: async () => "deadbee",
+      }),
+    InvalidImageReferenceError,
   );
 });

@@ -41,6 +41,11 @@
   // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.
   // "PG_HA_MODE": "Disabled", // Valid values: ZoneRedundant, Disabled. Use this in regions/environments where zone-redundant HA is unavailable.
   "IMAGE_TAG": "",
+  // Optional custom-image mode (IMAGE_SOURCE=custom): all four refs are required together.
+  // "IMAGE_API": "ghcr.io/your-org/agentweaver-api:v1.2.3",
+  // "IMAGE_FRONTEND": "ghcr.io/your-org/agentweaver-frontend:v1.2.3",
+  // "IMAGE_MCP": "ghcr.io/your-org/agentweaver-mcp:v1.2.3",
+  // "IMAGE_AGENT_HOST": "ghcr.io/your-org/agentweaver-agent-host:v1.2.3",
   "SKIP_POSTGRES": false,
   "SKIP_OAUTH_KEY": false
 }

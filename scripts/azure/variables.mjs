@@ -72,8 +72,11 @@ export const DEFAULTS = Object.freeze({
 /** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
 const SHORT_SHA_RE = /^[0-9a-f]{7,40}$/;
 const SEMVER_TAG_RE = /^v\d+\.\d+\.\d+/;
+const QUALIFIED_IMAGE_REFERENCE_RE =
+  /^(?<registry>(?:localhost|[A-Za-z0-9][A-Za-z0-9.-]*(?::\d+)?))\/(?<repository>[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)(?::(?<tag>[\w][\w.-]{0,127})|@(?<digest>sha256:[A-Fa-f0-9]{64}))$/;
 
 export class InvalidImageTagError extends Error {}
+export class InvalidImageReferenceError extends Error {}
 
 /** Thrown when a variable with no safe generic default (e.g. KEYVAULT_NAME) is unresolved. */
 export class MissingRequiredVariableError extends Error {}
@@ -114,6 +117,33 @@ export function validateImageTag(tag, name) {
     return true;
   }
   throw new InvalidImageTagError(`${name}='${tag}' is not a valid tag (expected git SHA or vX.Y.Z semver).`);
+}
+
+/**
+ * Validates a fully-qualified container image reference of the form
+ * `registry/repository:tag` or `registry/repository@sha256:<digest>`.
+ *
+ * The registry prefix is mandatory on purpose: this mode explicitly trusts an
+ * operator-chosen external image source, so partial/shorthand refs (for
+ * example `agentweaver-api:latest`) are rejected rather than guessed.
+ *
+ * @param {string} ref
+ * @param {string} name field name, used only in the error message.
+ * @returns {true}
+ */
+export function validateQualifiedImageReference(ref, name) {
+  const value = String(ref ?? "").trim();
+  if (!value) {
+    throw new InvalidImageReferenceError(
+      `${name} is required and must be a fully-qualified image reference (registry/repository:tag or registry/repository@sha256:digest).`,
+    );
+  }
+  if (!QUALIFIED_IMAGE_REFERENCE_RE.test(value)) {
+    throw new InvalidImageReferenceError(
+      `${name}='${value}' is not a valid fully-qualified image reference (expected registry/repository:tag or registry/repository@sha256:digest).`,
+    );
+  }
+  return true;
 }
 
 async function defaultGitShortSha(repoRoot) {
@@ -187,6 +217,13 @@ export async function resolveVariables(options = {}) {
     env.AGENTHOST_KEYVAULT_URI || `https://${KEYVAULT_NAME}.vault.azure.net/`;
 
   const GITHUB_ALLOWED_ORG = env.GITHUB_ALLOWED_ORG || DEFAULTS.GITHUB_ALLOWED_ORG;
+  const IMAGE_API = env.IMAGE_API || "";
+  const IMAGE_FRONTEND = env.IMAGE_FRONTEND || "";
+  const IMAGE_MCP = env.IMAGE_MCP || "";
+  const IMAGE_AGENT_HOST = env.IMAGE_AGENT_HOST || "";
+  for (const [name, value] of Object.entries({ IMAGE_API, IMAGE_FRONTEND, IMAGE_MCP, IMAGE_AGENT_HOST })) {
+    if (value) validateQualifiedImageReference(value, name);
+  }
 
   // Auth:Mode / Auth:Entra:* deploy-time wiring (issue: Entra sign-in endpoints from #653/#658
   // were never actually enabled on deployed environments). ENTRA_CLIENT_ID/ENTRA_TENANT_ID have no
@@ -253,6 +290,10 @@ export async function resolveVariables(options = {}) {
     KEYVAULT_NAME,
     AGENTHOST_KEYVAULT_URI,
     GITHUB_ALLOWED_ORG,
+    IMAGE_API,
+    IMAGE_FRONTEND,
+    IMAGE_MCP,
+    IMAGE_AGENT_HOST,
     AUTH_MODE,
     ENTRA_CLIENT_ID,
     ENTRA_TENANT_ID,

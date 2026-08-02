@@ -62,7 +62,7 @@ import * as promptDefault from "./lib/prompt.mjs";
 import { registerSecret } from "./lib/secret.mjs";
 import { resolveGitHubRepository } from "./lib/github.mjs";
 import { resolveConfig, loadParamsFile } from "./lib/config.mjs";
-import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT } from "./variables.mjs";
+import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT, validateQualifiedImageReference } from "./variables.mjs";
 
 import * as createClusterDefault from "./steps/10-create-cluster.mjs";
 import * as setupIdentityDefault from "./steps/15-setup-identity.mjs";
@@ -87,8 +87,9 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
 /**
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
  * Recognizes: --skip-postgres, --skip-oauth-key, --force,
- * --image-tag <tag>, --image-source <acr-build|ghcr>, --ghcr-ref <ref>,
- * --ghcr-token <token> (or =value forms),
+ * --image-tag <tag>, --image-source <acr-build|ghcr|custom>, --ghcr-ref <ref>,
+ * --ghcr-token <token>, --image-api <ref>, --image-frontend <ref>,
+ * --image-mcp <ref>, --image-agent-host <ref> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
  * --acr-name, --location, --keyvault-name, --postgres-server-name, --postgres-ha-mode, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
@@ -132,6 +133,22 @@ export function parseArgs(argv = []) {
     } else if (arg === "--ghcr-token" || arg.startsWith("--ghcr-token=")) {
       const { value, consumed } = takeValue(i, "--ghcr-token");
       flags.GHCR_TOKEN = value;
+      i += consumed;
+    } else if (arg === "--image-api" || arg.startsWith("--image-api=")) {
+      const { value, consumed } = takeValue(i, "--image-api");
+      flags.IMAGE_API = value;
+      i += consumed;
+    } else if (arg === "--image-frontend" || arg.startsWith("--image-frontend=")) {
+      const { value, consumed } = takeValue(i, "--image-frontend");
+      flags.IMAGE_FRONTEND = value;
+      i += consumed;
+    } else if (arg === "--image-mcp" || arg.startsWith("--image-mcp=")) {
+      const { value, consumed } = takeValue(i, "--image-mcp");
+      flags.IMAGE_MCP = value;
+      i += consumed;
+    } else if (arg === "--image-agent-host" || arg.startsWith("--image-agent-host=")) {
+      const { value, consumed } = takeValue(i, "--image-agent-host");
+      flags.IMAGE_AGENT_HOST = value;
       i += consumed;
     } else if (arg === "--params-file" || arg === "--config" || arg.startsWith("--params-file=") || arg.startsWith("--config=")) {
       const { value, consumed } = takeValue(i, "--params-file");
@@ -201,11 +218,15 @@ Local dev environment setup (no Azure) lives under 'dev --setup' instead:
 Flags:
   --skip-postgres             Skip Postgres provisioning (17-provision-postgres).
   --skip-oauth-key            Skip MCP OAuth signing key provisioning (16-provision-oauth-signing-key).
-  --force                     Allow GHCR import to overwrite an existing target ACR tag if the digest differs.
+  --force                     Allow GHCR/custom import to overwrite an existing target ACR tag if the digest differs.
   --image-tag <tag>           Use this image tag instead of the derived default.
-  --image-source <source>     Image source: 'acr-build' (default) or 'ghcr'.
+  --image-source <source>     Image source: 'acr-build' (default), 'ghcr', or 'custom'.
   --ghcr-ref <ref>            Required with --image-source ghcr; only accepts immutable refs (vX.Y.Z or sha-<hex>).
   --ghcr-token <token>        Optional GHCR registry token for private-package import; NEVER echoed/logged.
+  --image-api <ref>           Required with --image-source custom; fully-qualified ref for agentweaver-api.
+  --image-frontend <ref>      Required with --image-source custom; fully-qualified ref for agentweaver-frontend.
+  --image-mcp <ref>           Required with --image-source custom; fully-qualified ref for agentweaver-mcp.
+  --image-agent-host <ref>    Required with --image-source custom; fully-qualified ref for agentweaver-agent-host.
   --params-file <path>        JSON/JSONC params file (see scripts/azure/params.example.json).
   --config <path>             Alias for --params-file.
   --resource-group <name>
@@ -229,9 +250,15 @@ Config precedence: flags > env > params-file > detected defaults > prompt.
 Non-interactive (no TTY) never prompts -- missing required fields fail with a clear error.
 `;
 
-const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
+const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr", "custom"]);
 const POSTGRES_HA_MODE_VALUES = Object.freeze(["ZoneRedundant", "Disabled"]);
 const POSTGRES_SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+const CUSTOM_IMAGE_FIELDS = Object.freeze([
+  ["IMAGE_API", "agentweaver-api"],
+  ["IMAGE_FRONTEND", "agentweaver-frontend"],
+  ["IMAGE_MCP", "agentweaver-mcp"],
+  ["IMAGE_AGENT_HOST", "agentweaver-agent-host"],
+]);
 
 /**
  * A plausible GitHub org login: starts with an alphanumeric, up to 39 chars
@@ -326,6 +353,21 @@ function validatePostgresHaMode(value) {
   return true;
 }
 
+function validateCustomImageField(name, value, config) {
+  if (config.IMAGE_SOURCE !== "custom") {
+    if (!value) return undefined;
+  } else if (!value) {
+    return `${name} is required when IMAGE_SOURCE=custom. Provide all four custom image refs together so the deploy never falls back to a mixed image source state.`;
+  }
+
+  try {
+    validateQualifiedImageReference(value, name);
+    return undefined;
+  } catch (err) {
+    return err?.message ?? String(err);
+  }
+}
+
 /** Builds the lib/config.mjs field schema for the AKS deploy config. */
 function buildSchema({ prompt, az }) {
   return {
@@ -365,6 +407,18 @@ function buildSchema({ prompt, az }) {
     },
     GHCR_TOKEN: {
       secret: true,
+    },
+    IMAGE_API: {
+      validate: (value, config) => validateCustomImageField("IMAGE_API", value, config),
+    },
+    IMAGE_FRONTEND: {
+      validate: (value, config) => validateCustomImageField("IMAGE_FRONTEND", value, config),
+    },
+    IMAGE_MCP: {
+      validate: (value, config) => validateCustomImageField("IMAGE_MCP", value, config),
+    },
+    IMAGE_AGENT_HOST: {
+      validate: (value, config) => validateCustomImageField("IMAGE_AGENT_HOST", value, config),
     },
     GITHUB_CLIENT_ID: {
       required: true,
@@ -593,6 +647,11 @@ export async function run(opts = {}) {
   if (config.IMAGE_SOURCE === "ghcr") {
     log.field("GHCR owner", ghcrOwner);
     log.field("GHCR ref", config.GHCR_REF);
+  } else if (config.IMAGE_SOURCE === "custom") {
+    log.warn("IMAGE_SOURCE=custom trusts the exact image refs you provide. Use only images and registries you trust.");
+    for (const [field, imageName] of CUSTOM_IMAGE_FIELDS) {
+      log.field(`${imageName} source`, config[field]);
+    }
   }
   log.field("GitHub OAuth client ID", config.GITHUB_CLIENT_ID);
   log.field("Allowed GitHub org(s)", config.GITHUB_ALLOWED_ORG);
@@ -607,6 +666,10 @@ export async function run(opts = {}) {
     PG_HA_MODE: config.PG_HA_MODE,
     NAMESPACE: config.NAMESPACE,
     GITHUB_ALLOWED_ORG: config.GITHUB_ALLOWED_ORG,
+    IMAGE_API: config.IMAGE_API,
+    IMAGE_FRONTEND: config.IMAGE_FRONTEND,
+    IMAGE_MCP: config.IMAGE_MCP,
+    IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
   };
   if (flags.IMAGE_TAG) envOverride.IMAGE_TAG = flags.IMAGE_TAG;
 
@@ -621,6 +684,10 @@ export async function run(opts = {}) {
     GHCR_OWNER: ghcrOwner,
     GHCR_REPOSITORY: ghcrRepository,
     GHCR_TOKEN: config.GHCR_TOKEN,
+    IMAGE_API: config.IMAGE_API,
+    IMAGE_FRONTEND: config.IMAGE_FRONTEND,
+    IMAGE_MCP: config.IMAGE_MCP,
+    IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
     FORCE: Boolean(flags.FORCE),
     GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
     GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
@@ -645,6 +712,10 @@ export async function run(opts = {}) {
     GHCR_OWNER: ghcrOwner,
     GHCR_REPOSITORY: ghcrRepository,
     GHCR_TOKEN: config.GHCR_TOKEN,
+    IMAGE_API: config.IMAGE_API,
+    IMAGE_FRONTEND: config.IMAGE_FRONTEND,
+    IMAGE_MCP: config.IMAGE_MCP,
+    IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
     FORCE: Boolean(flags.FORCE),
     GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
     GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
@@ -707,6 +778,10 @@ export async function run(opts = {}) {
   log.field("Image source", cfg.IMAGE_SOURCE);
   if (cfg.IMAGE_SOURCE === "ghcr") {
     log.field("GHCR ref", cfg.GHCR_REF);
+  } else if (cfg.IMAGE_SOURCE === "custom") {
+    for (const [field, imageName] of CUSTOM_IMAGE_FIELDS) {
+      log.field(`${imageName} source`, cfg[field]);
+    }
   }
   log.field("Allowed GitHub org(s)", cfg.GITHUB_ALLOWED_ORG);
   log.field("Gateway host", deployResult?.HOST ?? "<unknown>");

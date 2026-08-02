@@ -186,7 +186,8 @@ AKS cluster / ACR / Key Vault names (prefilled with sensible defaults,
 editable), and a GitHub OAuth client ID + secret (the secret is entered with
 no echo). It then provisions the cluster, identity, monitoring, the MCP OAuth
 signing key, PostgreSQL, builds and pushes images (or optionally imports
-already-published GHCR images by immutable ref), verifies image provenance,
+already-published GHCR images by immutable ref, or four operator-specified
+fully-qualified custom image refs), verifies image provenance,
 and performs an initial SHA-identified deployment. At the end it prints an
 **outputs summary** (resource group, cluster, ACR, namespace, image tags,
 gateway host/IP, **GitHub OAuth callback URL**, verification pass/fail
@@ -264,6 +265,23 @@ are rejected. The GHCR owner/repository is always derived from the repo's
 GitHub origin remote, `--ghcr-token`/`GHCR_TOKEN` is available for private-
 package auth, and `--force` is required before overwriting an existing
 conflicting ACR tag.
+
+To import images from any registry you trust instead of the repo-derived GHCR
+owner, use `--image-source custom` and pass all four fully-qualified refs:
+
+```bash
+npm run azure:provision-infra -- \
+  --image-source custom \
+  --image-api ghcr.io/someuser/agentweaver-api:v1.2.3 \
+  --image-frontend ghcr.io/someuser/agentweaver-frontend:v1.2.3 \
+  --image-mcp ghcr.io/someuser/agentweaver-mcp:v1.2.3 \
+  --image-agent-host ghcr.io/someuser/agentweaver-agent-host:v1.2.3
+```
+
+The installer fails closed if any one of the four refs is missing or malformed.
+Unlike `--image-source ghcr`, custom mode does **not** derive or restrict the
+registry/owner from the Git remote; that is intentional, and it means custom
+mode trusts whatever registry/image you provide.
 
 **Deploying current local work to an existing environment:**
 

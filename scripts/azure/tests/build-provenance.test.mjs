@@ -16,6 +16,7 @@ import {
   acrRepositoryDigestForImage,
   validateGhcrRef,
   importImagesFromGhcr,
+  importImagesFromCustomSources,
   waitForAcrTagDigest,
   stampProvenance,
   run as runBuild,
@@ -489,6 +490,37 @@ test("importImagesFromGhcr: captures final digests and returns imported provenan
   assert.ok(finalDigestLookups.length >= 4, "final imported tags must have their digests captured via `az acr repository show --image ... --query digest`");
 });
 
+test("importImagesFromCustomSources: captures final digests and returns imported custom sources", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "custom",
+    IMAGE_API: "ghcr.io/fork/agentweaver-api:v1.2.3",
+    IMAGE_FRONTEND: "ghcr.io/fork/agentweaver-frontend:v1.2.3",
+    IMAGE_MCP: "ghcr.io/fork/agentweaver-mcp:v1.2.3",
+    IMAGE_AGENT_HOST: "ghcr.io/fork/agentweaver-agent-host:v1.2.3",
+  };
+  const showCounts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("import")) return { stdout: "", stderr: "", code: 0 };
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "show") {
+        const image = args[args.indexOf("--image") + 1];
+        const count = (showCounts.get(image) ?? 0) + 1;
+        showCounts.set(image, count);
+        if (image.includes("custom-preflight")) return { stdout: "sha256:" + "5".repeat(64), stderr: "", code: 0 };
+        if (count === 1) return { stdout: "", stderr: "not found", code: 1 };
+        return { stdout: "sha256:" + "5".repeat(64), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await importImagesFromCustomSources(cfg, { exec, sleep: async () => {} });
+  assert.equal(Object.keys(result.expectedImageDigests).length, 4);
+  assert.equal(result.importedImageSources["agentweaver-api"].sourceImage, "ghcr.io/fork/agentweaver-api:v1.2.3");
+});
+
 // -------------------- provenance helpers (25) --------------------
 
 test("imageTagFromRef / imageDigestFromId parse container status fields", () => {
@@ -649,6 +681,39 @@ test("verifyImage: imported GHCR digests are the source of truth when provided",
   );
   assert.equal(result.status, "ok");
   assert.match(result.message, /match imported digest/);
+});
+
+test("verifyImage: imported custom digests only verify deployed digest parity, not local git provenance", async () => {
+  const digest = "sha256:" + "8".repeat(64);
+  const kubectl = {
+    desiredDeploymentReplicas: async () => "1",
+    podStatusForSelector: async () => [
+      { name: "p1", phase: "Running", ready: "true", imageRef: "img:v1", imageId: `img@${digest}` },
+    ],
+  };
+  const git = {
+    diffIsQuiet: async () => {
+      throw new Error("custom imports must not attempt local git drift checks");
+    },
+  };
+  const result = await verifyImage(
+    "api",
+    "agentweaver-api",
+    getImage("agentweaver-api").watchedPaths,
+    "verifycommit",
+    {
+      ...CFG,
+      IMPORTED_IMAGE_SOURCES: {
+        "agentweaver-api": {
+          digest,
+          sourceImage: "docker.io/someuser/agentweaver-api:v1.2.3",
+        },
+      },
+    },
+    { exec: fakeExec(), git, kubectl },
+  );
+  assert.equal(result.status, "ok");
+  assert.match(result.message, /custom mode explicitly trusts that external image/i);
 });
 
 test("verifyImage: unresolvable prov tag (shallow clone/rewritten history) fails with a clear reason", async () => {
