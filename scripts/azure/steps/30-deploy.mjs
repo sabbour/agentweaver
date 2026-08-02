@@ -325,7 +325,7 @@ export async function run(cfg, opts = {}) {
     });
 
     const applyRendered = async (fname) => {
-      const content = kustomize.manifestForFilename(docs, fname);
+      const content = kustomize.manifestForFilename(docs, fname, { vars: renderVars });
       const outPath = path.join(RENDERED_DIR, fname.replace(/^_/, ""));
       fsImpl.writeFileSync(outPath, content);
       await execRun("kubectl", ["apply", "-f", outPath]);
@@ -357,6 +357,12 @@ export async function run(cfg, opts = {}) {
 
     log.info("");
     log.info("Applying network policies and egress allowlists...");
+    if (kustomize.isPublicPostgresAccess(renderVars)) {
+      log.info(
+        `  [note] PG_ACCESS_MODE=public -- Postgres egress uses FQDN-based CiliumNetworkPolicies ` +
+          `(${kustomize.postgresFqdn(renderVars)}:5432) instead of the private-subnet ipBlock rules.`,
+      );
+    }
     for (const fname of NETWORK_POLICY_MANIFESTS) {
       await applyRendered(fname);
     }
