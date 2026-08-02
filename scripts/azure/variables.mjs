@@ -46,6 +46,7 @@ export const DEFAULTS = Object.freeze({
   CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
+  PG_SERVER_NAME: "agentweaver-pg",
   // Deliberately NO default here (see resolveKeyvaultName() below): unlike
   // the other resource names, a wrong-but-plausible Key Vault name doesn't
   // just fail to find a resource -- it silently redirects the rendered
@@ -174,6 +175,7 @@ export async function resolveVariables(options = {}) {
   const CLUSTER_NAME = pick("CLUSTER_NAME");
   const ACR_NAME = pick("ACR_NAME");
   const LOCATION = pick("LOCATION");
+  const PG_SERVER_NAME = pick("PG_SERVER_NAME");
   const NAMESPACE = pick("NAMESPACE");
   const KATA_POOL_NAME = pick("KATA_POOL_NAME");
   const APP_POOL_NAME = pick("APP_POOL_NAME");
@@ -238,6 +240,7 @@ export async function resolveVariables(options = {}) {
     CLUSTER_NAME,
     ACR_NAME,
     LOCATION,
+    PG_SERVER_NAME,
     NAMESPACE,
     KATA_POOL_NAME,
     APP_POOL_NAME,
@@ -266,6 +269,7 @@ export function printSummary(vars, log) {
   log.field("Cluster", vars.CLUSTER_NAME);
   log.field("ACR", vars.ACR_LOGIN_SERVER);
   log.field("Location", vars.LOCATION);
+  log.field("Postgres server", vars.PG_SERVER_NAME);
   log.field("Namespace", vars.NAMESPACE);
   log.field("Kata pool", vars.KATA_POOL_NAME);
   log.field("App pool", vars.APP_POOL_NAME);

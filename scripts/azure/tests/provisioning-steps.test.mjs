@@ -494,6 +494,38 @@ test("17-provision-postgres: skips server creation when it already exists", asyn
   assert.ok(!exec.calls.run.some((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[2] === "create"));
 });
 
+test("17-provision-postgres: PG_SERVER_NAME override flows through to az calls and result metadata", async () => {
+  const cfg = { ...CFG, PG_SERVER_NAME: "custom-pg" };
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "/zone/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[2] === "show") {
+        assert.equal(args[args.indexOf("--name") + 1], "custom-pg");
+        return { stdout: "Ready", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") {
+        assert.equal(args[args.indexOf("--server-name") + 1], "custom-pg");
+        return { stdout: "agentweaver", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set") {
+        assert.equal(args[args.indexOf("--name") + 1], "custom-pg");
+        return { stdout: "custom-pg", stderr: "", code: 0 };
+      }
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  const result = await provisionPostgres.run(cfg, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+  assert.equal(result.PG_SERVER_NAME, "custom-pg");
+  assert.equal(result.PG_FQDN, "custom-pg.postgres.database.azure.com");
+});
+
 // -------------------- gen-a2a-mtls-certs.mjs --------------------
 
 test("gen-a2a-mtls-certs: skips generation when all three secrets already exist and force is not set", async () => {

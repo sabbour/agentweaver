@@ -79,6 +79,8 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
     "--image-tag",
     "v1.2.3",
     "--resource-group=my-rg",
+    "--postgres-server-name",
+    "custom-pg",
     "--github-client-secret",
     "shh",
   ]);
@@ -86,6 +88,7 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
   assert.equal(parsed.flags.SKIP_OAUTH_KEY, true);
   assert.equal(parsed.flags.IMAGE_TAG, "v1.2.3");
   assert.equal(parsed.flags.RESOURCE_GROUP, "my-rg");
+  assert.equal(parsed.flags.PG_SERVER_NAME, "custom-pg");
   assert.equal(parsed.flags.GITHUB_CLIENT_SECRET, "shh");
 });
 
@@ -136,6 +139,7 @@ test("GitHub org validator: rejects malformed wildcard forms", () => {
 test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--skip-postgres/);
   assert.match(HELP_TEXT, /--params-file/);
+  assert.match(HELP_TEXT, /--postgres-server-name <name>/);
   assert.match(HELP_TEXT, /--image-source <source>/);
   assert.match(HELP_TEXT, /--ghcr-ref <ref>/);
   assert.match(HELP_TEXT, /dev --setup/);
@@ -201,13 +205,23 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     ACR_LOGIN_SERVER: `${e.ACR_NAME}.azurecr.io`,
     LOCATION: e.LOCATION,
     KEYVAULT_NAME: e.KEYVAULT_NAME,
+    PG_SERVER_NAME: e.PG_SERVER_NAME,
     NAMESPACE: e.NAMESPACE,
     IMAGE_TAG: e.IMAGE_TAG ?? "dev",
     AGENTHOST_IMAGE_TAG: "dev",
   });
 
   const result = await run({
-    argv: ["--resource-group", "my-rg", "--github-client-id", "id-123", "--github-client-secret", "topsecret"],
+    argv: [
+      "--resource-group",
+      "my-rg",
+      "--postgres-server-name",
+      "custom-pg",
+      "--github-client-id",
+      "id-123",
+      "--github-client-secret",
+      "topsecret",
+    ],
     env: { GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" },
     prompt: { isInteractive: () => false },
     exec,
@@ -222,7 +236,27 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     ["createCluster", "setupIdentity", "provisionMonitoring", "oauthSigningKey", "provisionPostgres", "buildImages", "genA2aMtlsCerts", "deployStep", "verifyProvenance", "verifyStep"],
   );
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
+  assert.equal(calls[0].cfg.PG_SERVER_NAME, "custom-pg");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");
+});
+
+test("run: rejects an invalid PG_SERVER_NAME before provisioning starts", async () => {
+  await assert.rejects(
+    run({
+      argv: [
+        "--postgres-server-name",
+        "Invalid_Name",
+        "--github-client-id",
+        "id-123",
+        "--github-client-secret",
+        "topsecret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+    }),
+    /PG_SERVER_NAME must be 3-63 chars of lowercase letters, numbers, or hyphens/,
+  );
 });
 
 test("run: ghcr image-source resolves derived owner and passes GHCR config through to the image step", async () => {

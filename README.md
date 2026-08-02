@@ -219,9 +219,12 @@ npm run azure:provision-infra -- \
   --acr-name agentweaverregistry \
   --location westus2 \
   --keyvault-name agentweaver-kv \
+  --postgres-server-name agentweaver-pg-staging \
   --github-client-id "$GITHUB_CLIENT_ID" \
   --github-client-secret "$GITHUB_CLIENT_SECRET"
 ```
+
+Optional: pass `--postgres-server-name <name>` or set `PG_SERVER_NAME` to override the default `agentweaver-pg` and route around the rare Azure-global Flexible Server name collision.
 
 Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/params.example.json)):
 
@@ -232,6 +235,7 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
   "KEYVAULT_NAME": "agentweaver-kv",
+  "PG_SERVER_NAME": "agentweaver-pg-staging",
   "NAMESPACE": "agentweaver",
   "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
   "GITHUB_CLIENT_SECRET": "",

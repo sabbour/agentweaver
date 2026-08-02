@@ -90,7 +90,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * --image-tag <tag>, --image-source <acr-build|ghcr>, --ghcr-ref <ref>,
  * --ghcr-token <token> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
- * --acr-name, --location, --keyvault-name, --namespace,
+ * --acr-name, --location, --keyvault-name, --postgres-server-name, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
  */
 export function parseArgs(argv = []) {
@@ -157,6 +157,10 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--keyvault-name");
       flags.KEYVAULT_NAME = value;
       i += consumed;
+    } else if (arg === "--postgres-server-name" || arg.startsWith("--postgres-server-name=")) {
+      const { value, consumed } = takeValue(i, "--postgres-server-name");
+      flags.PG_SERVER_NAME = value;
+      i += consumed;
     } else if (arg === "--namespace" || arg.startsWith("--namespace=")) {
       const { value, consumed } = takeValue(i, "--namespace");
       flags.NAMESPACE = value;
@@ -205,6 +209,7 @@ Flags:
   --acr-name <name>
   --location <region>
   --keyvault-name <name>
+  --postgres-server-name <name>
   --namespace <name>
   --github-client-id <id>
   --github-client-secret <secret>   NEVER echoed/logged; prefer env/params-file/prompt instead.
@@ -220,6 +225,7 @@ Non-interactive (no TTY) never prompts -- missing required fields fail with a cl
 `;
 
 const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
+const POSTGRES_SERVER_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
 
 /**
  * A plausible GitHub org login: starts with an alphanumeric, up to 39 chars
@@ -298,6 +304,14 @@ export function normalizeGithubOrgList(value) {
     .join(",");
 }
 
+function validatePostgresServerName(value) {
+  const name = String(value ?? "");
+  if (!POSTGRES_SERVER_NAME_RE.test(name)) {
+    return "PG_SERVER_NAME must be 3-63 chars of lowercase letters, numbers, or hyphens, and cannot start or end with a hyphen.";
+  }
+  return true;
+}
+
 /** Builds the lib/config.mjs field schema for the AKS deploy config. */
 function buildSchema({ prompt, az }) {
   return {
@@ -306,6 +320,13 @@ function buildSchema({ prompt, az }) {
     ACR_NAME: { default: DEFAULTS.ACR_NAME },
     LOCATION: { default: DEFAULTS.LOCATION },
     KEYVAULT_NAME: { default: PROVISION_KEYVAULT_NAME_SUGGESTION },
+    PG_SERVER_NAME: {
+      default: DEFAULTS.PG_SERVER_NAME,
+      validate: (value) => {
+        const result = validatePostgresServerName(value);
+        return result === true ? undefined : result;
+      },
+    },
     NAMESPACE: { default: DEFAULTS.NAMESPACE },
     IMAGE_SOURCE: {
       default: "acr-build",
@@ -423,6 +444,10 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   collected.CLUSTER_NAME = await prompt.text("AKS cluster name", { default: DEFAULTS.CLUSTER_NAME });
   collected.ACR_NAME = await prompt.text("ACR name", { default: DEFAULTS.ACR_NAME });
   collected.KEYVAULT_NAME = await prompt.text("Key Vault name", { default: PROVISION_KEYVAULT_NAME_SUGGESTION });
+  collected.PG_SERVER_NAME = await prompt.text("Postgres server name", {
+    default: DEFAULTS.PG_SERVER_NAME,
+    validate: validatePostgresServerName,
+  });
 
   // --- GitHub OAuth credentials ---------------------------------------------
   log.info("");
@@ -536,6 +561,7 @@ export async function run(opts = {}) {
   log.field("ACR", config.ACR_NAME);
   log.field("Location", config.LOCATION);
   log.field("Key Vault", config.KEYVAULT_NAME);
+  log.field("Postgres server", config.PG_SERVER_NAME);
   log.field("Namespace", config.NAMESPACE);
   log.field("Image source", config.IMAGE_SOURCE);
   if (config.IMAGE_SOURCE === "ghcr") {
@@ -551,6 +577,7 @@ export async function run(opts = {}) {
     ACR_NAME: config.ACR_NAME,
     LOCATION: config.LOCATION,
     KEYVAULT_NAME: config.KEYVAULT_NAME,
+    PG_SERVER_NAME: config.PG_SERVER_NAME,
     NAMESPACE: config.NAMESPACE,
     GITHUB_ALLOWED_ORG: config.GITHUB_ALLOWED_ORG,
   };
@@ -646,6 +673,7 @@ export async function run(opts = {}) {
   log.field("Cluster", cfg.CLUSTER_NAME);
   log.field("ACR", cfg.ACR_LOGIN_SERVER);
   log.field("Namespace", cfg.NAMESPACE);
+  log.field("Postgres server", cfg.PG_SERVER_NAME);
   log.field("Image tag", cfg.IMAGE_TAG);
   log.field("AgentHost image tag", cfg.AGENTHOST_IMAGE_TAG);
   log.field("Image source", cfg.IMAGE_SOURCE);
