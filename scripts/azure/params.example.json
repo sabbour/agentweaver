@@ -44,6 +44,11 @@
   // "PG_HA_MODE": "Disabled", // Valid values: ZoneRedundant, Disabled. Use this in regions/environments where zone-redundant HA is unavailable.
   // "PG_ACCESS_MODE": "public", // Valid values: private, public. Required when PG_LOCATION differs from LOCATION because delegated private access is single-region only.
   "IMAGE_TAG": "",
+  // Optional custom-image mode (IMAGE_SOURCE=custom): all four refs are required together.
+  // "IMAGE_API": "ghcr.io/your-org/agentweaver-api:v1.2.3",
+  // "IMAGE_FRONTEND": "ghcr.io/your-org/agentweaver-frontend:v1.2.3",
+  // "IMAGE_MCP": "ghcr.io/your-org/agentweaver-mcp:v1.2.3",
+  // "IMAGE_AGENT_HOST": "ghcr.io/your-org/agentweaver-agent-host:v1.2.3",
   "SKIP_POSTGRES": false,
   "SKIP_OAUTH_KEY": false
 }

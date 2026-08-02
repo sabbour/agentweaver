@@ -119,6 +119,25 @@ test("parseArgs: recognizes GHCR import flags", () => {
   assert.equal(parsed.flags.FORCE, true);
 });
 
+test("parseArgs: recognizes custom image-source flags", () => {
+  const parsed = parseArgs([
+    "--image-source",
+    "custom",
+    "--image-api",
+    "ghcr.io/someuser/agentweaver-api:v1.2.3",
+    "--image-frontend=ghcr.io/someuser/agentweaver-frontend:v1.2.3",
+    "--image-mcp",
+    "ghcr.io/someuser/agentweaver-mcp:v1.2.3",
+    "--image-agent-host",
+    "ghcr.io/someuser/agentweaver-agent-host:v1.2.3",
+  ]);
+  assert.equal(parsed.flags.IMAGE_SOURCE, "custom");
+  assert.equal(parsed.flags.IMAGE_API, "ghcr.io/someuser/agentweaver-api:v1.2.3");
+  assert.equal(parsed.flags.IMAGE_FRONTEND, "ghcr.io/someuser/agentweaver-frontend:v1.2.3");
+  assert.equal(parsed.flags.IMAGE_MCP, "ghcr.io/someuser/agentweaver-mcp:v1.2.3");
+  assert.equal(parsed.flags.IMAGE_AGENT_HOST, "ghcr.io/someuser/agentweaver-agent-host:v1.2.3");
+});
+
 test("parseArgs: rejects ghcr-owner overrides so GHCR owner is always derived from origin", () => {
   assert.throws(() => parseArgs(["--ghcr-owner", "sabbour"]), /Unknown argument/);
 });
@@ -158,6 +177,7 @@ test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--postgres-access-mode <private\|public>/);
   assert.match(HELP_TEXT, /--image-source <source>/);
   assert.match(HELP_TEXT, /--ghcr-ref <ref>/);
+  assert.match(HELP_TEXT, /--image-api <ref>/);
   assert.match(HELP_TEXT, /dev --setup/);
 });
 
@@ -602,6 +622,134 @@ test("run: IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner c
       resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
     }),
     /requires a GitHub origin remote/i,
+  );
+});
+
+test("run: custom image-source passes all four fully-qualified refs through to the image step", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls, {
+      expectedImageDigests: { "agentweaver-api": "sha256:" + "a".repeat(64) },
+      importedImageSources: {
+        "agentweaver-api": {
+          digest: "sha256:" + "a".repeat(64),
+          sourceImage: "ghcr.io/fork/agentweaver-api:v1.2.3",
+        },
+      },
+    }),
+    verifyProvenance: fakeStep("verifyProvenance", calls, { ok: true }),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, { HOST: "agentweaver.example.com", GATEWAY_IP: "1.2.3.4" }),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 10, fail: 0 }),
+  };
+  const exec = { async run() { return { code: 0 }; }, async capture() { return { stdout: "", stderr: "", code: 0 }; } };
+  const resolveVariablesFn = async ({ env: e }) => ({
+    RESOURCE_GROUP: "my-rg",
+    CLUSTER_NAME: "my-cluster",
+    ACR_NAME: "myacr",
+    ACR_LOGIN_SERVER: "myacr.azurecr.io",
+    LOCATION: "westus2",
+    KEYVAULT_NAME: "my-kv",
+    NAMESPACE: "agentweaver",
+    IMAGE_TAG: "v0.15.0",
+    AGENTHOST_IMAGE_TAG: "v0.15.0",
+    IMAGE_API: e.IMAGE_API,
+    IMAGE_FRONTEND: e.IMAGE_FRONTEND,
+    IMAGE_MCP: e.IMAGE_MCP,
+    IMAGE_AGENT_HOST: e.IMAGE_AGENT_HOST,
+  });
+
+  await run({
+    argv: [
+      "--image-source",
+      "custom",
+      "--image-api",
+      "ghcr.io/fork/agentweaver-api:v1.2.3",
+      "--image-frontend",
+      "ghcr.io/fork/agentweaver-frontend:v1.2.3",
+      "--image-mcp",
+      "ghcr.io/fork/agentweaver-mcp:v1.2.3",
+      "--image-agent-host",
+      "ghcr.io/fork/agentweaver-agent-host:v1.2.3",
+      "--github-client-id",
+      "id-123",
+      "--github-client-secret",
+      "oauthsecret",
+    ],
+    env: {},
+    prompt: { isInteractive: () => false },
+    exec,
+    log: noopLog(),
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  const buildCall = calls.find((c) => c.step === "buildImages");
+  assert.equal(buildCall.cfg.IMAGE_SOURCE, "custom");
+  assert.equal(buildCall.cfg.IMAGE_API, "ghcr.io/fork/agentweaver-api:v1.2.3");
+  assert.equal(buildCall.cfg.IMAGE_FRONTEND, "ghcr.io/fork/agentweaver-frontend:v1.2.3");
+  assert.equal(buildCall.cfg.IMAGE_MCP, "ghcr.io/fork/agentweaver-mcp:v1.2.3");
+  assert.equal(buildCall.cfg.IMAGE_AGENT_HOST, "ghcr.io/fork/agentweaver-agent-host:v1.2.3");
+  const verifyCall = calls.find((c) => c.step === "verifyProvenance");
+  assert.equal(verifyCall.cfg.IMPORTED_IMAGE_SOURCES["agentweaver-api"].sourceImage, "ghcr.io/fork/agentweaver-api:v1.2.3");
+});
+
+test("run: IMAGE_SOURCE=custom fails closed when one of the four image refs is missing", async () => {
+  await assert.rejects(
+    run({
+      argv: [
+        "--image-source",
+        "custom",
+        "--image-api",
+        "ghcr.io/fork/agentweaver-api:v1.2.3",
+        "--image-frontend",
+        "ghcr.io/fork/agentweaver-frontend:v1.2.3",
+        "--image-mcp",
+        "ghcr.io/fork/agentweaver-mcp:v1.2.3",
+        "--github-client-id",
+        "id",
+        "--github-client-secret",
+        "secret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+      resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
+    }),
+    /IMAGE_AGENT_HOST is required when IMAGE_SOURCE=custom/i,
+  );
+});
+
+test("run: IMAGE_SOURCE=custom rejects malformed image refs", async () => {
+  await assert.rejects(
+    run({
+      argv: [
+        "--image-source",
+        "custom",
+        "--image-api",
+        "agentweaver-api:v1.2.3",
+        "--image-frontend",
+        "ghcr.io/fork/agentweaver-frontend:v1.2.3",
+        "--image-mcp",
+        "ghcr.io/fork/agentweaver-mcp:v1.2.3",
+        "--image-agent-host",
+        "ghcr.io/fork/agentweaver-agent-host:v1.2.3",
+        "--github-client-id",
+        "id",
+        "--github-client-secret",
+        "secret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+      resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
+    }),
+    /IMAGE_API='agentweaver-api:v1\.2\.3' is not a valid fully-qualified image reference/i,
   );
 });
 

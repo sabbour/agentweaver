@@ -38,6 +38,13 @@ import { githubReleaseExists, resolveGitHubRepository } from "../lib/github.mjs"
 import { IMAGES, buildArgsFor } from "../image-spec.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
 
+const CUSTOM_IMAGE_FIELDS = Object.freeze({
+  "agentweaver-api": "IMAGE_API",
+  "agentweaver-frontend": "IMAGE_FRONTEND",
+  "agentweaver-mcp": "IMAGE_MCP",
+  "agentweaver-agent-host": "IMAGE_AGENT_HOST",
+});
+
 /**
  * Resolves a release image tag to the commit that wrote that version to
  * VERSION, mirroring release_ref_for_tag()/Get-ReleaseRefForTag(). Returns
@@ -412,6 +419,22 @@ function ghcrStageTag(targetTag) {
   return `${targetTag}-ghcr-preflight-${process.pid}-${Date.now()}`;
 }
 
+function customStageTag(targetTag) {
+  return `${targetTag}-custom-preflight-${process.pid}-${Date.now()}`;
+}
+
+function customImageReferenceFor(imageSpec, cfg) {
+  const field = CUSTOM_IMAGE_FIELDS[imageSpec.name];
+  if (!field) {
+    throw new Error(`No custom image field configured for ${imageSpec.name}.`);
+  }
+  const sourceImage = cfg[field];
+  if (!sourceImage) {
+    throw new Error(`IMAGE_SOURCE=custom requires ${field} for ${imageSpec.name}.`);
+  }
+  return sourceImage;
+}
+
 export async function resolveGhcrSource(cfg, { exec = execDefault, git = gitDefault, fetchImpl = globalThis.fetch } = {}) {
   const ref = validateGhcrRef(cfg.GHCR_REF);
 
@@ -563,6 +586,123 @@ export async function importImagesFromGhcr(cfg, deps = {}) {
   return {
     imageSource: "ghcr",
     targetCommit: ghcrSource.sourceCommit,
+    plans: successfulStages.map((stage) => ({ action: "import", image: stage.image, targetTag: stage.targetTag })),
+    expectedImageDigests,
+    importedImageSources,
+  };
+}
+
+export async function importImagesFromCustomSources(cfg, deps = {}) {
+  const exec = deps.exec ?? execDefault;
+  const sleep = deps.sleep ?? defaultSleep;
+  const resolvedCfg = { ...cfg, repoRoot: cfg.repoRoot ?? DEFAULT_REPO_ROOT };
+
+  log.section("Importing operator-specified images into ACR");
+  log.warn(
+    "IMAGE_SOURCE=custom is an explicit trust boundary override: the deploy will import exactly the image refs you supplied. Use only registries and images you trust.",
+  );
+  log.info("Preflight strategy: import all four custom images into temporary ACR staging tags first, then promote final tags only after every staging import succeeds.");
+
+  const stagedPlans = IMAGES.map((imageSpec) => ({
+    image: imageSpec,
+    targetTag: resolvedCfg[imageSpec.tagField],
+    stageTag: customStageTag(resolvedCfg[imageSpec.tagField]),
+    sourceImage: customImageReferenceFor(imageSpec, resolvedCfg),
+  }));
+
+  const stageResults = await Promise.allSettled(
+    stagedPlans.map(async (plan) => {
+      await importIntoAcr(plan.sourceImage, plan.image.name, plan.stageTag, resolvedCfg, { exec });
+      const stageDigest = await waitForAcrRepositoryDigest(plan.image.name, plan.stageTag, resolvedCfg, { exec, sleep });
+      if (!stageDigest) {
+        throw new Error(`imported staging image ${plan.image.name}:${plan.stageTag} has no resolvable ACR digest`);
+      }
+      log.field(`${plan.image.name} staged digest`, stageDigest);
+      return { ...plan, stageDigest };
+    }),
+  );
+
+  const stageFailures = [];
+  const successfulStages = [];
+  for (const result of stageResults) {
+    if (result.status === "fulfilled") {
+      successfulStages.push(result.value);
+    } else {
+      stageFailures.push(result.reason);
+    }
+  }
+
+  if (stageFailures.length > 0) {
+    await Promise.all(successfulStages.map((stage) => untagImage(stage.image.name, stage.stageTag, resolvedCfg, { exec })));
+    throw new Error(
+      `Custom image import preflight failed before any final tags were updated: ${stageFailures.map((failure) => failure?.message ?? failure).join("; ")}`,
+    );
+  }
+
+  const promotionPlans = await Promise.all(successfulStages.map(async (stage) => ({
+    ...stage,
+    existingDigest: await acrRepositoryDigestForImage(stage.image.name, stage.targetTag, resolvedCfg, { exec }),
+  })));
+  const conflictingPromotions = promotionPlans.filter(
+    (stage) => stage.existingDigest && stage.existingDigest !== stage.stageDigest && !resolvedCfg.FORCE,
+  );
+  if (conflictingPromotions.length > 0) {
+    throw new Error(
+      `Refusing to overwrite conflicting existing ACR tags without --force: ${conflictingPromotions.map((stage) => (
+        `${stage.image.name}:${stage.targetTag} already exists in ACR with digest ${stage.existingDigest}; requested digest ${stage.stageDigest} from ${stage.sourceImage}`
+      )).join("; ")}`,
+    );
+  }
+
+  const expectedImageDigests = {};
+  const importedImageSources = {};
+
+  try {
+    for (const stage of promotionPlans) {
+      const { existingDigest } = stage;
+      if (existingDigest === stage.stageDigest) {
+        log.skip(`${stage.image.name}:${stage.targetTag} already resolves to imported digest ${stage.stageDigest}`);
+      } else {
+        await importIntoAcr(
+          `${resolvedCfg.ACR_LOGIN_SERVER}/${stage.image.name}@${stage.stageDigest}`,
+          stage.image.name,
+          stage.targetTag,
+          resolvedCfg,
+          { exec, force: Boolean(existingDigest) && Boolean(resolvedCfg.FORCE) },
+        );
+      }
+
+      const finalDigest = await waitForAcrRepositoryDigest(stage.image.name, stage.targetTag, resolvedCfg, { exec, sleep });
+      if (!finalDigest) {
+        throw new Error(`final imported image ${stage.image.name}:${stage.targetTag} has no resolvable ACR digest`);
+      }
+      if (finalDigest !== stage.stageDigest) {
+        throw new Error(
+          `${stage.image.name}:${stage.targetTag} resolved to ${finalDigest} after import; expected ${stage.stageDigest}.`,
+        );
+      }
+
+      log.field(`${stage.image.name} final digest`, finalDigest);
+      expectedImageDigests[stage.image.name] = finalDigest;
+      importedImageSources[stage.image.name] = {
+        digest: finalDigest,
+        sourceImage: stage.sourceImage,
+      };
+    }
+  } finally {
+    await Promise.all(successfulStages.map((stage) => untagImage(stage.image.name, stage.stageTag, resolvedCfg, { exec })));
+  }
+
+  log.section("IMAGES READY IN ACR");
+  for (const imageSpec of IMAGES) {
+    log.field(
+      imageSpec.name,
+      `${resolvedCfg.ACR_LOGIN_SERVER}/${imageSpec.name}:${resolvedCfg[imageSpec.tagField]} @ ${expectedImageDigests[imageSpec.name]}`,
+    );
+  }
+
+  return {
+    imageSource: "custom",
     plans: successfulStages.map((stage) => ({ action: "import", image: stage.image, targetTag: stage.targetTag })),
     expectedImageDigests,
     importedImageSources,
@@ -810,6 +950,9 @@ export async function run(cfg, deps = {}) {
   const resolvedCfg = { ...cfg, repoRoot: cfg.repoRoot ?? DEFAULT_REPO_ROOT };
   if (resolvedCfg.IMAGE_SOURCE === "ghcr") {
     return importImagesFromGhcr(resolvedCfg, deps);
+  }
+  if (resolvedCfg.IMAGE_SOURCE === "custom") {
+    return importImagesFromCustomSources(resolvedCfg, deps);
   }
   return runAcrBuild(resolvedCfg, deps);
 }
