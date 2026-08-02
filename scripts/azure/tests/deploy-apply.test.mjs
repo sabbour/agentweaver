@@ -236,3 +236,46 @@ test("run(): applied manifests carry real kustomize-resolved values, not the com
   assert.match(secretProviderClass, /clientID: 11111111-2222-3333-4444-555555555555/);
   assert.doesNotMatch(secretProviderClass, /changeme/);
 });
+
+// --- Postgres access-mode branching, end-to-end through a real kustomize build ---
+// Regression for the live v0.16.0 bug: with --postgres-access-mode public the
+// applied Postgres egress policies still carried the private delegated-subnet
+// ipBlock, so pods could never reach the public Flexible Server.
+
+test("run(): private mode (default) applies the ipBlock Postgres egress NetworkPolicies unchanged", async () => {
+  const { writtenFiles, execRun, execCapture, log, az, fsImpl } = makeFakes();
+  await run({ ...CFG, PG_ACCESS_MODE: "private", PG_SERVER_NAME: "agentweaver-pg" }, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT });
+
+  const apiPolicy = writtenFiles.get("networkpolicy-postgres-egress.yaml");
+  assert.match(apiPolicy, /name: allow-api-postgres-egress\b/);
+  assert.match(apiPolicy, /cidr: 10\.225\.0\.0\/28/);
+  assert.doesNotMatch(apiPolicy, /CiliumNetworkPolicy/);
+
+  const workerPolicies = writtenFiles.get("networkpolicy-worker.yaml");
+  assert.match(workerPolicies, /name: allow-worker-postgres-egress\b/);
+  assert.match(workerPolicies, /cidr: 10\.225\.0\.0\/28/);
+  assert.doesNotMatch(workerPolicies, /CiliumNetworkPolicy/);
+});
+
+test("run(): public mode applies toFQDNs CiliumNetworkPolicies instead of the private-CIDR ipBlock rules", async () => {
+  const { writtenFiles, execRun, execCapture, log, az, fsImpl } = makeFakes();
+  await run(
+    { ...CFG, PG_ACCESS_MODE: "public", PG_SERVER_NAME: "agentweaver-pg-eastus2" },
+    { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT },
+  );
+
+  const apiPolicy = writtenFiles.get("networkpolicy-postgres-egress.yaml");
+  assert.doesNotMatch(apiPolicy, /cidr: 10\.225\.0\.0\/28/);
+  assert.match(apiPolicy, /kind: CiliumNetworkPolicy/);
+  assert.match(apiPolicy, /name: allow-api-postgres-egress-fqdn/);
+  assert.match(apiPolicy, /matchName: "agentweaver-pg-eastus2\.postgres\.database\.azure\.com"/);
+  assert.match(apiPolicy, /- port: "5432"/);
+
+  const workerPolicies = writtenFiles.get("networkpolicy-worker.yaml");
+  assert.doesNotMatch(workerPolicies, /cidr: 10\.225\.0\.0\/28/);
+  assert.match(workerPolicies, /name: allow-worker-postgres-egress-fqdn/);
+  assert.match(workerPolicies, /matchName: "agentweaver-pg-eastus2\.postgres\.database\.azure\.com"/);
+  // Non-Postgres worker policies are unaffected.
+  assert.match(workerPolicies, /name: allow-worker-otel-egress\b/);
+  assert.match(workerPolicies, /name: allow-worker-dns-egress\b/);
+});

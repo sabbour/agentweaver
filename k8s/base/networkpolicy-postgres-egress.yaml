@@ -8,6 +8,11 @@
 #
 # NOTE: The CIDR 10.225.0.0/28 is the delegated subnet for the Flexible Server.
 #       If the subnet address changes, update this ipBlock.cidr accordingly.
+#
+# PG_ACCESS_MODE=private ONLY. In public-access mode the server has an Azure-managed
+# public IP, so this ipBlock would block all pod -> Postgres traffic. scripts/azure/
+# lib/kustomize.mjs drops this policy at deploy time when PG_ACCESS_MODE=public and
+# emits the FQDN-based CiliumNetworkPolicy `allow-api-postgres-egress-fqdn` instead.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

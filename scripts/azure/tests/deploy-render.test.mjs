@@ -28,6 +28,9 @@ import {
   writeOverlay,
   parseBuiltDocs,
   manifestForFilename,
+  isPublicPostgresAccess,
+  postgresFqdn,
+  buildPostgresFqdnPolicy,
 } from "../lib/kustomize.mjs";
 import { DEFAULT_REPO_ROOT } from "../steps/30-deploy.mjs";
 
@@ -249,4 +252,106 @@ test("manifestForFilename() throws a clear error for an unknown filename (fail-f
 test("manifestForFilename() throws when a resource is missing from the build (fail-fast)", () => {
   const docs = [{ kind: "Namespace", name: "wrong-name", text: "kind: Namespace\nmetadata:\n  name: wrong-name\n" }];
   assert.throws(() => manifestForFilename(docs, "namespace.yaml"), /did not produce Namespace\/agentweaver/);
+});
+
+// --- Postgres egress policy access-mode branching (bug found live in v0.16.0) ---
+//
+// PR #683 added --postgres-access-mode public, but the generated Postgres egress
+// NetworkPolicies kept templating the PRIVATE delegated-subnet CIDR, which blocked
+// every pod -> Postgres connection in public mode (Npgsql timeouts) even with the
+// Azure-side firewall correctly configured. Private mode must keep the ipBlock
+// policies unchanged; public mode must emit FQDN-based CiliumNetworkPolicies.
+
+const PG_DOCS = [
+  { kind: "NetworkPolicy", name: "allow-api-postgres-egress", text: "kind: NetworkPolicy\nmetadata:\n  name: allow-api-postgres-egress\n  namespace: agentweaver\nspec:\n  egress:\n  - to:\n    - ipBlock:\n        cidr: 10.225.0.0/28\n" },
+  { kind: "NetworkPolicy", name: "default-deny-egress-worker", text: "kind: NetworkPolicy\nmetadata:\n  name: default-deny-egress-worker\n" },
+  { kind: "NetworkPolicy", name: "allow-worker-dns-egress", text: "kind: NetworkPolicy\nmetadata:\n  name: allow-worker-dns-egress\n" },
+  { kind: "NetworkPolicy", name: "allow-worker-internal-egress", text: "kind: NetworkPolicy\nmetadata:\n  name: allow-worker-internal-egress\n" },
+  { kind: "NetworkPolicy", name: "allow-worker-external-https-egress", text: "kind: NetworkPolicy\nmetadata:\n  name: allow-worker-external-https-egress\n" },
+  { kind: "NetworkPolicy", name: "allow-worker-agenthost-egress", text: "kind: NetworkPolicy\nmetadata:\n  name: allow-worker-agenthost-egress\n" },
+  { kind: "NetworkPolicy", name: "allow-worker-postgres-egress", text: "kind: NetworkPolicy\nmetadata:\n  name: allow-worker-postgres-egress\n  namespace: agentweaver\nspec:\n  egress:\n  - to:\n    - ipBlock:\n        cidr: 10.225.0.0/28\n" },
+  { kind: "NetworkPolicy", name: "allow-worker-otel-egress", text: "kind: NetworkPolicy\nmetadata:\n  name: allow-worker-otel-egress\n" },
+];
+
+const PG_VARS_PRIVATE = { PG_ACCESS_MODE: "private", PG_SERVER_NAME: "agentweaver-pg" };
+const PG_VARS_PUBLIC = { PG_ACCESS_MODE: "public", PG_SERVER_NAME: "agentweaver-pg-eastus2" };
+
+test("isPublicPostgresAccess(): only 'public' (case/space tolerant) opts into FQDN egress", () => {
+  assert.equal(isPublicPostgresAccess({ PG_ACCESS_MODE: "public" }), true);
+  assert.equal(isPublicPostgresAccess({ PG_ACCESS_MODE: " Public " }), true);
+  assert.equal(isPublicPostgresAccess({ PG_ACCESS_MODE: "private" }), false);
+  assert.equal(isPublicPostgresAccess({}), false);
+  assert.equal(isPublicPostgresAccess(), false);
+});
+
+test("postgresFqdn(): derives <server>.postgres.database.azure.com and fails loudly when unset", () => {
+  assert.equal(postgresFqdn({ PG_SERVER_NAME: "agentweaver-pg" }), "agentweaver-pg.postgres.database.azure.com");
+  assert.throws(() => postgresFqdn({}), /PG_SERVER_NAME is required/);
+});
+
+test("manifestForFilename(): private mode keeps the ipBlock Postgres egress policies unchanged", () => {
+  const api = manifestForFilename(PG_DOCS, "networkpolicy-postgres-egress.yaml", { vars: PG_VARS_PRIVATE });
+  assert.match(api, /name: allow-api-postgres-egress\b/);
+  assert.match(api, /cidr: 10\.225\.0\.0\/28/);
+  assert.doesNotMatch(api, /CiliumNetworkPolicy/);
+
+  const worker = manifestForFilename(PG_DOCS, "networkpolicy-worker.yaml", { vars: PG_VARS_PRIVATE });
+  assert.match(worker, /name: allow-worker-postgres-egress\b/);
+  assert.match(worker, /cidr: 10\.225\.0\.0\/28/);
+  assert.doesNotMatch(worker, /CiliumNetworkPolicy/);
+
+  // No vars at all behaves exactly like private mode (default PG_ACCESS_MODE).
+  assert.equal(manifestForFilename(PG_DOCS, "networkpolicy-postgres-egress.yaml"), api);
+});
+
+test("manifestForFilename(): public mode swaps the ipBlock policy for a toFQDNs CiliumNetworkPolicy (api)", () => {
+  const api = manifestForFilename(PG_DOCS, "networkpolicy-postgres-egress.yaml", { vars: PG_VARS_PUBLIC });
+  assert.doesNotMatch(api, /cidr: 10\.225\.0\.0\/28/, "private subnet CIDR must not survive into public mode");
+  assert.doesNotMatch(api, /name: allow-api-postgres-egress\n/, "the ipBlock NetworkPolicy must be dropped");
+  assert.match(api, /kind: CiliumNetworkPolicy/);
+  assert.match(api, /name: allow-api-postgres-egress-fqdn/);
+  assert.match(api, /namespace: agentweaver/);
+  assert.match(api, /app: agentweaver-api/);
+  assert.match(api, /toFQDNs:\s*\n\s*- matchName: "agentweaver-pg-eastus2\.postgres\.database\.azure\.com"/);
+  assert.match(api, /- port: "5432"\s*\n\s*protocol: TCP/);
+});
+
+test("manifestForFilename(): public mode swaps the worker ipBlock policy but keeps the other worker policies", () => {
+  const worker = manifestForFilename(PG_DOCS, "networkpolicy-worker.yaml", { vars: PG_VARS_PUBLIC });
+  assert.doesNotMatch(worker, /cidr: 10\.225\.0\.0\/28/);
+  assert.doesNotMatch(worker, /name: allow-worker-postgres-egress\n/);
+  assert.match(worker, /kind: CiliumNetworkPolicy/);
+  assert.match(worker, /name: allow-worker-postgres-egress-fqdn/);
+  assert.match(worker, /app: agentweaver-worker/);
+  assert.match(worker, /toFQDNs:\s*\n\s*- matchName: "agentweaver-pg-eastus2\.postgres\.database\.azure\.com"/);
+  assert.match(worker, /- port: "5432"\s*\n\s*protocol: TCP/);
+  // The unrelated worker policies are untouched.
+  for (const name of [
+    "default-deny-egress-worker",
+    "allow-worker-dns-egress",
+    "allow-worker-internal-egress",
+    "allow-worker-external-https-egress",
+    "allow-worker-agenthost-egress",
+    "allow-worker-otel-egress",
+  ]) {
+    assert.match(worker, new RegExp(`name: ${name}\\b`), `${name} must still be applied in public mode`);
+  }
+});
+
+test("buildPostgresFqdnPolicy(): mirrors the existing FQDN allowlist style (kube-dns visibility rule)", () => {
+  const yaml = buildPostgresFqdnPolicy({ name: "allow-api-postgres-egress-fqdn", app: "agentweaver-api" }, PG_VARS_PUBLIC);
+  assert.match(yaml, /^apiVersion: cilium\.io\/v2$/m);
+  assert.match(yaml, /app\.kubernetes\.io\/part-of: agentweaver/);
+  // Cilium's FQDN proxy only learns addresses it sees resolved, so the policy
+  // must carry the same kube-dns rule agentweaver-app-egress-fqdn-allowlist has.
+  assert.match(yaml, /k8s-app: kube-dns/);
+  assert.match(yaml, /rules:\s*\n\s*dns:\s*\n\s*- matchPattern: "\*"/);
+});
+
+test("manifestForFilename(): public mode leaves non-Postgres manifest groups untouched", () => {
+  const docs = [{ kind: "Namespace", name: "agentweaver", text: "kind: Namespace\nmetadata:\n  name: agentweaver\n" }];
+  assert.equal(
+    manifestForFilename(docs, "namespace.yaml", { vars: PG_VARS_PUBLIC }),
+    manifestForFilename(docs, "namespace.yaml", { vars: PG_VARS_PRIVATE }),
+  );
 });
