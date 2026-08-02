@@ -60,6 +60,7 @@ import * as logDefault from "./lib/log.mjs";
 import * as azDefault from "./lib/az.mjs";
 import * as promptDefault from "./lib/prompt.mjs";
 import { registerSecret } from "./lib/secret.mjs";
+import { resolveGitHubRepository } from "./lib/github.mjs";
 import { resolveConfig, loadParamsFile } from "./lib/config.mjs";
 import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT } from "./variables.mjs";
 
@@ -85,9 +86,11 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
 
 /**
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
- * Recognizes: --skip-postgres, --skip-oauth-key, --image-tag <tag>
- * (or --image-tag=<tag>), --params-file/--config <path>, --resource-group,
- * --cluster-name, --acr-name, --location, --keyvault-name, --namespace,
+ * Recognizes: --skip-postgres, --skip-oauth-key, --force,
+ * --image-tag <tag>, --image-source <acr-build|ghcr>, --ghcr-ref <ref>,
+ * --ghcr-owner <owner>, --ghcr-token <token> (or =value forms),
+ * --params-file/--config <path>, --resource-group, --cluster-name,
+ * --acr-name, --location, --keyvault-name, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
  */
 export function parseArgs(argv = []) {
@@ -110,11 +113,29 @@ export function parseArgs(argv = []) {
       flags.SKIP_POSTGRES = true;
     } else if (arg === "--skip-oauth-key") {
       flags.SKIP_OAUTH_KEY = true;
+    } else if (arg === "--force") {
+      flags.FORCE = true;
     } else if (arg === "-h" || arg === "--help") {
       help = true;
     } else if (arg === "--image-tag" || arg.startsWith("--image-tag=")) {
       const { value, consumed } = takeValue(i, "--image-tag");
       flags.IMAGE_TAG = value;
+      i += consumed;
+    } else if (arg === "--image-source" || arg.startsWith("--image-source=")) {
+      const { value, consumed } = takeValue(i, "--image-source");
+      flags.IMAGE_SOURCE = value;
+      i += consumed;
+    } else if (arg === "--ghcr-ref" || arg.startsWith("--ghcr-ref=")) {
+      const { value, consumed } = takeValue(i, "--ghcr-ref");
+      flags.GHCR_REF = value;
+      i += consumed;
+    } else if (arg === "--ghcr-owner" || arg.startsWith("--ghcr-owner=")) {
+      const { value, consumed } = takeValue(i, "--ghcr-owner");
+      flags.GHCR_OWNER = value;
+      i += consumed;
+    } else if (arg === "--ghcr-token" || arg.startsWith("--ghcr-token=")) {
+      const { value, consumed } = takeValue(i, "--ghcr-token");
+      flags.GHCR_TOKEN = value;
       i += consumed;
     } else if (arg === "--params-file" || arg === "--config" || arg.startsWith("--params-file=") || arg.startsWith("--config=")) {
       const { value, consumed } = takeValue(i, "--params-file");
@@ -176,7 +197,12 @@ Local dev environment setup (no Azure) lives under 'dev --setup' instead:
 Flags:
   --skip-postgres             Skip Postgres provisioning (17-provision-postgres).
   --skip-oauth-key            Skip MCP OAuth signing key provisioning (16-provision-oauth-signing-key).
+  --force                     Allow GHCR import to overwrite an existing target ACR tag if the digest differs.
   --image-tag <tag>           Use this image tag instead of the derived default.
+  --image-source <source>     Image source: 'acr-build' (default) or 'ghcr'.
+  --ghcr-ref <ref>            Required with --image-source ghcr; only accepts immutable refs (vX.Y.Z or sha-<hex>).
+  --ghcr-owner <owner>        GHCR namespace owner (default: derived from the repo's GitHub origin remote).
+  --ghcr-token <token>        Optional GHCR registry token for private-package import; NEVER echoed/logged.
   --params-file <path>        JSON/JSONC params file (see scripts/azure/params.example.json).
   --config <path>             Alias for --params-file.
   --resource-group <name>
@@ -197,6 +223,8 @@ for the client ID/secret.
 Config precedence: flags > env > params-file > detected defaults > prompt.
 Non-interactive (no TTY) never prompts -- missing required fields fail with a clear error.
 `;
+
+const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
 
 /**
  * A plausible GitHub org login: starts with an alphanumeric, up to 39 chars
@@ -276,7 +304,7 @@ export function normalizeGithubOrgList(value) {
 }
 
 /** Builds the lib/config.mjs field schema for the AKS deploy config. */
-function buildSchema({ prompt, az }) {
+function buildSchema({ prompt, az, ghcrOwnerDefault }) {
   return {
     RESOURCE_GROUP: { default: DEFAULTS.RESOURCE_GROUP },
     CLUSTER_NAME: { default: DEFAULTS.CLUSTER_NAME },
@@ -284,6 +312,30 @@ function buildSchema({ prompt, az }) {
     LOCATION: { default: DEFAULTS.LOCATION },
     KEYVAULT_NAME: { default: PROVISION_KEYVAULT_NAME_SUGGESTION },
     NAMESPACE: { default: DEFAULTS.NAMESPACE },
+    IMAGE_SOURCE: {
+      default: "acr-build",
+      validate: (value) => (
+        IMAGE_SOURCE_VALUES.includes(String(value))
+          ? undefined
+          : `IMAGE_SOURCE must be one of: ${IMAGE_SOURCE_VALUES.join(", ")}.`
+      ),
+    },
+    GHCR_REF: {
+      validate: (value, config) => {
+        if (config.IMAGE_SOURCE !== "ghcr") return undefined;
+        return value ? undefined : "GHCR_REF is required when IMAGE_SOURCE=ghcr.";
+      },
+    },
+    GHCR_OWNER: {
+      default: ghcrOwnerDefault,
+      validate: (value, config) => {
+        if (config.IMAGE_SOURCE !== "ghcr") return undefined;
+        return value ? undefined : "GHCR_OWNER could not be derived; pass --ghcr-owner or set GHCR_OWNER.";
+      },
+    },
+    GHCR_TOKEN: {
+      secret: true,
+    },
     GITHUB_CLIENT_ID: {
       required: true,
       prompt: () => prompt.text("GitHub OAuth client ID"),
@@ -480,7 +532,8 @@ export async function run(opts = {}) {
     Object.assign(flags, collected);
   }
 
-  const schema = buildSchema({ prompt, az });
+  const githubRepo = await resolveGitHubRepository({ repoRoot, exec }).catch(() => null);
+  const schema = buildSchema({ prompt, az, ghcrOwnerDefault: githubRepo?.owner ?? "" });
   const config = await resolveConfig(schema, { flags, env, paramsFile });
 
   log.info("");
@@ -491,6 +544,11 @@ export async function run(opts = {}) {
   log.field("Location", config.LOCATION);
   log.field("Key Vault", config.KEYVAULT_NAME);
   log.field("Namespace", config.NAMESPACE);
+  log.field("Image source", config.IMAGE_SOURCE);
+  if (config.IMAGE_SOURCE === "ghcr") {
+    log.field("GHCR owner", config.GHCR_OWNER);
+    log.field("GHCR ref", config.GHCR_REF);
+  }
   log.field("GitHub OAuth client ID", config.GITHUB_CLIENT_ID);
   log.field("Allowed GitHub org(s)", config.GITHUB_ALLOWED_ORG);
 
@@ -509,7 +567,18 @@ export async function run(opts = {}) {
   let cfg = await (typeof log.withProgress === "function"
     ? log.withProgress("Resolving deploy configuration", resolveCfg)
     : resolveCfg());
-  cfg = { ...cfg, GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET, repoRoot };
+  cfg = {
+    ...cfg,
+    IMAGE_SOURCE: config.IMAGE_SOURCE,
+    GHCR_REF: config.GHCR_REF,
+    GHCR_OWNER: config.GHCR_OWNER,
+    GHCR_REPOSITORY: githubRepo?.repo ?? "",
+    GHCR_TOKEN: config.GHCR_TOKEN,
+    FORCE: Boolean(flags.FORCE),
+    GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
+    GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
+    repoRoot,
+  };
 
   log.step(1, 10, "Creating cluster (ACR + AKS)");
   await createCluster.run(cfg, { exec, log });
@@ -522,7 +591,18 @@ export async function run(opts = {}) {
   // any later step needs it -- mirrors install.sh's explicit `az identity
   // show` capture immediately after 15-setup-identity.sh.
   cfg = await resolveVariablesFn({ env: { ...env, ...envOverride }, repoRoot });
-  cfg = { ...cfg, GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET, repoRoot };
+  cfg = {
+    ...cfg,
+    IMAGE_SOURCE: config.IMAGE_SOURCE,
+    GHCR_REF: config.GHCR_REF,
+    GHCR_OWNER: config.GHCR_OWNER,
+    GHCR_REPOSITORY: githubRepo?.repo ?? "",
+    GHCR_TOKEN: config.GHCR_TOKEN,
+    FORCE: Boolean(flags.FORCE),
+    GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
+    GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
+    repoRoot,
+  };
 
   log.step(3, 10, "Provisioning monitoring");
   await provisionMonitoring.run(cfg, { exec, log });
@@ -543,6 +623,11 @@ export async function run(opts = {}) {
 
   log.step(6, 10, "Building and pushing images");
   const buildResult = await buildImages.run(cfg, { exec });
+  cfg = {
+    ...cfg,
+    EXPECTED_IMAGE_DIGESTS: buildResult.expectedImageDigests ?? undefined,
+    IMPORTED_IMAGE_SOURCES: buildResult.importedImageSources ?? undefined,
+  };
 
   log.step(7, 10, "Ensuring A2A mTLS certificates");
   await genA2aMtlsCerts.run(cfg, { exec, log, repoRoot });
@@ -570,6 +655,10 @@ export async function run(opts = {}) {
   log.field("Namespace", cfg.NAMESPACE);
   log.field("Image tag", cfg.IMAGE_TAG);
   log.field("AgentHost image tag", cfg.AGENTHOST_IMAGE_TAG);
+  log.field("Image source", cfg.IMAGE_SOURCE);
+  if (cfg.IMAGE_SOURCE === "ghcr") {
+    log.field("GHCR ref", cfg.GHCR_REF);
+  }
   log.field("Allowed GitHub org(s)", cfg.GITHUB_ALLOWED_ORG);
   log.field("Gateway host", deployResult?.HOST ?? "<unknown>");
   log.field("Gateway IP", deployResult?.GATEWAY_IP ?? "<unknown>");

@@ -185,11 +185,12 @@ resource group (pick an existing one or create a new one), a location, the
 AKS cluster / ACR / Key Vault names (prefilled with sensible defaults,
 editable), and a GitHub OAuth client ID + secret (the secret is entered with
 no echo). It then provisions the cluster, identity, monitoring, the MCP OAuth
-signing key, PostgreSQL, builds and pushes images, verifies image provenance,
-and performs an initial SHA-identified deployment. At the end it prints an **outputs
-summary** (resource group, cluster, ACR, namespace, image tags, gateway
-host/IP, **GitHub OAuth callback URL**, verification pass/fail counts) — it
-never prints the OAuth client secret or any other credential.
+signing key, PostgreSQL, builds and pushes images (or optionally imports
+already-published GHCR images by immutable ref), verifies image provenance,
+and performs an initial SHA-identified deployment. At the end it prints an
+**outputs summary** (resource group, cluster, ACR, namespace, image tags,
+gateway host/IP, **GitHub OAuth callback URL**, verification pass/fail
+counts) — it never prints the OAuth client secret or any other credential.
 
 > **GitHub OAuth App callback URL — local vs. Azure.** The registered
 > callback URL must match where the app is actually running:
@@ -248,6 +249,14 @@ npm run azure:provision-infra -- --params-file scripts/azure/params.my-env.json
 > the `GITHUB_CLIENT_SECRET` environment variable or the interactive secret
 > prompt; the params file field exists only for unattended CI use against
 > disposable/test environments.
+
+To reuse the container images already published by `.github/workflows/publish-images.yml`
+instead of rebuilding them into ACR, pass `--image-source ghcr --ghcr-ref <ref>`.
+`<ref>` must be immutable: either a published `vX.Y.Z` GitHub Release tag or a
+`sha-<hex>` image tag. Moving tags such as `dev`, `main`, `latest`, and `rc-*`
+are rejected. `--ghcr-owner <owner>` defaults to the repo's GitHub owner,
+`--ghcr-token`/`GHCR_TOKEN` is available for private-package auth, and
+`--force` is required before overwriting an existing conflicting ACR tag.
 
 **Deploying current local work to an existing environment:**
 
