@@ -149,6 +149,7 @@
   - **Trigger C — full `dev → release → main` promotion tier:** when **two consecutive releases** each require **at least 3 business days** of RC soak while **at least two independent next-version changes** must keep integrating in parallel, **or** the project formally commits to a durably-diverging externally consumed `next` channel.
 - These measurable conditions explicitly prevent the earlier short-sighted reasoning that a topology is unnecessary merely because the repository does not need it today. Full rationale, boundaries, and the migration playbook remain in `decisions/inbox/niobe-branching-growth-review.md`.
 
+
 ---
 
 ## 2026-07-20T15-05-18-07-00 — Trigger C promotion topology deliberately activated
