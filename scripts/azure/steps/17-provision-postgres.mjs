@@ -70,6 +70,20 @@ function firstNonEmptyReason(...values) {
 }
 
 function parseSkuAvailability(capabilities, skuName) {
+  // `az postgres flexible-server list-skus` emits a JSON ARRAY of capability sets,
+  // not a single object. Treat the region as provisionable when any entry allows it.
+  if (Array.isArray(capabilities)) {
+    const results = capabilities.map((entry) => parseSkuAvailability(entry, skuName));
+    const allowed = results.find((result) => result.ok);
+    if (allowed) return allowed;
+    return {
+      ok: false,
+      reason:
+        firstNonEmptyReason(...results.map((result) => result.reason)) ||
+        "Azure reported no supported server editions for this subscription/region.",
+    };
+  }
+
   const supportedServerEditions = Array.isArray(capabilities?.supportedServerEditions)
     ? capabilities.supportedServerEditions
     : [];
