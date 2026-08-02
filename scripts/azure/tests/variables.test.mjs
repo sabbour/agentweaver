@@ -128,6 +128,7 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.CLUSTER_NAME, DEFAULTS.CLUSTER_NAME);
   assert.equal(vars.ACR_NAME, DEFAULTS.ACR_NAME);
   assert.equal(vars.LOCATION, DEFAULTS.LOCATION);
+  assert.equal(vars.NODE_VM_SIZE, DEFAULTS.NODE_VM_SIZE);
   assert.equal(vars.PG_SERVER_NAME, DEFAULTS.PG_SERVER_NAME);
   assert.equal(vars.PG_HA_MODE, DEFAULTS.PG_HA_MODE);
   assert.equal(vars.KEYVAULT_NAME, TEST_KEYVAULT_NAME, "KEYVAULT_NAME has no generic default -- must come from env");
@@ -195,6 +196,7 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
       CLUSTER_NAME: "custom-cluster",
       ACR_NAME: "customacr",
       LOCATION: "eastus",
+      NODE_VM_SIZE: "Standard_D8s_v6",
       PG_SERVER_NAME: "custom-pg",
       PG_HA_MODE: "Disabled",
       KEYVAULT_NAME: "custom-kv",
@@ -216,6 +218,7 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
   assert.equal(vars.ACR_NAME, "customacr");
   assert.equal(vars.ACR_LOGIN_SERVER, "customacr.azurecr.io");
   assert.equal(vars.LOCATION, "eastus");
+  assert.equal(vars.NODE_VM_SIZE, "Standard_D8s_v6");
   assert.equal(vars.PG_SERVER_NAME, "custom-pg");
   assert.equal(vars.PG_HA_MODE, "Disabled");
   assert.equal(vars.KEYVAULT_NAME, "custom-kv");

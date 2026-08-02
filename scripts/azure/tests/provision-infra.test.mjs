@@ -79,6 +79,8 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
     "--image-tag",
     "v1.2.3",
     "--resource-group=my-rg",
+    "--node-vm-size",
+    "Standard_D8s_v6",
     "--postgres-server-name",
     "custom-pg",
     "--postgres-ha-mode",
@@ -90,6 +92,7 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
   assert.equal(parsed.flags.SKIP_OAUTH_KEY, true);
   assert.equal(parsed.flags.IMAGE_TAG, "v1.2.3");
   assert.equal(parsed.flags.RESOURCE_GROUP, "my-rg");
+  assert.equal(parsed.flags.NODE_VM_SIZE, "Standard_D8s_v6");
   assert.equal(parsed.flags.PG_SERVER_NAME, "custom-pg");
   assert.equal(parsed.flags.PG_HA_MODE, "Disabled");
   assert.equal(parsed.flags.GITHUB_CLIENT_SECRET, "shh");
@@ -161,6 +164,7 @@ test("GitHub org validator: rejects malformed wildcard forms", () => {
 test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--skip-postgres/);
   assert.match(HELP_TEXT, /--params-file/);
+  assert.match(HELP_TEXT, /--node-vm-size <sku>/);
   assert.match(HELP_TEXT, /--postgres-server-name <name>/);
   assert.match(HELP_TEXT, /--postgres-ha-mode <mode>/);
   assert.match(HELP_TEXT, /--image-source <source>/);
@@ -228,6 +232,7 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     ACR_NAME: e.ACR_NAME,
     ACR_LOGIN_SERVER: `${e.ACR_NAME}.azurecr.io`,
     LOCATION: e.LOCATION,
+    NODE_VM_SIZE: e.NODE_VM_SIZE,
     KEYVAULT_NAME: e.KEYVAULT_NAME,
     PG_SERVER_NAME: e.PG_SERVER_NAME,
     PG_HA_MODE: e.PG_HA_MODE,
@@ -240,6 +245,8 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     argv: [
       "--resource-group",
       "my-rg",
+      "--node-vm-size",
+      "Standard_D8s_v6",
       "--postgres-server-name",
       "custom-pg",
       "--postgres-ha-mode",
@@ -263,6 +270,7 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     ["createCluster", "setupIdentity", "provisionMonitoring", "oauthSigningKey", "provisionPostgres", "buildImages", "genA2aMtlsCerts", "deployStep", "verifyProvenance", "verifyStep"],
   );
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
+  assert.equal(calls[0].cfg.NODE_VM_SIZE, "Standard_D8s_v6");
   assert.equal(calls[0].cfg.PG_SERVER_NAME, "custom-pg");
   assert.equal(calls[0].cfg.PG_HA_MODE, "Disabled");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");
@@ -325,6 +333,27 @@ test("run: rejects an invalid PG_HA_MODE before provisioning starts", async () =
         log: noopLog(),
       }),
       /PG_HA_MODE must be one of: ZoneRedundant, Disabled\./,
+    );
+  }
+});
+
+test("run: rejects an invalid NODE_VM_SIZE before provisioning starts", async () => {
+  for (const sku of ["", "D4s_v6", "Standard D4s v6"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--node-vm-size",
+          sku,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /NODE_VM_SIZE must be a non-empty Azure VM SKU like Standard_D4s_v6\./,
     );
   }
 });
@@ -735,6 +764,7 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
   assert.equal(collected.RESOURCE_GROUP, "existing-rg");
   assert.equal(rgChoicesSeen[0].label, "Create new...", "Create new... must be the first resource-group choice");
   assert.equal(collected.LOCATION, "westus2");
+  assert.equal(collected.NODE_VM_SIZE, "Standard_D4s_v6");
   assert.equal(collected.GITHUB_CLIENT_SECRET, "super-secret-value");
   assert.equal(collected.GITHUB_ALLOWED_ORG, "microsoft");
   assert.ok(selectCalls.length >= 3);

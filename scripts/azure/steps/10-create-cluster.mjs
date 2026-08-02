@@ -8,7 +8,8 @@
 //
 // cfg is the resolved variables.mjs output: RESOURCE_GROUP, CLUSTER_NAME,
 // ACR_NAME, LOCATION, KATA_POOL_NAME, APP_POOL_NAME, ACR_LOGIN_SERVER.
-// Optional overrides: SANDBOX_CONTROLLER_VERSION (default 'v0.5.3').
+// Optional overrides: NODE_VM_SIZE (default Standard_D4s_v6),
+// SANDBOX_CONTROLLER_VERSION (default 'v0.5.3').
 
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
@@ -203,6 +204,7 @@ export async function reconcileExistingClusterAppRouting(cfg, { exec = execDefau
 export async function run(cfg, opts = {}) {
   const { exec = execDefault, log = logDefault } = opts;
 
+  const nodeVmSize = cfg.NODE_VM_SIZE || "Standard_D4s_v6";
   const sandboxControllerVersion = cfg.SANDBOX_CONTROLLER_VERSION || "v0.5.3";
   // #487: v0.5.2 renamed the core install asset from manifest.yaml to sandbox.yaml
   // (agent-sandbox #1012) to make room for the new all-in-one sandbox-with-extensions.yaml
@@ -292,7 +294,7 @@ export async function run(cfg, opts = {}) {
       "--os-sku",
       "AzureLinux",
       "--node-vm-size",
-      "Standard_D4s_v3",
+      nodeVmSize,
       "--node-count",
       "2",
       "--enable-cluster-autoscaler",
@@ -353,7 +355,7 @@ export async function run(cfg, opts = {}) {
       "--os-sku",
       "AzureLinux",
       "--node-vm-size",
-      "Standard_D4s_v3",
+      nodeVmSize,
       "--enable-cluster-autoscaler",
       "--min-count",
       "1",
@@ -389,7 +391,7 @@ export async function run(cfg, opts = {}) {
       "--workload-runtime",
       "KataVmIsolation",
       "--node-vm-size",
-      "Standard_D4s_v3",
+      nodeVmSize,
       "--enable-cluster-autoscaler",
       "--min-count",
       "1",
