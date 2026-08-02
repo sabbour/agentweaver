@@ -3,6 +3,7 @@
 - **Status:** Proposal (design/research only — no code changes in this task)
 - **Author:** Tank (Squad)
 - **Date:** 2026-08-02
+- **Revised:** 2026-08-02, after rubber-duck review — see [A.8](#a8-review-log) for what changed
 - **Scope:** `apps/Agentweaver.Api` request authentication, the AKS ingress/mesh boundary,
   and an evaluation of [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy).
 
@@ -113,10 +114,18 @@ Notes on the exact API, verified against this repo:
   `AuthorizationMiddleware` itself checks. The Phase 1 PR should confirm against the pinned
   SDK rather than trusting this paragraph.
 - The complement — "does this endpoint want authentication?" — should be expressed as
-  **default-deny**: any endpoint under `/api` (and `/mcp`, `/oauth`, `/.well-known`) that
-  does *not* carry `IAllowAnonymous` requires a principal. That inverts today's
-  fail-open-if-you-forget-the-list into fail-closed-unless-you-opt-out, which is the
-  correct default for an authn boundary.
+  **default-deny**: any mapped endpoint that does *not* carry `IAllowAnonymous` requires a
+  principal. That inverts today's fail-open-if-you-forget-the-list into
+  fail-closed-unless-you-opt-out, which is the correct default for an authn boundary.
+
+  ⚠️ **This inversion is the single most dangerous step in the whole plan**, because today's
+  largest exemption is *implicit*: `GitHubTokenAuthMiddleware` returns early for **any path
+  that does not start with `/api`** (`ApiKeyAuthMiddleware.cs:115`). Every non-`/api` route in
+  the application — `/health`, `/healthz/workspace`, `/auth/*`, `/mcp/*`, `/oauth/*`,
+  `/.well-known/*`, `/openapi` — is anonymous today **without a single `.AllowAnonymous()`
+  call anywhere**. Flipping to default-deny without first annotating all of them turns them
+  into 401s. See §2.3.1, which enumerates them exhaustively; that enumeration is a hard
+  prerequisite for Phase 1 and a blocking prerequisite for the Appendix A fallback policy.
 
 ### 2.2 Middleware ordering — does this need `UseRouting()` moved?
 
@@ -162,14 +171,64 @@ Side-effect review of an explicit `UseRouting()` at that position:
   mapped endpoint is either `AllowAnonymous` or requires a principal — a test that would have
   caught all five historical incidents.
 
+### 2.3.1 The complete exemption inventory (must be annotated before default-deny)
+
+Phase 1 is not "add `AllowAnonymous` to the endpoints people remember." It must **enumerate
+and explicitly annotate every route that is anonymous today**, from all four sources, and
+prove the resulting set is identical to current behaviour. The table below is that inventory,
+read out of the code as it stands.
+
+| Route | Anonymous today because | Must be annotated |
+|---|---|---|
+| `/health` | **not under `/api`** (implicit) + both `ExemptPrefixes` | ✅ **yes — missed by the obvious list** |
+| `/api/health` | explicit in all three lists | ✅ yes |
+| `/api/ping` | explicit in all three lists | ✅ yes |
+| `/healthz/workspace` | **not under `/api`** (implicit) + `/healthz` prefix in both `ExemptPrefixes` | ✅ **yes — missed by the obvious list** |
+| `/api/version` | explicit in all three lists | ✅ yes |
+| `/api/server/info` | explicit (as of #690) | ✅ yes |
+| `/api/auth/config` | authn + platform-role lists | ✅ yes |
+| `/api/auth/session/exchange` | authn + platform-role lists | ✅ yes |
+| `/auth/*` | **not under `/api`** (implicit) + both `ExemptPrefixes` | ✅ yes |
+| `/api/auth/*` (org middleware only) | `/api/auth` prefix in the org list | ⚠️ mode-specific — see note |
+| `/oauth/*` (MCP AS) | **not under `/api`** (implicit) + both `ExemptPrefixes` | ✅ yes |
+| `/.well-known/*` | **not under `/api`** (implicit) + both `ExemptPrefixes` | ✅ yes |
+| `/openapi*` | **not under `/api`** (implicit) + org `ExemptPrefixes` | ✅ yes |
+| `/mcp*` | **not under `/api`** (implicit) + org `ExemptPrefixes` | ✅ yes (prefix-shaped; see below) |
+| `/api/projects/*/webhooks/github` | suffix match in the authn middleware | ✅ yes — but as a **webhook** marker, not `AllowAnonymous` |
+
+Two entries resist plain endpoint metadata and need explicit decisions rather than a
+mechanical annotation:
+
+- **`/mcp*`** is served by the MCP SDK's own mapping, so `.AllowAnonymous()` may not be
+  attachable per-endpoint. If so, it stays in the single `PublicPaths` type (§2.3) — but that
+  list must then be *short, justified, and covered by the same enumeration test*, not a
+  general-purpose escape hatch.
+- **`/api/auth/*`** is exempt from the **org** middleware but *not* from the authn middleware.
+  A single `AllowAnonymous` marker cannot express "authenticated but exempt from the org
+  check"; that distinction belongs in the authorization policy (see A.3.2), not in the
+  anonymous set. Collapsing it into `AllowAnonymous` would make the whole GitHub sign-in
+  surface public.
+
+**Phase 1 acceptance criteria:** the enumeration test (§2.3, last bullet) is checked in and
+asserts the anonymous set *equals* this table. It must be written **before** any default-deny
+behaviour is enabled, and it is the same list the Appendix A fallback policy depends on.
+
+**Probe-specific test:** add an explicit test — and repeat it with
+`Auth:UseSchemeBasedPipeline=true` in Appendix A — that `GET /health`, `GET /api/health`,
+`GET /api/ping` and `GET /healthz/workspace` return **200 with no credentials**. These are the
+Kubernetes liveness/readiness probe targets (`k8s/base/api-deployment.yaml`); if a
+default-deny fallback policy 401s them, pods fail their probes and the deployment enters a
+crash/restart loop. That is a **self-inflicted outage triggered by a config flip**, and it
+would not be caught by any test that only exercises `/api/**` business routes.
+
 ### 2.4 Issue tracking
 
-I searched `gh issue list` / `gh search issues` for an existing issue filed today covering
-this (queries: `AllowAnonymous`, `auth middleware`) — **none is visible in the repo's issue
-list yet** (newest open issues are #687/#688, both Azure provisioning fixes). If the other
-agent's issue lands after this document, link it here rather than opening a duplicate; if it
-does not, Phase 1 needs its own issue titled roughly *"auth middleware must honour endpoint
-`AllowAnonymous` metadata instead of a hardcoded path list"*.
+Phase 1 is tracked by **#691** — *"tech-debt(auth): auth middlewares should honor endpoint
+`AllowAnonymous` metadata instead of hardcoded path allowlists"* — filed alongside the
+`/api/server/info` fix in **#690**. Do not open a duplicate. #691's scope should be extended to
+include the full exemption inventory in §2.3.1 (in particular the implicit non-`/api`
+exemption), since annotating only the endpoints named in its original description would leave
+the health probes unannotated.
 
 ### 2.5 Phase 1.5 — become a real `AuthenticationHandler`
 
@@ -452,7 +511,7 @@ per-endpoint `[Authorize(AuthenticationSchemes = "...")]` matrix — that would 
 knowledge into 200+ route declarations and recreate the distributed-knowledge problem.
 
 **Use a policy scheme as the default.** Register one `AddPolicyScheme("Agentweaver", ...)`
-whose `ForwardDefaultSelector` picks a concrete scheme from the request:
+whose `ForwardDefaultSelector` picks **exactly one** concrete scheme from the request:
 
 ```
 Agentweaver (policy scheme, DefaultScheme)
@@ -466,12 +525,6 @@ Agentweaver (policy scheme, DefaultScheme)
 Properties this gives:
 
 - **One** place encodes the mode branch, mirroring today's single `if (_authMode == …)`.
-- The internal service key and MCP OAuth JWT paths stay available in **both** modes, which
-  matches today's behaviour (the current middleware checks the internal key before the mode
-  branch, and the MCP OAuth path is reachable in GitHubLegacy mode).
-- Selector fallbacks must **not** throw on a malformed token — return the mode-default scheme
-  and let that scheme produce a clean `AuthenticateResult.Fail`, preserving the current
-  "any unparseable token ⇒ 401" outcome.
 - `AddAuthentication(AgentweaverAuthSchemes.Policy)` sets both `DefaultAuthenticateScheme`
   and `DefaultChallengeScheme`, so `[Authorize]` with no scheme argument does the right thing
   everywhere and endpoint authors never name a scheme.
@@ -479,6 +532,80 @@ Properties this gives:
 The **only** places that should ever name a scheme explicitly are endpoints that must accept
 *exclusively* one credential type (e.g. an MCP-only route pinned to `McpOAuth`). Keep that
 list near-empty and justify each entry in a comment.
+
+#### A.2.2.1 The selector picks ONE handler — there is no fallback chain
+
+This must be stated precisely, because the intuitive mental model is wrong and the mistake is
+a security bug:
+
+> `ForwardDefaultSelector` returns **a single scheme name**. That one handler runs. If it
+> returns `NoResult`, **no other scheme is tried** — the request simply proceeds with an
+> unauthenticated principal, and the *authorization* layer decides what happens next.
+
+Consequences the implementation must respect:
+
+- **`NoResult` is not "let someone else try."** In this design `NoResult` means "this request
+  is anonymous." That is only safe because a default-deny `FallbackPolicy` (A.3) turns an
+  unauthenticated principal into a 401 on every non-`AllowAnonymous` endpoint. **The selector
+  design and the fallback policy are a single safety mechanism; neither is correct alone.**
+- **Handlers must return `Fail`, not `NoResult`, when a credential was presented and is
+  invalid.** An expired Entra token returning `NoResult` would silently downgrade the request
+  to anonymous instead of 401-ing it — and on an `AllowAnonymous` endpoint it would succeed
+  with no indication anything was wrong.
+- **`NoResult` is correct in exactly one case:** no `Authorization` header at all. That
+  preserves today's behaviour, where a missing header is fine on a public path and a 401 on a
+  protected one.
+
+Required selector behaviour, exhaustively — each row is a test case (A.5.2 #3):
+
+| Request shape | Selector returns | Handler outcome |
+|---|---|---|
+| no `Authorization` header | mode-default scheme | `NoResult` → anonymous → fallback policy decides |
+| header present, wrong auth scheme prefix | mode-default scheme | `Fail` → 401 |
+| credential equals the configured internal key | `InternalServiceKey` | `Success` |
+| credential *resembles* but does not equal the internal key | mode-default scheme | `Fail` → 401 (must **not** be treated as internal) |
+| well-formed JWT, `iss` == our own AS issuer | `McpOAuth` | `Success` / `Fail` |
+| well-formed JWT, `iss` == Entra | `Entra` (mode=Entra) | `Success` / `Fail` |
+| malformed / undecodable token | mode-default scheme | `Fail` → 401 |
+| opaque GitHub PAT | `GitHubToken` (mode=GitHubLegacy) | `Success` / `Fail` |
+
+The selector **must not throw** on a malformed token. Inspecting an attacker-controlled string
+is the one place in this design where an unhandled exception becomes a 500 on every request —
+wrap the JWT-shape probe in `try`/`catch` and fall through to the mode-default scheme.
+
+#### A.2.2.2 MCP OAuth in Entra mode is a **behaviour change** — decide it explicitly
+
+The claim that "the MCP OAuth JWT path is available in both modes today" is **wrong**, and the
+correction matters.
+
+Reading `ApiKeyAuthMiddleware.InvokeAsync` as it actually stands: the internal-key check comes
+first (both modes), but the `AUTH_MODE=Entra` branch calls `_entraTokenValidator.ValidateAsync`
+and **returns unconditionally** — on success *and* on failure.
+`McpTokenService.TryValidateAccessToken` is only reached on the fall-through path, which is the
+GitHubLegacy branch. **Today, an MCP OAuth JWT is rejected in Entra mode.**
+
+A naive selector would therefore silently *add* a capability. That may be desirable — MCP
+clients arguably should work in Entra mode — but it is a **new feature with security
+consequences**, not a refactor, and it must not arrive as an accident of the composition
+design. Two options:
+
+- **Preserve parity (recommended).** Gate the `McpOAuth` branch of the selector on
+  `AUTH_MODE=GitHubLegacy`, exactly as today. The migration then changes *no* authentication
+  outcomes, which is the entire point of a parity-gated cutover. Cost: MCP-in-Entra-mode stays
+  unsupported, as it is now.
+- **Adopt it deliberately, in a separate PR.** If MCP-in-Entra-mode is wanted, spec it on its
+  own: what `PlatformRoles` an MCP-issued principal carries (today's OAuth `CallerContext` has
+  **none**, so under the Entra `PlatformAccess` fallback policy it would be 403'd anyway —
+  the "capability" is half-built as specified); how the AS mints tokens for Entra users; what
+  the token's `sub` / `gh_login` mean when the user signed in with Entra. Ship it with its own
+  tests and its own security review.
+
+**This plan takes the first option.** The decision matrix must include the row *"valid MCP
+OAuth JWT presented in Entra mode ⇒ 401"*, so parity is asserted rather than assumed and
+choosing option two later becomes a visible, reviewable change to a checked-in expectation.
+
+The internal-service-key path **is** genuinely available in both modes today (it precedes the
+mode branch), so that part of the selector is parity-preserving as written.
 
 ### A.2.3 Reusing `EntraAccessTokenValidator` — the specific mechanism
 
@@ -507,13 +634,46 @@ prevents starting Entra mode without `Auth:Entra:ClientId`/`TenantId`.
 request (host-aware), because the AS metadata must match the URL the client actually used.
 `JwtBearerOptions.TokenValidationParameters` is resolved once at startup. Resolution:
 
-- Set `TokenValidationParameters.ValidateIssuer = false` / `ValidateAudience = false` at
-  registration, and perform the issuer/audience check inside `OnTokenValidated` using the
-  live `HttpContext` and `McpTokenService.CreateValidationParameters(issuer, audience)` —
-  failing the result if they do not match. This is a real deviation from the textbook
-  registration and **must be called out in review**, because getting it wrong silently
-  disables issuer validation. Guard it with a dedicated test that a token minted for issuer A
-  is rejected when presented to host B.
+Setting `ValidateIssuer = false` / `ValidateAudience = false` and "checking it later" is only
+safe if **all four** of the following hold. Any three of them is a bypass.
+
+1. **Pin the signing key at registration.** `IssuerSigningKey` (or `IssuerSigningKeys`) must be
+   the AS's own key, with `ValidateIssuerSigningKey = true`. This is what actually stops
+   third-party tokens: a token we did not sign fails signature validation before any of our
+   event code runs. Without it, disabling issuer validation means *any* correctly-formed token
+   from *any* signer is a candidate.
+2. **Pin the algorithm.** Set `ValidAlgorithms` to the single algorithm the AS uses and nothing
+   else. Leaving it open re-admits algorithm-confusion attacks against a handler we have
+   deliberately loosened.
+3. **Do a real comparison in `OnTokenValidated`.** Resolve the expected issuer and audience from
+   the live `HttpContext`, then compare them **explicitly** against the validated token's `iss`
+   and `aud` claims and call `context.Fail()` on mismatch.
+   ⚠️ **Merely constructing `McpTokenService.CreateValidationParameters(issuer, audience)`
+   inside the event does nothing.** A `TokenValidationParameters` object is inert data; it only
+   has an effect when a handler validates a token against it. Either write the explicit
+   comparison, or re-run a full `JwtSecurityTokenHandler.ValidateToken` pass with those
+   parameters — and if you choose the latter, note it double-validates and costs a second
+   signature check. **The explicit comparison is the recommended form.** This is precisely the
+   kind of line that reads as correct in review and is not.
+4. **`RequireSignedTokens = true`** and no `ValidateLifetime = false` slipping in alongside the
+   other relaxations.
+
+Hostile test cases, all mandatory (A.5.2), not just the host-A/host-B case:
+
+| Attack | Expected |
+|---|---|
+| token minted for host A, presented to host B | 401 |
+| token with a **foreign `iss`** but otherwise well-formed | 401 |
+| token with the correct `iss` but a **wrong `aud`** | 401 |
+| token signed with a **different key** | 401 |
+| token using an **unexpected algorithm** (incl. `none` / HS256-with-public-key confusion) | 401 |
+| forged `Host` / `X-Forwarded-Host` header aimed at steering `ResolveIssuer` | 401, and issuer resolution must not be attacker-steerable beyond the configured host set |
+
+The last row is worth dwelling on: `ResolveIssuer` is **host-derived**, so if the deployment
+accepts arbitrary `Host`/`X-Forwarded-Host` values, an attacker who can mint a token for a host
+they control could get it accepted. Confirm the gateway pins the host, or constrain
+`ResolveIssuer` to a configured allow-list. **This file is a mandatory Seraph security review.**
+
 - The `IsJtiDeniedAsync` revocation check moves into the same event. It is currently the only
   DB call on the hot auth path; keep it scoped to the MCP scheme so Entra requests do not pay
   for it.
@@ -537,8 +697,71 @@ formalisation, not invention):
 | `PrimaryPlatformRole` | `agentweaver_primary_role` | new; currently only in `CallerContext` |
 | `GitHubLogin` | `gh_login` | already emitted |
 | `Org` | `agentweaver_org` | new; currently only in `CallerContext` |
-| `IsOAuthJwt` | derived from `principal.Identity.AuthenticationType == "McpOAuth"` | stop storing it as data; it *is* the scheme |
-| (internal caller) | `agentweaver_internal` | already emitted; better still, derive from the scheme name |
+| `IsOAuthJwt` | derived from an explicit `agentweaver_auth_scheme` claim (see below) | **not** from `Identity.AuthenticationType` |
+| (internal caller) | derived from the same `agentweaver_auth_scheme` claim | `agentweaver_internal` is already emitted, but the scheme claim is the authoritative form |
+
+#### A.2.5.1 Stamp the scheme explicitly — do not infer it from `AuthenticationType`
+
+The obvious implementation of `IsOAuthJwt` is
+`principal.Identity.AuthenticationType == "McpOAuth"`. **Do not do this.** The value of
+`AuthenticationType` is whatever string the handler passed when it constructed its
+`ClaimsIdentity`; it is **not** guaranteed to equal the scheme name given to
+`AddJwtBearer("McpOAuth", …)`. `JwtBearerHandler` in particular derives it from the token
+handler's configuration, and any `OnTokenValidated` code that rebuilds the principal — which
+A.2.3 explicitly proposes for the Entra scheme — can change it without anyone noticing.
+
+The failure is silent and one-directional in the dangerous way: `IsOAuthJwt` quietly becomes
+`false` for real MCP callers, and every downstream branch that treats OAuth callers specially
+takes the wrong path. Nothing throws.
+
+**Instead:** each handler stamps a private, immutable claim in its success path —
+
+| Scheme | Claim |
+|---|---|
+| `McpOAuth` | `agentweaver_auth_scheme=McpOAuth` (stamped in `OnTokenValidated`) |
+| `InternalServiceKey` | `agentweaver_auth_scheme=InternalServiceKey` |
+| `Entra` | `agentweaver_auth_scheme=Entra` |
+| `GitHubToken` | `agentweaver_auth_scheme=GitHubToken` |
+| `TestBypass` | `agentweaver_auth_scheme=TestBypass` |
+
+`CallerContext.IsOAuthJwt`, `IsInternalServiceCaller` (A.3.4/R10) and any future
+scheme-sensitive logic project from **this claim only**. Two supporting rules:
+
+- **Strip any inbound `agentweaver_*` claim before stamping.** A token from an external IdP
+  could carry an attacker-chosen `agentweaver_auth_scheme` claim; if the handler appends rather
+  than replaces, a self-asserted `InternalServiceKey` value could survive into the principal.
+  Filter the namespace on the way in and treat the first-stamped value as authoritative.
+- **Test it per scheme:** assert the exact claim value produced (A.5.2 #2), and assert that a
+  token *containing* a forged `agentweaver_auth_scheme` claim does not end up with that value
+  in the resulting principal.
+
+#### A.2.5.2 The raw GitHub token must never become a claim
+
+`CallerContext` carries the caller's identity, but downstream code also needs the **raw GitHub
+bearer token** for repo/Copilot operations. The tempting move during a claims migration is to
+carry it as a claim so it travels with the principal. **Do not.**
+
+Claims are treated as non-sensitive by everything that touches a `ClaimsPrincipal`: they are
+serialised into authentication cookies, emitted by diagnostic and `/debug` endpoints, attached
+to OpenTelemetry activity tags and exception telemetry, dumped by structured logging when a
+principal is logged, and persisted anywhere a principal is round-tripped. A credential placed
+in a claim will end up somewhere it is retained in plaintext, and **nothing will fail** —
+credential leakage has no failing test.
+
+Acceptable options, in order of preference:
+
+1. **Re-read the `Authorization` header after authentication.** The header is already in the
+   request; the token does not need to be carried anywhere. Simplest and leaks nothing new.
+2. **A private request-scoped feature** (`HttpContext.Features.Set<IGitHubTokenFeature>(…)`)
+   owned by the `GitHubToken` handler, with an internal accessor. Request-scoped, never
+   serialised, and — unlike `HttpContext.Items` — typed and not enumerable by generic
+   diagnostic code.
+
+Either way the token stays **out of `ClaimsPrincipal`**, out of logs, and out of anything
+serialised. Add a test asserting no claim value in a built principal equals the presented
+credential — cheap, and it makes the rule enforceable rather than aspirational.
+
+#### A.2.5.3 `GetCaller` is not the only consumer — find the direct readers first
 
 **Do not touch the 73 `GetCaller(...)` call sites in this phase.** Keep
 `ApiKeyAuthMiddleware.GetCaller(HttpContext)` as a public shim that now *reads from
@@ -546,6 +769,34 @@ formalisation, not invention):
 zero diff, and lets the risky part (scheme plumbing) be reviewed in isolation. Migrating call
 sites to inject `ClaimsPrincipal`/`HttpContext.User` directly is worthwhile later cleanup but
 is explicitly **out of scope** for Phase 1.5 — bundling it would make the diff unreviewable.
+
+⚠️ **The shim does not cover everything.** Two call sites bypass `GetCaller` and read
+`HttpContext.Items` directly, so they will **not** be fixed by the shim and **will break** the
+moment PR 3 deletes the `Items` write:
+
+| Site | What it does |
+|---|---|
+| `Blueprints/HttpContextAuthenticatedOwnerContext.cs:18` | `context.Items.TryGetValue(GitHubTokenAuthMiddleware.CallerItemKey, out var value)` — resolves the owner identity for **owner-scoped blueprint operations** |
+| `Auth/GitHubOrgAuthorizationMiddleware.cs:117` | `context.Items["agentweaver.caller"] as CallerContext` — the **string literal**, so it does not even show up in a search for `CallerItemKey` |
+
+The second one is the more instructive: it hardcodes the key as a literal, which is exactly why
+a symbol-based search under-reports the blast radius. If either is missed, deleting the `Items`
+write produces a `null` caller (and, at the blueprint site, a likely `NullReferenceException`)
+on a code path that is not on the health-probe or smoke-test route — so it survives to
+production.
+
+**Required, in PR 1 — before any deletion:**
+
+1. Migrate `HttpContextAuthenticatedOwnerContext` to project from `context.User` (or from
+   `GetCaller`), in the same PR that makes `GetCaller` claims-backed.
+2. Migrate the `GitHubOrgAuthorizationMiddleware` literal read at the same time.
+3. Add a **repo-wide grep guard test** that fails the build if any file outside the auth
+   handlers references `CallerItemKey`, the literal `"agentweaver.caller"`, or reads an auth
+   caller out of `HttpContext.Items`. Run it as a CI gate for the whole flag lifetime — it is
+   the precondition for PR 3, not a nicety, and it also stops a new direct reader being added
+   during the bake period.
+4. Keep `HttpContextAuthenticatedOwnerContextTests` and `ProjectOwnershipAuthorizationTests`
+   green with **unchanged assertions** — they are the behavioural guard on this migration.
 
 One behavioural subtlety to preserve: `CallerContext.Owns(ownerUser)` matches on **either**
 `User` **or** `GitHubLogin`. The projection must keep that exact semantics; a regression here
@@ -655,12 +906,35 @@ configuration. That gives a rollback measured in *a config change and a pod rest
 than a revert-build-redeploy cycle, and it avoids the cost and complexity of running two auth
 stacks on every request.
 
+**What that trade costs, stated plainly.** A shadow/dual-evaluation mode would have let real
+production traffic — real Entra token shapes, real MCP client challenge sequences, real
+long-lived GitHub sessions — flow through the new stack while the old one stayed authoritative,
+surfacing divergence *before* anyone's request depended on it. Dropping it means **the first
+real traffic the new stack ever adjudicates is traffic it is already deciding.** Synthetic
+tests and staging harnesses do not generate the long tail: unusual token lifetimes, tenant
+guest accounts, clients pinned to old API versions, tokens minted before a config change.
+
+Three controls substitute for it, and they are **not optional** — they are what makes the
+simpler design defensible rather than merely cheaper:
+
+1. **Startup-time, mutually exclusive pipeline registration** (A.4.1) — the flag is read once
+   and selects one of two pipeline constructions. Never a per-request branch. A per-request
+   `if` would double the surface *and* make behaviour depend on config-reload timing, which is
+   the worst of both designs.
+2. **Auth-outcome telemetry segmented by scheme, status and endpoint** (A.4.1) — emitted by
+   *both* pipelines, in the same shape, from PR 1 onward. Without it, "did the flag change
+   anything?" is unanswerable except by waiting for a user complaint.
+3. **Canary the enablement, do not flip it fleet-wide** (A.4.2, PR 2 step 6) — enable on one
+   replica first and compare its auth-outcome rates against the rest. This is the closest
+   available approximation to shadow mode: real production traffic meeting the new stack, with
+   a blast radius of `1/N` of requests and a rollback that is a single pod restart.
+
 ### A.4.0 The three PRs (start here)
 
 | PR | Stage | What it is | Risk | Gate to proceed |
 |---|---|---|---|---|
-| **1** | **Prepare** | `ClaimsPrincipal` becomes the source of truth, and the golden decision-matrix test is written **against today's middleware** so current behaviour is captured as the parity baseline. No enforcement change whatsoever. | **None** — nothing about who is allowed in changes. | Matrix test green and checked in; existing suite passes unchanged. |
-| **2** | **Cut over behind a flag** | The full new stack (schemes + policy scheme + authorization policies) ships **off by default**, behind `Auth:UseSchemeBasedPipeline`. Turn it **on in staging**, prove parity, then turn it on in production. Old middleware stays in the tree but inert when the flag is on. | Medium to *enable*, **near-zero to undo** — flip the flag back off. | Decision-matrix test green with the flag **on**; all three harness suites green against staging with the flag **on**. |
+| **1** | **Prepare** | `ClaimsPrincipal` becomes the source of truth, the two direct `HttpContext.Items` readers are migrated, auth-outcome telemetry starts emitting, and the golden classification/outcome tests are written **against today's middleware** so current behaviour is captured as the parity baseline. No enforcement change whatsoever. | **None** — nothing about who is allowed in changes. | Golden tests green and checked in; grep guard green; existing suite passes unchanged. |
+| **2** | **Cut over behind a flag** | The full new stack (schemes + policy scheme + authorization policies) ships **off by default**, behind `Auth:UseSchemeBasedPipeline`. Turn it **on in staging**, prove parity, then enable in production **on one replica first**. Old middleware stays in the tree but inert when the flag is on. | Medium to *enable*, **near-zero to undo** — flip the flag back off. | Golden tests green with the flag **on**; all three harness suites green against staging with the flag **on**; canary replica's auth-outcome telemetry matches the fleet. |
 | **3** | **Clean up** | After a stated production bake, delete the old middlewares, delete the flag, and finish hardening + docs. | Low — deleting a path that has been provably unused in production. | Bake period elapsed with no auth incidents. |
 
 Read this as: **one cheap PR, one flag flip you can undo instantly, one deletion PR.** The
@@ -676,10 +950,20 @@ engineering.
   `AUTH_USE_SCHEME_BASED_PIPELINE` key on the `agentweaver-runtime-config` ConfigMap, exactly
   as `Auth__Mode` is sourced from `AUTH_MODE` today (`k8s/base/api-deployment.yaml:186-190`,
   `scripts/azure/lib/kustomize.mjs:176`). No new mechanism.
-- **Resolution is startup-time, not per-request.** Read it once in `Program.cs` and branch the
-  pipeline construction; do not evaluate it inside a middleware. Log the resolved value at
-  startup next to the existing `"Running in {AuthMode} auth mode."` line so every pod's logs
-  state which pipeline it is running.
+- **Resolution is startup-time and mutually exclusive.** Read the flag **once** in `Program.cs`
+  and use it to select one of two pipeline constructions — register the old middleware chain, or
+  register `UseAuthentication()`/`UseAuthorization()` with the schemes. **Never** register both
+  and branch per request: that doubles the live surface, makes behaviour depend on
+  config-reload timing, and defeats the "exactly one pipeline is active" property the whole
+  design rests on. Log the resolved value at startup next to the existing
+  `"Running in {AuthMode} auth mode."` line so every pod's logs state which pipeline it is
+  running.
+- **Auth-outcome telemetry is part of PR 1, not PR 2.** Emit a counter dimensioned by
+  `(pipeline, scheme, status, endpoint-classification)` from **both** pipelines in the same
+  shape. Landing it in PR 1 means a baseline already exists before the flag is ever turned on;
+  landing it with PR 2 would mean the first datapoint and the first behaviour change arrive
+  together, which tells you nothing. This is the instrument that makes the canary readable and
+  the substitute for shadow mode's divergence log.
 - **Interaction with `Auth:Mode`:** orthogonal. The flag chooses *how* auth is implemented;
   `Auth:Mode` chooses *which IdP*. Both `Entra` and `GitHubLegacy` must work under both
   pipelines, so the matrix test runs 2 × 2.
@@ -693,21 +977,32 @@ as tasks within three PRs.)*
 
 ---
 
-#### PR 1 — Prepare: claims consolidation + parity baseline. (S)
+#### PR 1 — Prepare: claims consolidation + parity baseline. (S–M)
 
 **Risk: none.** No enforcement change; verifiable entirely with the existing test suite.
 
 1. **Claims consolidation.** Make `ClaimsPrincipal` the source of truth: add the two missing
-   claims (`agentweaver_primary_role`, `agentweaver_org`), and rewrite
-   `GetCaller(HttpContext)` to project from `context.User` instead of `HttpContext.Items`.
-   `SetCaller` keeps writing both for now. **This is the change that de-risks the other 72
-   `GetCaller` call sites** without touching them.
+   claims (`agentweaver_primary_role`, `agentweaver_org`) plus the explicit
+   `agentweaver_auth_scheme` discriminator (A.2.5.1), and rewrite `GetCaller(HttpContext)` to
+   project from `context.User` instead of `HttpContext.Items`. `SetCaller` keeps writing both
+   for now. **This is the change that de-risks the other 72 `GetCaller` call sites** without
+   touching them.
    - Preserve `CallerContext.Owns` semantics exactly (matches `User` **or** `GitHubLogin`) —
      see risk R7.
-2. **Golden decision-matrix test** (A.5.2 #1), written against the **current** middleware.
-   That ordering is what makes it a parity test rather than a description of the new code.
-   Check the resulting matrix in as the baseline; PR 2 re-runs the identical matrix with the
-   flag on and must produce identical results.
+   - Keep the raw GitHub token **out of claims** (A.2.5.2) — re-read the header or use a
+     private request-scoped feature.
+2. **Migrate the two direct `HttpContext.Items` readers** (A.2.5.3):
+   `Blueprints/HttpContextAuthenticatedOwnerContext.cs:18` and the string-literal read at
+   `Auth/GitHubOrgAuthorizationMiddleware.cs:117`. Add the **repo-wide grep guard test** for
+   `CallerItemKey` / `"agentweaver.caller"` / direct `Items` auth reads. Without this, PR 3's
+   deletion throws at runtime on owner-scoped blueprint operations (risk **R12**).
+3. **Auth-outcome telemetry** (A.4.1) — the `(pipeline, scheme, status, classification)`
+   counter, emitted by the current pipeline so a baseline exists before anything changes.
+4. **Golden tests 1a + 1b + 1c** (A.5.2), written against the **current** middleware. That
+   ordering is what makes them parity tests rather than descriptions of the new code. Check the
+   1a classification golden file in as the baseline; PR 2 re-runs both with the flag on and must
+   produce identical results. 1a's expectations must be derived from the **complete** exemption
+   inventory in §2.3.1, including the implicit non-`/api` exemption.
 
 *Rollback: trivial revert.*
 
@@ -723,26 +1018,40 @@ turned on, so the merge itself is low-risk; the *enablement* is the event to man
    Development-only bypass — A.2), `UseAuthentication()`, and `UseAuthorization()` with the
    mode-appropriate **fallback policy** (`PlatformAccess` for Entra, `GitHubOrgAccess` for
    GitHubLegacy) plus the custom `IAuthorizationMiddlewareResultHandler` that preserves the
-   existing 401/403 response bodies (risks R1, R3).
+   existing 401/403 response bodies (risks R1, R3). Registration is **startup-time and mutually
+   exclusive** with the old chain (A.4.1) — not a per-request branch.
+   - Gate the `McpOAuth` selector branch on `AUTH_MODE=GitHubLegacy` to preserve parity
+     (A.2.2.2). MCP-in-Entra-mode is a separate, deliberate feature — not a side effect of this
+     PR.
+   - Pin the signing key **and** algorithm on the `McpOAuth` registration and write the
+     **explicit** iss/aud comparison in `OnTokenValidated` (A.2.4, risk R6). Constructing a
+     `TokenValidationParameters` in the event validates nothing.
 2. **Keep the old pipeline intact** on the `false` branch: `GitHubTokenAuthMiddleware`,
    `PlatformRoleAuthorizationMiddleware`, `GitHubOrgAuthorizationMiddleware` unchanged. This
    is the safety net. Both branches must be exercised in CI (see risk R11).
 3. **Convert `ExemptPrefixes` entries to `AllowAnonymous` route-group metadata** where they are
-   not already (most exist from Phase 1). This is shared by both branches and is therefore
-   safe to land here.
-4. **Tests:** per-scheme unit tests, policy-scheme selector tests, fallback-policy coverage,
-   and response-shape golden tests (A.5.2 #2–#5). **Run the full decision matrix twice — flag
-   off and flag on — and assert the two produce identical outcomes.** That assertion is the
-   parity control for the whole migration, and it runs on every CI
-   build rather than only in staging.
+   not already (most exist from Phase 1). Verify against the **full** §2.3.1 inventory —
+   especially the health/readiness routes, which are anonymous today only by virtue of the
+   implicit non-`/api` rule and would otherwise be 401'd by the fallback policy, failing the
+   pods' probes. Note that `/api/auth/*` is **not** an `AllowAnonymous` case; it is
+   "authenticated but exempt from the org check" and belongs in the policy (A.3.2).
+4. **Tests:** per-scheme unit tests, policy-scheme selector tests covering every A.2.2.1 row,
+   fallback-policy coverage, health-probe anonymity with the flag on (1c), and response-shape
+   golden tests (A.5.2 #2–#5). **Run 1a and 1b twice — flag off and flag on — and assert the
+   two produce identical outcomes** (A.5.2 #6). That assertion is the parity control for the
+   whole migration, and it runs on every CI build rather than only in staging.
 5. **Staging enablement:** flip `AUTH_USE_SCHEME_BASED_PIPELINE=true` in staging and run all
    three harness suites (`agentweaver-api-harness`, `agentweaver-mcp-harness`,
    `agentweaver-ui-harness`) against it (A.5.3). The MCP harness matters most — it is the only
    automated coverage of a real third-party client doing discovery + challenge + token
    (risk R2). Exercise both `Auth:Mode` values if staging permits.
-6. **Production enablement:** a separate, deliberate config change — not part of the merge.
-   Announce it, watch auth error rates, and treat "flip the flag back off" as the standing
-   rollback for the first days.
+6. **Production enablement: canary first.** A separate, deliberate config change — not part of
+   the merge. Enable on **one replica**, compare its auth-outcome telemetry (`status` × `scheme`
+   × `classification`) against the untouched replicas for a stated observation window, and only
+   then widen to the fleet. This is the substitute for shadow mode: real production traffic
+   meets the new stack with a `1/N` blast radius and a one-pod-restart rollback. Watch
+   specifically for 401 and 403 rate changes on endpoint classifications that should not have
+   moved at all.
 
 *Rollback: **set `Auth:UseSchemeBasedPipeline=false` and restart.** No revert, no rebuild, no
 redeploy of application code. If the problem is structural rather than operational, reverting
@@ -759,13 +1068,18 @@ reasonable default) — an unbounded "when it feels safe" is how flags become pe
 1. Delete `GitHubTokenAuthMiddleware`, `PlatformRoleAuthorizationMiddleware` and
    `GitHubOrgAuthorizationMiddleware`. Delete `Auth:UseSchemeBasedPipeline` and its
    ConfigMap/env wiring; the scheme-based pipeline becomes the only path.
+   - **Precondition:** the grep guard test from PR 1 (A.2.5.3) is green — no code outside the
+     auth handlers still reads the caller out of `HttpContext.Items`. Deleting the `Items` write
+     while `HttpContextAuthenticatedOwnerContext` still reads it throws at runtime on
+     owner-scoped blueprint operations (risk **R12**).
 2. **Cleanup and hardening.** Delete `SetCaller`'s `Items` write and the `CallerItemKey`
    constant; retire `OpenApiSecurityTransformers`' path heuristics in favour of the same
-   metadata; switch `ProjectAuthorization.IsInternalServiceCaller` to a scheme/claim test
-   (A.3.4, risk R10); fixed-time comparison for the internal API key. Add the CI guard test
-   that fails if any endpoint is neither `AllowAnonymous` nor covered by a policy.
-3. **Simplify the tests** that ran the matrix against both branches down to the single
-   remaining pipeline.
+   metadata; switch `ProjectAuthorization.IsInternalServiceCaller` to a test on the
+   `agentweaver_auth_scheme` claim (A.2.5.1/A.3.4, risk R10); fixed-time comparison for the
+   internal API key. Keep the 1a enumeration test as the permanent CI guard that no endpoint is
+   unclassified.
+3. **Simplify the tests** that ran 1a/1b against both branches down to the single remaining
+   pipeline.
 4. **Docs.** Update `docs/guide/` auth pages and `docs/mcp-oauth.md` for the new scheme names,
    `WWW-Authenticate` behaviour, and any changed status codes, per `CONTRIBUTING.md`.
 
@@ -805,41 +1119,103 @@ green — they encode the 401-vs-403 contract described in risk R1.
 
 ### A.5.2 New tests required
 
-**1. The decision matrix (the centrepiece).** A single integration test that enumerates
-`EndpointDataSource` and, for **every** mapped endpoint, asserts the expected status for each
+The centrepiece is split into **two** tests, because a single "enumerate every endpoint and
+assert 2xx" test is not implementable — see the boxed note under #1b.
+
+**1a. Endpoint classification enumeration (cheap, total, no HTTP calls).** Enumerate
+`EndpointDataSource` and assert, for **every** mapped endpoint, its *classification*: anonymous,
+webhook-authenticated, or protected — and for protected endpoints, which authorization policy
+applies. This is a **metadata** assertion; it invokes nothing, needs no fixtures, has no side
+effects, and cannot be defeated by an endpoint that requires a request body.
+
+Check it in as a **golden file** listing every route and its classification, so any change to
+who can reach what is a visible diff in code review. This is the test that would have caught
+all five historical incidents, and it is the permanent backstop for the bug class in §1. It
+must cover **100%** of endpoints — the totality is the whole point.
+
+Write it in PR 1 against the *current* middleware, deriving expectations from today's four
+allow-lists (§2.3.1), so it captures existing behaviour as the parity baseline rather than
+describing the new code.
+
+**1b. Authorization-outcome tests over representative route fixtures (real HTTP, small set).**
+
+> ⚠️ **Why this is not "every endpoint × every credential".** Most endpoints need route values,
+> request bodies, or seeded state, and correctly return **400/404/409 even with perfect
+> credentials** — so "assert 2xx" is wrong for them, and a genuine auth regression would hide
+> behind an expected-400. Worse, blindly invoking every mapped endpoint **executes side
+> effects**: the route table includes deletes, run submissions, workflow triggers and outbound
+> GitHub calls. A suite that POSTs to every endpoint once per credential is a
+> fixture-corruption and outbound-call generator, not a parity test.
+
+Instead, hand-pick a **representative fixture per authorization shape** — roughly a dozen
+routes, each with a valid request that returns a known success status under a known-good
 credential:
+
+| Shape | Example fixture |
+|---|---|
+| anonymous GET | `/api/version` |
+| health probe | `/health`, `/api/health`, `/api/ping`, `/healthz/workspace` |
+| pre-sign-in metadata | `/api/server/info`, `/api/auth/config` |
+| platform-role-protected read | a `/api/projects` list |
+| platform-admin-only | an admin-scoped route |
+| Tier-2 project-scoped read | `/api/projects/{seededId}` |
+| Tier-2 project-scoped write | a seeded-project mutation |
+| owner-scoped blueprint op | a `HttpContextAuthenticatedOwnerContext` consumer |
+| MCP-reachable route | an `/mcp` operation |
+| MCP AS discovery | `/.well-known/oauth-protected-resource` |
+| webhook (HMAC) | `/api/projects/{id}/webhooks/github` |
+| internal-service-only | a loopback route |
+
+Each fixture is then crossed with the credential matrix below. Assert **the fixture's own
+expected status**, never a bare "2xx":
 
 | Credential | Expected |
 |---|---|
-| no `Authorization` header | 200 if `AllowAnonymous`, else **401** |
+| no `Authorization` header | the fixture's success status if anonymous, else **401** |
 | malformed / non-Bearer header | 401 |
 | expired Entra token | 401 |
 | wrong-audience Entra token | 401 |
 | wrong-issuer Entra token (v1 `sts.windows.net` vs v2) | 401 |
-| valid Entra token, **no** platform role | 403 (not 401) |
-| valid Entra token **with** required role | 200/2xx |
-| valid GitHub PAT, org member | 200/2xx (GitHubLegacy factory) |
+| valid Entra token, **no** platform role | **403** (not 401) |
+| valid Entra token **with** required role | the fixture's success status |
+| valid GitHub PAT, org member | the fixture's success status (GitHubLegacy factory) |
 | valid GitHub PAT, **non-member** | 403 |
-| valid MCP OAuth JWT | 200/2xx on MCP-reachable routes |
+| valid MCP OAuth JWT, **GitHubLegacy mode** | the fixture's success status on MCP-reachable routes |
+| valid MCP OAuth JWT, **Entra mode** | **401** — parity with today (A.2.2.2) |
 | MCP OAuth JWT with **revoked jti** | 401 |
 | MCP OAuth JWT minted for a **different issuer/host** | 401 |
-| internal service key | 200/2xx |
+| MCP OAuth JWT signed with a **different key** | 401 |
+| MCP OAuth JWT using an **unexpected algorithm** | 401 |
+| forged `Host` / `X-Forwarded-Host` aimed at steering `ResolveIssuer` | 401 |
+| internal service key | the fixture's success status |
 | **wrong** internal service key | 401 |
+| token carrying a forged `agentweaver_auth_scheme` claim | claim ignored; treated per its real scheme |
 
-Implementation notes: build it as a data-driven xUnit `[Theory]` over
-`(endpoint × credential)`, run against `EntraWebApplicationFactory` and the GitHubLegacy
-factory. **Write this test in PR 1, against the *current* middleware, and check in the
-resulting matrix as the golden baseline** — that is what makes it a parity test rather than a
-description of the new code. New endpoints joining the codebase later must extend the matrix,
-which also gives the Phase 1 bug class a permanent CI backstop.
+Data-driven xUnit `[Theory]` over `(fixture × credential)`, run against
+`EntraWebApplicationFactory` and the GitHubLegacy factory. Adding a new authorization *shape*
+means adding a fixture; adding a new *endpoint* is already covered by 1a.
 
-**2. Per-scheme unit tests** — one focused test class per handler: token accepted/rejected,
-claims produced (exact claim types and values), `AuthenticateResult.NoResult` vs `Fail`
-(they differ: `NoResult` lets the next scheme try, `Fail` stops — getting this wrong in the
-policy scheme is a plausible silent-bypass bug).
+**Together:** 1a guarantees no endpoint is unclassified; 1b guarantees each classification
+actually enforces what it claims. Neither alone is sufficient, and neither requires invoking
+every route.
 
-**3. Policy-scheme selector tests** — for each `(AUTH_MODE, token shape)` combination, assert
-which concrete scheme is selected, including the malformed-token fallback path.
+**1c. Health-probe anonymity test.** `GET /health`, `/api/health`, `/api/ping` and
+`/healthz/workspace` return **200 with no credentials** — asserted with the flag **off** and
+again with the flag **on**. Small, separate, and named for what it protects: a default-deny
+fallback policy that 401s these takes the pods' liveness/readiness probes down and turns a
+config flip into a crash-loop outage (§2.3.1).
+
+**2. Per-scheme unit tests** — one focused test class per handler: token accepted/rejected, the
+exact claims produced (including the `agentweaver_auth_scheme` claim from A.2.5.1, and that a
+*forged* inbound value of it is stripped), that **no claim value equals the presented
+credential** (A.2.5.2), and `AuthenticateResult.NoResult` vs `Fail` per the A.2.2.1 table —
+`NoResult` **only** when no `Authorization` header is present, `Fail` whenever a credential was
+presented and rejected. That distinction is a silent-bypass bug when wrong, not a cosmetic one.
+
+**3. Policy-scheme selector tests** — assert the selected concrete scheme for **every row** of
+the A.2.2.1 table, including the malformed-token fall-through and the
+"resembles-but-does-not-equal the internal key" case, and that the selector never throws on
+adversarial `Authorization` values.
 
 **4. Fallback-policy coverage test** — assert `FallbackPolicy` is non-null in both modes and
 that an endpoint with **no** metadata at all is denied (guards against a future
@@ -848,15 +1224,18 @@ that an endpoint with **no** metadata at all is denied (guards against a future
 **5. Response-shape golden tests** — 401 body is `{"error":"unauthorized"}`, 403 body is the
 platform-role JSON, `WWW-Authenticate` header value is asserted verbatim (see R2).
 
-**6. Both-branches parity test** — in PR 2, run the full decision matrix twice against the same
+**6. Both-branches parity test** — in PR 2, run **1a and 1b** twice against the same
 `WebApplicationFactory` (once with `Auth:UseSchemeBasedPipeline=false`, once with `true`) and
 assert the two outcome sets are **identical**. This runs on every CI build and is the primary
-parity control for the migration.
+parity control for the migration, replacing what a shadow-mode deployment would otherwise have
+had to discover in production.
 
-**7. `AllowAnonymous`-count snapshot** — assert the *number and set* of anonymous endpoints
-matches a checked-in list. Any PR that makes an endpoint public then requires an explicit,
-reviewable one-line change to that list. Cheap, and it converts "someone accidentally made
-`/api/projects` public" from an incident into a failing CI job.
+**7. `AllowAnonymous`-count snapshot** — subsumed by the 1a golden file, which already pins the
+*set* of anonymous endpoints rather than just the count. Keep it as a distinct assertion inside
+1a so the failure message is explicit ("endpoint X became anonymous") rather than a generic
+golden-file diff: any PR that makes an endpoint public then requires an explicit, reviewable
+one-line change. Cheap, and it converts "someone accidentally made `/api/projects` public" from
+an incident into a failing CI job.
 
 ### A.5.3 Live verification (`CONTRIBUTING.md` requires it for runtime-impacting work)
 
@@ -874,20 +1253,23 @@ performing the discovery + challenge + token flow, which is precisely what R2 th
 | **R2** | **`WWW-Authenticate` challenge changes.** Current code writes a bare 401 with **no** `WWW-Authenticate` header and body `{"error":"unauthorized"}`. `JwtBearerHandler` emits `WWW-Authenticate: Bearer error="invalid_token", error_description="..."` and an **empty body**. | MCP clients (Copilot CLI, VS Code) do RFC-driven challenge-response and RFC 9728 protected-resource discovery; a *new* header could change client behaviour (possibly for the better — or into a redirect loop), and an emptied body breaks anything parsing `error`. Neither shows up as a server-side error. | Golden response-shape tests (A.5.2 #5). Decide deliberately whether to *start* emitting `WWW-Authenticate` (arguably a spec-compliance improvement for MCP) and, if so, validate it with the MCP harness against a real client **before** PR 3, not after. Preserve the JSON body via a custom result handler regardless. |
 | **R3** | **403 body shape loss.** `Forbid()` writes an empty body; the middleware writes a specific JSON message. | Clients showing the message get a blank error dialog. | Custom `IAuthorizationMiddlewareResultHandler`; golden test. |
 | **R4** | **Middleware ordering.** `UseAuthentication`/`UseAuthorization` must sit after `UseRouting` and after `UseCors`; `UseExceptionHandler` must stay outermost; the rate limiter's position relative to auth determines whether unauthenticated floods consume the limiter budget. | Wrong order can make `[Authorize]` silently not run (endpoint metadata not yet resolved) — a **fail-open** outcome that no test notices unless a test specifically asserts a protected endpoint 401s. | Phase 1's explicit `UseRouting()` + the fallback-policy coverage test (A.5.2 #4). Assert ordering in a startup test, not by reading `Program.cs`. |
-| **R5** | **`AuthenticateResult.NoResult` vs `Fail` confusion** in the policy scheme / multi-scheme setup. | `NoResult` on every scheme yields an unauthenticated principal, which under a *missing* fallback policy means the request **succeeds anonymously**. | A.5.2 #2 and #4; default-deny fallback policy in both modes. |
-| **R6** | **MCP OAuth issuer validation disabled at registration** (A.2.4) and then not re-checked in `OnTokenValidated`. | Complete bypass: any RS256 token from any issuer is accepted. Nothing logs. | Dedicated test: token minted for host A rejected on host B. Flag this file for mandatory Seraph security review. |
+| **R5** | **`AuthenticateResult.NoResult` vs `Fail` confusion.** In a policy-scheme design the selector picks **one** handler — there is no fallback chain, so `NoResult` means "this request is anonymous", not "let the next scheme try" (A.2.2.1). | A handler returning `NoResult` for a *presented but invalid* credential silently downgrades the request to anonymous instead of 401-ing it. On an `AllowAnonymous` endpoint it then succeeds outright, and under a *missing* fallback policy it succeeds on protected endpoints too. Nothing logs. | A.2.2.1's exhaustive selector table as test cases (A.5.2 #2, #3); `NoResult` permitted **only** when no `Authorization` header is present; default-deny fallback policy in both modes (A.5.2 #4). |
+| **R6** | **MCP OAuth issuer validation disabled at registration** (A.2.4) and then not genuinely re-checked in `OnTokenValidated` — including the specific trap of *constructing* a `TokenValidationParameters` in the event and believing that validates something. | Complete bypass: any token from any issuer is accepted. Nothing logs. The code reads as correct in review. | Pin the signing key **and** algorithm at registration; write an **explicit** iss/aud comparison in the event. Full hostile matrix (A.5.2 1b): foreign issuer, wrong audience, different signing key, unexpected algorithm, forged `Host`/`X-Forwarded-Host`. Mandatory Seraph security review. |
 | **R7** | **`CallerContext.Owns` semantics drift** during the claims projection (it matches `User` **or** `GitHubLogin`). | Silent broken-access-control in either direction — too permissive is a security bug, too strict looks like a random 403. | PR 1 is deliberately isolated so this is reviewable alone; `HttpContextAuthenticatedOwnerContextTests` + `ProjectOwnershipAuthorizationTests` are the guards. |
 | **R8** | **Epoch check relocation** (A.3.3) changes which requests it applies to. | A stale-epoch pod could start serving authenticated traffic (security) or start failing health probes and get evicted (availability). | Preserve the "only when an `Authorization` header is present" condition verbatim; `AuthModeSwitchTests` covers it. |
 | **R9** | **Test bypass leaking out of Development.** The bypass becomes a registered *scheme* rather than an `if` inside one middleware — a larger, more permanent-looking surface. | A configuration slip in a non-Development environment would authenticate arbitrary tokens. | Register the scheme **only** when `environment.IsDevelopment() && Testing:BypassGitHubTokenAuth`; keep both `LogCritical` messages; add a test asserting the scheme is absent in Production. |
 | **R10** | **Internal-service-key exemption widening** — `ProjectAuthorization.IsInternalServiceCaller` matches on a *username string*. | Anyone whose resolved principal name equals `Auth:User` inherits the Tier-2 bypass, regardless of scheme. Pre-existing, but the refactor is the moment to fix it — and the moment it could be made worse. | A.3.4: switch to a scheme/claim test in PR 3's cleanup step, with a test that a non-`InternalServiceKey` caller with a colliding name is **denied**. |
 | **R11** | **Flag drift / rotting fallback.** `Auth:UseSchemeBasedPipeline` leaves two auth pipelines in the tree for a release cycle. The inert branch stops being exercised, environments drift apart (staging on, prod off), and the flag outlives its purpose. | The "safe rollback" silently stops being safe: a later change touches only the live branch, so flipping the flag back off restores a path that no longer matches current endpoint metadata, claims, or route registrations — and *nothing fails* until the moment you need the fallback. Environment drift also means a staging-green result can stop meaning anything about prod. Both are invisible without a deliberate check. | (a) **CI runs the full decision matrix against BOTH branches** on every build (A.5.2 #6) — the inert path is never unexercised; (b) log the resolved flag value at startup on every pod, so which pipeline is running is always visible; (c) state the **bake period explicitly** in PR 2's body and open PR 3 as a tracked follow-up issue at the same time, so deletion is scheduled, not hoped for; (d) any PR touching auth during the flag's lifetime must update both branches or explicitly state why not; (e) after PR 3, verify no environment still sets the removed key. |
+| **R12** | **Direct `HttpContext.Items` readers outside `GetCaller`** (A.2.5.3): `HttpContextAuthenticatedOwnerContext.cs:18` and the **string-literal** read at `GitHubOrgAuthorizationMiddleware.cs:117`. | The `GetCaller` shim makes 73 call sites correct and creates the impression the migration is complete. These two are not covered. When PR 3 deletes the `Items` write they get `null` — a likely `NullReferenceException` on owner-scoped blueprint operations, on a path not covered by health probes or smoke tests, so it reaches production. The literal read does not even appear in a `CallerItemKey` search. | Migrate both in **PR 1**; add a repo-wide grep guard test (`CallerItemKey`, `"agentweaver.caller"`, direct `Items` auth reads) as a CI gate for the whole flag lifetime, and make it an explicit precondition for PR 3. |
+| **R13** | **Health/readiness probes 401'd by the fallback policy.** `/health` and `/healthz/workspace` are anonymous today **only** because the authn middleware skips everything not under `/api` — they carry no `.AllowAnonymous()` at all (§2.3.1). | Enabling the flag makes every pod fail its liveness/readiness probe. Kubernetes restarts them, they fail again, and the deployment crash-loops — a **self-inflicted outage caused by a config flip**, with no application error to point at. Invisible to any test that only exercises `/api/**` business routes. | The §2.3.1 inventory is a hard Phase 1 prerequisite; test 1c asserts probe anonymity with the flag **off and on**; the canary rollout (PR 2 step 6) limits the blast radius to one replica if it is still missed. |
+| **R14** | **Scheme inferred from `Identity.AuthenticationType`** instead of an explicit stamped claim (A.2.5.1). | `AuthenticationType` is not guaranteed to equal the registered scheme name, and any `OnTokenValidated` code that rebuilds the principal can change it. `IsOAuthJwt` / `IsInternalServiceCaller` then quietly evaluate `false` for real callers and every scheme-sensitive branch takes the wrong path. Nothing throws. The mirror-image risk is an *inbound* token carrying a forged `agentweaver_auth_scheme` claim that survives into the principal. | Stamp `agentweaver_auth_scheme` explicitly in each handler's success path and project from that claim only; strip inbound `agentweaver_*` claims before stamping; per-scheme tests assert both the exact value produced and that a forged inbound value is discarded (A.5.2 #2). |
 
 ## A.7 Effort summary
 
 | PR | Stage | Scope | Size |
 |---|---|---|---|
-| **1** | Prepare | Claims consolidation + `GetCaller` projection + golden decision-matrix test against current behaviour | S |
-| **2** | Cut over behind a flag | Schemes + policy scheme + authorization policies behind `Auth:UseSchemeBasedPipeline`; both branches parity-tested in CI; staging then production enablement | **L** (the bulk of the phase) |
+| **1** | Prepare | Claims consolidation (incl. the `agentweaver_auth_scheme` discriminator) + `GetCaller` projection + migration of the two direct `Items` readers + grep guard + auth-outcome telemetry + golden tests 1a/1b/1c against current behaviour | S–M |
+| **2** | Cut over behind a flag | Schemes + policy scheme + authorization policies behind `Auth:UseSchemeBasedPipeline`; both branches parity-tested in CI; staging enablement, then a **canary** production enablement | **L** (the bulk of the phase) |
 | **3** | Clean up | Delete old middlewares + the flag, hardening, CI guards, docs — after the production bake | S–M |
 
 Overall the phase remains **M–L** — larger than the original §2.5 estimate once the 73
@@ -895,3 +1277,28 @@ Overall the phase remains **M–L** — larger than the original §2.5 estimate 
 best available investment: it deletes three bespoke middlewares, removes the last of the
 duplicated allow-lists, and fixes two latent security weaknesses (R6-adjacent issuer handling
 and R10's username-based service exemption) as a side effect.
+
+## A.8 Review log
+
+Rubber-duck review of this plan (2026-08-02) raised four blocking and five non-blocking
+findings. All nine are incorporated above; this section records what changed and where, so the
+review does not have to be re-derived from the diff.
+
+### Blocking
+
+| # | Finding | Resolution |
+|---|---|---|
+| **B1** | The fallback policy would 401 the health/readiness probes. `/health`, `/api/health`, `/api/ping` and `/healthz/workspace` carry **no** `.AllowAnonymous()`; they are anonymous today only because the authn middleware skips everything not under `/api`. | New **§2.3.1** enumerates *every* current exemption from all four sources and names the implicit non-`/api` rule as the largest one. Annotating the complete set is now a hard Phase 1 prerequisite. New test **1c** asserts probe anonymity with the flag off *and* on. New risk **R13**. |
+| **B2** | `Identity.AuthenticationType == "McpOAuth"` is not a reliable scheme discriminator. | New **A.2.5.1**: each handler stamps an explicit `agentweaver_auth_scheme` claim; `IsOAuthJwt` and `IsInternalServiceCaller` project from that claim only. Inbound `agentweaver_*` claims are stripped before stamping. New risk **R14**. |
+| **B3** | Putting the raw GitHub bearer token in a claim is a credential-leak surface. | New **A.2.5.2**: the token stays out of `ClaimsPrincipal` — re-read the header, or use a private request-scoped feature. Test asserts no claim value equals the presented credential. |
+| **B4** | "Enumerate every endpoint and assert 2xx" is not implementable: endpoints need route values/bodies/state and legitimately return 400/404/409, and invoking them all causes side effects. | **A.5.2 #1 split into 1a + 1b**: 1a is a total, side-effect-free *classification* assertion over `EndpointDataSource` (golden file, 100% coverage); 1b is a small set of representative per-shape route fixtures crossed with the credential matrix, asserting each fixture's own expected status. |
+
+### Non-blocking
+
+| # | Finding | Resolution |
+|---|---|---|
+| **N5** | Dropping shadow mode removes the only pre-cutover exposure to real traffic shapes. | **A.4** now states that cost explicitly and names three substitute controls: startup-time mutually exclusive pipeline registration, auth-outcome telemetry `(pipeline, scheme, status, classification)` landing in **PR 1** so a baseline exists first, and a **canary** single-replica production enablement (PR 2 step 6). |
+| **N6** | "Disable issuer/audience validation and check in `OnTokenValidated`" is unsafe as written. | **A.2.4** rewritten: pin the signing key *and* algorithm at registration, and write an **explicit** iss/aud comparison — constructing a `TokenValidationParameters` in the event validates nothing. Hostile test matrix added (foreign issuer, wrong audience, wrong key, unexpected algorithm, forged `Host`). Risk **R6** updated. |
+| **N7** | PR 3 would delete `HttpContext.Items` while `HttpContextAuthenticatedOwnerContext` still reads it. | New **A.2.5.3**: both direct readers (including the string-literal one at `GitHubOrgAuthorizationMiddleware.cs:117`, invisible to a `CallerItemKey` search) are migrated in **PR 1**, with a repo-wide grep guard test gating PR 3. New risk **R12**. |
+| **N8** | "MCP OAuth already works in both modes" is inaccurate — the Entra branch returns unconditionally, so MCP tokens are rejected in Entra mode today. | New **A.2.2.2**: the claim is corrected, and the plan **preserves parity** by gating the `McpOAuth` selector branch on `AUTH_MODE=GitHubLegacy`. MCP-in-Entra-mode is called out as a separate feature needing its own spec, roles and review. Matrix row added asserting 401. |
+| **N9** | "`NoResult` lets the next scheme try" is wrong for a policy-scheme forwarding selector. | New **A.2.2.1**: the selector picks exactly one handler; `NoResult` means "anonymous" and is permitted **only** when no `Authorization` header is present. Exhaustive selector table added as test cases. Risk **R5** rewritten. |
