@@ -526,6 +526,35 @@ test("17-provision-postgres: PG_SERVER_NAME override flows through to az calls a
   assert.equal(result.PG_FQDN, "custom-pg.postgres.database.azure.com");
 });
 
+test("17-provision-postgres: PG_HA_MODE override controls zonal resiliency flags", async () => {
+  const cfg = { ...CFG, PG_HA_MODE: "Disabled" };
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "list") return { stdout: "10.0.0.4", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "secret") return { stdout: "apiVersion: v1\nkind: Secret\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  await provisionPostgres.run(cfg, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create");
+  assert.ok(createCall, "expected an 'az postgres flexible-server create' call");
+  assert.ok(!createCall.args.includes("--zonal-resiliency"), "Disabled HA mode must not request zonal resiliency");
+});
+
 // -------------------- gen-a2a-mtls-certs.mjs --------------------
 
 test("gen-a2a-mtls-certs: skips generation when all three secrets already exist and force is not set", async () => {

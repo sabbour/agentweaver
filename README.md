@@ -220,11 +220,12 @@ npm run azure:provision-infra -- \
   --location westus2 \
   --keyvault-name agentweaver-kv \
   --postgres-server-name agentweaver-pg-staging \
+  --postgres-ha-mode Disabled \
   --github-client-id "$GITHUB_CLIENT_ID" \
   --github-client-secret "$GITHUB_CLIENT_SECRET"
 ```
 
-Optional: pass `--postgres-server-name <name>` or set `PG_SERVER_NAME` to override the default `agentweaver-pg` and route around the rare Azure-global Flexible Server name collision.
+Optional: pass `--postgres-server-name <name>` or set `PG_SERVER_NAME` to override the default `agentweaver-pg` and route around the rare Azure-global Flexible Server name collision. Pass `--postgres-ha-mode <ZoneRedundant|Disabled>` or set `PG_HA_MODE` to override the default `ZoneRedundant`, which is useful in regions/environments where zone-redundant HA is unavailable (for example early-access/canary regions such as `eastus2euap`).
 
 Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/params.example.json)):
 
@@ -236,6 +237,7 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
   "LOCATION": "westus2",
   "KEYVAULT_NAME": "agentweaver-kv",
   "PG_SERVER_NAME": "agentweaver-pg-staging",
+  "PG_HA_MODE": "Disabled",
   "NAMESPACE": "agentweaver",
   "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
   "GITHUB_CLIENT_SECRET": "",
