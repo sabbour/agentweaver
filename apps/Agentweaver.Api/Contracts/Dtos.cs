@@ -710,7 +710,12 @@ public sealed record BeginGitHubAccountLinkResponse(
 public sealed record LinkedGitHubAccountResponse
 {
     [JsonPropertyName("login")] public required string Login { get; init; }
+    // GitHub identity links only ever represent a personal user account (not an org), and the
+    // display name isn't fetched at link time — populate both with the values the frontend's
+    // LinkedGitHubAccount type requires so it never silently mis-renders as "undefined".
+    [JsonPropertyName("name")] public string? Name { get; init; }
     [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
+    [JsonPropertyName("type")] public string Type { get; init; } = "user";
     [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
     [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
     [JsonPropertyName("linked_at")] public required DateTimeOffset LinkedAt { get; init; }
@@ -721,12 +726,18 @@ public sealed record UnlinkGitHubAccountResponse(
 
 public sealed record AccessibleGitHubRepositoryResponse
 {
-    [JsonPropertyName("full_name")] public required string FullName { get; init; }
-    [JsonPropertyName("description")] public string? Description { get; init; }
-    [JsonPropertyName("private")] public required bool Private { get; init; }
-    [JsonPropertyName("default_branch")] public required string DefaultBranch { get; init; }
-    [JsonPropertyName("html_url")] public string? HtmlUrl { get; init; }
-    [JsonPropertyName("accessible_via_login")] public required string AccessibleViaLogin { get; init; }
+    // FullName/Description/Private/DefaultBranch/HtmlUrl intentionally use the default
+    // camelCase policy (no [JsonPropertyName]) to match the frontend's GitHubRepo type, which
+    // AccessibleGitHubRepo extends. Only the "source account" fields are snake_case, matching
+    // AccessibleGitHubRepo's own declared fields.
+    public required string FullName { get; init; }
+    public string? Description { get; init; }
+    public required bool Private { get; init; }
+    public required string DefaultBranch { get; init; }
+    public string? HtmlUrl { get; init; }
+    [JsonPropertyName("source_login")] public required string AccessibleViaLogin { get; init; }
+    [JsonPropertyName("source_avatar_url")] public string? AccessibleViaAvatarUrl { get; init; }
+    [JsonPropertyName("source_is_default")] public bool AccessibleViaIsDefault { get; init; }
     [JsonPropertyName("permission")] public required string Permission { get; init; }
 }
 

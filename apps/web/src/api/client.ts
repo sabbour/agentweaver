@@ -533,20 +533,27 @@ export class AgentweaverApiClient {
     return this.request<GitHubRepo[]>('GET', path);
   }
 
+  // NOTE: these four paths/verbs must match Endpoints/AuthEndpoints.cs's `/api/auth/github-accounts*`
+  // routes exactly -- they previously pointed at `/auth/github/linked-accounts*` and `/github/repos/accessible`,
+  // which never existed server-side, so every linked-GitHub-account operation 404'd silently.
   listLinkedGitHubAccounts(): Promise<LinkedGitHubAccount[]> {
-    return this.request<LinkedGitHubAccount[]>('GET', '/auth/github/linked-accounts');
+    return this.request<LinkedGitHubAccount[]>('GET', '/auth/github-accounts');
+  }
+
+  beginLinkGitHubAccount(): Promise<{ authorize_url: string }> {
+    return this.request<{ authorize_url: string }>('POST', '/auth/github-accounts/link', {});
   }
 
   setDefaultLinkedGitHubAccount(login: string): Promise<void> {
-    return this.request<void>('POST', `/auth/github/linked-accounts/${encodeURIComponent(login)}/default`, {});
+    return this.request<void>('PUT', `/auth/github-accounts/${encodeURIComponent(login)}/default`, {});
   }
 
   unlinkLinkedGitHubAccount(login: string): Promise<void> {
-    return this.request<void>('DELETE', `/auth/github/linked-accounts/${encodeURIComponent(login)}`);
+    return this.request<void>('DELETE', `/auth/github-accounts/${encodeURIComponent(login)}`);
   }
 
   listAccessibleGitHubRepos(): Promise<AccessibleGitHubRepo[]> {
-    return this.request<AccessibleGitHubRepo[]>('GET', '/github/repos/accessible');
+    return this.request<AccessibleGitHubRepo[]>('GET', '/auth/github-accounts/accessible-repos');
   }
 
   // Post-creation GitHub connection for a currently-unconnected (blank-origin) project.

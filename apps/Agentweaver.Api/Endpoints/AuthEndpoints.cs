@@ -391,6 +391,8 @@ app.MapGet("/api/auth/github-accounts/accessible-repos", async (
         DefaultBranch = repo.DefaultBranch,
         HtmlUrl = repo.HtmlUrl,
         AccessibleViaLogin = repo.AccessibleViaLogin,
+        AccessibleViaAvatarUrl = repo.AccessibleViaAvatarUrl,
+        AccessibleViaIsDefault = repo.AccessibleViaIsDefault,
         Permission = repo.Permission,
     }));
 });
