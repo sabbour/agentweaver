@@ -73,7 +73,7 @@ export const DEFAULTS = Object.freeze({
 const SHORT_SHA_RE = /^[0-9a-f]{7,40}$/;
 const SEMVER_TAG_RE = /^v\d+\.\d+\.\d+/;
 const QUALIFIED_IMAGE_REFERENCE_RE =
-  /^(?<registry>(?:localhost|[A-Za-z0-9][A-Za-z0-9.-]*(?::\d+)?))\/(?<repository>[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)(?::(?<tag>[\w][\w.-]{0,127})|@(?<digest>sha256:[A-Fa-f0-9]{64}))$/;
+  /^(?<registry>(?:localhost(?::\d+)?|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:(?::\d+)|(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+(?:\:\d+)?)))\/(?<repository>[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)(?::(?<tag>[\w][\w.-]{0,127})|@(?<digest>sha256:[A-Fa-f0-9]{64}))$/;
 
 export class InvalidImageTagError extends Error {}
 export class InvalidImageReferenceError extends Error {}

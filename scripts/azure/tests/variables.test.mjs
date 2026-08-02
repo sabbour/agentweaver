@@ -40,11 +40,15 @@ test("validateImageTag: rejects anything else", () => {
 
 test("validateQualifiedImageReference: accepts tag and digest forms with an explicit registry", () => {
   assert.doesNotThrow(() => validateQualifiedImageReference("ghcr.io/someuser/agentweaver-api:v1.2.3", "IMAGE_API"));
+  assert.doesNotThrow(() => validateQualifiedImageReference("localhost:5000/someuser/agentweaver-api:v1", "IMAGE_API"));
+  assert.doesNotThrow(() => validateQualifiedImageReference("myregistry.local/someuser/agentweaver-api:v1", "IMAGE_API"));
   assert.doesNotThrow(() => validateQualifiedImageReference("docker.io/someuser/agentweaver-mcp@sha256:" + "a".repeat(64), "IMAGE_MCP"));
 });
 
 test("validateQualifiedImageReference: rejects shorthand or malformed refs", () => {
   assert.throws(() => validateQualifiedImageReference("agentweaver-api:v1.2.3", "IMAGE_API"), InvalidImageReferenceError);
+  assert.throws(() => validateQualifiedImageReference("myorg/myimage:v1.2.3", "IMAGE_API"), InvalidImageReferenceError);
+  assert.throws(() => validateQualifiedImageReference("someuser/agentweaver-api:v1", "IMAGE_API"), InvalidImageReferenceError);
   assert.throws(() => validateQualifiedImageReference("ghcr.io/someuser/agentweaver-api", "IMAGE_API"), InvalidImageReferenceError);
   assert.throws(() => validateQualifiedImageReference("ghcr.io/someuser/agentweaver-api@sha256:1234", "IMAGE_API"), InvalidImageReferenceError);
 });
