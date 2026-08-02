@@ -195,6 +195,14 @@ export function renderCaptureScript(plan) {
       lines.push(`    await click(${locatorExpression(step.selector)}, ${step.scale ?? 1.45}, ${step.after ?? 620}, ${step.force ? 'true' : 'false'});`);
     } else if (step.type === 'hover') {
       lines.push(`    await focus(${locatorExpression(step.selector)}, ${step.scale ?? 1.45}, 18, ${step.hold ?? 900});`);
+    } else if (step.type === 'drag') {
+      const source = locatorExpression(step.selector);
+      const target = locatorExpression(step.target);
+      lines.push(`    await focus(${source}, ${step.scale ?? 1.35});`);
+      lines.push(`    await ${target}.scrollIntoViewIfNeeded();`);
+      lines.push(`    await ${source}.dragTo(${target});`);
+      lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('drag'));`);
+      if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'type') {
       lines.push(`    await typeInto(${locatorExpression(step.selector)}, ${JSON.stringify(step.text)}, ${step.scale ?? 1.6}, ${step.delay ?? 12}, ${step.after ?? 700});`);
     } else if (step.type === 'press') {
