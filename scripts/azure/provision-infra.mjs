@@ -90,7 +90,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * --image-tag <tag>, --image-source <acr-build|ghcr>, --ghcr-ref <ref>,
  * --ghcr-token <token> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
- * --acr-name, --location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-ha-mode, --namespace,
+ * --acr-name, --location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-location, --postgres-ha-mode, --postgres-access-mode, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
  */
 export function parseArgs(argv = []) {
@@ -165,9 +165,17 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--postgres-server-name");
       flags.PG_SERVER_NAME = value;
       i += consumed;
+    } else if (arg === "--postgres-location" || arg.startsWith("--postgres-location=")) {
+      const { value, consumed } = takeValue(i, "--postgres-location");
+      flags.PG_LOCATION = value;
+      i += consumed;
     } else if (arg === "--postgres-ha-mode" || arg.startsWith("--postgres-ha-mode=")) {
       const { value, consumed } = takeValue(i, "--postgres-ha-mode");
       flags.PG_HA_MODE = value;
+      i += consumed;
+    } else if (arg === "--postgres-access-mode" || arg.startsWith("--postgres-access-mode=")) {
+      const { value, consumed } = takeValue(i, "--postgres-access-mode");
+      flags.PG_ACCESS_MODE = value;
       i += consumed;
     } else if (arg === "--namespace" || arg.startsWith("--namespace=")) {
       const { value, consumed } = takeValue(i, "--namespace");
@@ -219,7 +227,9 @@ Flags:
   --node-vm-size <sku>
   --keyvault-name <name>
   --postgres-server-name <name>
+  --postgres-location <region>
   --postgres-ha-mode <mode>
+  --postgres-access-mode <private|public>
   --namespace <name>
   --github-client-id <id>
   --github-client-secret <secret>   NEVER echoed/logged; prefer env/params-file/prompt instead.
@@ -236,6 +246,7 @@ Non-interactive (no TTY) never prompts -- missing required fields fail with a cl
 
 const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
 const POSTGRES_HA_MODE_VALUES = Object.freeze(["ZoneRedundant", "Disabled"]);
+const POSTGRES_ACCESS_MODE_VALUES = Object.freeze(["private", "public"]);
 const POSTGRES_SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 const NODE_VM_SIZE_RE = /^Standard_[A-Za-z0-9][A-Za-z0-9_]*$/;
 
@@ -332,12 +343,38 @@ function validatePostgresHaMode(value) {
   return true;
 }
 
+function validatePostgresAccessMode(value) {
+  const mode = String(value ?? "");
+  if (!POSTGRES_ACCESS_MODE_VALUES.includes(mode)) {
+    return `PG_ACCESS_MODE must be one of: ${POSTGRES_ACCESS_MODE_VALUES.join(", ")}.`;
+  }
+  return true;
+}
+
 function validateNodeVmSize(value) {
   const sku = String(value ?? "").trim();
   if (!NODE_VM_SIZE_RE.test(sku)) {
     return "NODE_VM_SIZE must be a non-empty Azure VM SKU like Standard_D4s_v6.";
   }
   return true;
+}
+
+function normalizePostgresConfig(config) {
+  return {
+    ...config,
+    PG_LOCATION: String(config.PG_LOCATION ?? "").trim() || config.LOCATION,
+    PG_ACCESS_MODE: String(config.PG_ACCESS_MODE ?? "").trim() || DEFAULTS.PG_ACCESS_MODE,
+  };
+}
+
+function validatePostgresAccessConfiguration(config) {
+  if (config.PG_LOCATION !== config.LOCATION && config.PG_ACCESS_MODE === "private") {
+    throw new Error(
+      `PG_LOCATION='${config.PG_LOCATION}' differs from LOCATION='${config.LOCATION}', but PG_ACCESS_MODE is '${config.PG_ACCESS_MODE}'. ` +
+        "Azure Database for PostgreSQL Flexible Server private VNet integration is single-region only. " +
+        "For cross-region Postgres, set --postgres-access-mode public (or PG_ACCESS_MODE=public).",
+    );
+  }
 }
 
 /** Builds the lib/config.mjs field schema for the AKS deploy config. */
@@ -362,10 +399,18 @@ function buildSchema({ prompt, az }) {
         return result === true ? undefined : result;
       },
     },
+    PG_LOCATION: {},
     PG_HA_MODE: {
       default: DEFAULTS.PG_HA_MODE,
       validate: (value) => {
         const result = validatePostgresHaMode(value);
+        return result === true ? undefined : result;
+      },
+    },
+    PG_ACCESS_MODE: {
+      default: DEFAULTS.PG_ACCESS_MODE,
+      validate: (value) => {
+        const result = validatePostgresAccessMode(value);
         return result === true ? undefined : result;
       },
     },
@@ -494,9 +539,16 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
     default: DEFAULTS.PG_SERVER_NAME,
     validate: validatePostgresServerName,
   });
+  collected.PG_LOCATION = await prompt.text("Postgres location", {
+    default: collected.LOCATION,
+  });
   collected.PG_HA_MODE = await prompt.text("Postgres HA mode", {
     default: DEFAULTS.PG_HA_MODE,
     validate: validatePostgresHaMode,
+  });
+  collected.PG_ACCESS_MODE = await prompt.text("Postgres access mode", {
+    default: DEFAULTS.PG_ACCESS_MODE,
+    validate: validatePostgresAccessMode,
   });
 
   // --- GitHub OAuth credentials ---------------------------------------------
@@ -599,7 +651,9 @@ export async function run(opts = {}) {
   const ghcrOwner = githubRepo?.owner ?? "";
   const ghcrRepository = githubRepo?.repo ?? "";
   const schema = buildSchema({ prompt, az });
-  const config = await resolveConfig(schema, { flags, env, paramsFile });
+  let config = await resolveConfig(schema, { flags, env, paramsFile });
+  config = normalizePostgresConfig(config);
+  validatePostgresAccessConfiguration(config);
   if (config.IMAGE_SOURCE === "ghcr" && (!ghcrOwner || !ghcrRepository)) {
     throw new Error("IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner/repository can be derived automatically.");
   }
@@ -613,7 +667,9 @@ export async function run(opts = {}) {
   log.field("Node VM size", config.NODE_VM_SIZE);
   log.field("Key Vault", config.KEYVAULT_NAME);
   log.field("Postgres server", config.PG_SERVER_NAME);
+  log.field("Postgres location", config.PG_LOCATION);
   log.field("Postgres HA mode", config.PG_HA_MODE);
+  log.field("Postgres access mode", config.PG_ACCESS_MODE);
   log.field("Namespace", config.NAMESPACE);
   log.field("Image source", config.IMAGE_SOURCE);
   if (config.IMAGE_SOURCE === "ghcr") {
@@ -631,7 +687,9 @@ export async function run(opts = {}) {
     NODE_VM_SIZE: config.NODE_VM_SIZE,
     KEYVAULT_NAME: config.KEYVAULT_NAME,
     PG_SERVER_NAME: config.PG_SERVER_NAME,
+    PG_LOCATION: config.PG_LOCATION,
     PG_HA_MODE: config.PG_HA_MODE,
+    PG_ACCESS_MODE: config.PG_ACCESS_MODE,
     NAMESPACE: config.NAMESPACE,
     GITHUB_ALLOWED_ORG: config.GITHUB_ALLOWED_ORG,
   };
@@ -729,7 +787,9 @@ export async function run(opts = {}) {
   log.field("Namespace", cfg.NAMESPACE);
   log.field("Node VM size", cfg.NODE_VM_SIZE);
   log.field("Postgres server", cfg.PG_SERVER_NAME);
+  log.field("Postgres location", cfg.PG_LOCATION);
   log.field("Postgres HA mode", cfg.PG_HA_MODE);
+  log.field("Postgres access mode", cfg.PG_ACCESS_MODE);
   log.field("Image tag", cfg.IMAGE_TAG);
   log.field("AgentHost image tag", cfg.AGENTHOST_IMAGE_TAG);
   log.field("Image source", cfg.IMAGE_SOURCE);
