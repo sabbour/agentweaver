@@ -100,6 +100,29 @@ test("buildRuntimeConfigLiterals() passes GITHUB_ALLOWED_ORG through, defaulting
   );
 });
 
+test("buildRuntimeConfigLiterals() derives ENTRA_REDIRECT_URI from HOST and defaults AUTH_MODE to GitHubLegacy", () => {
+  const literals = buildRuntimeConfigLiterals(VARS);
+  assert.equal(literals.AUTH_MODE, "GitHubLegacy");
+  assert.equal(literals.ENTRA_CLIENT_ID, "");
+  assert.equal(literals.ENTRA_TENANT_ID, "");
+  assert.equal(
+    literals.ENTRA_REDIRECT_URI,
+    "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/entra/callback",
+  );
+});
+
+test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID through when set", () => {
+  const literals = buildRuntimeConfigLiterals({
+    ...VARS,
+    AUTH_MODE: "Entra",
+    ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
+    ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
+  });
+  assert.equal(literals.AUTH_MODE, "Entra");
+  assert.equal(literals.ENTRA_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
+  assert.equal(literals.ENTRA_TENANT_ID, "66666666-7777-8888-9999-000000000000");
+});
+
 test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
   const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
   const original = fs.readFileSync(overlayPath, "utf8");
@@ -112,6 +135,13 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.match(rewritten, /- "IDENTITY_CLIENT_ID=11111111-2222-3333-4444-555555555555"/);
   assert.match(rewritten, /- "AGENTHOST_IDENTITY_CLIENT_ID=99999999-8888-7777-6666-555555555555"/);
   assert.match(rewritten, /- "TENANT_ID=66666666-7777-8888-9999-000000000000"/);
+  assert.match(rewritten, /- "AUTH_MODE=GitHubLegacy"/);
+  assert.match(rewritten, /- "ENTRA_CLIENT_ID="/);
+  assert.match(rewritten, /- "ENTRA_TENANT_ID="/);
+  assert.match(
+    rewritten,
+    /- "ENTRA_REDIRECT_URI=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io\/auth\/entra\/callback"/,
+  );
   // Untouched structural content (resources:/replacements: blocks) should survive verbatim.
   assert.match(rewritten, /resources:\s*\n\s*- \.\.\/\.\.\/base/);
   assert.match(rewritten, /replacements:/);
@@ -136,6 +166,13 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /tenantId: 66666666-7777-8888-9999-000000000000/);
   assert.match(builtYaml, /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/);
   assert.match(builtYaml, /azure\.workload\.identity\/tenant-id: 66666666-7777-8888-9999-000000000000/);
+  // Auth__Mode/Auth__Entra__* env vars reference the ConfigMap keys correctly (configMapKeyRef).
+  // kubectl kustomize serializes valueFrom.configMapKeyRef fields alphabetically (key: before name:).
+  assert.match(builtYaml, /name: Auth__Mode\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: AUTH_MODE\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__Entra__ClientId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_CLIENT_ID\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__Entra__TenantId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_TENANT_ID\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__Entra__RedirectUri\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_REDIRECT_URI\s*\n\s*name: agentweaver-runtime-config/);
+  assert.doesNotMatch(builtYaml, /name: Auth__Entra__ClientSecret/);
   assert.doesNotMatch(builtYaml, /changeme/);
   assert.doesNotMatch(builtYaml, /example\.com/);
 

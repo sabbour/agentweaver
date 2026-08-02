@@ -19,6 +19,16 @@ function extractBlockers(body) {
   return Array.from(body.matchAll(/BLOCKED\(([^)]+)\)/g), (match) => match[1]);
 }
 
+function extractStartUrl(body) {
+  const match = body.match(/(?:^|\n)Start URL:\s*(\S+)\s*(?:\n|$)/i);
+  return match ? match[1].trim() : null;
+}
+
+function extractFreshNavigation(body) {
+  const match = body.match(/(?:^|\n)Fresh navigation:\s*(true|false)\s*(?:\n|$)/i);
+  return match ? match[1].toLowerCase() === 'true' : false;
+}
+
 export function parseBeatPlan(markdown) {
   // Normalize CRLF/CR to LF first: the beat file is stored with CRLF line endings in
   // this repo, but the narration/paragraph regexes below key off "\n\n" — without this
@@ -35,6 +45,8 @@ export function parseBeatPlan(markdown) {
       act: parseActLabel(match[1]),
       narrationSource: extractNarration(body),
       blockers: extractBlockers(body),
+      startUrl: extractStartUrl(body),
+      freshNavigation: extractFreshNavigation(body),
       markdown: body,
     };
   });

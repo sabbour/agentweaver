@@ -7,6 +7,7 @@ namespace Agentweaver.Api.Auth;
 ///
 /// Under the team-membership authz model this key accepts a mixed delimited list where each
 /// entry is one of:
+///   • <c>*</c>              — global wildcard (any authenticated GitHub identity).
 ///   • <c>org</c>            — bare org (satisfied by any-form org membership).
 ///   • <c>org/*</c>          — explicit wildcard, canonicalized to bare org (identical semantics).
 ///   • <c>org/team-slug</c>  — team-scoped rule (satisfied only by that team's membership).

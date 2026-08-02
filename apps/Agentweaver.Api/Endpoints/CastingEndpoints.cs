@@ -46,7 +46,7 @@ app.MapGet("/api/projects/{id}/casting/universes", async (
     CastingService castingService,
     CancellationToken ct) =>
 {
-    var (failure, _) = await ProjectAuthorization.ResolveOwnedProjectAsync(httpContext, id, projectStore, configuration, ct);
+    var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(httpContext, id, projectStore, configuration, ProjectRole.Viewer, ct);
     if (failure is not null) return failure;
     try
     {
@@ -96,7 +96,7 @@ app.MapGet("/api/projects/{id}/casting/proposals", async (
     ICastProposalStore proposalStore,
     CancellationToken ct) =>
 {
-    var (failure, _) = await ProjectAuthorization.ResolveOwnedProjectAsync(httpContext, id, projectStore, configuration, ct);
+    var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(httpContext, id, projectStore, configuration, ProjectRole.Viewer, ct);
     if (failure is not null) return failure;
     var proposals = proposalStore.ListByProject(id);
     return Results.Ok(proposals.Select(p => CastingMappings.ToDto(p.Proposal)));
@@ -112,7 +112,7 @@ app.MapGet("/api/projects/{id}/casting/proposals/{proposalId}", async (
     ICastProposalStore proposalStore,
     CancellationToken ct) =>
 {
-    var (failure, _) = await ProjectAuthorization.ResolveOwnedProjectAsync(httpContext, id, projectStore, configuration, ct);
+    var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(httpContext, id, projectStore, configuration, ProjectRole.Viewer, ct);
     if (failure is not null) return failure;
     var (proposal, _) = proposalStore.Get(id, proposalId);
     if (proposal is null) return Results.NotFound();
@@ -131,7 +131,7 @@ app.MapMethods("/api/projects/{id}/casting/proposals/{proposalId}", ["PATCH"], a
     CatalogReader catalog,
     CancellationToken ct) =>
 {
-    var (failure, _) = await ProjectAuthorization.ResolveOwnedProjectAsync(httpContext, id, projectStore, configuration, ct);
+    var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(httpContext, id, projectStore, configuration, ProjectRole.Contributor, ct);
     if (failure is not null) return failure;
     IReadOnlyList<Agentweaver.Squad.Model.ProposedMember>? members = null;
     if (request.Members is not null)
@@ -201,7 +201,7 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", async (
     CastingService castingService,
     CancellationToken ct) =>
 {
-    var (failure, _) = await ProjectAuthorization.ResolveOwnedProjectAsync(httpContext, id, projectStore, configuration, ct);
+    var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(httpContext, id, projectStore, configuration, ProjectRole.Contributor, ct);
     if (failure is not null) return failure;
     try
     {
@@ -258,7 +258,7 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", async (
         ILogger<Program> logger,
         CancellationToken ct)
     {
-        var (failure, _) = await ProjectAuthorization.ResolveOwnedProjectAsync(httpContext, id, projectStore, configuration, ct);
+        var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(httpContext, id, projectStore, configuration, ProjectRole.Contributor, ct);
         if (failure is not null) return failure;
 
         var mode = (request.Mode ?? string.Empty).ToLowerInvariant();
@@ -353,7 +353,7 @@ app.MapDelete("/api/projects/{id}/casting/proposals/{proposalId}", async (
         ILogger<Program> logger,
         CancellationToken ct)
     {
-        var (failure, _) = await ProjectAuthorization.ResolveOwnedProjectAsync(httpContext, id, projectStore, configuration, ct);
+        var (failure, _) = await ProjectAuthorization.ResolveProjectAsync(httpContext, id, projectStore, configuration, ProjectRole.Contributor, ct);
         if (failure is not null) return failure;
 
         try

@@ -188,7 +188,7 @@ export function isDryRun() {
   return dryRunEnabled;
 }
 
-class ExecError extends Error {
+export class ExecError extends Error {
   constructor(message, { command: cmdLine, exitCode, stderr } = {}) {
     super(message);
     this.name = "ExecError";
@@ -198,8 +198,25 @@ class ExecError extends Error {
   }
 }
 
+/** A local-process timeout; remote Azure operation state is intentionally unknown. */
+export class ExecTimeoutError extends ExecError {
+  constructor(message, details = {}) {
+    super(message, details);
+    this.name = "ExecTimeoutError";
+  }
+}
+
 function mergeEnv(extraEnv) {
   return { ...process.env, ...(extraEnv ?? {}) };
+}
+
+function normalizeTimeoutMs(timeoutMs) {
+  if (timeoutMs === undefined || timeoutMs === null || timeoutMs === "") return null;
+  const parsed = Number(timeoutMs);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new TypeError(`timeoutMs must be a positive finite number; received '${timeoutMs}'.`);
+  }
+  return Math.floor(parsed);
 }
 
 /**
@@ -210,7 +227,7 @@ function mergeEnv(extraEnv) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, azSafeEnv?: boolean }} [opts]
+ * @param {{ cwd?: string, env?: Record<string,string>, dryRun?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
  */
 export function run(cmd, args = [], opts = {}) {
   const dryRun = opts.dryRun ?? dryRunEnabled;
@@ -223,9 +240,23 @@ export function run(cmd, args = [], opts = {}) {
 
   const plan = buildSpawnPlan(cmd, args);
   const env = mergeEnv({ ...(opts.azSafeEnv === false ? {} : AZ_SAFE_ENV), ...(opts.env ?? {}) });
+  let timeoutMs;
+  try {
+    timeoutMs = normalizeTimeoutMs(opts.timeoutMs);
+  } catch (err) {
+    return Promise.reject(err);
+  }
 
   return new Promise((resolve, reject) => {
     let child;
+    let timer;
+    let settled = false;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
     try {
       child = spawn(plan.file, plan.spawnArgs, {
         ...plan.spawnOpts,
@@ -234,24 +265,41 @@ export function run(cmd, args = [], opts = {}) {
         stdio: "inherit",
       });
     } catch (err) {
-      reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine }));
+      finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
     child.on("error", (err) => {
-      reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine }));
+      finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
     });
     child.on("close", (code, signal) => {
       if (code === 0) {
-        resolve({ code: 0 });
+        finish(() => resolve({ code: 0 }));
         return;
       }
-      reject(
+      finish(() => reject(
         new ExecError(
           `Command failed (exit ${code}${signal ? `, signal ${signal}` : ""}): ${redact(displayLine)}`,
           { command: displayLine, exitCode: code },
         ),
-      );
+      ));
     });
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        // Never retry here. Killing the local CLI cannot establish whether a
+        // remote Azure operation completed, so callers must reconcile state.
+        try {
+          child.kill();
+        } catch {
+          // The timeout result remains authoritative even if the child has
+          // already exited or cannot be signaled on this platform.
+        }
+        finish(() => reject(new ExecTimeoutError(
+          `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
+          { command: displayLine },
+        )));
+      }, timeoutMs);
+      if (typeof timer.unref === "function") timer.unref();
+    }
   });
 }
 
@@ -263,7 +311,7 @@ export function run(cmd, args = [], opts = {}) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean }} [opts]
+ * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
  * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown }>}
  */
 export function capture(cmd, args = [], opts = {}) {
@@ -276,9 +324,23 @@ export function capture(cmd, args = [], opts = {}) {
 
   const plan = buildSpawnPlan(cmd, args);
   const env = mergeEnv({ ...(opts.azSafeEnv === false ? {} : AZ_SAFE_ENV), ...(opts.env ?? {}) });
+  let timeoutMs;
+  try {
+    timeoutMs = normalizeTimeoutMs(opts.timeoutMs);
+  } catch (err) {
+    return Promise.reject(err);
+  }
 
   return new Promise((resolve, reject) => {
     let child;
+    let timer;
+    let settled = false;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
     try {
       child = spawn(plan.file, plan.spawnArgs, {
         ...plan.spawnOpts,
@@ -287,7 +349,7 @@ export function capture(cmd, args = [], opts = {}) {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
-      reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine }));
+      finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
       return;
     }
 
@@ -309,20 +371,20 @@ export function capture(cmd, args = [], opts = {}) {
         // checks (deploy.mjs's --local setup) would crash with a raw
         // ExecError instead of reporting a friendly "not found" message --
         // found live when `dotnet` wasn't on PATH in a fresh environment.
-        resolve({ stdout: "", stderr: redact(err.message), code: 127 });
+        finish(() => resolve({ stdout: "", stderr: redact(err.message), code: 127 }));
         return;
       }
-      reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine }));
+      finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
     });
     child.on("close", (code, signal) => {
       const trimmedStdout = opts.trim === false ? stdout : stdout.trim();
       if (code !== 0 && !opts.allowFailure) {
-        reject(
+        finish(() => reject(
           new ExecError(
             `Command failed (exit ${code}${signal ? `, signal ${signal}` : ""}): ${redact(displayLine)}\n${redact(stderr.trim())}`,
             { command: displayLine, exitCode: code, stderr: redact(stderr.trim()) },
           ),
-        );
+        ));
         return;
       }
       let parsed;
@@ -330,20 +392,32 @@ export function capture(cmd, args = [], opts = {}) {
         try {
           parsed = JSON.parse(trimmedStdout);
         } catch (err) {
-          reject(
+          finish(() => reject(
             new ExecError(
               `Failed to parse JSON output of: ${redact(displayLine)}\n${redact(err.message)}\nRaw output (first 500 chars): ${redact(trimmedStdout.slice(0, 500))}`,
               { command: displayLine, exitCode: code },
             ),
-          );
+          ));
           return;
         }
       } else if (opts.json) {
         parsed = null;
       }
-      resolve({ stdout: trimmedStdout, stderr: stderr.trim(), code, json: parsed });
+      finish(() => resolve({ stdout: trimmedStdout, stderr: stderr.trim(), code, json: parsed }));
     });
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          // See run(): never retry after an indeterminate remote operation.
+        }
+        finish(() => reject(new ExecTimeoutError(
+          `Command timed out after ${timeoutMs}ms; remote operation state is unknown and was not retried: ${redact(displayLine)}`,
+          { command: displayLine },
+        )));
+      }, timeoutMs);
+      if (typeof timer.unref === "function") timer.unref();
+    }
   });
 }
-
-export { ExecError };

@@ -25,6 +25,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<McpPendingAuthorization> McpPendingAuthorizations => Set<McpPendingAuthorization>();
     public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
     public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
+    public DbSet<EntraOAuthState> EntraOAuthStates => Set<EntraOAuthState>();
+    public DbSet<AuthModeEpochRecord> AuthModeEpochs => Set<AuthModeEpochRecord>();
+    public DbSet<GitHubAccountLinkStateRecord> GitHubAccountLinkStates => Set<GitHubAccountLinkStateRecord>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
     public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
     public DbSet<DismissedNotification> DismissedNotifications => Set<DismissedNotification>();
@@ -43,6 +46,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<RunRecord> Runs => Set<RunRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
+    public DbSet<ProjectGitHubIdentityOverrideRecord> ProjectGitHubIdentityOverrides => Set<ProjectGitHubIdentityOverrideRecord>();
+    public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
     public DbSet<BacklogTaskDependencyRecord> BacklogTaskDependencies => Set<BacklogTaskDependencyRecord>();
     public DbSet<WorkflowRunRecord> WorkflowRuns => Set<WorkflowRunRecord>();
@@ -121,8 +126,41 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<OAuthState>().HasKey(s => s.State);
         model.Entity<OAuthState>().HasIndex(s => s.ExpiresAt);
 
+        model.Entity<EntraOAuthState>().HasKey(s => s.State);
+        model.Entity<EntraOAuthState>().HasIndex(s => s.ExpiresAt);
+
+        model.Entity<AuthModeEpochRecord>(e =>
+        {
+            e.ToTable("auth_mode_epochs");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasColumnName("key");
+            e.Property(x => x.AuthMode).HasColumnName("auth_mode");
+            e.Property(x => x.Epoch).HasColumnName("epoch");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        model.Entity<GitHubAccountLinkStateRecord>(e =>
+        {
+            e.ToTable("github_account_link_states");
+            e.HasKey(s => s.State);
+            e.Property(s => s.State).HasColumnName("state");
+            e.Property(s => s.EntraUserId).HasColumnName("entra_user_id");
+            e.Property(s => s.ExpiresAt).HasColumnName("expires_at");
+            e.HasIndex(s => s.ExpiresAt);
+        });
+
         model.Entity<WebSessionExchangeCode>().HasKey(c => c.Code);
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
+
+        model.Entity<ProjectGitHubIdentityOverrideRecord>(e =>
+        {
+            e.ToTable("project_github_identity_overrides").HasKey(x => new { x.ProjectId, x.EntraUserId });
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.EntraUserId).HasColumnName("entra_user_id");
+            e.Property(x => x.GitHubLogin).HasColumnName("github_login");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.EntraUserId, x.GitHubLogin }).HasDatabaseName("IX_project_github_identity_overrides_user_login");
+        });
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
         model.Entity<DismissedNotification>(e =>
@@ -161,6 +199,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<RunRecord>();
             model.Ignore<RunRevisionRecord>();
             model.Ignore<ProjectRecord>();
+            model.Ignore<ProjectRoleAssignmentRecord>();
             model.Ignore<BacklogTaskRecord>();
             model.Ignore<BacklogTaskDependencyRecord>();
             model.Ignore<WorkflowRunRecord>();
@@ -268,6 +307,18 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.AllowedWorkflowIds).HasColumnName("allowed_workflow_ids");
             e.Property(p => p.WebhookSecret).HasColumnName("webhook_secret");
             e.HasIndex(p => p.State).HasDatabaseName("IX_projects_state");
+        });
+
+        model.Entity<ProjectRoleAssignmentRecord>(e =>
+        {
+            e.ToTable("project_role_assignments").HasKey(p => new { p.ProjectId, p.PrincipalId });
+            e.Property(p => p.ProjectId).HasColumnName("project_id");
+            e.Property(p => p.PrincipalId).HasColumnName("principal_id");
+            e.Property(p => p.Role).HasColumnName("role");
+            e.Property(p => p.GrantedBy).HasColumnName("granted_by");
+            e.Property(p => p.GrantedAt).HasColumnName("granted_at");
+            e.HasIndex(p => p.PrincipalId).HasDatabaseName("IX_project_role_assignments_principal_id");
+            e.HasIndex(p => new { p.ProjectId, p.Role }).HasDatabaseName("IX_project_role_assignments_project_role");
         });
 
         model.Entity<BlueprintPackageLibraryRecord>(e =>

@@ -63,6 +63,7 @@ public sealed class OAuthWebApplicationFactory : WebApplicationFactory<Program>
                 // Auth bypass (test-only)
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
+                ["Auth:Mode"]                            = "GitHubLegacy",
                 // Static API key for S4 backward-compat tests
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,

@@ -1,13 +1,14 @@
 namespace Agentweaver.Api.Security;
 
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Centralized project-ownership authorization for project-scoped endpoints (memory, decisions,
-/// sessions, decision inbox, and casting). Every one of those routes MUST resolve/authorize the
-/// project through this helper so that a "project exists" check (<c>projectStore.GetAsync</c> ≠ null)
-/// is never mistaken for a "caller owns this project" check.
+/// Centralized project authorization for project-scoped endpoints. In GitHubLegacy mode this
+/// preserves the legacy owner-or-internal-service check; in Entra mode it defers to the Tier-2
+/// project-role service so viewer/contributor/owner semantics stay consistent across endpoints.
 ///
 /// SECURITY (broken access control + stored XPIA): without an ownership check, any authenticated
 /// organization member who learns another project's UUID (project ids are not secret) could read or
@@ -59,11 +60,40 @@ public static class ProjectAuthorization
     /// the endpoint when the caller neither owns the project nor is the internal service identity.
     /// </summary>
     public static IResult? RequireOwnership(HttpContext httpContext, Project project, IConfiguration configuration)
+        => RequireOwnershipLegacy(httpContext, project, configuration);
+
+    public static async Task<IResult?> RequireAccessAsync(
+        HttpContext httpContext,
+        Project project,
+        IConfiguration configuration,
+        ProjectRole minimumRole,
+        CancellationToken ct)
     {
         var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
-        return CanAccess(caller, project.Owner, configuration)
-            ? null
-            : Results.StatusCode(StatusCodes.Status403Forbidden);
+        if (AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy)
+            return CanAccess(caller, project.Owner, configuration)
+                ? null
+                : Results.StatusCode(StatusCodes.Status403Forbidden);
+
+        if (IsInternalServiceCaller(caller, configuration))
+            return null;
+
+        var authorization = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
+        if (await authorization.HasRoleAsync(caller, project.Id, minimumRole, ct).ConfigureAwait(false))
+            return null;
+
+        var legacyBackfill = httpContext.RequestServices.GetRequiredService<ILegacyProjectRoleBackfillService>();
+        return await legacyBackfill.GetClaimStateAsync(caller, project, ct).ConfigureAwait(false) switch
+        {
+            LegacyProjectClaimState.UnclaimedNeedsAdmin => Results.Json(
+                new
+                {
+                    error = "project_unclaimed_in_entra_mode",
+                    message = "This legacy project has no Entra owner yet. A platform admin must claim it, or the legacy GitHub owner must sign in with Entra and link that GitHub account first.",
+                },
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.StatusCode(StatusCodes.Status403Forbidden),
+        };
     }
 
     /// <summary>
@@ -79,6 +109,15 @@ public static class ProjectAuthorization
         IProjectStore projectStore,
         IConfiguration configuration,
         CancellationToken ct)
+        => await ResolveProjectAsync(httpContext, rawProjectId, projectStore, configuration, ProjectRole.Owner, ct).ConfigureAwait(false);
+
+    public static async Task<(IResult? Failure, Project? Project)> ResolveProjectAsync(
+        HttpContext httpContext,
+        string rawProjectId,
+        IProjectStore projectStore,
+        IConfiguration configuration,
+        ProjectRole minimumRole,
+        CancellationToken ct)
     {
         if (!ProjectId.TryParse(rawProjectId, out var projectId))
             return (Results.BadRequest(new { error = "Invalid project id." }), null);
@@ -87,7 +126,15 @@ public static class ProjectAuthorization
         if (project is null)
             return (Results.NotFound(), null);
 
-        var forbid = RequireOwnership(httpContext, project, configuration);
+        var forbid = await RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
         return forbid is not null ? (forbid, null) : (null, project);
+    }
+
+    private static IResult? RequireOwnershipLegacy(HttpContext httpContext, Project project, IConfiguration configuration)
+    {
+        var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
+        return CanAccess(caller, project.Owner, configuration)
+            ? null
+            : Results.StatusCode(StatusCodes.Status403Forbidden);
     }
 }

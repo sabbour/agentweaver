@@ -177,6 +177,32 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: GITHUB_FRONTEND_URL
+            # Microsoft Entra ID browser sign-in (#653/#658). Only meaningful when Auth__Mode=Entra;
+            # ClientId/TenantId/RedirectUri are the deploy-time-resolved counterparts of the
+            # GITHUB_* wiring above. Auth__Entra__ClientSecret is deliberately OMITTED here -- #658
+            # made it optional so PKCE-only authorization-code redemption works when a tenant policy
+            # blocks client secrets; set it manually via the Key Vault CSI/SecretProviderClass only
+            # if/when a future tenant allows a confidential-client secret.
+            - name: Auth__Mode
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: AUTH_MODE
+            - name: Auth__Entra__ClientId
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: ENTRA_CLIENT_ID
+            - name: Auth__Entra__TenantId
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: ENTRA_TENANT_ID
+            - name: Auth__Entra__RedirectUri
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: ENTRA_REDIRECT_URI
             # OAuth 2.1 Authorization Server config (RFC 8414 / RFC 9728)
             # Issuer must match the public host so iss claim == AS metadata URL.
             - name: Auth__OAuth__Issuer

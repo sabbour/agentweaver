@@ -68,9 +68,6 @@ public sealed class GitHubOAuthRedirectService
     /// </summary>
     public async Task<string> BeginAuthorizationAsync(CancellationToken ct = default)
     {
-        var clientId = RequireClientId();
-        var callbackUrl = RequireCallbackUrl();
-
         var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .Replace('+', '-').Replace('/', '_').TrimEnd('=');
 
@@ -85,6 +82,13 @@ public sealed class GitHubOAuthRedirectService
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
 
+        return CreateAuthorizationUrl(state);
+    }
+
+    public string CreateAuthorizationUrl(string state)
+    {
+        var clientId = RequireClientId();
+        var callbackUrl = RequireCallbackUrl();
         return $"{_baseUrl}/login/oauth/authorize" +
                $"?client_id={Uri.EscapeDataString(clientId)}" +
                $"&redirect_uri={Uri.EscapeDataString(callbackUrl)}" +
@@ -136,6 +140,15 @@ public sealed class GitHubOAuthRedirectService
             }
         }
 
+        var token = await ExchangeCodeForTokenAsync(code, ct).ConfigureAwait(false);
+        await _tokenStore.SetAsync(GitHubTokenScope.ForUser(token.Login), token, ct).ConfigureAwait(false);
+
+        _logger.LogInformation("GitHub OAuth redirect flow completed for login {Login}", token.Login);
+        return (token.Login, token.AccessToken);
+    }
+
+    public async Task<GitHubToken> ExchangeCodeForTokenAsync(string code, CancellationToken ct = default)
+    {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/login/oauth/access_token")
         {
             Content = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -160,22 +173,16 @@ public sealed class GitHubOAuthRedirectService
             throw new InvalidOperationException($"GitHub OAuth error: {body.Error}");
 
         var (login, avatarUrl) = await FetchUserAsync(body.AccessToken!, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(login) || login == "unknown")
+            throw new InvalidOperationException("Could not resolve GitHub login from OAuth callback.");
 
-        var token = new GitHubToken(
+        return new GitHubToken(
             body.AccessToken!,
             body.RefreshToken,
             body.ExpiresIn is > 0 ? DateTimeOffset.UtcNow.AddSeconds(body.ExpiresIn.Value) : null,
             login,
             avatarUrl,
             (_scopes ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries));
-
-        if (string.IsNullOrWhiteSpace(login) || login == "unknown")
-            throw new InvalidOperationException("Could not resolve GitHub login from OAuth callback.");
-
-        await _tokenStore.SetAsync(GitHubTokenScope.ForUser(login), token, ct).ConfigureAwait(false);
-
-        _logger.LogInformation("GitHub OAuth redirect flow completed for login {Login}", login);
-        return (login, body.AccessToken!);
     }
 
     private async Task<(string Login, string? AvatarUrl)> FetchUserAsync(string accessToken, CancellationToken ct)

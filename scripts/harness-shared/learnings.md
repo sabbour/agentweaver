@@ -910,3 +910,14 @@ Source explains why this happens:
 Result: on worker pods, preview detection is permanently disabled, so the reaper can never see the live preview that should protect the claim. On the next sweep after the child is no longer in the active-run map, the worker deletes the claim as orphaned and the preview dies ~60-90s after `start_preview`.
 
 This explains why the earlier #578 TTL-renewal attempt was live-refuted even with `ttlSecondsAfterFinished=29400`: the worker reaper's delete path ignores TTL entirely because it is an explicit delete.
+
+---
+
+## Operator staging deploys must override Azure env vars explicitly
+
+- date: 2026-07-30
+- category: environment-fact
+- surface: all
+- status: open
+
+scripts/azure/variables.mjs still defaults RESOURCE_GROUP=agentweaver-rg, ACR_NAME=agentweaverregistry, and CLUSTER_NAME=agentweaver-aks, but this operator's real staging environment in subscription 'AKS INT/Staging Test' is RESOURCE_GROUP=asabbour2, ACR_NAME=agwv2acr, CLUSTER_NAME=agwv2, KEYVAULT_NAME=agwv2kv. For this staging environment, every azure:deploy-from-commit / azure:deploy-from-local invocation must set all four env vars explicitly or the deploy will target the wrong or nonexistent resources. This was confirmed only after two failed defaulted deploy attempts, then by checking az account list, az group list, and az resource list --resource-group asabbour2.

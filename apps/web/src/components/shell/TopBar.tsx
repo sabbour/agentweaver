@@ -91,7 +91,7 @@ export function TopBar({
       <div className={styles.end}>
         {!pageHasStartTaskAction && <StartOrchestrationFab currentProjectId={projectId} />}
         <StatusDot />
-        <GitHubSignIn />
+        <GitHubSignIn projectId={projectId} />
       </div>
     </header>
   );

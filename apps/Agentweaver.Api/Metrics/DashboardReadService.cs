@@ -1,4 +1,5 @@
 using System.Globalization;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Diagnostics;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -20,23 +21,28 @@ public sealed class DashboardReadService
 
     private readonly SqliteDb _db;
     private readonly IProjectStore _projectStore;
+    private readonly IProjectRoleAuthorizationService _projectRoles;
     private readonly HeartbeatStatusStore _heartbeatStore;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly AuthMode _authMode;
     private readonly bool _isPostgres;
 
     public DashboardReadService(
         SqliteDb db,
         IProjectStore projectStore,
+        IProjectRoleAuthorizationService projectRoles,
         HeartbeatStatusStore heartbeatStore,
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration)
     {
         _db = db;
         _projectStore = projectStore;
+        _projectRoles = projectRoles;
         _heartbeatStore = heartbeatStore;
         _scopeFactory = scopeFactory;
         var provider = configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
         _isPostgres = provider is "postgres" or "postgresql";
+        _authMode = AuthModeResolver.Resolve(configuration);
     }
 
     private readonly record struct RunRow(
@@ -103,9 +109,7 @@ public sealed class DashboardReadService
         var now = DateTimeOffset.UtcNow;
         var todayUtc = now.UtcDateTime.Date;
 
-        var projects = (await _projectStore.ListAsync(ct).ConfigureAwait(false))
-            .Where(project => caller.Owns(project.Owner))
-            .ToList();
+        var projects = await ListVisibleProjectsAsync(caller, ct).ConfigureAwait(false);
         var names = projects.ToDictionary(p => p.Id.ToString(), p => p.Name, StringComparer.Ordinal);
         var visibleProjectIds = names.Keys.ToHashSet(StringComparer.Ordinal);
 
@@ -125,6 +129,19 @@ public sealed class DashboardReadService
             ActiveProjects = ReadActiveProjects(runs, readyProjectIds, names),
             RecentActivity = ReadRecentActivity(runs, names),
         };
+    }
+
+    private async Task<IReadOnlyList<Project>> ListVisibleProjectsAsync(CallerContext caller, CancellationToken ct)
+    {
+        var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
+        if (_authMode == AuthMode.GitHubLegacy)
+            return projects.Where(project => caller.Owns(project.Owner)).ToList();
+
+        if (_projectRoles.IsPlatformAdmin(caller))
+            return projects;
+
+        var visibleRoles = await _projectRoles.ListExplicitRolesAsync(caller, ct).ConfigureAwait(false);
+        return projects.Where(project => visibleRoles.ContainsKey(project.Id)).ToList();
     }
 
     public async Task<RunAgentTokenBreakdownDto> GetRunAgentTokenBreakdownFallbackAsync(

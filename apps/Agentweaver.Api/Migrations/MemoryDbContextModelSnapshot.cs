@@ -17,6 +17,25 @@ namespace Agentweaver.Api.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
 
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.EntraOAuthState", b =>
+                {
+                    b.Property<string>("State")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CodeVerifier")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("State");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("EntraOAuthStates");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.McpAuthorizationCode", b =>
                 {
                     b.Property<int>("Id")
@@ -387,6 +406,30 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("AgentMemory");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.AuthModeEpochRecord", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("key");
+
+                    b.Property<string>("AuthMode")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("auth_mode");
+
+                    b.Property<long>("Epoch")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("epoch");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("auth_mode_epochs", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.Decision", b =>
                 {
                     b.Property<int>("Id")
@@ -523,6 +566,28 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("dismissed_notifications", (string)null);
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.GitHubAccountLinkStateRecord", b =>
+                {
+                    b.Property<string>("State")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<string>("EntraUserId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("entra_user_id");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expires_at");
+
+                    b.HasKey("State");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("github_account_link_states", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.IntegrationBuildLockRecord", b =>
                 {
                     b.Property<string>("ProjectId")
@@ -598,6 +663,33 @@ namespace Agentweaver.Api.Migrations
                     b.HasIndex("ProjectId", "CoordinatorRunId");
 
                     b.ToTable("OutcomeSpecs");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.ProjectGitHubIdentityOverrideRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("EntraUserId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("entra_user_id");
+
+                    b.Property<string>("GitHubLogin")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("github_login");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("ProjectId", "EntraUserId");
+
+                    b.HasIndex("EntraUserId", "GitHubLogin")
+                        .HasDatabaseName("IX_project_github_identity_overrides_user_login");
+
+                    b.ToTable("project_github_identity_overrides", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.SessionContext", b =>

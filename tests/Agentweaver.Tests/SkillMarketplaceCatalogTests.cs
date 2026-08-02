@@ -1,11 +1,13 @@
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
@@ -386,7 +388,9 @@ public sealed class SkillMarketplaceCatalogTests
         NullLogger<SkillCatalogService>.Instance,
         accessTokenProvider: null,
         treeClient: treeClient,
-        catalogIndexer: new MarketplaceCatalogIndexer(new MarketplaceCatalogCache()));
+        catalogIndexer: new MarketplaceCatalogIndexer(new MarketplaceCatalogCache()),
+        projectRoles: new AllowAllProjectRoles(),
+        configuration: new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
 
     private sealed class FakeClassifier(IReadOnlyList<MarketplaceCatalogEntry> result) : IMarketplaceCatalogClassifier
     {
@@ -453,6 +457,14 @@ public sealed class SkillMarketplaceCatalogTests
     private sealed class InstallationScopeProvider : IGitHubTokenScopeProvider
     {
         public GitHubTokenScope Resolve(string? userId) => GitHubTokenScope.Installation;
+    }
+
+    private sealed class AllowAllProjectRoles : IProjectRoleAuthorizationService
+    {
+        public bool IsPlatformAdmin(CallerContext caller) => false;
+        public Task<ProjectRole?> GetEffectiveRoleAsync(CallerContext caller, ProjectId projectId, CancellationToken ct = default) => Task.FromResult<ProjectRole?>(ProjectRole.Owner);
+        public Task<bool> HasRoleAsync(CallerContext caller, ProjectId projectId, ProjectRole minimumRole, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<IReadOnlyDictionary<ProjectId, ProjectRole>> ListExplicitRolesAsync(CallerContext caller, CancellationToken ct = default) => Task.FromResult<IReadOnlyDictionary<ProjectId, ProjectRole>>(new Dictionary<ProjectId, ProjectRole>());
     }
 
     private sealed class SignedOutTokenStore : IGitHubTokenStore

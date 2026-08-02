@@ -121,6 +121,10 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.AGENTHOST_IMAGE_TAG, "deadbee", "AGENTHOST_IMAGE_TAG defaults to IMAGE_TAG");
   assert.equal(vars.GITHUB_ALLOWED_ORG, DEFAULTS.GITHUB_ALLOWED_ORG, "defaults to microsoft");
   assert.equal(vars.GITHUB_ALLOWED_ORG, "microsoft");
+  assert.equal(vars.AUTH_MODE, DEFAULTS.AUTH_MODE, "defaults to GitHubLegacy -- must preserve today's GitHub sign-in behavior");
+  assert.equal(vars.AUTH_MODE, "GitHubLegacy");
+  assert.equal(vars.ENTRA_CLIENT_ID, "", "no generic default -- empty means Entra mode is not configured");
+  assert.equal(vars.ENTRA_TENANT_ID, "");
 });
 
 test("resolveVariables: GITHUB_ALLOWED_ORG env override beats the microsoft default", async () => {
@@ -131,6 +135,38 @@ test("resolveVariables: GITHUB_ALLOWED_ORG env override beats the microsoft defa
     gitShortSha: async () => "deadbee",
   });
   assert.equal(vars.GITHUB_ALLOWED_ORG, "microsoft,contoso");
+});
+
+test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID env overrides beat the defaults", async () => {
+  const vars = await resolveVariables({
+    env: {
+      KEYVAULT_NAME: TEST_KEYVAULT_NAME,
+      AUTH_MODE: "Entra",
+      ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
+      ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
+    },
+    repoRoot: FAKE_REPO_ROOT,
+    resolveLive: false,
+    gitShortSha: async () => "deadbee",
+  });
+  assert.equal(vars.AUTH_MODE, "Entra");
+  assert.equal(vars.ENTRA_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
+  assert.equal(vars.ENTRA_TENANT_ID, "66666666-7777-8888-9999-000000000000");
+});
+
+test("resolveVariables: forwards opt-in ACR CLI timeout settings", async () => {
+  const vars = await resolveVariables({
+    env: {
+      KEYVAULT_NAME: TEST_KEYVAULT_NAME,
+      ACR_BUILD_TIMEOUT_MS: "1800000",
+      ACR_IMPORT_TIMEOUT_MS: "600000",
+    },
+    repoRoot: FAKE_REPO_ROOT,
+    resolveLive: false,
+    gitShortSha: async () => "deadbee",
+  });
+  assert.equal(vars.ACR_BUILD_TIMEOUT_MS, "1800000");
+  assert.equal(vars.ACR_IMPORT_TIMEOUT_MS, "600000");
 });
 
 test("resolveVariables: env overrides beat defaults for every field", async () => {

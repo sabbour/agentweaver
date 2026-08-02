@@ -167,6 +167,16 @@ export function buildRuntimeConfigLiterals(vars) {
     GITHUB_CALLBACK_URL: host ? `https://${host}/auth/github/callback` : "",
     GITHUB_FRONTEND_URL: host ? `https://${host}/` : "",
     GITHUB_ALLOWED_ORG: str(vars.GITHUB_ALLOWED_ORG) || "microsoft",
+    // Auth:Mode / Auth:Entra:* deploy-time wiring (#653/#658 added the app-side Entra sign-in
+    // endpoints; this is what actually flips them on for a deployed environment). AUTH_MODE
+    // defaults to "GitHubLegacy" -- the literal AuthModeResolver.Parse() requires to preserve
+    // today's GitHub sign-in behavior (see variables.mjs's DEFAULTS.AUTH_MODE comment). ClientId/
+    // TenantId have no generic default: empty means Entra mode is not (yet) configured.
+    // ClientSecret is deliberately NOT wired here -- PKCE-only per #658; see api-deployment.yaml.
+    AUTH_MODE: str(vars.AUTH_MODE) || "GitHubLegacy",
+    ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
+    ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
+    ENTRA_REDIRECT_URI: host ? `https://${host}/auth/entra/callback` : "",
     TOKEN_STORE_KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
     AGENTHOST_KEYVAULT_URI: str(vars.AGENTHOST_KEYVAULT_URI),
     APPINSIGHTS_WORKSPACE_ID: str(vars.APPINSIGHTS_WORKSPACE_ID),

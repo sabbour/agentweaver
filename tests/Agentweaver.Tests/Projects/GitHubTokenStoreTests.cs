@@ -141,6 +141,43 @@ public sealed class GitHubTokenStoreTests
         identity!.Login.Should().Be("mylogin");
     }
 
+    [Fact]
+    public async Task InMemory_LinkIdentityAsync_StoresMultipleGitHubAccountsPerUser()
+    {
+        var store = new InMemoryGitHubTokenStore();
+        const string entraUserId = "00000000-0000-0000-0000-000000000001";
+
+        await store.LinkIdentityAsync(entraUserId, new GitHubToken("tok-a", null, null, "alice", "https://a", []), isDefault: true, copilotEntitled: true);
+        await store.LinkIdentityAsync(entraUserId, new GitHubToken("tok-b", null, null, "bob", "https://b", []), copilotEntitled: false);
+
+        var links = await store.ListLinkedIdentitiesAsync(entraUserId);
+        links.Should().HaveCount(2);
+        links.Should().ContainSingle(x => x.GitHubLogin == "alice" && x.IsDefault && x.CopilotEntitled == true);
+        links.Should().ContainSingle(x => x.GitHubLogin == "bob" && !x.IsDefault && x.CopilotEntitled == false);
+
+        var bobScope = GitHubTokenScope.ForLinkedIdentity(entraUserId, "bob");
+        (await store.GetAsync(bobScope)).Status.Should().Be(GitHubTokenStatus.SignedIn);
+    }
+
+    [Fact]
+    public async Task InMemory_UnlinkIdentityAsync_ReassignsDefaultAndSignsOutRemovedToken()
+    {
+        var store = new InMemoryGitHubTokenStore();
+        const string entraUserId = "00000000-0000-0000-0000-000000000002";
+
+        await store.LinkIdentityAsync(entraUserId, new GitHubToken("tok-a", null, null, "alice", null, []), isDefault: true);
+        await store.LinkIdentityAsync(entraUserId, new GitHubToken("tok-b", null, null, "bob", null, []));
+
+        (await store.UnlinkIdentityAsync(entraUserId, "alice")).Should().BeTrue();
+
+        var defaultLink = await store.GetDefaultLinkedIdentityAsync(entraUserId);
+        defaultLink.Should().NotBeNull();
+        defaultLink!.GitHubLogin.Should().Be("bob");
+
+        var removedScope = GitHubTokenScope.ForLinkedIdentity(entraUserId, "alice");
+        (await store.GetAsync(removedScope)).Status.Should().Be(GitHubTokenStatus.SignedOut);
+    }
+
     // =========================================================================
     // GTS-08: OsCredentialStore — roundtrip (Windows only; skip on CI/non-Windows)
     // =========================================================================

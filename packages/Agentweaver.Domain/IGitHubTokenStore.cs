@@ -5,6 +5,15 @@ public enum GitHubTokenStatus { SignedIn, SignedOut, NeverSignedIn }
 public sealed record GitHubTokenEntry(GitHubTokenStatus Status, string? AccessToken);
 public sealed record GitHubToken(string AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt, string Login, string? AvatarUrl, string[] Scopes);
 public sealed record GitHubIdentity(string Login, string? AvatarUrl);
+public sealed record GitHubIdentityLink(
+    string EntraUserId,
+    string GitHubLogin,
+    string TokenScopeKey,
+    bool IsDefault,
+    DateTimeOffset LinkedAt,
+    bool? CopilotEntitled,
+    DateTimeOffset? CopilotEntitledCheckedAt,
+    string? AvatarUrl);
 
 public sealed record GitHubTokenScope
 {
@@ -12,7 +21,24 @@ public sealed record GitHubTokenScope
     private GitHubTokenScope(string key) => Key = key;
 
     public static GitHubTokenScope Installation { get; } = new("installation");
+
+    /// <summary>
+    /// Legacy single-account scope keyed directly by the GitHub login. Retained for backward
+    /// compatibility with pre-Entra deployments and for lazy migration of existing tokens.
+    /// </summary>
     public static GitHubTokenScope ForUser(string userId) => new($"user:{userId}");
+
+    /// <summary>
+    /// Multi-account scope for a specific GitHub identity linked to a verified Entra user.
+    /// </summary>
+    public static GitHubTokenScope ForLinkedIdentity(string entraUserId, string githubLogin) =>
+        new($"user-link:{entraUserId}:{githubLogin}");
+
+    /// <summary>
+    /// Metadata index describing all GitHub identities linked to a verified Entra user.
+    /// </summary>
+    public static GitHubTokenScope ForLinkedIdentityIndex(string entraUserId) =>
+        new($"user-links:{entraUserId}");
 
     public override string ToString() => Key;
 }

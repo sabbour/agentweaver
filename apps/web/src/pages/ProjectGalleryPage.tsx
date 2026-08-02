@@ -42,7 +42,15 @@ import { GITHUB_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { CreateProjectRequest, GitHubAccount, GitHubRepo, PagedResult, Project } from '../api/types';
+import type {
+  AccessibleGitHubRepo,
+  CreateProjectRequest,
+  GitHubAccount,
+  GitHubRepo,
+  LinkedGitHubAccount,
+  PagedResult,
+  Project,
+} from '../api/types';
 import type { BlueprintSelection } from '../components/BlueprintPicker.helpers';
 import type { ReactElement, ReactNode } from 'react';
 /** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
@@ -477,18 +485,30 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   );
 }
 
+type RepoBrowserAccount = GitHubAccount & {
+  is_default?: boolean;
+  copilot_entitled?: boolean | null;
+};
+
+type RepoBrowserRepo = GitHubRepo & {
+  source_login?: string;
+  source_avatar_url?: string | null;
+  source_is_default?: boolean;
+};
+
 function useGitHubData(open: boolean) {
-  const [accounts, setAccounts] = useState<GitHubAccount[]>([]);
+  const [accounts, setAccounts] = useState<RepoBrowserAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [accountsKey, setAccountsKey] = useState(0);
 
-  const [selectedAccount, setSelectedAccount] = useState<GitHubAccount | null>(null);
-  const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<RepoBrowserAccount | null>(null);
+  const [repos, setRepos] = useState<RepoBrowserRepo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
   const [reposKey, setReposKey] = useState(0);
+  const [crossAccount, setCrossAccount] = useState(false);
 
   // Reset all state when the dialog (re-)opens.
   const [prevOpen, setPrevOpen] = useState(open);
@@ -503,6 +523,7 @@ function useGitHubData(open: boolean) {
       setRepos([]);
       setReposLoading(false);
       setReposError(null);
+      setCrossAccount(false);
     }
   }
 
@@ -515,13 +536,42 @@ function useGitHubData(open: boolean) {
       setAuthRequired(false);
       setAccountsError(null);
       try {
-        const data = await apiClient.listGitHubAccounts();
+        const linked = await apiClient.listLinkedGitHubAccounts();
         if (cancelled) return;
+        const data: RepoBrowserAccount[] = linked.map((account: LinkedGitHubAccount) => ({
+          login: account.login,
+          name: account.name,
+          avatar_url: account.avatar_url,
+          type: account.type,
+          is_default: account.is_default,
+          copilot_entitled: account.copilot_entitled,
+        }));
         setAccounts(data);
-        if (data.length > 0) setSelectedAccount(data[0]);
+        if (data.length > 0) {
+          const preferred = data.find((account) => account.is_default) ?? data[0];
+          setSelectedAccount(preferred);
+        }
       } catch (err: unknown) {
         if (cancelled) return;
-        if (err instanceof ApiError && err.status === 401) {
+        if (err instanceof ApiError && err.status === 404) {
+          try {
+            const data = await apiClient.listGitHubAccounts();
+            if (cancelled) return;
+            setAccounts(data);
+            if (data.length > 0) setSelectedAccount(data[0]);
+          } catch (fallbackErr) {
+            if (cancelled) return;
+            if (fallbackErr instanceof ApiError && fallbackErr.status === 401) {
+              setAuthRequired(true);
+            } else {
+              setAccountsError(
+                fallbackErr instanceof ApiError
+                  ? `Error ${fallbackErr.status}: ${fallbackErr.body}`
+                  : fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+              );
+            }
+          }
+        } else if (err instanceof ApiError && err.status === 401) {
           setAuthRequired(true);
         } else {
           setAccountsError(
@@ -542,20 +592,56 @@ function useGitHubData(open: boolean) {
   useEffect(() => {
     let cancelled = false;
     const loadRepos = async () => {
-      if (!selectedAccount) { setRepos([]); return; }
       setReposLoading(true);
       setReposError(null);
       try {
-        const data = await apiClient.listGitHubRepos(selectedAccount.login);
-        if (!cancelled) setRepos(data);
+        const data = await apiClient.listAccessibleGitHubRepos();
+        if (cancelled) return;
+        setRepos(data.map((repo: AccessibleGitHubRepo) => ({
+          fullName: repo.fullName,
+          htmlUrl: repo.htmlUrl,
+          description: repo.description,
+          private: repo.private,
+          defaultBranch: repo.defaultBranch,
+          source_login: repo.source_login,
+          source_avatar_url: repo.source_avatar_url,
+          source_is_default: repo.source_is_default,
+        })));
+        setCrossAccount(true);
+        setSelectedAccount(null);
       } catch (err: unknown) {
         if (cancelled) return;
-        setReposError(
-          err instanceof ApiError
-            ? `Error ${err.status}: ${err.body}`
-            : err instanceof Error ? err.message : String(err),
-        );
-        setRepos([]);
+        if (err instanceof ApiError && err.status === 404) {
+          if (!selectedAccount) {
+            setRepos([]);
+            setCrossAccount(false);
+            setReposLoading(false);
+            return;
+          }
+          try {
+            const fallbackRepos = await apiClient.listGitHubRepos(selectedAccount.login);
+            if (cancelled) return;
+            setRepos(fallbackRepos);
+            setCrossAccount(false);
+          } catch (fallbackErr) {
+            if (cancelled) return;
+            setReposError(
+              fallbackErr instanceof ApiError
+                ? `Error ${fallbackErr.status}: ${fallbackErr.body}`
+                : fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+            );
+            setRepos([]);
+            setCrossAccount(false);
+          }
+        } else {
+          setReposError(
+            err instanceof ApiError
+              ? `Error ${err.status}: ${err.body}`
+              : err instanceof Error ? err.message : String(err),
+          );
+          setRepos([]);
+          setCrossAccount(false);
+        }
       } finally {
         if (!cancelled) setReposLoading(false);
       }
@@ -564,10 +650,12 @@ function useGitHubData(open: boolean) {
     return () => { cancelled = true; };
   }, [selectedAccount, reposKey]);
 
-  const changeAccount = (acc: GitHubAccount) => {
+  const changeAccount = (acc: RepoBrowserAccount | null) => {
     setSelectedAccount(acc);
-    setRepos([]);
-    setReposError(null);
+    if (!crossAccount) {
+      setRepos([]);
+      setReposError(null);
+    }
   };
 
   const reloadAccounts = () => setAccountsKey((k) => k + 1);
@@ -577,7 +665,7 @@ function useGitHubData(open: boolean) {
     accounts, accountsLoading, authRequired, accountsError,
     selectedAccount, changeAccount,
     repos, reposLoading, reposError,
-    reloadAccounts, reloadRepos,
+    reloadAccounts, reloadRepos, crossAccount,
   };
 }
 
@@ -588,7 +676,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
     accounts, accountsLoading, authRequired, accountsError,
     selectedAccount, changeAccount,
     repos, reposLoading, reposError,
-    reloadAccounts, reloadRepos,
+    reloadAccounts, reloadRepos, crossAccount,
   } = useGitHubData(d.open);
   const [repoFilter, setRepoFilter] = useState('');
   const [pasteRepo, setPasteRepo] = useState('');
@@ -597,9 +685,10 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   const [showMoreSources, setShowMoreSources] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
+  const hasLinkedGitHubIdentity = accounts.length > 0 || selectedAccount !== null;
 
   const hasChosenRepository = /^(https:\/\/github\.com\/)?[\w.-]+\/[\w.-]+/.test(d.sourceRepository.trim());
-  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && !d.saving);
+  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && hasLinkedGitHubIdentity && !d.saving);
   const setWorkspaceSlug = (slug: string) => {
     setFolderName(slug);
     d.setWorkingDirectory(workspaceAutoAssigned ? slug : workspacePath(dataDir, slug));
@@ -625,7 +714,13 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   };
 
   const filteredRepos = repos
-    .filter(r => r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false)
+    .filter((r) => {
+      const byName = r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false;
+      const bySource = !selectedAccount || crossAccount
+        ? (!selectedAccount || r.source_login === selectedAccount.login)
+        : true;
+      return byName && bySource;
+    })
     .sort((a, b) => {
       const nameA = (a.fullName?.split('/').pop() ?? '').toLowerCase();
       const nameB = (b.fullName?.split('/').pop() ?? '').toLowerCase();
@@ -653,13 +748,21 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
           {filteredRepos.map((repo) => {
             const fullName = repo.fullName ?? '';
             return (
-              <Option key={fullName} value={fullName} text={fullName}>
-                <span className={styles.repoOption}><span className={styles.githubMark}>GH</span><Text weight="semibold">{repoDisplayName(fullName)}</Text></span>
+              <Option key={`${repo.source_login ?? 'repo'}:${fullName}`} value={fullName} text={fullName}>
+                <span className={styles.repoOption}>
+                  <span className={styles.githubMark}>GH</span>
+                  <Text weight="semibold">{repoDisplayName(fullName)}</Text>
+                  {repo.source_login && <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>via @{repo.source_login}</Text>}
+                </span>
               </Option>
             );
           })}
         </Combobox>
-        <Text className={styles.tipLine}>Start typing to search any owner/repository on GitHub.</Text>
+        <Text className={styles.tipLine}>
+          {crossAccount
+            ? 'Browsing repositories reachable across all linked GitHub accounts. Start typing to narrow the list.'
+            : 'Start typing to search any owner/repository on GitHub. Import succeeds only if one of your linked GitHub identities can actually access it.'}
+        </Text>
       </div>
 
       <Field label="Project name">
@@ -678,11 +781,18 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       )}
       {accountsError && <MessageBar intent="error"><MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadAccounts}>Retry</Button></MessageBarActions></MessageBar>}
       {reposError && <MessageBar intent="error"><MessageBarBody>Could not load repositories: {reposError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadRepos}>Retry</Button></MessageBarActions></MessageBar>}
+      {!authRequired && !accountsLoading && accounts.length === 0 && !accountsError && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            Link at least one GitHub account before importing a repository. Agentweaver no longer uses a shared fallback GitHub token for project creation or background GitHub work.
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {!authRequired && (
         <div className={styles.listBlock}>
           <div className={styles.listHeader}>
-            <Text weight="semibold">My organizations</Text>
+            <Text weight="semibold">{crossAccount ? 'Linked GitHub accounts' : 'My organizations'}</Text>
             {accounts.length > 5 && (
               <Button
                 appearance="transparent"
@@ -696,16 +806,34 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
             )}
           </div>
           {visibleSources.length === 0 ? <Text className={styles.tipLine}>{accountsLoading ? 'Loading sources…' : 'No GitHub sources found.'}</Text> : visibleSources.map((acc) => (
-            <button key={acc.login} className={styles.orgRow} type="button" onClick={() => { changeAccount(acc); setRepoFilter(''); d.setSourceRepository(''); }}>
+            <button
+              key={acc.login}
+              className={styles.orgRow}
+              type="button"
+              onClick={() => { changeAccount(selectedAccount?.login === acc.login ? null : acc); setRepoFilter(''); if (!crossAccount) d.setSourceRepository(''); }}
+            >
               <span className={styles.accountOption}>
                 <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />
-                <span><Text weight="semibold">{acc.name ?? acc.login}</Text><br /><Text className={styles.tipLine}>@{acc.login}</Text></span>
+                <span>
+                  <Text weight="semibold">{acc.name ?? acc.login}</Text><br />
+                  <Text className={styles.tipLine}>@{acc.login}</Text>
+                </span>
                 {acc.type === 'user' && <Badge size="small" appearance="outline">You</Badge>}
+                {acc.is_default && <Badge size="small" appearance="filled">Default</Badge>}
+                {acc.copilot_entitled === true && <Badge size="small" appearance="filled">Copilot</Badge>}
               </span>
               <ChevronRightRegular />
             </button>
           ))}
-          {selectedAccount && <Text className={styles.tipLine}>Browsing @{selectedAccount.login} repositories</Text>}
+          {crossAccount ? (
+            <Text className={styles.tipLine}>
+              {selectedAccount
+                ? `Showing repositories reachable via @${selectedAccount.login}. Click again to show all linked accounts.`
+                : 'Showing repositories reachable across all linked GitHub accounts.'}
+            </Text>
+          ) : (
+            selectedAccount && <Text className={styles.tipLine}>Browsing @{selectedAccount.login} repositories</Text>
+          )}
         </div>
       )}
 

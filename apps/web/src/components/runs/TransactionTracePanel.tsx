@@ -242,6 +242,11 @@ function TraceRow({
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
         onClick={() => onSelect(node)}
         aria-expanded={hasChildren ? isExpanded : undefined}
+        aria-pressed={isSelected}
+        data-testid="trace-span"
+        data-span-key={node.key}
+        data-span-type={node.type}
+        data-selected={isSelected ? 'true' : 'false'}
       >
         {hasChildren ? (
           <span
@@ -416,7 +421,7 @@ export function TransactionTracePanel({
   }
 
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} data-testid="transaction-trace-panel">
       <div className={styles.panelHeaderWrapper}>
         <div className={styles.panelHeaderTitle}>
           <TitleText as="h2">{title}</TitleText>
@@ -428,7 +433,7 @@ export function TransactionTracePanel({
         <EmptyState title="No trace data available for this run yet." />
       ) : (
         <div className={styles.body}>
-          <div className={styles.tree}>
+          <div className={styles.tree} data-testid="trace-tree">
             {tree.map((node) => (
               <TraceRow
                 key={node.key}

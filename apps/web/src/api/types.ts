@@ -1,8 +1,12 @@
 export type ModelSource = 'github-copilot' | 'microsoft-foundry';
+export type AuthMode = 'entra' | 'github-legacy';
 
 export interface ServerInfo {
   data_directory: string;
   workspace_auto_assigned?: boolean;
+  auth_mode?: AuthMode;
+  auth_mode_label?: string | null;
+  auth_mode_recommended?: boolean;
 }
 
 export type RunStatus =
@@ -459,6 +463,17 @@ export interface GitHubAuthStatusResponse {
   avatar_url?: string;
 }
 
+export interface AuthSessionResponse {
+  authenticated: boolean;
+  auth_mode: AuthMode;
+  display_name: string | null;
+  email: string | null;
+  login: string | null;
+  avatar_url?: string | null;
+  entra_object_id?: string | null;
+  platform_roles: string[];
+}
+
 export interface GitHubRepo {
   fullName: string | null;
   htmlUrl?: string | null;
@@ -472,6 +487,27 @@ export interface GitHubAccount {
   name: string | null;
   avatar_url: string;
   type: 'user' | 'org';
+}
+
+export interface LinkedGitHubAccount {
+  login: string;
+  name: string | null;
+  avatar_url: string;
+  type: 'user' | 'org';
+  is_default: boolean;
+  copilot_entitled: boolean | null;
+  linked_at?: string | null;
+  default_for_project_count?: number | null;
+  override_project_count?: number | null;
+  dependent_project_names?: string[] | null;
+  unlink_warnings?: string[] | null;
+  can_unlink?: boolean;
+}
+
+export interface AccessibleGitHubRepo extends GitHubRepo {
+  source_login: string;
+  source_avatar_url?: string | null;
+  source_is_default?: boolean;
 }
 
 /** One candidate owner for creating a new repository for a project (GET
@@ -490,6 +526,42 @@ export interface CreateProjectRepositoryRequest {
 export interface ConnectedRepository {
   source_repository: string;
   html_url: string;
+}
+
+export interface ProjectRoleAssignment {
+  assignment_id: string;
+  principal_id: string;
+  display_name: string | null;
+  email: string | null;
+  role: string;
+  scope: string;
+}
+
+export interface ProjectGitHubIdentityPermission {
+  login: string;
+  permission: string | null;
+  is_default?: boolean;
+}
+
+export interface CreateProjectRoleAssignmentRequest {
+  principal_id: string;
+  role: string;
+  display_name?: string | null;
+  email?: string | null;
+}
+
+export interface ProjectAccessOverview {
+  auth_mode: AuthMode;
+  platform_roles: string[];
+  platform_roles_source?: string | null;
+  current_user_project_role?: string | null;
+  can_manage_role_assignments?: boolean;
+  can_manage_project_github_identity?: boolean;
+  project_role_assignments: ProjectRoleAssignment[];
+  github_identity_override_login?: string | null;
+  effective_github_login?: string | null;
+  effective_github_permission?: string | null;
+  github_identity_permissions?: ProjectGitHubIdentityPermission[] | null;
 }
 
 
@@ -1220,6 +1292,8 @@ export interface WorkflowTriggerDto {
   day_of_month?: number | null;
   time_of_day?: string | null;
   event_name?: string | null;
+  // TODO(#641): replace this loose shape with Tank's dedicated event-predicate DTO once the backend ships it.
+  if?: Array<Record<string, unknown>> | null;
 }
 
 // Response body for GET/POST the project's workflows list.
