@@ -83,8 +83,12 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
     "Standard_D8s_v6",
     "--postgres-server-name",
     "custom-pg",
+    "--postgres-location",
+    "eastus2",
     "--postgres-ha-mode",
     "Disabled",
+    "--postgres-access-mode",
+    "public",
     "--github-client-secret",
     "shh",
   ]);
@@ -94,7 +98,9 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
   assert.equal(parsed.flags.RESOURCE_GROUP, "my-rg");
   assert.equal(parsed.flags.NODE_VM_SIZE, "Standard_D8s_v6");
   assert.equal(parsed.flags.PG_SERVER_NAME, "custom-pg");
+  assert.equal(parsed.flags.PG_LOCATION, "eastus2");
   assert.equal(parsed.flags.PG_HA_MODE, "Disabled");
+  assert.equal(parsed.flags.PG_ACCESS_MODE, "public");
   assert.equal(parsed.flags.GITHUB_CLIENT_SECRET, "shh");
 });
 
@@ -147,7 +153,9 @@ test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--params-file/);
   assert.match(HELP_TEXT, /--node-vm-size <sku>/);
   assert.match(HELP_TEXT, /--postgres-server-name <name>/);
+  assert.match(HELP_TEXT, /--postgres-location <region>/);
   assert.match(HELP_TEXT, /--postgres-ha-mode <mode>/);
+  assert.match(HELP_TEXT, /--postgres-access-mode <private\|public>/);
   assert.match(HELP_TEXT, /--image-source <source>/);
   assert.match(HELP_TEXT, /--ghcr-ref <ref>/);
   assert.match(HELP_TEXT, /dev --setup/);
@@ -215,7 +223,9 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     NODE_VM_SIZE: e.NODE_VM_SIZE,
     KEYVAULT_NAME: e.KEYVAULT_NAME,
     PG_SERVER_NAME: e.PG_SERVER_NAME,
+    PG_LOCATION: e.PG_LOCATION,
     PG_HA_MODE: e.PG_HA_MODE,
+    PG_ACCESS_MODE: e.PG_ACCESS_MODE,
     NAMESPACE: e.NAMESPACE,
     IMAGE_TAG: e.IMAGE_TAG ?? "dev",
     AGENTHOST_IMAGE_TAG: "dev",
@@ -229,8 +239,12 @@ test("run: non-interactive path resolves config from flags and env, then delegat
       "Standard_D8s_v6",
       "--postgres-server-name",
       "custom-pg",
+      "--postgres-location",
+      "eastus2",
       "--postgres-ha-mode",
       "Disabled",
+      "--postgres-access-mode",
+      "public",
       "--github-client-id",
       "id-123",
       "--github-client-secret",
@@ -252,7 +266,9 @@ test("run: non-interactive path resolves config from flags and env, then delegat
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
   assert.equal(calls[0].cfg.NODE_VM_SIZE, "Standard_D8s_v6");
   assert.equal(calls[0].cfg.PG_SERVER_NAME, "custom-pg");
+  assert.equal(calls[0].cfg.PG_LOCATION, "eastus2");
   assert.equal(calls[0].cfg.PG_HA_MODE, "Disabled");
+  assert.equal(calls[0].cfg.PG_ACCESS_MODE, "public");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");
 });
 
@@ -315,6 +331,130 @@ test("run: rejects an invalid PG_HA_MODE before provisioning starts", async () =
       /PG_HA_MODE must be one of: ZoneRedundant, Disabled\./,
     );
   }
+});
+
+test("run: rejects an invalid PG_ACCESS_MODE before provisioning starts", async () => {
+  for (const mode of ["Public", "internet"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--postgres-access-mode",
+          mode,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /PG_ACCESS_MODE must be one of: private, public\./,
+    );
+  }
+});
+
+test("run: rejects cross-region Postgres when access mode remains private", async () => {
+  let resolveVariablesCalls = 0;
+  const steps = {
+    createCluster: fakeStep("createCluster", []),
+  };
+  await assert.rejects(
+    run({
+      argv: [
+        "--location",
+        "eastus2euap",
+        "--postgres-location",
+        "eastus2",
+        "--github-client-id",
+        "id-123",
+        "--github-client-secret",
+        "topsecret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+      resolveVariables: async () => {
+        resolveVariablesCalls += 1;
+        return { IMAGE_TAG: "dev", AGENTHOST_IMAGE_TAG: "dev" };
+      },
+      steps,
+    }),
+    /cross-region Postgres, set --postgres-access-mode public/i,
+  );
+  assert.equal(resolveVariablesCalls, 0, "validation must fail before variable resolution or Azure calls");
+});
+
+test("run: allows cross-region Postgres when access mode is explicitly public", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls, { IMAGE_TAG: "abc123" }),
+    verifyProvenance: fakeStep("verifyProvenance", calls, { ok: true }),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, { HOST: "agentweaver.example.com", GATEWAY_IP: "1.2.3.4" }),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 10, fail: 0 }),
+  };
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture() {
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  };
+  const resolveVariablesFn = async ({ env: e }) => ({
+    RESOURCE_GROUP: e.RESOURCE_GROUP,
+    CLUSTER_NAME: e.CLUSTER_NAME,
+    ACR_NAME: e.ACR_NAME,
+    ACR_LOGIN_SERVER: `${e.ACR_NAME}.azurecr.io`,
+    LOCATION: e.LOCATION,
+    NODE_VM_SIZE: e.NODE_VM_SIZE,
+    KEYVAULT_NAME: e.KEYVAULT_NAME,
+    PG_SERVER_NAME: e.PG_SERVER_NAME,
+    PG_LOCATION: e.PG_LOCATION,
+    PG_HA_MODE: e.PG_HA_MODE,
+    PG_ACCESS_MODE: e.PG_ACCESS_MODE,
+    NAMESPACE: e.NAMESPACE,
+    IMAGE_TAG: e.IMAGE_TAG ?? "dev",
+    AGENTHOST_IMAGE_TAG: "dev",
+  });
+
+  const result = await run({
+    argv: [
+      "--location",
+      "eastus2euap",
+      "--postgres-location",
+      "eastus2",
+      "--postgres-access-mode",
+      "public",
+      "--github-client-id",
+      "id-123",
+      "--github-client-secret",
+      "topsecret",
+    ],
+    env: {
+      RESOURCE_GROUP: "my-rg",
+      CLUSTER_NAME: "my-cluster",
+      ACR_NAME: "myacr",
+      KEYVAULT_NAME: "my-kv",
+      NAMESPACE: "agentweaver",
+    },
+    prompt: { isInteractive: () => false },
+    exec,
+    log: noopLog(),
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].cfg.LOCATION, "eastus2euap");
+  assert.equal(calls[0].cfg.PG_LOCATION, "eastus2");
+  assert.equal(calls[0].cfg.PG_ACCESS_MODE, "public");
 });
 
 test("run: rejects an invalid NODE_VM_SIZE before provisioning starts", async () => {
@@ -617,6 +757,8 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
   assert.equal(rgChoicesSeen[0].label, "Create new...", "Create new... must be the first resource-group choice");
   assert.equal(collected.LOCATION, "westus2");
   assert.equal(collected.NODE_VM_SIZE, "Standard_D4s_v6");
+  assert.equal(collected.PG_LOCATION, "westus2");
+  assert.equal(collected.PG_ACCESS_MODE, "private");
   assert.equal(collected.GITHUB_CLIENT_SECRET, "super-secret-value");
   assert.equal(collected.GITHUB_ALLOWED_ORG, "microsoft");
   assert.ok(selectCalls.length >= 3);

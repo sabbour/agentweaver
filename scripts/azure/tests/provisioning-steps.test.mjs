@@ -20,6 +20,8 @@ const CFG = Object.freeze({
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
   NODE_VM_SIZE: "Standard_D4s_v6",
+  PG_LOCATION: "westus2",
+  PG_ACCESS_MODE: "private",
   NAMESPACE: "agentweaver",
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
@@ -532,6 +534,9 @@ test("17-provision-postgres: PG_SERVER_NAME override flows through to az calls a
       if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "postgres" && args[2] === "show") {
         assert.equal(args[args.indexOf("--name") + 1], "custom-pg");
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "fullyQualifiedDomainName") {
+          return { stdout: "custom-pg.postgres.database.azure.com", stderr: "", code: 0 };
+        }
         return { stdout: "Ready", stderr: "", code: 0 };
       }
       if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") {
@@ -579,6 +584,72 @@ test("17-provision-postgres: PG_HA_MODE override controls zonal resiliency flags
   const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create");
   assert.ok(createCall, "expected an 'az postgres flexible-server create' call");
   assert.ok(!createCall.args.includes("--zonal-resiliency"), "Disabled HA mode must not request zonal resiliency");
+});
+
+test("17-provision-postgres: private mode remains the default and still uses subnet plus private DNS", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "/zone/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "fullyQualifiedDomainName") {
+          return { stdout: "agentweaver-pg.postgres.database.azure.com", stderr: "", code: 0 };
+        }
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "list") return { stdout: "10.0.0.4", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "secret") return { stdout: "apiVersion: v1\nkind: Secret\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  await provisionPostgres.run(CFG, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create");
+  assert.ok(createCall, "expected an 'az postgres flexible-server create' call");
+  assert.ok(createCall.args.includes("--subnet"), "private mode must keep subnet wiring");
+  assert.ok(createCall.args.includes("--private-dns-zone"), "private mode must keep private DNS wiring");
+  assert.ok(!createCall.args.includes("--public-access"), "private mode must not create a public firewall rule");
+});
+
+test("17-provision-postgres: public mode skips subnet/private DNS setup and adds Azure-services firewall rule", async () => {
+  const cfg = { ...CFG, PG_LOCATION: "eastus2", PG_ACCESS_MODE: "public" };
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "fullyQualifiedDomainName") {
+          return { stdout: "agentweaver-pg.postgres.database.azure.com", stderr: "", code: 0 };
+        }
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "secret") return { stdout: "apiVersion: v1\nkind: Secret\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  await provisionPostgres.run(cfg, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+
+  assert.ok(!exec.calls.capture.some((c) => c.cmd === "az" && c.args[0] === "aks" && c.args[1] === "show"), "public mode must not inspect the AKS node resource group");
+  assert.ok(
+    !exec.calls.capture.some((c) => c.cmd === "az" && c.args[0] === "network" && c.args[1] === "private-dns"),
+    "public mode must skip private DNS reconciliation entirely",
+  );
+
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create");
+  assert.ok(createCall, "expected an 'az postgres flexible-server create' call");
+  assert.ok(!createCall.args.includes("--subnet"), "public mode must not pass a subnet");
+  assert.ok(!createCall.args.includes("--private-dns-zone"), "public mode must not pass a private DNS zone");
+  assert.equal(createCall.args[createCall.args.indexOf("--public-access") + 1], "0.0.0.0");
+  assert.equal(createCall.args[createCall.args.indexOf("--location") + 1], "eastus2");
 });
 
 // -------------------- gen-a2a-mtls-certs.mjs --------------------
