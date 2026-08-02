@@ -174,12 +174,15 @@ app.MapGet("/auth/github/callback", async (
         try
         {
             var linked = await linkedAccountService.CompleteLinkAsync(code, state, ct).ConfigureAwait(false);
+            // Linked-account management lives on the Settings page regardless of which UI
+            // surface (sidebar switcher or Settings itself) started the link flow, so always
+            // land there rather than the app root after a successful link.
             return Results.Redirect(
-                $"{frontendUrl}/?auth=github_linked&login={Uri.EscapeDataString(linked.GitHubLogin)}");
+                $"{frontendUrl}/settings?auth=github_linked&login={Uri.EscapeDataString(linked.GitHubLogin)}");
         }
         catch (Exception ex)
         {
-            return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
+            return Results.Redirect($"{frontendUrl}/settings?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
         }
     }
 
