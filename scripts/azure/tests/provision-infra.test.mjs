@@ -289,22 +289,24 @@ test("run: rejects 1-2 character PG_SERVER_NAME values before provisioning start
 });
 
 test("run: rejects an invalid PG_HA_MODE before provisioning starts", async () => {
-  await assert.rejects(
-    run({
-      argv: [
-        "--postgres-ha-mode",
-        "GeoRedundant",
-        "--github-client-id",
-        "id-123",
-        "--github-client-secret",
-        "topsecret",
-      ],
-      env: {},
-      prompt: { isInteractive: () => false },
-      log: noopLog(),
-    }),
-    /PG_HA_MODE must be one of: ZoneRedundant, SameZone, Disabled\./,
-  );
+  for (const mode of ["SameZone", "GeoRedundant"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--postgres-ha-mode",
+          mode,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /PG_HA_MODE must be one of: ZoneRedundant, Disabled\./,
+    );
+  }
 });
 
 test("run: ghcr image-source resolves derived owner and passes GHCR config through to the image step", async () => {

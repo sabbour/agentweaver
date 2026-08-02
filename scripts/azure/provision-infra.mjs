@@ -230,7 +230,7 @@ Non-interactive (no TTY) never prompts -- missing required fields fail with a cl
 `;
 
 const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
-const POSTGRES_HA_MODE_VALUES = Object.freeze(["ZoneRedundant", "SameZone", "Disabled"]);
+const POSTGRES_HA_MODE_VALUES = Object.freeze(["ZoneRedundant", "Disabled"]);
 const POSTGRES_SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 
 /**

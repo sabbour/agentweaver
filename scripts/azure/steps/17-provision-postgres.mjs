@@ -217,6 +217,7 @@ export async function run(cfg, opts = {}) {
     secret.registerSecret(PG_ADMIN_PASSWORD, "postgres-admin-password");
 
     log.info(`  Creating Flexible Server '${PG_SERVER_NAME}' -- this takes ~5 minutes...`);
+    // SameZone was removed until we correctly wire/test az postgres flexible-server create --allow-same-zone.
     const zonalFlags = PG_HA_MODE !== "Disabled" ? ["--zonal-resiliency", "Enabled"] : [];
     await exec.run(
       "az",
