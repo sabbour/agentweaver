@@ -784,7 +784,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       {!authRequired && !accountsLoading && accounts.length === 0 && !accountsError && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            Link at least one GitHub account before importing a repository. Agentweaver no longer uses a shared fallback GitHub token for project creation or background GitHub work.
+            Link at least one GitHub account before importing a repository or running background GitHub work.
           </MessageBarBody>
         </MessageBar>
       )}

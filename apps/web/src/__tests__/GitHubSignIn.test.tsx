@@ -12,6 +12,7 @@ vi.mock('../api/apiClient', () => ({
     setDefaultLinkedGitHubAccount: vi.fn(),
     setProjectGitHubIdentityOverride: vi.fn(),
     signOutSession: vi.fn(),
+    beginLinkGitHubAccount: vi.fn(),
   },
 }));
 
@@ -59,6 +60,9 @@ beforeEach(() => {
     effective_github_permission: 'Write',
   } as never);
   vi.mocked(apiClient.setProjectGitHubIdentityOverride).mockResolvedValue(undefined as never);
+  vi.mocked(apiClient.beginLinkGitHubAccount).mockResolvedValue({
+    authorize_url: 'https://github.com/login/oauth/authorize?state=abc',
+  } as never);
 });
 
 describe('GitHubSignIn', () => {
@@ -77,5 +81,31 @@ describe('GitHubSignIn', () => {
     fireEvent.click(screen.getByRole('button', { name: /Alt Cat/ }));
 
     await waitFor(() => expect(apiClient.setProjectGitHubIdentityOverride).toHaveBeenCalledWith('proj-1', 'altcat'));
+  });
+
+  it('starts the real link flow via beginLinkGitHubAccount when "Add account" is clicked', async () => {
+    const originalLocation = window.location;
+    // jsdom's window.location.href setter doesn't actually navigate, but redefining it lets
+    // us assert the redirect target without triggering a real "not implemented" navigation error.
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, href: '' },
+    });
+
+    try {
+      render(
+        <AzureFluentProvider density="compact">
+          <GitHubSignIn projectId="proj-1" />
+        </AzureFluentProvider>,
+      );
+
+      fireEvent.click(await screen.findByRole('button', { name: 'GitHub account switcher' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+
+      await waitFor(() => expect(apiClient.beginLinkGitHubAccount).toHaveBeenCalled());
+      await waitFor(() => expect(window.location.href).toBe('https://github.com/login/oauth/authorize?state=abc'));
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    }
   });
 });

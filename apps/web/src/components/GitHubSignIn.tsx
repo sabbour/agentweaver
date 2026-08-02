@@ -1,6 +1,5 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { GITHUB_AUTHORIZE_URL } from '../config';
 import {
   Button,
   Divider,
@@ -116,14 +115,6 @@ function apiErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function goToGitHubLinkFlow() {
-  const url = new URL(GITHUB_AUTHORIZE_URL);
-  url.searchParams.set('intent', 'link');
-  if (typeof window !== 'undefined') {
-    url.searchParams.set('return_to', `${window.location.pathname}${window.location.search}`);
-    window.location.href = url.toString();
-  }
-}
 
 export interface GitHubSignInProps {
   projectId?: string;
@@ -239,6 +230,22 @@ export function GitHubSignIn({ projectId }: GitHubSignInProps) {
     }
   };
 
+  const handleAddAccount = async () => {
+    setSaving('__addaccount__');
+    setError(null);
+    try {
+      // The plain /auth/github/authorize redirect is a sign-in flow, not a link flow -- the
+      // server ignores any "intent" query param there. Linking a second account requires
+      // POST /auth/github-accounts/link, which registers a pending-link state so the OAuth
+      // callback actually calls CompleteLinkAsync() instead of a normal sign-in exchange.
+      const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setError(apiErrorMessage(err));
+      setSaving(null);
+    }
+  };
+
   if (loading) {
     return <Spinner size="extra-tiny" aria-label="Loading GitHub account switcher" />;
   }
@@ -339,9 +346,11 @@ export function GitHubSignIn({ projectId }: GitHubSignInProps) {
 
           <Divider />
           <div className={styles.section}>
-            <Button appearance="subtle" icon={<AddRegular />} onClick={goToGitHubLinkFlow}>
-              Add account
-            </Button>
+            {authMode === 'entra' && (
+              <Button appearance="subtle" icon={<AddRegular />} disabled={saving !== null} onClick={() => void handleAddAccount()}>
+                {saving === '__addaccount__' ? <Spinner size="tiny" /> : 'Add account'}
+              </Button>
+            )}
             <Button
               appearance="subtle"
               icon={<SignOutRegular />}

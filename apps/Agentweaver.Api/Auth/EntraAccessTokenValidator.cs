@@ -106,17 +106,22 @@ public sealed class EntraAccessTokenValidator
 
         var allRoles = result.ClaimsIdentity.FindAll("roles").Select(x => x.Value).ToArray();
         var recognizedRoles = PlatformRoles.FilterRecognized(allRoles);
-        var displayName = FirstNonWhiteSpace(
+        var email = FirstNonWhiteSpace(
             result.ClaimsIdentity.FindFirst("preferred_username")?.Value,
             result.ClaimsIdentity.FindFirst(ClaimTypes.Upn)?.Value,
+            result.ClaimsIdentity.FindFirst(ClaimTypes.Email)?.Value);
+        var displayName = FirstNonWhiteSpace(
             result.ClaimsIdentity.FindFirst("name")?.Value,
+            email,
             oid);
 
         return new EntraAccessTokenClaims(
             oid,
             tid,
             displayName!,
+            email,
             recognizedRoles,
+            allRoles,
             PlatformRoles.SelectPrimaryRole(recognizedRoles));
     }
 
@@ -187,5 +192,7 @@ public sealed record EntraAccessTokenClaims(
     string ObjectId,
     string TenantId,
     string DisplayName,
+    string? Email,
     IReadOnlyList<string> RecognizedRoles,
+    IReadOnlyList<string> RawRoles,
     string? PrimaryRole);
