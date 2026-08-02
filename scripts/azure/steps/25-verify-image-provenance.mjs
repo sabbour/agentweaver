@@ -206,9 +206,17 @@ export async function verifyImage(label, image, paths, verifyCommit, cfg, deps =
   const importedSource = cfg.IMPORTED_IMAGE_SOURCES?.[image];
   if (importedSource) {
     if (liveState.digest !== importedSource.digest) {
+      const importedLabel = importedSource.sourceImage ? "custom imported" : "imported GHCR";
+      const importedRef = importedSource.sourceImage ?? importedSource.sourceRef;
       return {
         status: "fail",
-        message: `${label}: live digest ${liveState.digest.slice(0, 19)} does not match the imported GHCR digest ${importedSource.digest.slice(0, 19)} captured in ACR for ${image} (${importedSource.sourceRef})`,
+        message: `${label}: live digest ${liveState.digest.slice(0, 19)} does not match the ${importedLabel} digest ${importedSource.digest.slice(0, 19)} captured in ACR for ${image} (${importedRef})`,
+      };
+    }
+    if (!importedSource.sourceCommit) {
+      return {
+        status: "ok",
+        message: `${label}: ${liveState.podCount} live pod(s) match imported digest ${importedSource.digest.slice(0, 19)} from custom image ${importedSource.sourceImage}; custom mode explicitly trusts that external image, so no local git provenance check applies`,
       };
     }
     const quiet = await git.diffIsQuiet(importedSource.sourceCommit, verifyCommit, paths, { cwd: cfg.repoRoot });

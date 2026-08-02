@@ -20,6 +20,7 @@
   "CLUSTER_NAME": "agentweaver-aks",
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
+  "NODE_VM_SIZE": "Standard_D4s_v6",
 
   // Optional for `provision-infra` (defaults to a suggested name it will create if missing).
   // REQUIRED for deploy commands (deploy-from-local/deploy-from-release/deploy-from-commit/verify):
@@ -38,7 +39,16 @@
   "GITHUB_CLIENT_SECRET": "",
 
   // Optional overrides.
+  // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.
+  // "PG_LOCATION": "eastus2", // Defaults to LOCATION. Set this only when Postgres must live in a different Azure region than AKS.
+  // "PG_HA_MODE": "Disabled", // Valid values: ZoneRedundant, Disabled. Use this in regions/environments where zone-redundant HA is unavailable.
+  // "PG_ACCESS_MODE": "public", // Valid values: private, public. Required when PG_LOCATION differs from LOCATION because delegated private access is single-region only.
   "IMAGE_TAG": "",
+  // Optional custom-image mode (IMAGE_SOURCE=custom): all four refs are required together.
+  // "IMAGE_API": "ghcr.io/your-org/agentweaver-api:v1.2.3",
+  // "IMAGE_FRONTEND": "ghcr.io/your-org/agentweaver-frontend:v1.2.3",
+  // "IMAGE_MCP": "ghcr.io/your-org/agentweaver-mcp:v1.2.3",
+  // "IMAGE_AGENT_HOST": "ghcr.io/your-org/agentweaver-agent-host:v1.2.3",
   "SKIP_POSTGRES": false,
   "SKIP_OAUTH_KEY": false
 }

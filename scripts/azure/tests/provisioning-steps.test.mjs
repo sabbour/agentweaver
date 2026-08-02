@@ -19,6 +19,9 @@ const CFG = Object.freeze({
   CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
+  NODE_VM_SIZE: "Standard_D4s_v6",
+  PG_LOCATION: "westus2",
+  PG_ACCESS_MODE: "private",
   NAMESPACE: "agentweaver",
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
@@ -65,6 +68,40 @@ function fakeExec({ captureImpl, runImpl } = {}) {
       return { code: 0 };
     },
   };
+}
+
+function skuCapabilities({
+  sku = "Standard_D2ds_v4",
+  reason = null,
+  restricted = null,
+  offerRestrictedStatus = "Disabled",
+  supportedServerEditions,
+} = {}) {
+  return JSON.stringify({
+    name: "FlexibleServerCapabilities",
+    reason,
+    restricted,
+    status: null,
+    supportedFeatures: [{ name: "OfferRestricted", status: offerRestrictedStatus }],
+    supportedServerEditions:
+      supportedServerEditions ??
+      [
+        {
+          name: "GeneralPurpose",
+          reason: null,
+          status: null,
+          supportedServerSkus: [
+            {
+              name: sku,
+              reason: null,
+              status: null,
+              supportedFeatures: [],
+              supportedHaMode: ["ZoneRedundant", "SameZone"],
+            },
+          ],
+        },
+      ],
+  });
 }
 
 // -------------------- 10-create-cluster.mjs --------------------
@@ -119,6 +156,31 @@ test("10-create-cluster: run() creates RG/ACR/cluster/node pools when absent, an
     nginxIdx !== -1 && createCall.args[nginxIdx + 1] === "None",
     "az aks create must pass --app-routing-default-nginx-controller None",
   );
+  const vmSizeIdx = createCall.args.indexOf("--node-vm-size");
+  assert.ok(vmSizeIdx !== -1 && createCall.args[vmSizeIdx + 1] === "Standard_D4s_v6");
+});
+
+test("10-create-cluster: run() uses cfg.NODE_VM_SIZE for cluster and both user pools", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "group" && args[1] === "exists") return { stdout: "false", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "acr" && args[1] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "aks" && args[1] === "nodepool" && args[2] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "kubectl" && args[0] === "get" && args[1] === "crd") return { stdout: "", stderr: "", code: 1 };
+      if (args.includes("--query") && args[args.indexOf("--query") + 1] === "id") {
+        return { stdout: "/subscriptions/x/resourceGroups/agentweaver-rg/providers/Microsoft.ContainerRegistry/registries/agentweaverregistry", stderr: "", code: 0 };
+      }
+      return null;
+    },
+  });
+
+  await createCluster.run({ ...CFG, NODE_VM_SIZE: "Standard_D8s_v6" }, { exec, log: noopLog() });
+
+  const vmSizeArgs = exec.calls.run
+    .filter((c) => c.cmd === "az" && c.args.includes("--node-vm-size"))
+    .map((c) => c.args[c.args.indexOf("--node-vm-size") + 1]);
+  assert.deepEqual(vmSizeArgs, ["Standard_D8s_v6", "Standard_D8s_v6", "Standard_D8s_v6"]);
 });
 
 test("10-create-cluster: skips resource creation when everything already exists", async () => {
@@ -479,6 +541,7 @@ test("17-provision-postgres: skips server creation when it already exists", asyn
       if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "/zone/id", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "list-skus") return { stdout: skuCapabilities(), stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "postgres" && args[2] === "show") return { stdout: "Ready", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "agentweaver", stderr: "", code: 0 };
       if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set") return { stdout: "agentweaver-pg", stderr: "", code: 0 };
@@ -492,6 +555,216 @@ test("17-provision-postgres: skips server creation when it already exists", asyn
   assert.equal(result.created, false);
   assert.equal(result.serverState, "Ready");
   assert.ok(!exec.calls.run.some((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[2] === "create"));
+});
+
+test("17-provision-postgres: PG_SERVER_NAME override flows through to az calls and result metadata", async () => {
+  const cfg = { ...CFG, PG_SERVER_NAME: "custom-pg" };
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "/zone/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "list-skus") return { stdout: skuCapabilities(), stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[2] === "show") {
+        assert.equal(args[args.indexOf("--name") + 1], "custom-pg");
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "fullyQualifiedDomainName") {
+          return { stdout: "custom-pg.postgres.database.azure.com", stderr: "", code: 0 };
+        }
+        return { stdout: "Ready", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") {
+        assert.equal(args[args.indexOf("--server-name") + 1], "custom-pg");
+        return { stdout: "agentweaver", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set") {
+        assert.equal(args[args.indexOf("--name") + 1], "custom-pg");
+        return { stdout: "custom-pg", stderr: "", code: 0 };
+      }
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  const result = await provisionPostgres.run(cfg, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+  assert.equal(result.PG_SERVER_NAME, "custom-pg");
+  assert.equal(result.PG_FQDN, "custom-pg.postgres.database.azure.com");
+});
+
+test("17-provision-postgres: PG_HA_MODE override controls zonal resiliency flags", async () => {
+  const cfg = { ...CFG, PG_HA_MODE: "Disabled" };
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "list-skus") return { stdout: skuCapabilities(), stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "list") return { stdout: "10.0.0.4", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "secret") return { stdout: "apiVersion: v1\nkind: Secret\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  await provisionPostgres.run(cfg, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create");
+  assert.ok(createCall, "expected an 'az postgres flexible-server create' call");
+  assert.ok(!createCall.args.includes("--zonal-resiliency"), "Disabled HA mode must not request zonal resiliency");
+});
+
+test("17-provision-postgres: private mode remains the default and still uses subnet plus private DNS", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "/zone/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "list-skus") return { stdout: skuCapabilities(), stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "fullyQualifiedDomainName") {
+          return { stdout: "agentweaver-pg.postgres.database.azure.com", stderr: "", code: 0 };
+        }
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "list") return { stdout: "10.0.0.4", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "secret") return { stdout: "apiVersion: v1\nkind: Secret\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  await provisionPostgres.run(CFG, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create");
+  assert.ok(createCall, "expected an 'az postgres flexible-server create' call");
+  assert.ok(createCall.args.includes("--subnet"), "private mode must keep subnet wiring");
+  assert.ok(createCall.args.includes("--private-dns-zone"), "private mode must keep private DNS wiring");
+  assert.ok(!createCall.args.includes("--public-access"), "private mode must not create a public firewall rule");
+});
+
+test("17-provision-postgres: public mode skips subnet/private DNS setup and adds Azure-services firewall rule", async () => {
+  const cfg = { ...CFG, PG_LOCATION: "eastus2", PG_ACCESS_MODE: "public" };
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "list-skus") return { stdout: skuCapabilities(), stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "fullyQualifiedDomainName") {
+          return { stdout: "agentweaver-pg.postgres.database.azure.com", stderr: "", code: 0 };
+        }
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "secret") return { stdout: "apiVersion: v1\nkind: Secret\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+  await provisionPostgres.run(cfg, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+
+  assert.ok(!exec.calls.capture.some((c) => c.cmd === "az" && c.args[0] === "aks" && c.args[1] === "show"), "public mode must not inspect the AKS node resource group");
+  assert.ok(
+    !exec.calls.capture.some((c) => c.cmd === "az" && c.args[0] === "network" && c.args[1] === "private-dns"),
+    "public mode must skip private DNS reconciliation entirely",
+  );
+
+  const createCall = exec.calls.run.find((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create");
+  assert.ok(createCall, "expected an 'az postgres flexible-server create' call");
+  assert.ok(!createCall.args.includes("--subnet"), "public mode must not pass a subnet");
+  assert.ok(!createCall.args.includes("--private-dns-zone"), "public mode must not pass a private DNS zone");
+  assert.equal(createCall.args[createCall.args.indexOf("--public-access") + 1], "0.0.0.0");
+  assert.equal(createCall.args[createCall.args.indexOf("--location") + 1], "eastus2");
+});
+
+test("17-provision-postgres: fails fast when list-skus reports a restricted or unsupported SKU/region", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "/zone/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "list-skus") {
+        return {
+          stdout: skuCapabilities({
+            reason: "Subscriptions are restricted from provisioning in this region.",
+            offerRestrictedStatus: "Enabled",
+            supportedServerEditions: [],
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+
+  await assert.rejects(
+    () => provisionPostgres.run(CFG, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" }),
+    /SKU 'Standard_D2ds_v4' is not available.*Subscriptions are restricted from provisioning in this region/i,
+  );
+  assert.ok(
+    !exec.calls.run.some((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create"),
+    "restricted SKU pre-flight must fail before create is attempted",
+  );
+});
+
+test("17-provision-postgres: supported list-skus response still proceeds to create", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "MC_agentweaver-rg_agentweaver-aks_westus2", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "list") return { stdout: "aks-vnet", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "account" && args[1] === "show") return { stdout: "11111111-1111-1111-1111-111111111111", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "vnet" && args[2] === "subnet" && args[3] === "show") return { stdout: "/subnet/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "zone") return { stdout: "/zone/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "link") return { stdout: "/link/id", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "list-skus") return { stdout: skuCapabilities(), stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "show") {
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "state") return { stdout: "", stderr: "", code: 1 };
+        if (args.includes("--query") && args[args.indexOf("--query") + 1] === "fullyQualifiedDomainName") {
+          return { stdout: "agentweaver-pg.postgres.database.azure.com", stderr: "", code: 0 };
+        }
+      }
+      if (cmd === "az" && args[0] === "postgres" && args[1] === "flexible-server" && args[2] === "db") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "network" && args[1] === "private-dns" && args[2] === "record-set" && args[3] === "a" && args[4] === "list") return { stdout: "10.0.0.4", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "namespace") return { stdout: "apiVersion: v1\nkind: Namespace\n", stderr: "", code: 0 };
+      if (cmd === "kubectl" && args[0] === "create" && args[1] === "secret") return { stdout: "apiVersion: v1\nkind: Secret\n", stderr: "", code: 0 };
+      return null;
+    },
+  });
+  const fsImpl = { mkdirSync: () => {}, writeFileSync: () => {}, rmSync: () => {} };
+
+  await provisionPostgres.run(CFG, { exec, log: noopLog(), fs: fsImpl, repoRoot: "C:\\fake\\repo" });
+  assert.ok(
+    exec.calls.capture.some((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "list-skus"),
+    "expected SKU availability pre-flight to run before create",
+  );
+  assert.ok(
+    exec.calls.run.some((c) => c.cmd === "az" && c.args[0] === "postgres" && c.args[1] === "flexible-server" && c.args[2] === "create"),
+    "supported SKU pre-flight should still allow create",
+  );
 });
 
 // -------------------- gen-a2a-mtls-certs.mjs --------------------

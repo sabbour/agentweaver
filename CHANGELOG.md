@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- bfeb12d: Added `azure:provision-infra` support for provisioning PostgreSQL Flexible Server in a different Azure region from the AKS cluster. The installer now exposes `--postgres-location` / `PG_LOCATION` and `--postgres-access-mode` / `PG_ACCESS_MODE`, fails closed when a cross-region server is requested without switching to public access, creates the Azure-services-only firewall rule needed for public-access Flexible Server deployments, and performs a fail-fast SKU/region capability pre-flight so unsupported subscription+region combinations error immediately instead of hanging in Azure provisioning.
+- e7e2a4a: Add `--node-vm-size` / `NODE_VM_SIZE` to `azure:provision-infra` so new AKS clusters can override the node-pool VM SKU when a subscription or region disallows the default. The default new-cluster SKU is now `Standard_D4s_v6` (up from `Standard_D4s_v3`); existing clusters are unaffected because the installer skips cluster and node-pool creation when those resources already exist.
+- e3fdb53: Add a `custom` Azure installer image-source mode so deployments can import four operator-specified fully-qualified container image references instead of rebuilding in ACR or using only the repo-derived GHCR owner flow.
+
+### Patch Changes
+
+- b7bcfb3: Allow overriding the Postgres Flexible Server HA mode via `--postgres-ha-mode`/`PG_HA_MODE` between `ZoneRedundant` and `Disabled` to support regions and environments where zone-redundant HA is unavailable, including early-access/canary regions such as `eastus2euap`. Also fix Postgres server-name validation to reject names shorter than 3 characters.
+- d0d6b99: Allow overriding the Postgres Flexible Server name via `--postgres-server-name`/`PG_SERVER_NAME` to route around the rare case where the default `agentweaver-pg` name is already reserved elsewhere in Azure's global namespace.
+
 ## 0.15.0
 
 ### Minor Changes

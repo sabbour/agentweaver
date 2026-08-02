@@ -79,6 +79,16 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
     "--image-tag",
     "v1.2.3",
     "--resource-group=my-rg",
+    "--node-vm-size",
+    "Standard_D8s_v6",
+    "--postgres-server-name",
+    "custom-pg",
+    "--postgres-location",
+    "eastus2",
+    "--postgres-ha-mode",
+    "Disabled",
+    "--postgres-access-mode",
+    "public",
     "--github-client-secret",
     "shh",
   ]);
@@ -86,6 +96,11 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
   assert.equal(parsed.flags.SKIP_OAUTH_KEY, true);
   assert.equal(parsed.flags.IMAGE_TAG, "v1.2.3");
   assert.equal(parsed.flags.RESOURCE_GROUP, "my-rg");
+  assert.equal(parsed.flags.NODE_VM_SIZE, "Standard_D8s_v6");
+  assert.equal(parsed.flags.PG_SERVER_NAME, "custom-pg");
+  assert.equal(parsed.flags.PG_LOCATION, "eastus2");
+  assert.equal(parsed.flags.PG_HA_MODE, "Disabled");
+  assert.equal(parsed.flags.PG_ACCESS_MODE, "public");
   assert.equal(parsed.flags.GITHUB_CLIENT_SECRET, "shh");
 });
 
@@ -102,6 +117,25 @@ test("parseArgs: recognizes GHCR import flags", () => {
   assert.equal(parsed.flags.GHCR_REF, "v0.15.0");
   assert.equal(parsed.flags.GHCR_TOKEN, "topsecret");
   assert.equal(parsed.flags.FORCE, true);
+});
+
+test("parseArgs: recognizes custom image-source flags", () => {
+  const parsed = parseArgs([
+    "--image-source",
+    "custom",
+    "--image-api",
+    "ghcr.io/someuser/agentweaver-api:v1.2.3",
+    "--image-frontend=ghcr.io/someuser/agentweaver-frontend:v1.2.3",
+    "--image-mcp",
+    "ghcr.io/someuser/agentweaver-mcp:v1.2.3",
+    "--image-agent-host",
+    "ghcr.io/someuser/agentweaver-agent-host:v1.2.3",
+  ]);
+  assert.equal(parsed.flags.IMAGE_SOURCE, "custom");
+  assert.equal(parsed.flags.IMAGE_API, "ghcr.io/someuser/agentweaver-api:v1.2.3");
+  assert.equal(parsed.flags.IMAGE_FRONTEND, "ghcr.io/someuser/agentweaver-frontend:v1.2.3");
+  assert.equal(parsed.flags.IMAGE_MCP, "ghcr.io/someuser/agentweaver-mcp:v1.2.3");
+  assert.equal(parsed.flags.IMAGE_AGENT_HOST, "ghcr.io/someuser/agentweaver-agent-host:v1.2.3");
 });
 
 test("parseArgs: rejects ghcr-owner overrides so GHCR owner is always derived from origin", () => {
@@ -136,8 +170,14 @@ test("GitHub org validator: rejects malformed wildcard forms", () => {
 test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--skip-postgres/);
   assert.match(HELP_TEXT, /--params-file/);
+  assert.match(HELP_TEXT, /--node-vm-size <sku>/);
+  assert.match(HELP_TEXT, /--postgres-server-name <name>/);
+  assert.match(HELP_TEXT, /--postgres-location <region>/);
+  assert.match(HELP_TEXT, /--postgres-ha-mode <mode>/);
+  assert.match(HELP_TEXT, /--postgres-access-mode <private\|public>/);
   assert.match(HELP_TEXT, /--image-source <source>/);
   assert.match(HELP_TEXT, /--ghcr-ref <ref>/);
+  assert.match(HELP_TEXT, /--image-api <ref>/);
   assert.match(HELP_TEXT, /dev --setup/);
 });
 
@@ -200,14 +240,36 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     ACR_NAME: e.ACR_NAME,
     ACR_LOGIN_SERVER: `${e.ACR_NAME}.azurecr.io`,
     LOCATION: e.LOCATION,
+    NODE_VM_SIZE: e.NODE_VM_SIZE,
     KEYVAULT_NAME: e.KEYVAULT_NAME,
+    PG_SERVER_NAME: e.PG_SERVER_NAME,
+    PG_LOCATION: e.PG_LOCATION,
+    PG_HA_MODE: e.PG_HA_MODE,
+    PG_ACCESS_MODE: e.PG_ACCESS_MODE,
     NAMESPACE: e.NAMESPACE,
     IMAGE_TAG: e.IMAGE_TAG ?? "dev",
     AGENTHOST_IMAGE_TAG: "dev",
   });
 
   const result = await run({
-    argv: ["--resource-group", "my-rg", "--github-client-id", "id-123", "--github-client-secret", "topsecret"],
+    argv: [
+      "--resource-group",
+      "my-rg",
+      "--node-vm-size",
+      "Standard_D8s_v6",
+      "--postgres-server-name",
+      "custom-pg",
+      "--postgres-location",
+      "eastus2",
+      "--postgres-ha-mode",
+      "Disabled",
+      "--postgres-access-mode",
+      "public",
+      "--github-client-id",
+      "id-123",
+      "--github-client-secret",
+      "topsecret",
+    ],
     env: { GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" },
     prompt: { isInteractive: () => false },
     exec,
@@ -222,7 +284,218 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     ["createCluster", "setupIdentity", "provisionMonitoring", "oauthSigningKey", "provisionPostgres", "buildImages", "genA2aMtlsCerts", "deployStep", "verifyProvenance", "verifyStep"],
   );
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
+  assert.equal(calls[0].cfg.NODE_VM_SIZE, "Standard_D8s_v6");
+  assert.equal(calls[0].cfg.PG_SERVER_NAME, "custom-pg");
+  assert.equal(calls[0].cfg.PG_LOCATION, "eastus2");
+  assert.equal(calls[0].cfg.PG_HA_MODE, "Disabled");
+  assert.equal(calls[0].cfg.PG_ACCESS_MODE, "public");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");
+});
+
+test("run: rejects an invalid PG_SERVER_NAME before provisioning starts", async () => {
+  await assert.rejects(
+    run({
+      argv: [
+        "--postgres-server-name",
+        "Invalid_Name",
+        "--github-client-id",
+        "id-123",
+        "--github-client-secret",
+        "topsecret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+    }),
+    /PG_SERVER_NAME must be 3-63 chars of lowercase letters, numbers, or hyphens/,
+  );
+});
+
+test("run: rejects 1-2 character PG_SERVER_NAME values before provisioning starts", async () => {
+  for (const name of ["a", "ab"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--postgres-server-name",
+          name,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /PG_SERVER_NAME must be 3-63 chars of lowercase letters, numbers, or hyphens/,
+    );
+  }
+});
+
+test("run: rejects an invalid PG_HA_MODE before provisioning starts", async () => {
+  for (const mode of ["SameZone", "GeoRedundant"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--postgres-ha-mode",
+          mode,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /PG_HA_MODE must be one of: ZoneRedundant, Disabled\./,
+    );
+  }
+});
+
+test("run: rejects an invalid PG_ACCESS_MODE before provisioning starts", async () => {
+  for (const mode of ["Public", "internet"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--postgres-access-mode",
+          mode,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /PG_ACCESS_MODE must be one of: private, public\./,
+    );
+  }
+});
+
+test("run: rejects cross-region Postgres when access mode remains private", async () => {
+  let resolveVariablesCalls = 0;
+  const steps = {
+    createCluster: fakeStep("createCluster", []),
+  };
+  await assert.rejects(
+    run({
+      argv: [
+        "--location",
+        "eastus2euap",
+        "--postgres-location",
+        "eastus2",
+        "--github-client-id",
+        "id-123",
+        "--github-client-secret",
+        "topsecret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+      resolveVariables: async () => {
+        resolveVariablesCalls += 1;
+        return { IMAGE_TAG: "dev", AGENTHOST_IMAGE_TAG: "dev" };
+      },
+      steps,
+    }),
+    /cross-region Postgres, set --postgres-access-mode public/i,
+  );
+  assert.equal(resolveVariablesCalls, 0, "validation must fail before variable resolution or Azure calls");
+});
+
+test("run: allows cross-region Postgres when access mode is explicitly public", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls, { IMAGE_TAG: "abc123" }),
+    verifyProvenance: fakeStep("verifyProvenance", calls, { ok: true }),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, { HOST: "agentweaver.example.com", GATEWAY_IP: "1.2.3.4" }),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 10, fail: 0 }),
+  };
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture() {
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  };
+  const resolveVariablesFn = async ({ env: e }) => ({
+    RESOURCE_GROUP: e.RESOURCE_GROUP,
+    CLUSTER_NAME: e.CLUSTER_NAME,
+    ACR_NAME: e.ACR_NAME,
+    ACR_LOGIN_SERVER: `${e.ACR_NAME}.azurecr.io`,
+    LOCATION: e.LOCATION,
+    NODE_VM_SIZE: e.NODE_VM_SIZE,
+    KEYVAULT_NAME: e.KEYVAULT_NAME,
+    PG_SERVER_NAME: e.PG_SERVER_NAME,
+    PG_LOCATION: e.PG_LOCATION,
+    PG_HA_MODE: e.PG_HA_MODE,
+    PG_ACCESS_MODE: e.PG_ACCESS_MODE,
+    NAMESPACE: e.NAMESPACE,
+    IMAGE_TAG: e.IMAGE_TAG ?? "dev",
+    AGENTHOST_IMAGE_TAG: "dev",
+  });
+
+  const result = await run({
+    argv: [
+      "--location",
+      "eastus2euap",
+      "--postgres-location",
+      "eastus2",
+      "--postgres-access-mode",
+      "public",
+      "--github-client-id",
+      "id-123",
+      "--github-client-secret",
+      "topsecret",
+    ],
+    env: {
+      RESOURCE_GROUP: "my-rg",
+      CLUSTER_NAME: "my-cluster",
+      ACR_NAME: "myacr",
+      KEYVAULT_NAME: "my-kv",
+      NAMESPACE: "agentweaver",
+    },
+    prompt: { isInteractive: () => false },
+    exec,
+    log: noopLog(),
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].cfg.LOCATION, "eastus2euap");
+  assert.equal(calls[0].cfg.PG_LOCATION, "eastus2");
+  assert.equal(calls[0].cfg.PG_ACCESS_MODE, "public");
+});
+
+test("run: rejects an invalid NODE_VM_SIZE before provisioning starts", async () => {
+  for (const sku of ["", "D4s_v6", "Standard D4s v6"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--node-vm-size",
+          sku,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /NODE_VM_SIZE must be a non-empty Azure VM SKU like Standard_D4s_v6\./,
+    );
+  }
 });
 
 test("run: ghcr image-source resolves derived owner and passes GHCR config through to the image step", async () => {
@@ -349,6 +622,134 @@ test("run: IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner c
       resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
     }),
     /requires a GitHub origin remote/i,
+  );
+});
+
+test("run: custom image-source passes all four fully-qualified refs through to the image step", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls, {
+      expectedImageDigests: { "agentweaver-api": "sha256:" + "a".repeat(64) },
+      importedImageSources: {
+        "agentweaver-api": {
+          digest: "sha256:" + "a".repeat(64),
+          sourceImage: "ghcr.io/fork/agentweaver-api:v1.2.3",
+        },
+      },
+    }),
+    verifyProvenance: fakeStep("verifyProvenance", calls, { ok: true }),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, { HOST: "agentweaver.example.com", GATEWAY_IP: "1.2.3.4" }),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 10, fail: 0 }),
+  };
+  const exec = { async run() { return { code: 0 }; }, async capture() { return { stdout: "", stderr: "", code: 0 }; } };
+  const resolveVariablesFn = async ({ env: e }) => ({
+    RESOURCE_GROUP: "my-rg",
+    CLUSTER_NAME: "my-cluster",
+    ACR_NAME: "myacr",
+    ACR_LOGIN_SERVER: "myacr.azurecr.io",
+    LOCATION: "westus2",
+    KEYVAULT_NAME: "my-kv",
+    NAMESPACE: "agentweaver",
+    IMAGE_TAG: "v0.15.0",
+    AGENTHOST_IMAGE_TAG: "v0.15.0",
+    IMAGE_API: e.IMAGE_API,
+    IMAGE_FRONTEND: e.IMAGE_FRONTEND,
+    IMAGE_MCP: e.IMAGE_MCP,
+    IMAGE_AGENT_HOST: e.IMAGE_AGENT_HOST,
+  });
+
+  await run({
+    argv: [
+      "--image-source",
+      "custom",
+      "--image-api",
+      "ghcr.io/fork/agentweaver-api:v1.2.3",
+      "--image-frontend",
+      "ghcr.io/fork/agentweaver-frontend:v1.2.3",
+      "--image-mcp",
+      "ghcr.io/fork/agentweaver-mcp:v1.2.3",
+      "--image-agent-host",
+      "ghcr.io/fork/agentweaver-agent-host:v1.2.3",
+      "--github-client-id",
+      "id-123",
+      "--github-client-secret",
+      "oauthsecret",
+    ],
+    env: {},
+    prompt: { isInteractive: () => false },
+    exec,
+    log: noopLog(),
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  const buildCall = calls.find((c) => c.step === "buildImages");
+  assert.equal(buildCall.cfg.IMAGE_SOURCE, "custom");
+  assert.equal(buildCall.cfg.IMAGE_API, "ghcr.io/fork/agentweaver-api:v1.2.3");
+  assert.equal(buildCall.cfg.IMAGE_FRONTEND, "ghcr.io/fork/agentweaver-frontend:v1.2.3");
+  assert.equal(buildCall.cfg.IMAGE_MCP, "ghcr.io/fork/agentweaver-mcp:v1.2.3");
+  assert.equal(buildCall.cfg.IMAGE_AGENT_HOST, "ghcr.io/fork/agentweaver-agent-host:v1.2.3");
+  const verifyCall = calls.find((c) => c.step === "verifyProvenance");
+  assert.equal(verifyCall.cfg.IMPORTED_IMAGE_SOURCES["agentweaver-api"].sourceImage, "ghcr.io/fork/agentweaver-api:v1.2.3");
+});
+
+test("run: IMAGE_SOURCE=custom fails closed when one of the four image refs is missing", async () => {
+  await assert.rejects(
+    run({
+      argv: [
+        "--image-source",
+        "custom",
+        "--image-api",
+        "ghcr.io/fork/agentweaver-api:v1.2.3",
+        "--image-frontend",
+        "ghcr.io/fork/agentweaver-frontend:v1.2.3",
+        "--image-mcp",
+        "ghcr.io/fork/agentweaver-mcp:v1.2.3",
+        "--github-client-id",
+        "id",
+        "--github-client-secret",
+        "secret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+      resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
+    }),
+    /IMAGE_AGENT_HOST is required when IMAGE_SOURCE=custom/i,
+  );
+});
+
+test("run: IMAGE_SOURCE=custom rejects malformed image refs", async () => {
+  await assert.rejects(
+    run({
+      argv: [
+        "--image-source",
+        "custom",
+        "--image-api",
+        "agentweaver-api:v1.2.3",
+        "--image-frontend",
+        "ghcr.io/fork/agentweaver-frontend:v1.2.3",
+        "--image-mcp",
+        "ghcr.io/fork/agentweaver-mcp:v1.2.3",
+        "--image-agent-host",
+        "ghcr.io/fork/agentweaver-agent-host:v1.2.3",
+        "--github-client-id",
+        "id",
+        "--github-client-secret",
+        "secret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+      resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
+    }),
+    /IMAGE_API='agentweaver-api:v1\.2\.3' is not a valid fully-qualified image reference/i,
   );
 });
 
@@ -503,6 +904,9 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
   assert.equal(collected.RESOURCE_GROUP, "existing-rg");
   assert.equal(rgChoicesSeen[0].label, "Create new...", "Create new... must be the first resource-group choice");
   assert.equal(collected.LOCATION, "westus2");
+  assert.equal(collected.NODE_VM_SIZE, "Standard_D4s_v6");
+  assert.equal(collected.PG_LOCATION, "westus2");
+  assert.equal(collected.PG_ACCESS_MODE, "private");
   assert.equal(collected.GITHUB_CLIENT_SECRET, "super-secret-value");
   assert.equal(collected.GITHUB_ALLOWED_ORG, "microsoft");
   assert.ok(selectCalls.length >= 3);
