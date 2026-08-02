@@ -454,7 +454,7 @@ export function SettingsPage() {
         >
           <div className={styles.section}>
             <Body>
-              Remove @{unlinkCandidate.login} from this Entra profile? Agentweaver no longer has a shared fallback GitHub token, so unlinking immediately removes any repository or Copilot access that depends on this account.
+              Remove @{unlinkCandidate.login} from this Entra profile? Unlinking immediately removes any repository or Copilot access that depends on this account.
             </Body>
             {unlinkWarnings.length > 0 && (
               <div className={styles.listBox}>

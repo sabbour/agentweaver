@@ -99,7 +99,7 @@ describe('SettingsPage', () => {
     await screen.findByText(/Octocat/);
     fireEvent.click(screen.getAllByRole('button', { name: 'Unlink' })[0]!);
     expect(await screen.findByText('Unlink GitHub account')).toBeDefined();
-    expect(screen.getByText(/shared fallback GitHub token/i)).toBeDefined();
+    expect(screen.getByText(/removes any repository or copilot access/i)).toBeDefined();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
 

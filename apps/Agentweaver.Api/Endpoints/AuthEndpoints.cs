@@ -64,6 +64,29 @@ app.MapGet("/api/auth/context", (HttpContext httpContext, IConfiguration configu
     });
 });
 
+// GET /api/auth/session — the web app's post-sign-in identity/session check (AuthGate in
+// apps/web/src/App.tsx). Reaching this handler at all means the caller already presented a
+// valid bearer token (GitHubTokenAuthMiddleware ran first), so `authenticated` is always true
+// here; an absent/invalid token 401s before this route is ever matched, which the web app's
+// apiClient already treats as "signed out". This route is exempt from
+// PlatformRoleAuthorizationMiddleware so a signed-in caller with zero platform roles can still
+// see their own identity/roles (empty) instead of a 403 dead end.
+app.MapGet("/api/auth/session", (HttpContext httpContext, IConfiguration configuration) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    return Results.Ok(new
+    {
+        authenticated = true,
+        auth_mode = AuthModeResolver.ToWireValue(AuthModeResolver.Resolve(configuration)),
+        display_name = caller.DisplayName,
+        email = caller.Email,
+        login = caller.GitHubLogin,
+        avatar_url = (string?)null,
+        entra_object_id = caller.EntraObjectId,
+        platform_roles = caller.PlatformRoles,
+    });
+});
+
 // GET /auth/github/authorize — begin OAuth redirect flow
 app.MapGet("/auth/github/authorize", async (HttpContext httpContext, GitHubOAuthRedirectService oauthService, CancellationToken ct) =>
 {
