@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.16.1
+
+### Patch Changes
+
+- 073d9f9: fix(auth): repair linked-GitHub-account route/verb mismatches and the dead "link account" flow
+
+  The Entra multi-account GitHub linking feature never actually worked end-to-end:
+
+  - `client.ts`'s `listLinkedGitHubAccounts`, `setDefaultLinkedGitHubAccount`,
+    `unlinkLinkedGitHubAccount`, and `listAccessibleGitHubRepos` called routes that never
+    existed server-side (`/auth/github/linked-accounts*`, `/github/repos/accessible`), and one
+    used the wrong HTTP verb (`POST` instead of `PUT`). Every one of these operations 404'd.
+  - "Add account" / "Link another GitHub account" built a URL to `/auth/github/authorize` with
+    an `intent=link` query param the server never reads — that endpoint always runs a plain
+    sign-in exchange, never the dedicated link flow. Added `apiClient.beginLinkGitHubAccount()`
+    calling the correct, pre-existing `POST /auth/github-accounts/link` endpoint and rewired
+    both call sites to use it.
+  - The accessible-repos response used inconsistent JSON casing versus what the frontend
+    expects and was missing the source account's avatar/default-flag fields; fixed end to end.
+  - `LinkedGitHubAccountResponse` was missing `name`/`type` fields the frontend type requires;
+    populated with `type: "user"` (GitHub identity links are always personal accounts, never
+    orgs) and `name: null` (not fetched at link time).
+
+- 1295cfb: Fixed the PostgreSQL region/SKU pre-flight check rejecting every region during `provision-infra`. `az postgres flexible-server list-skus` returns a JSON array of capability sets, but the check read the capability fields off the array itself, so it always concluded that no server editions were supported and aborted before creating the Flexible Server — even in regions where the SKU was perfectly available. The failure also reported a fabricated reason (`Azure reported no supported server editions for this subscription/region.`) that hid Azure's real explanation, turning an actionable message such as "Subscriptions are restricted from provisioning in this region ... open a support request with Issue type of 'Service and subscription limits'" into a dead end. Provisioning now succeeds in supported regions, and genuinely restricted regions surface Azure's own wording so you can pick another `--postgres-location` or request an exception.
+- 07c3598: fix: add missing Postgres migrations for notifications/GitHub-linking, polish sidebar GitHub sign-in UX
+
+  - Added the Postgres counterparts of two migrations that only ever existed in the
+    SQLite dev-migrations project (`apps/Agentweaver.Api/Migrations`), so the live
+    production Postgres provider (which resolves migrations from the separate
+    `Agentweaver.Api.Migrations.Postgres` assembly) never created their tables:
+    - `dismissed_notifications` — caused `GET /api/notifications` to 500.
+    - `github_account_link_states` / `project_github_identity_overrides` — caused
+      "Link another GitHub account" to 500 with
+      `42P01: relation "github_account_link_states" does not exist`.
+  - `GitHubSignIn` (sidebar popover): wrapped the trigger in a tooltip so it's
+    discoverable as the GitHub account switcher, added a persistent "Entra ID"
+    badge + popover banner when signed in via Microsoft Entra ID, fixed the
+    collapsed-rail (64px) layout so the trigger and status/version badge no
+    longer squish together, and truncated long account name/login text in the
+    popover's account lists.
+  - `SettingsPage`: added a confirmation toast when landing on
+    `?auth=github_linked&login=...` (the redirect from the GitHub account-link
+    flow), then strips those query params so a refresh doesn't re-fire it.
+
+- 6314349: fix(auth): make `/api/server/info` genuinely anonymous and return the configured auth mode
+
+  `GET /api/server/info` is what the web app calls before sign-in to decide whether to show
+  the Entra or GitHub sign-in button, but it was unreachable and incomplete:
+
+  - Despite `.AllowAnonymous()`, the custom bearer-token (`GitHubTokenAuthMiddleware`) and
+    GitHub-org authorization middlewares keep their own hardcoded anonymous-path allowlists
+    and never consulted endpoint metadata, so every unauthenticated call got a 401.
+  - The response body omitted `auth_mode` / `auth_mode_label` / `auth_mode_recommended`
+    entirely, so even a successful call could not report the deployment's auth mode.
+
+  The frontend defaults to `github-legacy` whenever the field is missing or the call fails,
+  so Entra deployments (`AUTH_MODE=Entra`) silently showed "Sign in with GitHub". The
+  endpoint is now exempt in all auth middlewares (and marked public in the OpenAPI document)
+  and returns the auth mode resolved through the existing `AuthModeResolver`.
+
+- 7797a39: Fixed public-access Postgres (`--postgres-access-mode public`) deployments where the generated Kubernetes egress policies still allowlisted the private delegated-subnet CIDR, so API and worker pods could never reach the Flexible Server (`Npgsql.NpgsqlException: Failed to connect ... TimeoutException`) even with the Azure-side firewall and public network access configured correctly. Public mode now emits FQDN-based `CiliumNetworkPolicy` objects (`allow-api-postgres-egress-fqdn` / `allow-worker-postgres-egress-fqdn`) that allow port 5432 to `<PG_SERVER_NAME>.postgres.database.azure.com` via Cilium `toFQDNs`, which stays correct when Azure changes the server's public IP. Private mode keeps the existing ipBlock `NetworkPolicy` objects unchanged.
+
 ## 0.16.0
 
 ### Minor Changes

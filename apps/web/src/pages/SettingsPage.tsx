@@ -1,5 +1,5 @@
 import { apiClient } from '../api/apiClient';
-import { MCP_URL, GITHUB_AUTHORIZE_URL } from '../config';
+import { MCP_URL } from '../config';
 import { ApiError } from '../api/client';
 import {
   Badge,
@@ -10,10 +10,17 @@ import {
   MessageBarBody,
   Spinner,
   Switch,
+  Toast,
+  ToastBody,
+  ToastTitle,
+  Toaster,
   makeStyles,
   tokens,
+  useId,
+  useToastController,
 } from '@fluentui/react-components';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount, SandboxPolicy, ServerInfo } from '../api/types';
 import {
   Body,
@@ -131,20 +138,11 @@ function authModeLabel(mode: AuthMode | undefined): string {
   return mode ? AUTH_MODE_LABELS[mode] : 'GitHub';
 }
 
-function goToGitHubLinkFlow() {
-  const url = new URL(GITHUB_AUTHORIZE_URL);
-  // Assumption for Tank's Entra-linked GitHub flow: the backend distinguishes a
-  // post-sign-in link round-trip from an initial sign-in via `intent=link`, then
-  // returns the browser to this page after the OAuth callback completes.
-  url.searchParams.set('intent', 'link');
-  if (typeof window !== 'undefined') {
-    url.searchParams.set('return_to', `${window.location.pathname}${window.location.search}`);
-    window.location.href = url.toString();
-  }
-}
-
 export function SettingsPage() {
   const styles = useStyles();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const toasterId = useId('settings-toaster');
+  const { dispatchToast } = useToastController(toasterId);
   const [repositoryPath, setRepositoryPath] = useState('');
   const [policy, setPolicy] = useState<SandboxPolicy | null>(null);
   const [loading, setLoading] = useState(false);
@@ -211,6 +209,29 @@ export function SettingsPage() {
     queueMicrotask(() => { void loadLinkedAccounts(); });
   }, [authMode, loadLinkedAccounts]);
 
+  // Redirect landing from AuthEndpoints' GitHub linking flow (`/settings?auth=github_linked&login=...`).
+  // Surface a confirmation toast, then strip the query params so a refresh doesn't re-fire it.
+  // linkToastShownRef guards against StrictMode's dev-only double effect invocation dispatching
+  // the toast twice before setSearchParams' URL update is reflected back into searchParams.
+  const linkToastShownRef = useRef(false);
+  useEffect(() => {
+    if (searchParams.get('auth') !== 'github_linked') return;
+    if (linkToastShownRef.current) return;
+    linkToastShownRef.current = true;
+    const login = searchParams.get('login');
+    dispatchToast(
+      <Toast>
+        <ToastTitle>GitHub account linked</ToastTitle>
+        <ToastBody>{login ? `@${login} is now linked to your account.` : 'Your GitHub account is now linked.'}</ToastBody>
+      </Toast>,
+      { intent: 'success', timeout: 6000 },
+    );
+    const next = new URLSearchParams(searchParams);
+    next.delete('auth');
+    next.delete('login');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, dispatchToast, setSearchParams]);
+
   const platformRoles = useMemo(
     () => (session?.platform_roles ?? []).filter((role, index, all) => all.indexOf(role) === index),
     [session?.platform_roles],
@@ -238,6 +259,22 @@ export function SettingsPage() {
     } catch (err) {
       setAccountActionError(formatError(err));
     } finally {
+      setAccountActionKey(null);
+    }
+  };
+
+  const handleAddAccount = async () => {
+    setAccountActionKey('add-account');
+    setAccountActionError(null);
+    try {
+      // The plain /auth/github/authorize redirect is a sign-in flow, not a link flow -- the
+      // server ignores any "intent" query param there. Linking a second account requires
+      // POST /auth/github-accounts/link, which registers a pending-link state so the OAuth
+      // callback actually calls CompleteLinkAsync() instead of a normal sign-in exchange.
+      const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setAccountActionError(formatError(err));
       setAccountActionKey(null);
     }
   };
@@ -297,6 +334,7 @@ export function SettingsPage() {
 
   return (
     <PageContainer width="readable">
+      <Toaster toasterId={toasterId} position="top-end" />
       <PageHeader
         title="Account settings"
         description="Manage authentication, linked GitHub accounts, MCP access, and local repository sandbox policy."
@@ -362,8 +400,12 @@ export function SettingsPage() {
         title="Linked GitHub accounts"
         description="In Entra ID mode, one signed-in user can link multiple GitHub identities and choose which one Agentweaver uses by default."
         actions={authMode === 'entra' ? (
-          <Button appearance="primary" onClick={goToGitHubLinkFlow}>
-            Link another GitHub account
+          <Button
+            appearance="primary"
+            disabled={accountActionKey !== null}
+            onClick={() => void handleAddAccount()}
+          >
+            {accountActionKey === 'add-account' ? 'Redirecting…' : 'Link another GitHub account'}
           </Button>
         ) : undefined}
       >
@@ -454,7 +496,7 @@ export function SettingsPage() {
         >
           <div className={styles.section}>
             <Body>
-              Remove @{unlinkCandidate.login} from this Entra profile? Agentweaver no longer has a shared fallback GitHub token, so unlinking immediately removes any repository or Copilot access that depends on this account.
+              Remove @{unlinkCandidate.login} from this Entra profile? Unlinking immediately removes any repository or Copilot access that depends on this account.
             </Body>
             {unlinkWarnings.length > 0 && (
               <div className={styles.listBox}>

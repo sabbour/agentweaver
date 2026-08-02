@@ -44,11 +44,18 @@ app.MapPost("/api/projects", CreateProjectAsync)
     });
 
 // GET /api/server/info — public server metadata (no auth required)
-app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider) => Results.Ok(new
+app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider, IConfiguration configuration) =>
 {
-    data_directory          = AppPaths.DataDirectory,
-    workspace_auto_assigned = workspaceProvider.AutoAssignsPath,
-})).AllowAnonymous();
+    var authMode = AuthModeResolver.Resolve(configuration);
+    return Results.Ok(new
+    {
+        data_directory          = AppPaths.DataDirectory,
+        workspace_auto_assigned = workspaceProvider.AutoAssignsPath,
+        auth_mode               = AuthModeResolver.ToWireValue(authMode),
+        auth_mode_label         = AuthModeResolver.ToLabel(authMode),
+        auth_mode_recommended   = AuthModeResolver.IsRecommended(authMode),
+    });
+}).AllowAnonymous();
 
 // GET /api/projects — list all projects (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects", ListProjectsAsync)

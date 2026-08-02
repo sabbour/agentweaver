@@ -1,4 +1,4 @@
-import { Button, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, MessageBar, MessageBarBody, MessageBarTitle, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ENTRA_AUTHORIZE_URL, GITHUB_AUTHORIZE_URL } from '../config';
 import { GitHubIcon } from '../components/GitHubIcon';
 import type { AuthMode } from '../api/types';
@@ -80,6 +80,14 @@ const useStyles = makeStyles({
 
 export interface SignInPageProps {
   authMode?: AuthMode;
+  /**
+   * A session-check failure surfaced by AuthGate (apps/web/src/App.tsx) — e.g. `/api/auth/session`
+   * returning an unexpected status, a platform-role denial, or a network error. Distinct from
+   * `authError` below (which reads `?auth=error&reason=` set by the *server-side* OAuth redirect
+   * on failure): this covers failures that happen client-side, after redirect, so the user always
+   * sees why they landed back on the sign-in screen instead of silently retrying forever.
+   */
+  sessionError?: string | null;
 }
 
 function authHeading(mode: AuthMode | undefined) {
@@ -92,7 +100,7 @@ function authCopy(mode: AuthMode | undefined) {
     : 'Use your GitHub account to continue to Agentweaver.';
 }
 
-export function SignInPage({ authMode = 'github-legacy' }: SignInPageProps) {
+export function SignInPage({ authMode = 'github-legacy', sessionError = null }: SignInPageProps) {
   const styles = useStyles();
 
   const params = new URLSearchParams(window.location.search);
@@ -107,6 +115,15 @@ export function SignInPage({ authMode = 'github-legacy' }: SignInPageProps) {
           <Text className={styles.wordmark}>Agentweaver</Text>
         </div>
 
+        {sessionError && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>Couldn't check your sign-in status</MessageBarTitle>
+              {sessionError}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
         <div>
           <Text as="h1" className={styles.heading}>{authHeading(authMode)}</Text>
           <Text as="p" className={styles.subheading}>{authCopy(authMode)}</Text>
@@ -117,7 +134,7 @@ export function SignInPage({ authMode = 'github-legacy' }: SignInPageProps) {
             <Text className={styles.checklistItem}>1. Sign in to Agentweaver with your Entra ID account.</Text>
             <Text className={styles.checklistItem}>2. Link at least one GitHub account before importing repositories or running GitHub/Copilot actions.</Text>
             <Text className={styles.note}>
-              You can still browse Agentweaver before linking GitHub, but GitHub operations no longer use any shared fallback token.
+              You can browse Agentweaver right after signing in; link a GitHub account whenever you're ready to import a repository or run GitHub/Copilot actions.
             </Text>
           </div>
         )}

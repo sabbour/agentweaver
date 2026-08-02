@@ -143,6 +143,99 @@ export const FILE_RESOURCES = Object.freeze({
 });
 
 /**
+ * The two ipBlock-based Postgres egress NetworkPolicies. They are correct for
+ * PG_ACCESS_MODE=private (the Flexible Server is VNet-integrated into the
+ * delegated subnet), but WRONG for PG_ACCESS_MODE=public: there the server is
+ * reachable over a public IP, so a private-CIDR ipBlock silently blocks every
+ * pod -> Postgres connection. In public mode these are swapped for the
+ * FQDN-based CiliumNetworkPolicies below.
+ */
+const POSTGRES_IPBLOCK_POLICY_NAMES = Object.freeze(["allow-api-postgres-egress", "allow-worker-postgres-egress"]);
+
+/**
+ * filename -> the FQDN-based CiliumNetworkPolicy that replaces that file's
+ * ipBlock Postgres rule when PG_ACCESS_MODE=public. Keeping one policy per
+ * original file preserves today's api/worker split (and the staged apply
+ * order in steps/30-deploy.mjs) instead of collapsing them into one object.
+ */
+const POSTGRES_FQDN_POLICIES = Object.freeze({
+  "networkpolicy-postgres-egress.yaml": { name: "allow-api-postgres-egress-fqdn", app: "agentweaver-api" },
+  "networkpolicy-worker.yaml": { name: "allow-worker-postgres-egress-fqdn", app: "agentweaver-worker" },
+});
+
+/** True when the resolved variable set asks for public-access (cross-region) Postgres. */
+export function isPublicPostgresAccess(vars = {}) {
+  return String(vars?.PG_ACCESS_MODE ?? "").trim().toLowerCase() === "public";
+}
+
+/**
+ * Public-access Postgres FQDN for the configured server, matching the FQDN
+ * steps/17-provision-postgres.mjs derives (`<server>.postgres.database.azure.com`).
+ * @param {Record<string, unknown>} vars
+ */
+export function postgresFqdn(vars = {}) {
+  const serverName = String(vars?.PG_SERVER_NAME ?? "").trim();
+  if (!serverName) {
+    throw new Error("kustomize.mjs: PG_SERVER_NAME is required to build the public-mode Postgres egress policy");
+  }
+  return `${serverName}.postgres.database.azure.com`;
+}
+
+/**
+ * Renders the FQDN-based Postgres egress CiliumNetworkPolicy used when
+ * PG_ACCESS_MODE=public.
+ *
+ * Why toFQDNs instead of an ipBlock: an Azure Flexible Server in public-access
+ * mode has a real, Azure-managed public IP that can change over time, so any
+ * static ipBlock allowlist would need periodic reconciliation. Cilium's
+ * built-in FQDN proxy resolves the name dynamically, exactly like the existing
+ * `agentweaver-app-egress-fqdn-allowlist` policy in this namespace does for the
+ * GitHub/OpenAI endpoints -- this policy deliberately mirrors that style,
+ * including the kube-dns visibility rule the FQDN proxy needs to learn the
+ * resolved addresses.
+ *
+ * @param {{ name: string, app: string }} policy
+ * @param {Record<string, unknown>} vars
+ * @returns {string}
+ */
+export function buildPostgresFqdnPolicy(policy, vars) {
+  const fqdn = postgresFqdn(vars);
+  // Namespace is pinned to `agentweaver` by k8s/overlays/production/kustomization.yaml,
+  // so every kustomize-built doc these policies sit alongside lands there too.
+  return `apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ${policy.name}
+  namespace: agentweaver
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  endpointSelector:
+    matchLabels:
+      app: ${policy.app}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: "${fqdn}"
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP`;
+}
+
+/**
  * Builds the agentweaver-runtime-config ConfigMap literal set from a
  * resolved variable set (cfg plus the live-derived HOST, PREVIEW_HOSTNAME,
  * etc. fields -- see steps/30-deploy.mjs's renderVars). Key names match the
@@ -297,15 +390,23 @@ export function parseBuiltDocs(builtYaml) {
  * Throws if a filename's expected resource is missing from `docs` (fail
  * fast rather than silently apply a partial/empty manifest).
  *
+ * When `vars.PG_ACCESS_MODE` is `public`, the two ipBlock-based Postgres
+ * egress NetworkPolicies are dropped and replaced, in place, by FQDN-based
+ * CiliumNetworkPolicies (see buildPostgresFqdnPolicy). Private mode is
+ * unchanged.
+ *
  * @param {{kind: string, name: string, text: string}[]} docs
  * @param {string} filename
+ * @param {{ vars?: Record<string, unknown> }} [opts]
  * @returns {string}
  */
-export function manifestForFilename(docs, filename) {
-  const wanted = FILE_RESOURCES[filename];
-  if (!wanted) {
+export function manifestForFilename(docs, filename, opts = {}) {
+  const all = FILE_RESOURCES[filename];
+  if (!all) {
     throw new Error(`kustomize.mjs: no FILE_RESOURCES entry for '${filename}'`);
   }
+  const publicPostgres = isPublicPostgresAccess(opts.vars);
+  const wanted = publicPostgres ? all.filter(({ name }) => !POSTGRES_IPBLOCK_POLICY_NAMES.includes(name)) : all;
   const parts = wanted.map(({ kind, name }) => {
     const doc = docs.find((d) => d.kind === kind && d.name === name);
     if (!doc) {
@@ -313,5 +414,9 @@ export function manifestForFilename(docs, filename) {
     }
     return doc.text;
   });
+  const fqdnPolicy = publicPostgres ? POSTGRES_FQDN_POLICIES[filename] : undefined;
+  if (fqdnPolicy) {
+    parts.push(buildPostgresFqdnPolicy(fqdnPolicy, opts.vars ?? {}));
+  }
   return parts.join("\n---\n");
 }

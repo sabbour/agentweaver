@@ -17,7 +17,9 @@ public sealed record AccessibleGitHubRepository(
     string DefaultBranch,
     string? HtmlUrl,
     string AccessibleViaLogin,
-    string Permission);
+    string Permission,
+    string? AccessibleViaAvatarUrl,
+    bool AccessibleViaIsDefault);
 
 public sealed class LinkedGitHubAccountService(
     MemoryDbContext db,
@@ -167,7 +169,9 @@ public sealed class LinkedGitHubAccountService(
                     repo.DefaultBranch ?? "main",
                     repo.HtmlUrl,
                     link.GitHubLogin,
-                    ResolvePermission(repo.Permissions))));
+                    ResolvePermission(repo.Permissions),
+                    link.AvatarUrl,
+                    link.IsDefault)));
 
                 if (repos.Length < perPage)
                     break;
