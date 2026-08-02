@@ -51,6 +51,7 @@ export const DEFAULTS = Object.freeze({
   NODE_VM_SIZE: "Standard_D4s_v6",
   PG_SERVER_NAME: "agentweaver-pg",
   PG_HA_MODE: "ZoneRedundant",
+  PG_ACCESS_MODE: "private",
   // Deliberately NO default here (see resolveKeyvaultName() below): unlike
   // the other resource names, a wrong-but-plausible Key Vault name doesn't
   // just fail to find a resource -- it silently redirects the rendered
@@ -211,7 +212,9 @@ export async function resolveVariables(options = {}) {
   const LOCATION = pick("LOCATION");
   const NODE_VM_SIZE = pick("NODE_VM_SIZE");
   const PG_SERVER_NAME = pick("PG_SERVER_NAME");
+  const PG_LOCATION = env.PG_LOCATION || LOCATION;
   const PG_HA_MODE = pick("PG_HA_MODE");
+  const PG_ACCESS_MODE = pick("PG_ACCESS_MODE");
   const NAMESPACE = pick("NAMESPACE");
   const KATA_POOL_NAME = pick("KATA_POOL_NAME");
   const APP_POOL_NAME = pick("APP_POOL_NAME");
@@ -285,7 +288,9 @@ export async function resolveVariables(options = {}) {
     LOCATION,
     NODE_VM_SIZE,
     PG_SERVER_NAME,
+    PG_LOCATION,
     PG_HA_MODE,
+    PG_ACCESS_MODE,
     NAMESPACE,
     KATA_POOL_NAME,
     APP_POOL_NAME,
@@ -320,7 +325,9 @@ export function printSummary(vars, log) {
   log.field("Location", vars.LOCATION);
   log.field("Node VM size", vars.NODE_VM_SIZE);
   log.field("Postgres server", vars.PG_SERVER_NAME);
+  log.field("Postgres location", vars.PG_LOCATION);
   log.field("Postgres HA mode", vars.PG_HA_MODE);
+  log.field("Postgres access mode", vars.PG_ACCESS_MODE);
   log.field("Namespace", vars.NAMESPACE);
   log.field("Kata pool", vars.KATA_POOL_NAME);
   log.field("App pool", vars.APP_POOL_NAME);

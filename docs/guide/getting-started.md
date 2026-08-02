@@ -280,20 +280,21 @@ already-committed ref that should be deployed without switching this checkout.
 > [RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md).
 
 With no flags, in an interactive terminal, this prompts you through Azure
-subscription, resource group, location, cluster/ACR/Key Vault names (smart
-defaults, all editable — navigate list prompts with the arrow keys and Enter,
-or type a digit; falls back to the classic numbered prompt automatically when
-raw-mode input isn't available), your GitHub OAuth App client ID + secret,
-and the GitHub org(s) allowed to sign in (comma-separated, default
-`microsoft`; invalid entries are rejected with a clear message and
-re-prompted rather than crashing the installer). Before asking for the OAuth
-credentials, it walks you through creating the OAuth App itself (with the
-[creation link](https://github.com/settings/applications/new) and the right
-callback URL for local vs. Azure). It then provisions AKS, PostgreSQL, Key
-Vault, ACR, identity, and monitoring, builds and pushes images, and deploys
-and verifies the release. It prints an outputs summary at the end (cluster,
-ACR, gateway host, **GitHub OAuth callback URL**, **allowed GitHub org(s)**,
-verification pass/fail counts) and never prints the OAuth client secret.
+subscription, resource group, location, cluster/ACR/Key Vault names, Postgres
+server/location/access-mode settings (smart defaults, all editable — navigate
+list prompts with the arrow keys and Enter, or type a digit; falls back to the
+classic numbered prompt automatically when raw-mode input isn't available),
+your GitHub OAuth App client ID + secret, and the GitHub org(s) allowed to
+sign in (comma-separated, default `microsoft`; invalid entries are rejected
+with a clear message and re-prompted rather than crashing the installer).
+Before asking for the OAuth credentials, it walks you through creating the
+OAuth App itself (with the [creation
+link](https://github.com/settings/applications/new) and the right callback URL
+for local vs. Azure). It then provisions AKS, PostgreSQL, Key Vault, ACR,
+identity, and monitoring, builds and pushes images, and deploys and verifies
+the release. It prints an outputs summary at the end (cluster, ACR, gateway
+host, **GitHub OAuth callback URL**, **allowed GitHub org(s)**, verification
+pass/fail counts) and never prints the OAuth client secret.
 
 > **GitHub OAuth App callback URL — local vs. Azure.** The callback URL you
 > register on the GitHub OAuth App must match where the app is actually
@@ -316,6 +317,27 @@ For non-interactive deploys (flags, environment variables, or a
 and the full flag reference, see the [README's Deploy to Azure
 section](https://github.com/sabbour/agentweaver#deploy-to-azure) and the
 [npm script reference](#npm-script-reference) below.
+
+If AKS must stay in one region (for example, to keep using App Routing's
+default domain support) but Azure blocks PostgreSQL provisioning there, set
+`PG_LOCATION` / `--postgres-location` to a supported production region and
+also set `PG_ACCESS_MODE=public` / `--postgres-access-mode public`. This is a
+required pair: private delegated-subnet access is single-region only, so
+Agentweaver now fails closed before any Azure calls if you try a cross-region
+Postgres server while leaving access mode at the default `private`. Public mode
+uses Azure CLI `--public-access 0.0.0.0`, which creates the standard firewall
+rule that allows connections from Azure-hosted resources only. That is a wider
+trust boundary than same-VNet private access and may include other customers'
+Azure workloads, so keep the default `private` mode whenever Postgres can stay
+in the same region as AKS.
+
+Separately, when the installer is about to create a brand-new PostgreSQL
+Flexible Server, it now performs a fast `az postgres flexible-server list-skus`
+capability check against the target `PG_LOCATION` and `PG_SKU` first. If Azure
+already knows the subscription/region/SKU combination is restricted or has no
+supported server editions, the installer stops immediately with that reason
+instead of waiting through a long `Provisioning` hang from
+`az postgres flexible-server create`.
 
 ---
 
@@ -343,7 +365,7 @@ required on any platform. The root `package.json` exposes these scripts:
 
 Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full flag list, for example `npm run azure:provision-infra -- --help`. Useful flags across commands:
 
-- **`azure:provision-infra`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--node-vm-size`, `--keyvault-name`, `--postgres-server-name`, `--postgres-ha-mode`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`, and `--image-source <acr-build|ghcr|custom>`. `NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for **new** clusters; the default is now `Standard_D4s_v6`, and existing clusters are unaffected because the installer skips `az aks create` / `az aks nodepool add` when those resources already exist. Set `PG_SERVER_NAME` (or pass `--postgres-server-name`) to route around the rare Azure-global Flexible Server name collision where the default `agentweaver-pg` is already reserved. Set `PG_HA_MODE` (or pass `--postgres-ha-mode`) to override the default `ZoneRedundant` with one of `ZoneRedundant` or `Disabled` in regions/environments where zone-redundant HA is unavailable, such as early-access/canary regions. When using `--image-source ghcr`, pass `--ghcr-ref <ref>` and use only immutable refs (`vX.Y.Z` published releases or `sha-<hex>` tags); moving tags such as `dev`, `main`, `latest`, and `rc-*` are rejected. The GHCR owner/repository is always derived from the repo's GitHub origin remote, `--ghcr-token`/`GHCR_TOKEN` is available for private-package auth, and `--force` allows an intentional overwrite of a conflicting existing ACR tag. When using `--image-source custom`, pass all four fully-qualified refs together: `--image-api`, `--image-frontend`, `--image-mcp`, and `--image-agent-host`. Each ref must include an explicit registry and either a tag or digest. Custom mode is an explicit trust-boundary override: the installer imports exactly the images you specify, so use only registries and images you trust.
+- **`azure:provision-infra`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--node-vm-size`, `--keyvault-name`, `--postgres-server-name`, `--postgres-location`, `--postgres-ha-mode`, `--postgres-access-mode <private|public>`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`, and `--image-source <acr-build|ghcr|custom>`. `NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for **new** clusters; the default is now `Standard_D4s_v6`, and existing clusters are unaffected because the installer skips `az aks create` / `az aks nodepool add` when those resources already exist. Set `PG_SERVER_NAME` (or pass `--postgres-server-name`) to route around the rare Azure-global Flexible Server name collision where the default `agentweaver-pg` is already reserved. Set `PG_HA_MODE` (or pass `--postgres-ha-mode`) to override the default `ZoneRedundant` with one of `ZoneRedundant` or `Disabled` in regions/environments where zone-redundant HA is unavailable, such as early-access/canary regions. Set `PG_LOCATION` (or pass `--postgres-location`) to keep Postgres in the same region as the main cluster by default, or to move it elsewhere when Azure capacity/policy requires it. Cross-region Postgres requires `PG_ACCESS_MODE=public` / `--postgres-access-mode public`; the default `private` mode intentionally errors out before any Azure calls because delegated subnet connectivity is single-region only. Public mode uses Azure's `0.0.0.0` "allow Azure services/resources" firewall rule rather than an unrestricted internet-open range. When using `--image-source ghcr`, pass `--ghcr-ref <ref>` and use only immutable refs (`vX.Y.Z` published releases or `sha-<hex>` tags); moving tags such as `dev`, `main`, `latest`, and `rc-*` are rejected. The GHCR owner/repository is always derived from the repo's GitHub origin remote, `--ghcr-token`/`GHCR_TOKEN` is available for private-package auth, and `--force` allows an intentional overwrite of a conflicting existing ACR tag. When using `--image-source custom`, pass all four fully-qualified refs together: `--image-api`, `--image-frontend`, `--image-mcp`, and `--image-agent-host`. Each ref must include an explicit registry and either a tag or digest. Custom mode is an explicit trust-boundary override: the installer imports exactly the images you specify, so use only registries and images you trust.
 - **`azure:deploy-from-local`**: `--allow-dirty` to bypass the clean-working-tree check (personal/throwaway testing only).
 - **`azure:deploy-from-commit`**: one required SHA or ref; no dirty-tree option because only committed source is eligible.
 - **`azure:deploy-from-release`**: positional existing `vX.Y.Z` tag; the checkout must be clean and at that tag commit.

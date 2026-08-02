@@ -182,16 +182,17 @@ unmerged feature branch/worktree — during normal development, and
 With no arguments, `azure:provision-infra` launches an interactive installer that prompts
 for: the Azure subscription (defaulting to your current `az` default), a
 resource group (pick an existing one or create a new one), a location, the
-AKS cluster / ACR / Key Vault names (prefilled with sensible defaults,
-editable), and a GitHub OAuth client ID + secret (the secret is entered with
-no echo). It then provisions the cluster, identity, monitoring, the MCP OAuth
-signing key, PostgreSQL, builds and pushes images (or optionally imports
-already-published GHCR images by immutable ref, or four operator-specified
-fully-qualified custom image refs), verifies image provenance,
-and performs an initial SHA-identified deployment. At the end it prints an
-**outputs summary** (resource group, cluster, ACR, namespace, image tags,
-gateway host/IP, **GitHub OAuth callback URL**, verification pass/fail
-counts) — it never prints the OAuth client secret or any other credential.
+AKS cluster / ACR / Key Vault names, the Postgres server/location/access-mode
+settings (prefilled with sensible defaults, editable), and a GitHub OAuth
+client ID + secret (the secret is entered with no echo). It then provisions
+the cluster, identity, monitoring, the MCP OAuth signing key, PostgreSQL,
+builds and pushes images (or optionally imports already-published GHCR images
+by immutable ref, or four operator-specified fully-qualified custom image
+refs), verifies image provenance, and performs an initial SHA-identified
+deployment. At the end it prints an **outputs summary** (resource group,
+cluster, ACR, namespace, image tags, gateway host/IP, **GitHub OAuth callback
+URL**, verification pass/fail counts) — it never prints the OAuth client
+secret or any other credential.
 
 > **GitHub OAuth App callback URL — local vs. Azure.** The registered
 > callback URL must match where the app is actually running:
@@ -222,12 +223,35 @@ npm run azure:provision-infra -- \
   --node-vm-size Standard_D4s_v6 \
   --keyvault-name agentweaver-kv \
   --postgres-server-name agentweaver-pg-staging \
+  --postgres-location eastus2 \
   --postgres-ha-mode Disabled \
+  --postgres-access-mode public \
   --github-client-id "$GITHUB_CLIENT_ID" \
   --github-client-secret "$GITHUB_CLIENT_SECRET"
 ```
 
 Optional: pass `--node-vm-size <sku>` or set `NODE_VM_SIZE` to override the default `Standard_D4s_v6` for new AKS system/app/kata pools when your subscription or region requires a different allowed SKU. Existing clusters are unaffected: the value is only used during `az aks create` / `az aks nodepool add`, and the installer idempotently skips those calls when the cluster or pool already exists. You can also pass `--postgres-server-name <name>` or set `PG_SERVER_NAME` to override the default `agentweaver-pg` and route around the rare Azure-global Flexible Server name collision. Pass `--postgres-ha-mode <ZoneRedundant|Disabled>` or set `PG_HA_MODE` to override the default `ZoneRedundant`, which is useful in regions/environments where zone-redundant HA is unavailable (for example early-access/canary regions such as `eastus2euap`).
+
+If AKS must stay in one region but PostgreSQL must be provisioned in another, pass
+`--postgres-location <region>` (or set `PG_LOCATION`). When `PG_LOCATION`
+differs from the main `--location`, Agentweaver intentionally fails closed
+unless you also set `--postgres-access-mode public` / `PG_ACCESS_MODE=public`.
+That's because Azure Database for PostgreSQL Flexible Server delegated subnet
+integration is single-region only: a cross-region server cannot attach to the
+AKS VNet privately. Public mode keeps the server on Azure's public endpoint and
+uses `--public-access 0.0.0.0`, which creates the standard Azure firewall rule
+that allows connections from Azure services/resources only. This is broader
+than private VNet access and can include other customers' Azure-hosted sources,
+so prefer the default `private` mode whenever the Postgres server can stay in
+the same region as AKS.
+
+Before creating a new PostgreSQL Flexible Server, the installer now also runs a
+read-only `az postgres flexible-server list-skus --location <region>` pre-flight
+against the target `PG_LOCATION`. If Azure reports that the selected `PG_SKU`
+is unavailable, has no supported server editions, or is offer-restricted for
+the current subscription/region, the installer fails immediately with Azure's
+reason text instead of letting `az postgres flexible-server create` sit in an
+indefinite provisioning hang.
 
 Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/params.example.json)):
 
@@ -240,7 +264,9 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
   "NODE_VM_SIZE": "Standard_D4s_v6",
   "KEYVAULT_NAME": "agentweaver-kv",
   "PG_SERVER_NAME": "agentweaver-pg-staging",
+  "PG_LOCATION": "eastus2",
   "PG_HA_MODE": "Disabled",
+  "PG_ACCESS_MODE": "public",
   "NAMESPACE": "agentweaver",
   "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
   "GITHUB_CLIENT_SECRET": "",

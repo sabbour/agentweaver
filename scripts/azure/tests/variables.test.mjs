@@ -130,7 +130,9 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.LOCATION, DEFAULTS.LOCATION);
   assert.equal(vars.NODE_VM_SIZE, DEFAULTS.NODE_VM_SIZE);
   assert.equal(vars.PG_SERVER_NAME, DEFAULTS.PG_SERVER_NAME);
+  assert.equal(vars.PG_LOCATION, DEFAULTS.LOCATION);
   assert.equal(vars.PG_HA_MODE, DEFAULTS.PG_HA_MODE);
+  assert.equal(vars.PG_ACCESS_MODE, DEFAULTS.PG_ACCESS_MODE);
   assert.equal(vars.KEYVAULT_NAME, TEST_KEYVAULT_NAME, "KEYVAULT_NAME has no generic default -- must come from env");
   assert.equal(vars.NAMESPACE, DEFAULTS.NAMESPACE);
   assert.equal(vars.KATA_POOL_NAME, DEFAULTS.KATA_POOL_NAME);
@@ -198,7 +200,9 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
       LOCATION: "eastus",
       NODE_VM_SIZE: "Standard_D8s_v6",
       PG_SERVER_NAME: "custom-pg",
+      PG_LOCATION: "eastus2",
       PG_HA_MODE: "Disabled",
+      PG_ACCESS_MODE: "public",
       KEYVAULT_NAME: "custom-kv",
       NAMESPACE: "custom-ns",
       KATA_POOL_NAME: "customkata",
@@ -220,7 +224,9 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
   assert.equal(vars.LOCATION, "eastus");
   assert.equal(vars.NODE_VM_SIZE, "Standard_D8s_v6");
   assert.equal(vars.PG_SERVER_NAME, "custom-pg");
+  assert.equal(vars.PG_LOCATION, "eastus2");
   assert.equal(vars.PG_HA_MODE, "Disabled");
+  assert.equal(vars.PG_ACCESS_MODE, "public");
   assert.equal(vars.KEYVAULT_NAME, "custom-kv");
   assert.equal(vars.NAMESPACE, "custom-ns");
   assert.equal(vars.KATA_POOL_NAME, "customkata");
