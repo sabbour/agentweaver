@@ -20,6 +20,13 @@ import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
 
 export const DEFAULT_APP_NAME = "agentweaver-authn";
+// NOTE: these are registered under the app's *publicClient* platform (not `web`).
+// Agentweaver's API redeems the authorization code server-side, and Microsoft Entra ID
+// only allows secretless (PKCE-only) redemption for `publicClient`-registered redirect
+// URIs regardless of caller. `web`-registered URIs always require a client_secret or
+// client_assertion at the token endpoint, and `spa`-registered URIs are restricted to
+// browser/CORS-origin redemption -- neither works for this deployment's architecture,
+// and this tenant's policy blocks client-secret creation outright.
 export const DEFAULT_REDIRECT_URIS = Object.freeze(["http://localhost:5000/auth/entra/callback"]);
 export const SIGN_IN_AUDIENCE = "AzureADMyOrg";
 export const MANAGED_ROLE_DESCRIPTION_PREFIX = "Agentweaver:";
@@ -70,7 +77,7 @@ Usage:
 Flags:
   --app-name <name>                     Display name to create/reuse (default: ${DEFAULT_APP_NAME}).
   --app-id <client-id>                  Target an existing application by client ID instead of display name lookup.
-  --redirect-uri <uri>                  Web redirect URI to ensure on the app. Repeatable; defaults to ${DEFAULT_REDIRECT_URIS[0]}.
+  --redirect-uri <uri>                  Public-client redirect URI to ensure on the app. Repeatable; defaults to ${DEFAULT_REDIRECT_URIS[0]}.
   --service-management-reference <id>   Optional app-create passthrough required by some corporate tenants.
   -h, --help                            Show this help.
 
@@ -78,8 +85,14 @@ Notes:
   - This command is optional. Run it when a deployment chooses Auth:Mode=Entra.
     Deployments using Auth:Mode=GitHubLegacy can ignore it.
   - The app is always enforced as single-tenant (${SIGN_IN_AUDIENCE}).
-  - Redirect URIs are merged idempotently; re-running adds missing URIs without removing existing ones.
-  - The App Roles are: PlatformAdmin, ProjectCreator, Contributor, Viewer.
+  - Redirect URIs are registered under the *publicClient* platform (not \`web\` or \`spa\`), and
+    \`isFallbackPublicClient\` is enforced true, so the API can redeem authorization codes with
+    PKCE only -- no client secret, and no browser/CORS restriction. If a URI is found under
+    \`web\` it is moved to \`publicClient\`. Redirect URIs are merged idempotently; re-running
+    adds missing URIs without removing unrelated existing ones.
+  - The App Roles are: PlatformAdmin, ProjectCreator, Contributor, Viewer. Creating the app
+    does NOT grant anyone a role -- see the "Grant platform roles" output after this command
+    runs for how to assign a user or group.
 `;
 
 export function parseArgs(argv = []) {
@@ -226,9 +239,19 @@ function ensureSingleTenant(app) {
 
 async function createApp({ appName, redirectUris, serviceManagementReference, exec, log }) {
   log.section("Creating Entra app registration");
-  const args = ["ad", "app", "create", "--display-name", appName, "--sign-in-audience", SIGN_IN_AUDIENCE];
+  const args = [
+    "ad",
+    "app",
+    "create",
+    "--display-name",
+    appName,
+    "--sign-in-audience",
+    SIGN_IN_AUDIENCE,
+    "--is-fallback-public-client",
+    "true",
+  ];
   if (redirectUris.length > 0) {
-    args.push("--web-redirect-uris", ...redirectUris);
+    args.push("--public-client-redirect-uris", ...redirectUris);
   }
   if (serviceManagementReference) {
     args.push("--service-management-reference", serviceManagementReference);
@@ -242,16 +265,43 @@ function unionStrings(existing = [], desired = []) {
   return normalizeRedirectUris([...existing, ...desired]);
 }
 
-async function ensureRedirectUris(app, desiredRedirectUris, { exec, log }) {
-  const current = normalizeRedirectUris(app?.web?.redirectUris ?? []);
-  const merged = unionStrings(current, desiredRedirectUris);
-  const changed = JSON.stringify(current) !== JSON.stringify(merged);
-  if (!changed) {
-    log.skip("Redirect URIs already match the requested set.");
+async function ensureFallbackPublicClient(app, { exec, log }) {
+  if (app?.isFallbackPublicClient === true) {
+    log.skip("isFallbackPublicClient already true.");
     return false;
   }
+  log.section("Enabling isFallbackPublicClient");
+  await exec.run("az", ["ad", "app", "update", "--id", app.appId, "--is-fallback-public-client", "true"]);
+  log.ok("isFallbackPublicClient enabled.");
+  return true;
+}
+
+async function ensureRedirectUris(app, desiredRedirectUris, { exec, log }) {
+  const currentPublic = normalizeRedirectUris(app?.publicClient?.redirectUris ?? []);
+  const currentWeb = normalizeRedirectUris(app?.web?.redirectUris ?? []);
+  const mergedPublic = unionStrings(currentPublic, desiredRedirectUris);
+  const publicChanged = JSON.stringify(currentPublic) !== JSON.stringify(mergedPublic);
+
+  // Any of our managed redirect URIs found under `web` came from an older revision of this
+  // script (or manual setup) and must move to `publicClient` -- `web` always requires a
+  // client_secret/client_assertion at redemption, which this deployment cannot supply.
+  const desiredSet = new Set(desiredRedirectUris.map((uri) => uri.toLowerCase()));
+  const remainingWeb = currentWeb.filter((uri) => !desiredSet.has(uri.toLowerCase()));
+  const webChanged = JSON.stringify(currentWeb) !== JSON.stringify(remainingWeb);
+
+  if (!publicChanged && !webChanged) {
+    log.skip("Redirect URIs already match the requested set under publicClient.");
+    return false;
+  }
+
   log.section("Updating redirect URIs");
-  await exec.run("az", ["ad", "app", "update", "--id", app.appId, "--web-redirect-uris", ...merged]);
+  if (publicChanged) {
+    await exec.run("az", ["ad", "app", "update", "--id", app.appId, "--public-client-redirect-uris", ...mergedPublic]);
+  }
+  if (webChanged) {
+    log.info("Moving managed redirect URI(s) off the `web` platform onto `publicClient`.");
+    await exec.run("az", ["ad", "app", "update", "--id", app.appId, "--web-redirect-uris", ...remainingWeb]);
+  }
   log.ok("Redirect URIs updated.");
   return true;
 }
@@ -311,7 +361,7 @@ function printSummary(result, log) {
   log.field("Entra service principal object ID", result.servicePrincipalObjectId);
   log.field("Entra tenant ID", result.tenantId);
   log.field("Sign-in audience", result.signInAudience);
-  log.field("Redirect URI(s)", result.redirectUris.join(", "));
+  log.field("Redirect URI(s) [publicClient]", result.redirectUris.join(", "));
 
   log.section("Agentweaver config handoff");
   log.info("Optional Entra-mode config surface (ignored when Auth:Mode=GitHubLegacy):");
@@ -327,13 +377,47 @@ function printSummary(result, log) {
   log.field("Auth__Entra__TenantId", result.tenantId);
   log.field("Auth__Entra__RedirectUri", result.redirectUris[0] ?? "");
   log.warn(
-    "Auth__Entra__ClientSecret is OPTIONAL. If your tenant allows password credentials and you want "
-    + "confidential-client redemption, create a client secret for this app (for example "
-    + "`az ad app credential reset --id " + result.appId + "`) and supply it as "
-    + "Auth__Entra__ClientSecret (Key Vault secret entra-client-secret). If your tenant blocks "
-    + "client secrets, leave Auth__Entra__ClientSecret unset and make sure the app registration "
-    + "allows public client flows (`isFallbackPublicClient: true`) so Agentweaver can redeem the "
-    + "authorization code with PKCE only.");
+    "Auth__Entra__ClientSecret must stay unset. Redirect URIs on this app are registered under "
+    + "the `publicClient` platform (not `web`), which is what lets the API redeem authorization "
+    + "codes with PKCE only. Supplying a client_secret here would not work: Microsoft Entra ID "
+    + "requires client_secret/client_assertion for `web`-registered redirect URIs, and restricts "
+    + "`spa`-registered redirect URIs to browser/CORS-origin redemption only -- neither matches a "
+    + "server-side code exchange against a `publicClient` redirect URI. If a future need arises "
+    + "for confidential-client auth, that requires re-registering the redirect URI under `web` and "
+    + "supplying a client secret (blocked by policy on tenants that disallow client-secret "
+    + "credentials), not adding a secret to this publicClient registration.");
+
+  log.section("Grant platform roles (required before anyone can sign in)");
+  log.warn(
+    "Creating this app registration does NOT grant anyone access. Every Auth:Mode=Entra sign-in "
+    + "is rejected with 'Access denied. A recognized Agentweaver platform role is required.' until "
+    + "a user or a group is assigned to one of the App Roles below.");
+  log.info(`App Roles and their IDs (resourceId is the service principal object ID: ${result.servicePrincipalObjectId}):`);
+  for (const role of DEFAULT_APP_ROLES) {
+    log.field(role.value, role.id);
+  }
+  log.info("Assign a GROUP to a role (recommended -- e.g. an 'akspm' Entra group as Contributor):");
+  log.info(
+    `  GROUP_ID=$(az ad group show --group "akspm" --query id -o tsv)\n`
+    + `  az rest --method POST \\\n`
+    + `    --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${result.servicePrincipalObjectId}/appRoleAssignedTo" \\\n`
+    + `    --headers "Content-Type=application/json" \\\n`
+    + `    --body '{"principalId":"'"$GROUP_ID"'","resourceId":"${result.servicePrincipalObjectId}","appRoleId":"85fd3442-8291-4d52-a76f-ee962e711d7f"}'`,
+  );
+  log.info("Assign a single USER to a role (e.g. alice@contoso.com as PlatformAdmin):");
+  log.info(
+    `  USER_ID=$(az ad user show --id "alice@contoso.com" --query id -o tsv)\n`
+    + `  az rest --method POST \\\n`
+    + `    --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${result.servicePrincipalObjectId}/appRoleAssignedTo" \\\n`
+    + `    --headers "Content-Type=application/json" \\\n`
+    + `    --body '{"principalId":"'"$USER_ID"'","resourceId":"${result.servicePrincipalObjectId}","appRoleId":"38a31dfd-b8b8-42b3-a820-1521f6274955"}'`,
+  );
+  log.info(
+    "List current role assignments to verify (or find the appRoleAssignment id to remove one):",
+  );
+  log.info(
+    `  az rest --method GET --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${result.servicePrincipalObjectId}/appRoleAssignedTo"`,
+  );
 }
 
 export async function run({ argv = [], exec = execDefault, log = logDefault } = {}) {
@@ -372,6 +456,7 @@ export async function run({ argv = [], exec = execDefault, log = logDefault } = 
     });
   }
 
+  await ensureFallbackPublicClient(app, { exec, log });
   await ensureRedirectUris(app, desiredRedirectUris, { exec, log });
   app = await getAppById(app.appId, exec);
   ensureSingleTenant(app);
@@ -384,7 +469,7 @@ export async function run({ argv = [], exec = execDefault, log = logDefault } = 
     app,
     servicePrincipal,
     tenantId,
-    redirectUris: normalizeRedirectUris(app?.web?.redirectUris ?? desiredRedirectUris),
+    redirectUris: normalizeRedirectUris(app?.publicClient?.redirectUris ?? desiredRedirectUris),
   });
 
   printSummary(result, log);

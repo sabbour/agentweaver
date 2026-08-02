@@ -111,8 +111,10 @@ test("run: creates app, patches roles, creates service principal, and returns co
     appRoles: [],
     displayName: "agentweaver-authn",
     id: "33333333-3333-3333-3333-333333333333",
+    isFallbackPublicClient: true,
     signInAudience: "AzureADMyOrg",
-    web: { redirectUris: ["http://localhost:5000/auth/entra/callback"] },
+    publicClient: { redirectUris: ["http://localhost:5000/auth/entra/callback"] },
+    web: { redirectUris: [] },
   };
   const appWithRoles = { ...app, appRoles: DEFAULT_APP_ROLES };
   const sp = {
@@ -163,13 +165,15 @@ test("run: reusing an already-matching app is idempotent", async () => {
     appRoles: DEFAULT_APP_ROLES,
     displayName: "agentweaver-authn",
     id: "33333333-3333-3333-3333-333333333333",
+    isFallbackPublicClient: true,
     signInAudience: "AzureADMyOrg",
-    web: {
+    publicClient: {
       redirectUris: [
         "http://localhost:5000/auth/entra/callback",
         "https://agentweaver.example.com/auth/entra/callback",
       ],
     },
+    web: { redirectUris: [] },
   };
   const sp = {
     appId: app.appId,
@@ -201,20 +205,24 @@ test("run: reusing an already-matching app is idempotent", async () => {
 
   assert.equal(result.ok, true);
   assert.ok(!commands.some((entry) => entry.includes("create") && entry.includes("app")));
+  assert.ok(!commands.some((entry) => entry.includes("update") && entry.includes("public-client-redirect-uris")));
   assert.ok(!commands.some((entry) => entry.includes("update") && entry.includes("web-redirect-uris")));
+  assert.ok(!commands.some((entry) => entry.includes("update") && entry.includes("is-fallback-public-client")));
   assert.ok(!commands.some((entry) => entry.includes("rest") && entry.includes("PATCH")));
   assert.ok(!commands.some((entry) => entry.includes("sp") && entry.includes("create")));
 });
 
-test("run: summary explains PKCE-only fallback when client secrets are blocked", async () => {
+test("run: summary explains the publicClient-only PKCE fix and prints role-grant guidance", async () => {
   const log = captureLog();
   const app = {
     appId: "11111111-1111-1111-1111-111111111111",
     appRoles: DEFAULT_APP_ROLES,
     displayName: "agentweaver-authn",
     id: "33333333-3333-3333-3333-333333333333",
+    isFallbackPublicClient: true,
     signInAudience: "AzureADMyOrg",
-    web: { redirectUris: ["http://localhost:5000/auth/entra/callback"] },
+    publicClient: { redirectUris: ["http://localhost:5000/auth/entra/callback"] },
+    web: { redirectUris: [] },
   };
   const sp = {
     appId: app.appId,
@@ -240,7 +248,12 @@ test("run: summary explains PKCE-only fallback when client secrets are blocked",
 
   assert.equal(result.ok, true);
   const warning = log.entries.filter(([level]) => level === "warn").map(([, message]) => String(message)).join("\n");
-  assert.match(warning, /Auth__Entra__ClientSecret is OPTIONAL/);
-  assert.match(warning, /isFallbackPublicClient: true/);
-  assert.match(warning, /PKCE only/);
+  assert.match(warning, /Auth__Entra__ClientSecret must stay unset/);
+  assert.match(warning, /publicClient/);
+  assert.match(warning, /recognized Agentweaver platform role/);
+
+  const info = log.entries.filter(([level]) => level === "info").map(([, message]) => String(message)).join("\n");
+  assert.match(info, /appRoleAssignedTo/);
+  assert.match(info, new RegExp(sp.id));
+  assert.match(info, /85fd3442-8291-4d52-a76f-ee962e711d7f/);
 });

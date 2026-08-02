@@ -21,8 +21,16 @@ public sealed class CallerContext
     public string? EntraObjectId { get; init; }
     public string? EntraTenantId { get; init; }
     public IReadOnlyList<string> PlatformRoles { get; init; } = [];
+    /// <summary>
+    /// Every role name found on the Entra token's `roles` claim, recognized or not (empty in
+    /// GitHubLegacy mode). Used to build a self-diagnosable 403 message: an admin can see
+    /// exactly what Microsoft Entra sent, even when none of it matched <see cref="Auth.PlatformRoles"/>.
+    /// </summary>
+    public IReadOnlyList<string> RawPlatformRoles { get; init; } = [];
     public string? PrimaryPlatformRole { get; init; }
     public string? GitHubLogin { get; init; }
+    public string? DisplayName { get; init; }
+    public string? Email { get; init; }
     public bool IsOAuthJwt { get; init; }
     public string? Org { get; init; }
 
@@ -117,6 +125,7 @@ public sealed class GitHubTokenAuthMiddleware
             || context.Request.Path.Equals("/api/version", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/auth/config", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Path.Equals("/api/server/info", StringComparison.OrdinalIgnoreCase)
             || (context.Request.Path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
                 && context.Request.Path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true))
         {
@@ -186,7 +195,10 @@ public sealed class GitHubTokenAuthMiddleware
                 EntraObjectId = entraClaims.ObjectId,
                 EntraTenantId = entraClaims.TenantId,
                 PlatformRoles = entraClaims.RecognizedRoles,
+                RawPlatformRoles = entraClaims.RawRoles,
                 PrimaryPlatformRole = entraClaims.PrimaryRole,
+                DisplayName = entraClaims.DisplayName,
+                Email = entraClaims.Email,
             };
             SetCaller(context, caller, BuildClaimsPrincipal(caller, displayName: entraClaims.DisplayName));
             await _next(context).ConfigureAwait(false);
@@ -316,6 +328,11 @@ public sealed class GitHubTokenAuthMiddleware
             claims.Add(new Claim("tid", caller.EntraTenantId));
         foreach (var role in caller.PlatformRoles)
             claims.Add(new Claim(ClaimTypes.Role, role));
+        // Carried separately from ClaimTypes.Role (which only holds *recognized* roles) so that
+        // PlatformRoleAuthorizationMiddleware can report exactly what Entra sent on a 403, even
+        // when none of it matched a known Agentweaver platform role.
+        foreach (var rawRole in caller.RawPlatformRoles)
+            claims.Add(new Claim("raw_role", rawRole));
         if (isInternal)
             claims.Add(new Claim("agentweaver_internal", "true"));
 

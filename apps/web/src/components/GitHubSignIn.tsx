@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { GITHUB_AUTHORIZE_URL } from '../config';
 import {
+  Badge,
   Button,
   Divider,
   Popover,
@@ -9,13 +9,16 @@ import {
   PopoverTrigger,
   Spinner,
   Text,
+  Tooltip,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import {
   ArrowSwapRegular,
   AddRegular,
   ChevronDownRegular,
+  ShieldPersonRegular,
   SignOutRegular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -65,6 +68,15 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     flexShrink: 0,
   },
+  entraBadge: {
+    flexShrink: 0,
+  },
+  popoverIdentityBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground2,
+  },
   popover: {
     width: '320px',
     maxWidth: 'calc(100vw - 32px)',
@@ -102,6 +114,20 @@ const useStyles = makeStyles({
   accountSecondary: {
     color: tokens.colorNeutralForeground2,
   },
+  truncate: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    display: 'block',
+    width: '100%',
+  },
+  triggerCollapsed: {
+    justifyContent: 'center',
+  },
+  triggerInnerCollapsed: {
+    justifyContent: 'center',
+  },
 });
 
 function apiErrorMessage(err: unknown): string {
@@ -116,20 +142,14 @@ function apiErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function goToGitHubLinkFlow() {
-  const url = new URL(GITHUB_AUTHORIZE_URL);
-  url.searchParams.set('intent', 'link');
-  if (typeof window !== 'undefined') {
-    url.searchParams.set('return_to', `${window.location.pathname}${window.location.search}`);
-    window.location.href = url.toString();
-  }
-}
 
 export interface GitHubSignInProps {
   projectId?: string;
+  /** Collapsed rail mode (icon-only sidebar) — hides label/chevron, keeps the trigger reachable via tooltip. */
+  collapsed?: boolean;
 }
 
-export function GitHubSignIn({ projectId }: GitHubSignInProps) {
+export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
   const styles = useStyles();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -239,6 +259,22 @@ export function GitHubSignIn({ projectId }: GitHubSignInProps) {
     }
   };
 
+  const handleAddAccount = async () => {
+    setSaving('__addaccount__');
+    setError(null);
+    try {
+      // The plain /auth/github/authorize redirect is a sign-in flow, not a link flow -- the
+      // server ignores any "intent" query param there. Linking a second account requires
+      // POST /auth/github-accounts/link, which registers a pending-link state so the OAuth
+      // callback actually calls CompleteLinkAsync() instead of a normal sign-in exchange.
+      const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setError(apiErrorMessage(err));
+      setSaving(null);
+    }
+  };
+
   if (loading) {
     return <Spinner size="extra-tiny" aria-label="Loading GitHub account switcher" />;
   }
@@ -256,23 +292,55 @@ export function GitHubSignIn({ projectId }: GitHubSignInProps) {
     ? `${projectAccess.effective_github_permission} access`
     : null;
 
+  const tooltipContent = authMode === 'entra'
+    ? 'Signed in with Microsoft Entra ID · Click to manage linked GitHub accounts'
+    : 'Click to manage your GitHub sign-in';
+
   return (
     <Popover positioning="above-start">
       <PopoverTrigger disableButtonEnhancement>
-        <Button appearance="transparent" className={styles.trigger} type="button" aria-label="GitHub account switcher">
-          <span className={styles.triggerInner}>
-            {triggerAvatar ? (
-              <img src={triggerAvatar} alt="" className={styles.avatar} />
-            ) : (
-              <span className={styles.fallbackAvatar}><ArrowSwapRegular /></span>
-            )}
-            <Text className={styles.login}>{triggerLabel}</Text>
-            <span className={styles.chevron}><ChevronDownRegular /></span>
-          </span>
-        </Button>
+        <Tooltip content={tooltipContent} relationship="description" withArrow positioning="above">
+          <Button
+            appearance="transparent"
+            className={collapsed ? mergeClasses(styles.trigger, styles.triggerCollapsed) : styles.trigger}
+            type="button"
+            aria-label="GitHub account switcher"
+          >
+            <span className={collapsed ? mergeClasses(styles.triggerInner, styles.triggerInnerCollapsed) : styles.triggerInner}>
+              {triggerAvatar ? (
+                <img src={triggerAvatar} alt="" className={styles.avatar} />
+              ) : (
+                <span className={styles.fallbackAvatar}><ArrowSwapRegular /></span>
+              )}
+              {!collapsed && (
+                <>
+                  <Text className={styles.login}>{triggerLabel}</Text>
+                  {authMode === 'entra' && (
+                    <Badge
+                      className={styles.entraBadge}
+                      appearance="tint"
+                      color="brand"
+                      size="small"
+                      icon={<ShieldPersonRegular />}
+                    >
+                      Entra ID
+                    </Badge>
+                  )}
+                  <span className={styles.chevron}><ChevronDownRegular /></span>
+                </>
+              )}
+            </span>
+          </Button>
+        </Tooltip>
       </PopoverTrigger>
       <PopoverSurface>
         <div className={styles.popover}>
+          {authMode === 'entra' && (
+            <div className={styles.popoverIdentityBanner}>
+              <ShieldPersonRegular />
+              <Text size={200}>Signed in with Microsoft Entra ID</Text>
+            </div>
+          )}
           <div className={styles.section}>
             <Text weight="semibold">Current GitHub account</Text>
             {currentAccount ? (
@@ -283,8 +351,8 @@ export function GitHubSignIn({ projectId }: GitHubSignInProps) {
                   <span className={styles.fallbackAvatar}><ArrowSwapRegular /></span>
                 )}
                 <div className={styles.accountMeta}>
-                  <Text weight="semibold">{currentAccount.name ?? currentAccount.login}</Text>
-                  <Text size={200} className={styles.accountSecondary}>
+                  <Text weight="semibold" className={styles.truncate}>{currentAccount.name ?? currentAccount.login}</Text>
+                  <Text size={200} className={mergeClasses(styles.accountSecondary, styles.truncate)}>
                     @{currentAccount.login}
                     {permissionLabel ? ` · ${permissionLabel}` : ''}
                   </Text>
@@ -319,8 +387,8 @@ export function GitHubSignIn({ projectId }: GitHubSignInProps) {
                           <span className={styles.fallbackAvatar}><ArrowSwapRegular /></span>
                         )}
                         <span className={styles.accountMeta}>
-                          <Text weight="semibold">{account.name ?? account.login}</Text>
-                          <Text size={200} className={styles.accountSecondary}>@{account.login}</Text>
+                          <Text weight="semibold" className={styles.truncate}>{account.name ?? account.login}</Text>
+                          <Text size={200} className={mergeClasses(styles.accountSecondary, styles.truncate)}>@{account.login}</Text>
                         </span>
                         {saving === account.login ? <Spinner size="tiny" /> : null}
                       </span>
@@ -339,9 +407,11 @@ export function GitHubSignIn({ projectId }: GitHubSignInProps) {
 
           <Divider />
           <div className={styles.section}>
-            <Button appearance="subtle" icon={<AddRegular />} onClick={goToGitHubLinkFlow}>
-              Add account
-            </Button>
+            {authMode === 'entra' && (
+              <Button appearance="subtle" icon={<AddRegular />} disabled={saving !== null} onClick={() => void handleAddAccount()}>
+                {saving === '__addaccount__' ? <Spinner size="tiny" /> : 'Add account'}
+              </Button>
+            )}
             <Button
               appearance="subtle"
               icon={<SignOutRegular />}

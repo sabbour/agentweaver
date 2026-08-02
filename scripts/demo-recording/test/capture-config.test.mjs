@@ -66,6 +66,21 @@ test('capture config rejects backend-coupled cue sources', () => {
   }), /DOM-only/);
 });
 
+test('capture config validates approval watcher settings', () => {
+  assert.doesNotThrow(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{ id: '1.1', disableApprovalWatcher: true, approvalWatcherGraceMs: 0 }],
+  }));
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{ id: '1.1', disableApprovalWatcher: 'true' }],
+  }), /disableApprovalWatcher must be a boolean/);
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{ id: '1.1', approvalWatcherGraceMs: -1 }],
+  }), /approvalWatcherGraceMs must be a non-negative integer/);
+});
+
 test('capture config rejects unknown, missing, and duplicate IDs and cue names', () => {
   assert.throws(() => joinCaptureConfig(beats, {
     schemaVersion: 1,

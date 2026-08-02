@@ -132,6 +132,10 @@ spec:
 # PostgreSQL egress — worker → Flexible Server private subnet on port 5432.
 # The Flexible Server is VNet-integrated into subnet 10.225.0.0/28 (aks-postgres).
 # If the subnet address changes, update ipBlock.cidr accordingly.
+#
+# PG_ACCESS_MODE=private ONLY -- replaced at deploy time by the FQDN-based
+# CiliumNetworkPolicy `allow-worker-postgres-egress-fqdn` when PG_ACCESS_MODE=public
+# (see scripts/azure/lib/kustomize.mjs).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

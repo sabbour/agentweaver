@@ -331,6 +331,15 @@ trust boundary than same-VNet private access and may include other customers'
 Azure workloads, so keep the default `private` mode whenever Postgres can stay
 in the same region as AKS.
 
+Public mode also changes the in-cluster egress policy for Postgres. Private mode
+keeps the `NetworkPolicy` objects that allow port 5432 to the delegated subnet's
+CIDR; public mode instead applies `CiliumNetworkPolicy` objects that allow port
+5432 to `<PG_SERVER_NAME>.postgres.database.azure.com` via Cilium's `toFQDNs`
+rules (the same mechanism as the existing app FQDN allowlist). FQDN-based egress
+is intentional: a public Flexible Server's IP is Azure-managed and can change,
+and a static `ipBlock` allowlist would then silently block every pod-to-Postgres
+connection until it was reconciled by hand.
+
 Separately, when the installer is about to create a brand-new PostgreSQL
 Flexible Server, it now performs a fast `az postgres flexible-server list-skus`
 capability check against the target `PG_LOCATION` and `PG_SKU` first. If Azure

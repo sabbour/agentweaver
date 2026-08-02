@@ -77,31 +77,34 @@ function skuCapabilities({
   offerRestrictedStatus = "Disabled",
   supportedServerEditions,
 } = {}) {
-  return JSON.stringify({
-    name: "FlexibleServerCapabilities",
-    reason,
-    restricted,
-    status: null,
-    supportedFeatures: [{ name: "OfferRestricted", status: offerRestrictedStatus }],
-    supportedServerEditions:
-      supportedServerEditions ??
-      [
-        {
-          name: "GeneralPurpose",
-          reason: null,
-          status: null,
-          supportedServerSkus: [
-            {
-              name: sku,
-              reason: null,
-              status: null,
-              supportedFeatures: [],
-              supportedHaMode: ["ZoneRedundant", "SameZone"],
-            },
-          ],
-        },
-      ],
-  });
+  // `az postgres flexible-server list-skus` emits a JSON ARRAY of capability sets.
+  return JSON.stringify([
+    {
+      name: "FlexibleServerCapabilities",
+      reason,
+      restricted,
+      status: null,
+      supportedFeatures: [{ name: "OfferRestricted", status: offerRestrictedStatus }],
+      supportedServerEditions:
+        supportedServerEditions ??
+        [
+          {
+            name: "GeneralPurpose",
+            reason: null,
+            status: null,
+            supportedServerSkus: [
+              {
+                name: sku,
+                reason: null,
+                status: null,
+                supportedFeatures: [],
+                supportedHaMode: ["ZoneRedundant", "SameZone"],
+              },
+            ],
+          },
+        ],
+    },
+  ]);
 }
 
 // -------------------- 10-create-cluster.mjs --------------------

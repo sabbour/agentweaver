@@ -2,6 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SettingsPage } from '../pages/SettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/apiClient', () => ({
@@ -60,9 +61,11 @@ beforeEach(() => {
 describe('SettingsPage', () => {
   it('shows auth mode, linked GitHub accounts, MCP URL, and sandbox policy section', async () => {
     render(
-      <AzureFluentProvider density="compact">
-        <SettingsPage />
-      </AzureFluentProvider>,
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
     );
 
     await waitFor(() => expect(screen.getByText('Authentication')).toBeDefined());
@@ -78,9 +81,11 @@ describe('SettingsPage', () => {
 
   it('sets a linked account as default', async () => {
     render(
-      <AzureFluentProvider density="compact">
-        <SettingsPage />
-      </AzureFluentProvider>,
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
     );
 
     await screen.findByText('Alt Cat');
@@ -91,15 +96,17 @@ describe('SettingsPage', () => {
 
   it('confirms before unlinking a GitHub account', async () => {
     render(
-      <AzureFluentProvider density="compact">
-        <SettingsPage />
-      </AzureFluentProvider>,
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
     );
 
     await screen.findByText(/Octocat/);
     fireEvent.click(screen.getAllByRole('button', { name: 'Unlink' })[0]!);
     expect(await screen.findByText('Unlink GitHub account')).toBeDefined();
-    expect(screen.getByText(/shared fallback GitHub token/i)).toBeDefined();
+    expect(screen.getByText(/removes any repository or copilot access/i)).toBeDefined();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
 
