@@ -44,6 +44,100 @@ function pgOption(cfg, name) {
   return cfg[name] || PG_DEFAULTS[name];
 }
 
+function isEnabledLike(value) {
+  if (typeof value === "boolean") return value;
+  if (value == null) return false;
+  return String(value).trim().toLowerCase() === "enabled";
+}
+
+function hasRestrictionSignal(value) {
+  if (value == null) return false;
+  const text = String(value).trim().toLowerCase();
+  if (!text) return false;
+  return text.includes("restricted") || text.includes("offerrestricted") || text.includes("notavailable");
+}
+
+function collectRestrictionReasons(...values) {
+  return values
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .filter((value) => value != null)
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+}
+
+function firstNonEmptyReason(...values) {
+  return collectRestrictionReasons(...values)[0] || "";
+}
+
+function parseSkuAvailability(capabilities, skuName) {
+  const supportedServerEditions = Array.isArray(capabilities?.supportedServerEditions)
+    ? capabilities.supportedServerEditions
+    : [];
+
+  if (supportedServerEditions.length === 0) {
+    return {
+      ok: false,
+      reason:
+        firstNonEmptyReason(
+          capabilities?.reason,
+          capabilities?.status,
+          capabilities?.restricted,
+          capabilities?.supportedFeatures
+            ?.filter?.((feature) => hasRestrictionSignal(feature?.name) || isEnabledLike(feature?.status))
+            ?.map?.((feature) => `${feature?.name}: ${feature?.status}`),
+        ) || "Azure reported no supported server editions for this subscription/region.",
+    };
+  }
+
+  const offerRestrictedFeature = Array.isArray(capabilities?.supportedFeatures)
+    ? capabilities.supportedFeatures.find(
+        (feature) => String(feature?.name ?? "").trim().toLowerCase() === "offerrestricted" && isEnabledLike(feature?.status),
+      )
+    : null;
+
+  let matchedSku = null;
+  let matchedEdition = null;
+  for (const edition of supportedServerEditions) {
+    const serverSkus = Array.isArray(edition?.supportedServerSkus) ? edition.supportedServerSkus : [];
+    const sku = serverSkus.find((candidate) => candidate?.name === skuName);
+    if (sku) {
+      matchedSku = sku;
+      matchedEdition = edition;
+      break;
+    }
+  }
+
+  if (!matchedSku) {
+    return {
+      ok: false,
+      reason:
+        firstNonEmptyReason(
+          capabilities?.reason,
+          offerRestrictedFeature ? `${offerRestrictedFeature.name}: ${offerRestrictedFeature.status}` : "",
+        ) || `Azure did not list SKU '${skuName}' in supportedServerSkus for this region.`,
+    };
+  }
+
+  const reasons = collectRestrictionReasons(
+    capabilities?.reason,
+    matchedEdition?.reason,
+    matchedSku?.reason,
+    offerRestrictedFeature ? `${offerRestrictedFeature.name}: ${offerRestrictedFeature.status}` : "",
+  );
+  const restricted =
+    isEnabledLike(capabilities?.restricted) ||
+    hasRestrictionSignal(capabilities?.status) ||
+    hasRestrictionSignal(matchedEdition?.status) ||
+    hasRestrictionSignal(matchedSku?.status) ||
+    Boolean(offerRestrictedFeature) ||
+    reasons.some((reason) => hasRestrictionSignal(reason));
+
+  return {
+    ok: !restricted,
+    reason: firstNonEmptyReason(reasons),
+  };
+}
+
 async function resolveServerFqdn(exec, resourceGroup, serverName) {
   const result = await exec.capture(
     "az",
@@ -63,6 +157,38 @@ async function resolveServerFqdn(exec, resourceGroup, serverName) {
     { allowFailure: true },
   );
   return result.stdout.trim() || `${serverName}.postgres.database.azure.com`;
+}
+
+async function assertSkuProvisionable(exec, location, skuName) {
+  const result = await exec.capture(
+    "az",
+    ["postgres", "flexible-server", "list-skus", "--location", location, "--output", "json"],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `Could not verify PostgreSQL Flexible Server SKU availability for region '${location}' before provisioning. ` +
+        `Azure CLI exited with code ${result.code}${result.stderr ? `: ${result.stderr.trim()}` : "."}`,
+    );
+  }
+
+  let capabilities;
+  try {
+    capabilities = JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(
+      `Could not parse 'az postgres flexible-server list-skus' output for region '${location}' while validating SKU '${skuName}': ${error.message}`,
+    );
+  }
+
+  const availability = parseSkuAvailability(capabilities, skuName);
+  if (!availability.ok) {
+    const reasonSuffix = availability.reason ? ` (Azure reason: '${availability.reason}')` : "";
+    throw new Error(
+      `PostgreSQL Flexible Server SKU '${skuName}' is not available for this subscription in region '${location}'${reasonSuffix}. ` +
+        "Try a different --postgres-location or PG_SKU value.",
+    );
+  }
 }
 
 /**
@@ -255,6 +381,10 @@ export async function run(cfg, opts = {}) {
   if (existingServer) {
     log.skip(`Server '${PG_SERVER_NAME}' already exists (state: ${existingServer}).`);
   } else {
+    log.info(`  Pre-flight: validating SKU '${PG_SKU}' is provisionable in '${PG_LOCATION}'...`);
+    await assertSkuProvisionable(exec, PG_LOCATION, PG_SKU);
+    log.ok("  SKU availability pre-flight passed.");
+
     log.info("  Generating admin password (not echoed; will be stored in K8s secret)...");
     const PG_ADMIN_PASSWORD = await generateAdminPassword();
     secret.registerSecret(PG_ADMIN_PASSWORD, "postgres-admin-password");

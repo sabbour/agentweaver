@@ -331,6 +331,14 @@ trust boundary than same-VNet private access and may include other customers'
 Azure workloads, so keep the default `private` mode whenever Postgres can stay
 in the same region as AKS.
 
+Separately, when the installer is about to create a brand-new PostgreSQL
+Flexible Server, it now performs a fast `az postgres flexible-server list-skus`
+capability check against the target `PG_LOCATION` and `PG_SKU` first. If Azure
+already knows the subscription/region/SKU combination is restricted or has no
+supported server editions, the installer stops immediately with that reason
+instead of waiting through a long `Provisioning` hang from
+`az postgres flexible-server create`.
+
 ---
 
 ## npm script reference

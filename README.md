@@ -244,6 +244,14 @@ than private VNet access and can include other customers' Azure-hosted sources,
 so prefer the default `private` mode whenever the Postgres server can stay in
 the same region as AKS.
 
+Before creating a new PostgreSQL Flexible Server, the installer now also runs a
+read-only `az postgres flexible-server list-skus --location <region>` pre-flight
+against the target `PG_LOCATION`. If Azure reports that the selected `PG_SKU`
+is unavailable, has no supported server editions, or is offer-restricted for
+the current subscription/region, the installer fails immediately with Azure's
+reason text instead of letting `az postgres flexible-server create` sit in an
+indefinite provisioning hang.
+
 Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/params.example.json)):
 
 ```json
