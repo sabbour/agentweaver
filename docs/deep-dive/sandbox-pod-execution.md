@@ -426,7 +426,7 @@ The three-pool layout:
 az aks nodepool add \
   --resource-group "${RESOURCE_GROUP}" --cluster-name "${CLUSTER_NAME}" \
   --name apppool --mode User --os-sku AzureLinux \
-  --node-vm-size Standard_D4s_v3 \
+  --node-vm-size Standard_D4s_v6 \
   --enable-cluster-autoscaler --min-count 1 --max-count 5 \
   --ssh-access disabled
 
@@ -434,7 +434,7 @@ az aks nodepool add \
 az aks nodepool add \
   --resource-group "${RESOURCE_GROUP}" --cluster-name "${CLUSTER_NAME}" \
   --name katapool --mode User --os-sku AzureLinux \
-  --workload-runtime KataVmIsolation --node-vm-size Standard_D4s_v3 \
+  --workload-runtime KataVmIsolation --node-vm-size Standard_D4s_v6 \
   --enable-cluster-autoscaler --min-count 1 --max-count 5 \
   --node-taints sandbox=kata:NoSchedule --labels agentweaver.io/kata=true \
   --ssh-access disabled

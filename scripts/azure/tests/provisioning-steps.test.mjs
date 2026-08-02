@@ -19,6 +19,7 @@ const CFG = Object.freeze({
   CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
+  NODE_VM_SIZE: "Standard_D4s_v6",
   NAMESPACE: "agentweaver",
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
@@ -119,6 +120,31 @@ test("10-create-cluster: run() creates RG/ACR/cluster/node pools when absent, an
     nginxIdx !== -1 && createCall.args[nginxIdx + 1] === "None",
     "az aks create must pass --app-routing-default-nginx-controller None",
   );
+  const vmSizeIdx = createCall.args.indexOf("--node-vm-size");
+  assert.ok(vmSizeIdx !== -1 && createCall.args[vmSizeIdx + 1] === "Standard_D4s_v6");
+});
+
+test("10-create-cluster: run() uses cfg.NODE_VM_SIZE for cluster and both user pools", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "group" && args[1] === "exists") return { stdout: "false", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "acr" && args[1] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "az" && args[0] === "aks" && args[1] === "nodepool" && args[2] === "show") return { stdout: "", stderr: "", code: 1 };
+      if (cmd === "kubectl" && args[0] === "get" && args[1] === "crd") return { stdout: "", stderr: "", code: 1 };
+      if (args.includes("--query") && args[args.indexOf("--query") + 1] === "id") {
+        return { stdout: "/subscriptions/x/resourceGroups/agentweaver-rg/providers/Microsoft.ContainerRegistry/registries/agentweaverregistry", stderr: "", code: 0 };
+      }
+      return null;
+    },
+  });
+
+  await createCluster.run({ ...CFG, NODE_VM_SIZE: "Standard_D8s_v6" }, { exec, log: noopLog() });
+
+  const vmSizeArgs = exec.calls.run
+    .filter((c) => c.cmd === "az" && c.args.includes("--node-vm-size"))
+    .map((c) => c.args[c.args.indexOf("--node-vm-size") + 1]);
+  assert.deepEqual(vmSizeArgs, ["Standard_D8s_v6", "Standard_D8s_v6", "Standard_D8s_v6"]);
 });
 
 test("10-create-cluster: skips resource creation when everything already exists", async () => {

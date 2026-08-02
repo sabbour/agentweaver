@@ -20,6 +20,7 @@
   "CLUSTER_NAME": "agentweaver-aks",
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
+  "NODE_VM_SIZE": "Standard_D4s_v6",
 
   // Optional for `provision-infra` (defaults to a suggested name it will create if missing).
   // REQUIRED for deploy commands (deploy-from-local/deploy-from-release/deploy-from-commit/verify):

@@ -83,12 +83,14 @@ or
 
 ```bash
 npm run azure:provision-infra -- --resource-group agentweaver-rg --cluster-name agentweaver-aks \
-  --acr-name agentweaverregistry --location westus2 --keyvault-name agentweaver-kv \
+  --acr-name agentweaverregistry --location westus2 --node-vm-size Standard_D4s_v6 --keyvault-name agentweaver-kv \
   --github-client-id "$GITHUB_CLIENT_ID" --github-client-secret "$GITHUB_CLIENT_SECRET"
 ```
 
 Config precedence: flags > env > params file > detected defaults > prompt.
-Optional flags: `--skip-postgres`, `--skip-oauth-key`, `--image-tag <tag>`.
+Optional flags: `--skip-postgres`, `--skip-oauth-key`, `--image-tag <tag>`, `--node-vm-size <sku>`.
+
+`NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for new clusters. The default is `Standard_D4s_v6`; existing clusters are unaffected because the installer only uses the value when it needs to run `az aks create` or `az aks nodepool add`.
 
 ### GitHub organization allowlist
 

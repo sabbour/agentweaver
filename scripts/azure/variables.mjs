@@ -46,6 +46,9 @@ export const DEFAULTS = Object.freeze({
   CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
+  // Default for new AKS clusters/nodepools only. Existing clusters are left as-is because
+  // 10-create-cluster.mjs skips `az aks create`/`az aks nodepool add` when those resources exist.
+  NODE_VM_SIZE: "Standard_D4s_v6",
   PG_SERVER_NAME: "agentweaver-pg",
   PG_HA_MODE: "ZoneRedundant",
   // Deliberately NO default here (see resolveKeyvaultName() below): unlike
@@ -176,6 +179,7 @@ export async function resolveVariables(options = {}) {
   const CLUSTER_NAME = pick("CLUSTER_NAME");
   const ACR_NAME = pick("ACR_NAME");
   const LOCATION = pick("LOCATION");
+  const NODE_VM_SIZE = pick("NODE_VM_SIZE");
   const PG_SERVER_NAME = pick("PG_SERVER_NAME");
   const PG_HA_MODE = pick("PG_HA_MODE");
   const NAMESPACE = pick("NAMESPACE");
@@ -242,6 +246,7 @@ export async function resolveVariables(options = {}) {
     CLUSTER_NAME,
     ACR_NAME,
     LOCATION,
+    NODE_VM_SIZE,
     PG_SERVER_NAME,
     PG_HA_MODE,
     NAMESPACE,
@@ -272,6 +277,7 @@ export function printSummary(vars, log) {
   log.field("Cluster", vars.CLUSTER_NAME);
   log.field("ACR", vars.ACR_LOGIN_SERVER);
   log.field("Location", vars.LOCATION);
+  log.field("Node VM size", vars.NODE_VM_SIZE);
   log.field("Postgres server", vars.PG_SERVER_NAME);
   log.field("Postgres HA mode", vars.PG_HA_MODE);
   log.field("Namespace", vars.NAMESPACE);
