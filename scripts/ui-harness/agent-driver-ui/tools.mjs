@@ -100,13 +100,18 @@ async function login(args) {
   const session = await openBrowserSession({
     baseUrl,
     headless: false,
+    browserChannel: 'msedge',
+    userDataDir: args['edge-user-data-dir'],
+    browserArgs: args['edge-profile-directory']
+      ? [`--profile-directory=${args['edge-profile-directory']}`]
+      : undefined,
     allowIdentityProviderNavigation: true,
     identityProviderOrigins,
     ...guardOptions,
   });
   try {
     await session.goto('/');
-    console.log('Complete sign-in in the visible Chromium window, then resume Playwright to save the session.');
+    console.log('Complete sign-in in the visible Microsoft Edge window, then resume Playwright to save the session.');
     await session.page.pause();
     await ensureAuthDirectory();
     const statePath = args['storage-state'] ?? DEFAULT_STORAGE_STATE;

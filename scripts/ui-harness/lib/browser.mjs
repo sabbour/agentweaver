@@ -76,10 +76,20 @@ async function playwrightChromium() {
 export async function openBrowserSession(opts) {
   const base = guardedUrl(opts.baseUrl, '/', opts);
   const chromium = await playwrightChromium();
-  const browser = await chromium.launch({ headless: opts.headless !== false });
+  const launchOptions = { headless: opts.headless !== false };
+  if (opts.browserChannel) launchOptions.channel = opts.browserChannel;
+  if (opts.browserArgs) launchOptions.args = opts.browserArgs;
   const contextOptions = {};
   if (opts.storageState) contextOptions.storageState = await loadStorageState(opts.storageState);
-  const context = await browser.newContext(contextOptions);
+  let browser;
+  let context;
+  if (opts.userDataDir) {
+    context = await chromium.launchPersistentContext(opts.userDataDir, launchOptions);
+    browser = context.browser();
+  } else {
+    browser = await chromium.launch(launchOptions);
+    context = await browser.newContext(contextOptions);
+  }
   if (opts.storageState) {
     const seed = await loadSessionStorageSeed(opts.storageState);
     if (seed && seed.origin === base.origin) {
@@ -112,7 +122,10 @@ export async function openBrowserSession(opts) {
       ...opts,
       allowAgentweaverPreviewNavigation: true,
     }).toString(), { waitUntil: 'domcontentloaded' }),
-    close: async () => { await context.close(); await browser.close(); },
+    close: async () => {
+      await context.close();
+      await browser?.close().catch(() => {});
+    },
   };
 }
 
