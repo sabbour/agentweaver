@@ -65,6 +65,7 @@ internal sealed class BearerSecurityRequirementOperationTransformer : IOpenApiOp
         path.Equals("/api/ping", StringComparison.OrdinalIgnoreCase)
         || path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)
         || path.Equals("/api/version", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/api/server/info", StringComparison.OrdinalIgnoreCase)
         || path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
         || path.StartsWith("/auth", StringComparison.OrdinalIgnoreCase)
         || path.StartsWith("/oauth", StringComparison.OrdinalIgnoreCase)

@@ -30,6 +30,9 @@ public sealed class GitHubOrgAuthorizationMiddleware
         "/api/health",
         "/api/ping",
         "/api/version",
+        // Public server metadata (data directory + configured auth mode): the web app reads this
+        // BEFORE sign-in to pick the right sign-in button, so it must never require a GitHub token.
+        "/api/server/info",
         "/auth",
         "/api/auth",
         "/mcp",

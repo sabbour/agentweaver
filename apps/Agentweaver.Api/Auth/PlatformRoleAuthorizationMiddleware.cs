@@ -18,6 +18,10 @@ public sealed class PlatformRoleAuthorizationMiddleware
         "/api/health",
         "/api/ping",
         "/api/version",
+        // Public server metadata (data directory + configured auth mode) is what the web app
+        // reads BEFORE sign-in to decide which sign-in button to render, so it must stay
+        // anonymous in both middlewares.
+        "/api/server/info",
         "/auth",
         "/api/auth/config",
         // The one-time-code session bootstrap is anonymous by design (the opaque code is the
