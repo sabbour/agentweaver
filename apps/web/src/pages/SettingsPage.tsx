@@ -10,10 +10,17 @@ import {
   MessageBarBody,
   Spinner,
   Switch,
+  Toast,
+  ToastBody,
+  ToastTitle,
+  Toaster,
   makeStyles,
   tokens,
+  useId,
+  useToastController,
 } from '@fluentui/react-components';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount, SandboxPolicy, ServerInfo } from '../api/types';
 import {
   Body,
@@ -133,6 +140,9 @@ function authModeLabel(mode: AuthMode | undefined): string {
 
 export function SettingsPage() {
   const styles = useStyles();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const toasterId = useId('settings-toaster');
+  const { dispatchToast } = useToastController(toasterId);
   const [repositoryPath, setRepositoryPath] = useState('');
   const [policy, setPolicy] = useState<SandboxPolicy | null>(null);
   const [loading, setLoading] = useState(false);
@@ -198,6 +208,24 @@ export function SettingsPage() {
     if (authMode !== 'entra') return;
     queueMicrotask(() => { void loadLinkedAccounts(); });
   }, [authMode, loadLinkedAccounts]);
+
+  // Redirect landing from AuthEndpoints' GitHub linking flow (`/settings?auth=github_linked&login=...`).
+  // Surface a confirmation toast, then strip the query params so a refresh doesn't re-fire it.
+  useEffect(() => {
+    if (searchParams.get('auth') !== 'github_linked') return;
+    const login = searchParams.get('login');
+    dispatchToast(
+      <Toast>
+        <ToastTitle>GitHub account linked</ToastTitle>
+        <ToastBody>{login ? `@${login} is now linked to your account.` : 'Your GitHub account is now linked.'}</ToastBody>
+      </Toast>,
+      { intent: 'success', timeout: 6000 },
+    );
+    const next = new URLSearchParams(searchParams);
+    next.delete('auth');
+    next.delete('login');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, dispatchToast, setSearchParams]);
 
   const platformRoles = useMemo(
     () => (session?.platform_roles ?? []).filter((role, index, all) => all.indexOf(role) === index),
@@ -301,6 +329,7 @@ export function SettingsPage() {
 
   return (
     <PageContainer width="readable">
+      <Toaster toasterId={toasterId} position="top-end" />
       <PageHeader
         title="Account settings"
         description="Manage authentication, linked GitHub accounts, MCP access, and local repository sandbox policy."
