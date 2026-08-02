@@ -81,6 +81,8 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
     "--resource-group=my-rg",
     "--postgres-server-name",
     "custom-pg",
+    "--postgres-ha-mode",
+    "Disabled",
     "--github-client-secret",
     "shh",
   ]);
@@ -89,6 +91,7 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
   assert.equal(parsed.flags.IMAGE_TAG, "v1.2.3");
   assert.equal(parsed.flags.RESOURCE_GROUP, "my-rg");
   assert.equal(parsed.flags.PG_SERVER_NAME, "custom-pg");
+  assert.equal(parsed.flags.PG_HA_MODE, "Disabled");
   assert.equal(parsed.flags.GITHUB_CLIENT_SECRET, "shh");
 });
 
@@ -140,6 +143,7 @@ test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--skip-postgres/);
   assert.match(HELP_TEXT, /--params-file/);
   assert.match(HELP_TEXT, /--postgres-server-name <name>/);
+  assert.match(HELP_TEXT, /--postgres-ha-mode <mode>/);
   assert.match(HELP_TEXT, /--image-source <source>/);
   assert.match(HELP_TEXT, /--ghcr-ref <ref>/);
   assert.match(HELP_TEXT, /dev --setup/);
@@ -206,6 +210,7 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     LOCATION: e.LOCATION,
     KEYVAULT_NAME: e.KEYVAULT_NAME,
     PG_SERVER_NAME: e.PG_SERVER_NAME,
+    PG_HA_MODE: e.PG_HA_MODE,
     NAMESPACE: e.NAMESPACE,
     IMAGE_TAG: e.IMAGE_TAG ?? "dev",
     AGENTHOST_IMAGE_TAG: "dev",
@@ -217,6 +222,8 @@ test("run: non-interactive path resolves config from flags and env, then delegat
       "my-rg",
       "--postgres-server-name",
       "custom-pg",
+      "--postgres-ha-mode",
+      "Disabled",
       "--github-client-id",
       "id-123",
       "--github-client-secret",
@@ -237,6 +244,7 @@ test("run: non-interactive path resolves config from flags and env, then delegat
   );
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
   assert.equal(calls[0].cfg.PG_SERVER_NAME, "custom-pg");
+  assert.equal(calls[0].cfg.PG_HA_MODE, "Disabled");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "topsecret");
 });
 
@@ -256,6 +264,46 @@ test("run: rejects an invalid PG_SERVER_NAME before provisioning starts", async 
       log: noopLog(),
     }),
     /PG_SERVER_NAME must be 3-63 chars of lowercase letters, numbers, or hyphens/,
+  );
+});
+
+test("run: rejects 1-2 character PG_SERVER_NAME values before provisioning starts", async () => {
+  for (const name of ["a", "ab"]) {
+    await assert.rejects(
+      run({
+        argv: [
+          "--postgres-server-name",
+          name,
+          "--github-client-id",
+          "id-123",
+          "--github-client-secret",
+          "topsecret",
+        ],
+        env: {},
+        prompt: { isInteractive: () => false },
+        log: noopLog(),
+      }),
+      /PG_SERVER_NAME must be 3-63 chars of lowercase letters, numbers, or hyphens/,
+    );
+  }
+});
+
+test("run: rejects an invalid PG_HA_MODE before provisioning starts", async () => {
+  await assert.rejects(
+    run({
+      argv: [
+        "--postgres-ha-mode",
+        "GeoRedundant",
+        "--github-client-id",
+        "id-123",
+        "--github-client-secret",
+        "topsecret",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+    }),
+    /PG_HA_MODE must be one of: ZoneRedundant, SameZone, Disabled\./,
   );
 });
 

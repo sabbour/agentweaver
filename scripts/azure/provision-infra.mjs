@@ -90,7 +90,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * --image-tag <tag>, --image-source <acr-build|ghcr>, --ghcr-ref <ref>,
  * --ghcr-token <token> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
- * --acr-name, --location, --keyvault-name, --postgres-server-name, --namespace,
+ * --acr-name, --location, --keyvault-name, --postgres-server-name, --postgres-ha-mode, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
  */
 export function parseArgs(argv = []) {
@@ -161,6 +161,10 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--postgres-server-name");
       flags.PG_SERVER_NAME = value;
       i += consumed;
+    } else if (arg === "--postgres-ha-mode" || arg.startsWith("--postgres-ha-mode=")) {
+      const { value, consumed } = takeValue(i, "--postgres-ha-mode");
+      flags.PG_HA_MODE = value;
+      i += consumed;
     } else if (arg === "--namespace" || arg.startsWith("--namespace=")) {
       const { value, consumed } = takeValue(i, "--namespace");
       flags.NAMESPACE = value;
@@ -210,6 +214,7 @@ Flags:
   --location <region>
   --keyvault-name <name>
   --postgres-server-name <name>
+  --postgres-ha-mode <mode>
   --namespace <name>
   --github-client-id <id>
   --github-client-secret <secret>   NEVER echoed/logged; prefer env/params-file/prompt instead.
@@ -225,7 +230,8 @@ Non-interactive (no TTY) never prompts -- missing required fields fail with a cl
 `;
 
 const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
-const POSTGRES_SERVER_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
+const POSTGRES_HA_MODE_VALUES = Object.freeze(["ZoneRedundant", "SameZone", "Disabled"]);
+const POSTGRES_SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 
 /**
  * A plausible GitHub org login: starts with an alphanumeric, up to 39 chars
@@ -312,6 +318,14 @@ function validatePostgresServerName(value) {
   return true;
 }
 
+function validatePostgresHaMode(value) {
+  const mode = String(value ?? "");
+  if (!POSTGRES_HA_MODE_VALUES.includes(mode)) {
+    return `PG_HA_MODE must be one of: ${POSTGRES_HA_MODE_VALUES.join(", ")}.`;
+  }
+  return true;
+}
+
 /** Builds the lib/config.mjs field schema for the AKS deploy config. */
 function buildSchema({ prompt, az }) {
   return {
@@ -324,6 +338,13 @@ function buildSchema({ prompt, az }) {
       default: DEFAULTS.PG_SERVER_NAME,
       validate: (value) => {
         const result = validatePostgresServerName(value);
+        return result === true ? undefined : result;
+      },
+    },
+    PG_HA_MODE: {
+      default: DEFAULTS.PG_HA_MODE,
+      validate: (value) => {
+        const result = validatePostgresHaMode(value);
         return result === true ? undefined : result;
       },
     },
@@ -448,6 +469,10 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
     default: DEFAULTS.PG_SERVER_NAME,
     validate: validatePostgresServerName,
   });
+  collected.PG_HA_MODE = await prompt.text("Postgres HA mode", {
+    default: DEFAULTS.PG_HA_MODE,
+    validate: validatePostgresHaMode,
+  });
 
   // --- GitHub OAuth credentials ---------------------------------------------
   log.info("");
@@ -562,6 +587,7 @@ export async function run(opts = {}) {
   log.field("Location", config.LOCATION);
   log.field("Key Vault", config.KEYVAULT_NAME);
   log.field("Postgres server", config.PG_SERVER_NAME);
+  log.field("Postgres HA mode", config.PG_HA_MODE);
   log.field("Namespace", config.NAMESPACE);
   log.field("Image source", config.IMAGE_SOURCE);
   if (config.IMAGE_SOURCE === "ghcr") {
@@ -578,6 +604,7 @@ export async function run(opts = {}) {
     LOCATION: config.LOCATION,
     KEYVAULT_NAME: config.KEYVAULT_NAME,
     PG_SERVER_NAME: config.PG_SERVER_NAME,
+    PG_HA_MODE: config.PG_HA_MODE,
     NAMESPACE: config.NAMESPACE,
     GITHUB_ALLOWED_ORG: config.GITHUB_ALLOWED_ORG,
   };
@@ -674,6 +701,7 @@ export async function run(opts = {}) {
   log.field("ACR", cfg.ACR_LOGIN_SERVER);
   log.field("Namespace", cfg.NAMESPACE);
   log.field("Postgres server", cfg.PG_SERVER_NAME);
+  log.field("Postgres HA mode", cfg.PG_HA_MODE);
   log.field("Image tag", cfg.IMAGE_TAG);
   log.field("AgentHost image tag", cfg.AGENTHOST_IMAGE_TAG);
   log.field("Image source", cfg.IMAGE_SOURCE);
