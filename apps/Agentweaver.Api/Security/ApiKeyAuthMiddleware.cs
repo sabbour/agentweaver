@@ -117,6 +117,7 @@ public sealed class GitHubTokenAuthMiddleware
             || context.Request.Path.Equals("/api/version", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/auth/config", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Path.Equals("/api/server/info", StringComparison.OrdinalIgnoreCase)
             || (context.Request.Path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
                 && context.Request.Path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true))
         {
