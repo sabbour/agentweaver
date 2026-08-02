@@ -34,6 +34,7 @@ import * as log from "../lib/log.mjs";
 import * as execDefault from "../lib/exec.mjs";
 import * as gitDefault from "../lib/git.mjs";
 import * as kubectlDefault from "../lib/kubectl.mjs";
+import { githubReleaseExists, resolveGitHubRepository } from "../lib/github.mjs";
 import { IMAGES, buildArgsFor } from "../image-spec.mjs";
 import { DEFAULT_REPO_ROOT } from "../variables.mjs";
 
@@ -100,6 +101,37 @@ export async function currentTagFor(image, namespace, { kubectl = kubectlDefault
     return kubectl.currentAgentHostTag(namespace);
   }
   return kubectl.currentDeploymentTag(image.currentTag.name, namespace);
+}
+
+export const GHCR_RELEASE_TAG_RE = /^v\d+\.\d+\.\d+$/;
+export const GHCR_SHA_TAG_RE = /^sha-[0-9a-f]{7,40}$/;
+const GHCR_MOVING_TAG_RE = /^(?:dev|main|latest|rc-.+)$/;
+
+/**
+ * Validates that a GHCR import ref is immutable and one of the supported
+ * forms: a published release tag (`vX.Y.Z`) or a `sha-<hex>` image tag.
+ *
+ * @param {string} ref
+ * @returns {{ kind: 'release'|'sha', ref: string, commitish: string }}
+ */
+export function validateGhcrRef(ref) {
+  const value = String(ref ?? "").trim();
+  if (GHCR_RELEASE_TAG_RE.test(value)) {
+    return { kind: "release", ref: value, commitish: value };
+  }
+  if (GHCR_SHA_TAG_RE.test(value)) {
+    return { kind: "sha", ref: value, commitish: value.slice(4) };
+  }
+  if (GHCR_MOVING_TAG_RE.test(value)) {
+    throw new Error(
+      `GHCR ref '${value}' is not allowed: moving tags such as dev, main, latest, and rc-* are forbidden for release imports. Use an immutable vX.Y.Z release tag or sha-<hex>.`,
+    );
+  }
+  throw new Error(`GHCR ref '${value}' is invalid. Use an immutable vX.Y.Z release tag or sha-<hex>.`);
+}
+
+export function ghcrImageReference(owner, image, ref) {
+  return `ghcr.io/${String(owner).toLowerCase()}/${image}:${ref}`;
 }
 
 const ACR_TAG_DIGEST_POLL_INITIAL_DELAY_MS = 2_000;
@@ -173,6 +205,41 @@ export async function acrDigestForTag(image, tag, cfg, { exec = execDefault } = 
   } catch {
     return null;
   }
+}
+
+/** Looks up the digest a concrete ACR image tag currently resolves to via `az acr repository show`. */
+export async function acrRepositoryDigestForImage(image, tag, cfg, { exec = execDefault } = {}) {
+  const { stdout, code } = await exec.capture(
+    "az",
+    [
+      "acr",
+      "repository",
+      "show",
+      "--name",
+      cfg.ACR_NAME,
+      "--image",
+      `${image}:${tag}`,
+      "--query",
+      "digest",
+      "--output",
+      "tsv",
+    ],
+    { allowFailure: true, timeoutMs: cfg.ACR_QUERY_TIMEOUT_MS || ACR_QUERY_TIMEOUT_MS },
+  );
+  if (code !== 0) return null;
+  return stdout.trim() || null;
+}
+
+export async function waitForAcrRepositoryDigest(image, tag, cfg, { exec = execDefault, sleep = defaultSleep } = {}) {
+  const initialDigest = await acrRepositoryDigestForImage(image, tag, cfg, { exec });
+  if (initialDigest) return initialDigest;
+
+  for (const delay of ACR_TAG_DIGEST_POLL_DELAYS_MS) {
+    await sleep(delay);
+    const digest = await acrRepositoryDigestForImage(image, tag, cfg, { exec });
+    if (digest) return digest;
+  }
+  return null;
 }
 
 /**
@@ -304,6 +371,202 @@ export async function retagImage(image, sourceTag, targetTag, cfg, { exec = exec
     ], { timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined }),
   );
   log.ok(`${cfg.ACR_LOGIN_SERVER}/${image}:${targetTag}`);
+}
+
+function ghcrImportAuthArgs(cfg) {
+  if (!cfg.GHCR_TOKEN) return [];
+  return ["--username", cfg.GHCR_OWNER, "--password", cfg.GHCR_TOKEN];
+}
+
+async function importIntoAcr(source, image, targetTag, cfg, { exec = execDefault, force = false, ghcrAuth = false } = {}) {
+  const args = [
+    "acr",
+    "import",
+    "--name",
+    cfg.ACR_NAME,
+    "--resource-group",
+    cfg.RESOURCE_GROUP,
+    "--source",
+    source,
+    "--image",
+    `${image}:${targetTag}`,
+    ...(force ? ["--force"] : []),
+    ...(ghcrAuth ? ghcrImportAuthArgs(cfg) : []),
+    "--output",
+    "none",
+  ];
+  await log.withTiming(`ACR import ${image}:${targetTag}`, () =>
+    exec.capture("az", args, { timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined }),
+  );
+}
+
+async function untagImage(image, tag, cfg, { exec = execDefault } = {}) {
+  await exec.capture(
+    "az",
+    ["acr", "repository", "untag", "--name", cfg.ACR_NAME, "--image", `${image}:${tag}`],
+    { allowFailure: true, timeoutMs: cfg.ACR_IMPORT_TIMEOUT_MS || undefined },
+  );
+}
+
+function ghcrStageTag(targetTag) {
+  return `${targetTag}-ghcr-preflight-${process.pid}-${Date.now()}`;
+}
+
+export async function resolveGhcrSource(cfg, { exec = execDefault, git = gitDefault, fetchImpl = globalThis.fetch } = {}) {
+  const ref = validateGhcrRef(cfg.GHCR_REF);
+
+  if (ref.kind === "sha") {
+    const sourceCommit = await git.revParseCommit(ref.commitish, { cwd: cfg.repoRoot });
+    if (!sourceCommit) {
+      throw new Error(`GHCR ref '${cfg.GHCR_REF}' does not resolve to a local git commit.`);
+    }
+    return { kind: ref.kind, sourceRef: ref.ref, sourceCommit };
+  }
+
+  const repo = cfg.GHCR_REPOSITORY
+    ? { owner: cfg.GHCR_OWNER, repo: cfg.GHCR_REPOSITORY }
+    : await resolveGitHubRepository({ repoRoot: cfg.repoRoot, exec });
+  if (!repo?.owner || !repo?.repo) {
+    throw new Error(`Cannot verify GHCR release ref '${cfg.GHCR_REF}': the repo's GitHub origin remote could not be resolved.`);
+  }
+
+  const releaseExists = await githubReleaseExists(repo.owner, repo.repo, cfg.GHCR_REF, { fetchImpl });
+  if (!releaseExists) {
+    throw new Error(`GHCR ref '${cfg.GHCR_REF}' is not a published GitHub Release tag for ${repo.owner}/${repo.repo}.`);
+  }
+
+  const sourceCommit =
+    (await git.revParseCommit(cfg.GHCR_REF, { cwd: cfg.repoRoot })) ||
+    (await releaseRefForTag(cfg.GHCR_REF, { cwd: cfg.repoRoot, git }));
+  if (!sourceCommit) {
+    throw new Error(`GHCR release ref '${cfg.GHCR_REF}' was found on GitHub but could not be resolved to a local source commit.`);
+  }
+
+  return { kind: ref.kind, sourceRef: ref.ref, sourceCommit, repository: repo };
+}
+
+export async function importImagesFromGhcr(cfg, deps = {}) {
+  const exec = deps.exec ?? execDefault;
+  const git = deps.git ?? gitDefault;
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+  const sleep = deps.sleep ?? defaultSleep;
+  const resolvedCfg = { ...cfg, repoRoot: cfg.repoRoot ?? DEFAULT_REPO_ROOT };
+  const ghcrSource = await resolveGhcrSource(resolvedCfg, { exec, git, fetchImpl });
+
+  log.section("Importing Agentweaver images from GHCR");
+  log.field("GHCR owner", resolvedCfg.GHCR_OWNER);
+  log.field("GHCR ref", ghcrSource.sourceRef);
+  log.info("Preflight strategy: import all four GHCR images into temporary ACR staging tags first, then promote final tags only after every staging import succeeds.");
+
+  const stagedPlans = IMAGES.map((imageSpec) => ({
+    image: imageSpec,
+    targetTag: resolvedCfg[imageSpec.tagField],
+    stageTag: ghcrStageTag(resolvedCfg[imageSpec.tagField]),
+    ghcrRef: ghcrImageReference(resolvedCfg.GHCR_OWNER, imageSpec.name, ghcrSource.sourceRef),
+  }));
+
+  const stageResults = await Promise.allSettled(
+    stagedPlans.map(async (plan) => {
+      await importIntoAcr(plan.ghcrRef, plan.image.name, plan.stageTag, resolvedCfg, { exec, ghcrAuth: true });
+      const stageDigest = await waitForAcrRepositoryDigest(plan.image.name, plan.stageTag, resolvedCfg, { exec, sleep });
+      if (!stageDigest) {
+        throw new Error(`imported staging image ${plan.image.name}:${plan.stageTag} has no resolvable ACR digest`);
+      }
+      log.field(`${plan.image.name} staged digest`, stageDigest);
+      return { ...plan, stageDigest };
+    }),
+  );
+
+  const stageFailures = [];
+  const successfulStages = [];
+  for (const result of stageResults) {
+    if (result.status === "fulfilled") {
+      successfulStages.push(result.value);
+    } else {
+      stageFailures.push(result.reason);
+    }
+  }
+
+  if (stageFailures.length > 0) {
+    await Promise.all(successfulStages.map((stage) => untagImage(stage.image.name, stage.stageTag, resolvedCfg, { exec })));
+    throw new Error(
+      `GHCR preflight failed before any final tags were updated: ${stageFailures.map((failure) => failure?.message ?? failure).join("; ")}`,
+    );
+  }
+
+  const promotionPlans = await Promise.all(successfulStages.map(async (stage) => ({
+    ...stage,
+    existingDigest: await acrRepositoryDigestForImage(stage.image.name, stage.targetTag, resolvedCfg, { exec }),
+  })));
+  const conflictingPromotions = promotionPlans.filter(
+    (stage) => stage.existingDigest && stage.existingDigest !== stage.stageDigest && !resolvedCfg.FORCE,
+  );
+  if (conflictingPromotions.length > 0) {
+    throw new Error(
+      `Refusing to overwrite conflicting existing ACR tags without --force: ${conflictingPromotions.map((stage) => (
+        `${stage.image.name}:${stage.targetTag} already exists in ACR with digest ${stage.existingDigest}; requested digest ${stage.stageDigest}`
+      )).join("; ")}`,
+    );
+  }
+
+  const expectedImageDigests = {};
+  const importedImageSources = {};
+
+  try {
+    for (const stage of promotionPlans) {
+      const { existingDigest } = stage;
+      if (existingDigest === stage.stageDigest) {
+        log.skip(`${stage.image.name}:${stage.targetTag} already resolves to imported digest ${stage.stageDigest}`);
+      } else {
+        await importIntoAcr(
+          `${resolvedCfg.ACR_LOGIN_SERVER}/${stage.image.name}@${stage.stageDigest}`,
+          stage.image.name,
+          stage.targetTag,
+          resolvedCfg,
+          { exec, force: Boolean(existingDigest) && Boolean(resolvedCfg.FORCE) },
+        );
+      }
+
+      const finalDigest = await waitForAcrRepositoryDigest(stage.image.name, stage.targetTag, resolvedCfg, { exec, sleep });
+      if (!finalDigest) {
+        throw new Error(`final imported image ${stage.image.name}:${stage.targetTag} has no resolvable ACR digest`);
+      }
+      if (finalDigest !== stage.stageDigest) {
+        throw new Error(
+          `${stage.image.name}:${stage.targetTag} resolved to ${finalDigest} after import; expected ${stage.stageDigest}.`,
+        );
+      }
+
+      log.field(`${stage.image.name} final digest`, finalDigest);
+      expectedImageDigests[stage.image.name] = finalDigest;
+      importedImageSources[stage.image.name] = {
+        digest: finalDigest,
+        sourceCommit: ghcrSource.sourceCommit,
+        sourceRef: ghcrSource.sourceRef,
+      };
+
+      await retagImage(stage.image.name, stage.targetTag, "latest-release", resolvedCfg, { exec });
+      await stampProvenance(stage.image.name, stage.targetTag, ghcrSource.sourceCommit, resolvedCfg, { exec, git });
+    }
+  } finally {
+    await Promise.all(successfulStages.map((stage) => untagImage(stage.image.name, stage.stageTag, resolvedCfg, { exec })));
+  }
+
+  log.section("IMAGES READY IN ACR");
+  for (const imageSpec of IMAGES) {
+    log.field(
+      imageSpec.name,
+      `${resolvedCfg.ACR_LOGIN_SERVER}/${imageSpec.name}:${resolvedCfg[imageSpec.tagField]} @ ${expectedImageDigests[imageSpec.name]}`,
+    );
+  }
+
+  return {
+    imageSource: "ghcr",
+    targetCommit: ghcrSource.sourceCommit,
+    plans: successfulStages.map((stage) => ({ action: "import", image: stage.image, targetTag: stage.targetTag })),
+    expectedImageDigests,
+    importedImageSources,
+  };
 }
 
 /**
@@ -476,7 +739,7 @@ async function executePlan(plan, targetCommit, cfg, deps) {
  * @param {Record<string, unknown>} cfg
  * @param {{ exec?: typeof execDefault, git?: typeof gitDefault, kubectl?: typeof kubectlDefault }} [deps]
  */
-export async function run(cfg, deps = {}) {
+export async function runAcrBuild(cfg, deps = {}) {
   const exec = deps.exec ?? execDefault;
   const git = deps.git ?? gitDefault;
   const kubectl = deps.kubectl ?? kubectlDefault;
@@ -541,6 +804,14 @@ export async function run(cfg, deps = {}) {
   }
 
   return { targetCommit, plans };
+}
+
+export async function run(cfg, deps = {}) {
+  const resolvedCfg = { ...cfg, repoRoot: cfg.repoRoot ?? DEFAULT_REPO_ROOT };
+  if (resolvedCfg.IMAGE_SOURCE === "ghcr") {
+    return importImagesFromGhcr(resolvedCfg, deps);
+  }
+  return runAcrBuild(resolvedCfg, deps);
 }
 
 export { IMAGES };

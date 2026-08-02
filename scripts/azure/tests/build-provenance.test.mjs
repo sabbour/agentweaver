@@ -13,6 +13,9 @@ import {
   buildImage,
   retagImage,
   acrDigestForTag,
+  acrRepositoryDigestForImage,
+  validateGhcrRef,
+  importImagesFromGhcr,
   waitForAcrTagDigest,
   stampProvenance,
   run as runBuild,
@@ -127,6 +130,14 @@ test("pathsChanged: delegates to git.diffIsQuiet and negates it", async () => {
   const git = { diffIsQuiet: async (a, b, paths) => paths.includes("apps/Agentweaver.Api") };
   assert.equal(await pathsChanged("old", "new", ["apps/Agentweaver.Api"], { git }), false);
   assert.equal(await pathsChanged("old", "new", ["apps/Agentweaver.Mcp"], { git }), true);
+});
+
+test("validateGhcrRef: accepts immutable release and sha refs, rejects moving tags", () => {
+  assert.deepEqual(validateGhcrRef("v0.15.0"), { kind: "release", ref: "v0.15.0", commitish: "v0.15.0" });
+  assert.deepEqual(validateGhcrRef("sha-deadbee"), { kind: "sha", ref: "sha-deadbee", commitish: "deadbee" });
+  assert.throws(() => validateGhcrRef("dev"), /moving tags/);
+  assert.throws(() => validateGhcrRef("latest"), /moving tags/);
+  assert.throws(() => validateGhcrRef("rc-0.15.0"), /moving tags/);
 });
 
 // -------------------- planImage build-vs-retag decision (20) --------------------
@@ -253,6 +264,11 @@ test("acrDigestForTag: parses the first non-empty tsv line as the digest", async
   assert.equal(digest, "sha256:" + "b".repeat(64));
 });
 
+test("acrRepositoryDigestForImage: returns null when the image tag does not exist", async () => {
+  const exec = fakeExec({ captureImpl: async () => ({ stdout: "", stderr: "not found", code: 1 }) });
+  assert.equal(await acrRepositoryDigestForImage("agentweaver-api", "v1.2.3", CFG, { exec }), null);
+});
+
 test("stampProvenance: imports the source digest into prov-<sha> and then locks it read-only", async () => {
   const git = { revParseCommit: async () => "c".repeat(40) };
   const sourceDigest = "sha256:" + "d".repeat(64);
@@ -306,6 +322,171 @@ test("retagImage: skips when source and target tags are identical", async () => 
   const exec = fakeExec();
   await retagImage("agentweaver-api", "v1.2.3", "v1.2.3", CFG, { exec });
   assert.equal(exec.calls.capture.length, 0, "must not invoke az acr import when source==target");
+});
+
+test("importImagesFromGhcr: fails closed before final tag promotion when one staged import fails", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("import")) {
+        const source = args[args.indexOf("--source") + 1];
+        if (source.includes("agentweaver-mcp")) throw new Error("manifest unknown");
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "show") {
+        return { stdout: "sha256:" + "1".repeat(64), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(() => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }), /preflight failed before any final tags were updated/i);
+  const finalImports = exec.calls.capture.filter((call) => {
+    if (!call.args.includes("import")) return false;
+    const image = call.args[call.args.indexOf("--image") + 1];
+    return image === "agentweaver-api:v1.2.3" || image === "agentweaver-frontend:v1.2.3" || image === "agentweaver-agent-host:v1.2.3";
+  });
+  assert.equal(finalImports.length, 0, "no final deployment tags should be mutated when GHCR preflight fails");
+});
+
+test("importImagesFromGhcr: refuses to overwrite a conflicting existing ACR tag without --force", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("import")) return { stdout: "", stderr: "", code: 0 };
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "show") {
+        const image = args[args.indexOf("--image") + 1];
+        if (image.includes("ghcr-preflight")) return { stdout: "sha256:" + "2".repeat(64), stderr: "", code: 0 };
+        return { stdout: "sha256:" + "3".repeat(64), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(() => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }), /refusing to overwrite/i);
+  const promotedImports = exec.calls.capture.filter((call) => {
+    if (!call.args.includes("import")) return false;
+    const source = call.args[call.args.indexOf("--source") + 1];
+    return source.startsWith(CFG.ACR_LOGIN_SERVER);
+  });
+  assert.equal(promotedImports.length, 0, "conflicting tags must fail before any staged digest is promoted");
+});
+
+test("importImagesFromGhcr: a last-image conflict blocks every earlier promotion and provenance stamp", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const stageDigestByImage = new Map([
+    ["agentweaver-api", "sha256:" + "1".repeat(64)],
+    ["agentweaver-frontend", "sha256:" + "2".repeat(64)],
+    ["agentweaver-mcp", "sha256:" + "3".repeat(64)],
+    ["agentweaver-agent-host", "sha256:" + "4".repeat(64)],
+  ]);
+  const finalDigestLookups = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("import")) return { stdout: "", stderr: "", code: 0 };
+      if (args.includes("show-manifests")) {
+        const image = args[args.indexOf("--repository") + 1];
+        const query = args[args.indexOf("--query") + 1];
+        const tag = /@=='([^']+)'/.exec(query)?.[1] ?? "";
+        if (tag.startsWith("prov-") || tag === "v1.2.3") {
+          return { stdout: `${stageDigestByImage.get(image) ?? ""}\n`, stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "show") {
+        const imageRef = args[args.indexOf("--image") + 1];
+        const [image, tag] = imageRef.split(":");
+        if (tag.includes("ghcr-preflight")) return { stdout: stageDigestByImage.get(image), stderr: "", code: 0 };
+        const count = (finalDigestLookups.get(imageRef) ?? 0) + 1;
+        finalDigestLookups.set(imageRef, count);
+        if (image === "agentweaver-agent-host") return { stdout: "sha256:" + "9".repeat(64), stderr: "", code: 0 };
+        if (count === 1) return { stdout: "", stderr: "not found", code: 1 };
+        return { stdout: stageDigestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && (args[2] === "untag" || args[2] === "update")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(() => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }), /refusing to overwrite/i);
+  const earlierImages = new Set(["agentweaver-api", "agentweaver-frontend", "agentweaver-mcp"]);
+  const promotedImports = exec.calls.capture.filter((call) =>
+    call.args.includes("import")
+    && earlierImages.has(call.args[call.args.indexOf("--image") + 1].split(":")[0])
+    && call.args[call.args.indexOf("--image") + 1].endsWith(":v1.2.3"),
+  );
+  assert.equal(promotedImports.length, 0, "no earlier final deployment tag should be promoted when a later image conflicts");
+  const provenanceMutations = exec.calls.capture.filter((call) => {
+    if (call.args[0] !== "acr" || call.args[1] !== "import" && call.args[2] !== "update") return false;
+    const imageArgIndex = call.args.indexOf("--image");
+    if (imageArgIndex < 0) return false;
+    const imageRef = call.args[imageArgIndex + 1];
+    const [image, tag] = imageRef.split(":");
+    return earlierImages.has(image) && tag.startsWith("prov-");
+  });
+  assert.equal(provenanceMutations.length, 0, "no earlier provenance tag should be stamped when promotion preflight fails");
+});
+
+test("importImagesFromGhcr: captures final digests and returns imported provenance inputs", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const showCounts = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("import")) return { stdout: "", stderr: "", code: 0 };
+      if (args.includes("show-manifests")) return { stdout: "sha256:" + "4".repeat(64), stderr: "", code: 0 };
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "show") {
+        const image = args[args.indexOf("--image") + 1];
+        const count = (showCounts.get(image) ?? 0) + 1;
+        showCounts.set(image, count);
+        if (image.includes("ghcr-preflight")) return { stdout: "sha256:" + "4".repeat(64), stderr: "", code: 0 };
+        if (count === 1) return { stdout: "", stderr: "not found", code: 1 };
+        return { stdout: "sha256:" + "4".repeat(64), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "untag") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  const result = await importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} });
+  assert.equal(Object.keys(result.expectedImageDigests).length, 4);
+  assert.equal(result.importedImageSources["agentweaver-api"].sourceRef, "sha-deadbee");
+  assert.equal(result.importedImageSources["agentweaver-api"].sourceCommit, "d".repeat(40));
+  const finalDigestLookups = exec.calls.capture.filter(
+    (call) => call.args[0] === "acr" && call.args[1] === "repository" && call.args[2] === "show" && !call.args[call.args.indexOf("--image") + 1].includes("ghcr-preflight"),
+  );
+  assert.ok(finalDigestLookups.length >= 4, "final imported tags must have their digests captured via `az acr repository show --image ... --query digest`");
 });
 
 // -------------------- provenance helpers (25) --------------------
@@ -438,6 +619,36 @@ test("verifyImage: OK result when the resolved provenance commit shows no watche
   });
   assert.equal(result.status, "ok");
   assert.match(result.message, /provably built from/);
+});
+
+test("verifyImage: imported GHCR digests are the source of truth when provided", async () => {
+  const digest = "sha256:" + "7".repeat(64);
+  const kubectl = {
+    desiredDeploymentReplicas: async () => "1",
+    podStatusForSelector: async () => [
+      { name: "p1", phase: "Running", ready: "true", imageRef: "img:v1", imageId: `img@${digest}` },
+    ],
+  };
+  const git = { diffIsQuiet: async () => true };
+  const result = await verifyImage(
+    "api",
+    "agentweaver-api",
+    getImage("agentweaver-api").watchedPaths,
+    "verifycommit",
+    {
+      ...CFG,
+      IMPORTED_IMAGE_SOURCES: {
+        "agentweaver-api": {
+          digest,
+          sourceCommit: "1".repeat(40),
+          sourceRef: "v0.15.0",
+        },
+      },
+    },
+    { exec: fakeExec(), git, kubectl },
+  );
+  assert.equal(result.status, "ok");
+  assert.match(result.message, /match imported digest/);
 });
 
 test("verifyImage: unresolvable prov tag (shallow clone/rewritten history) fails with a clear reason", async () => {

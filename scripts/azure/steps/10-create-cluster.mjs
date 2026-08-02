@@ -71,6 +71,128 @@ export async function sandboxCrdInstalled({ exec = execDefault } = {}) {
   return code === 0;
 }
 
+function asEnabled(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true" || value.toLowerCase() === "enabled";
+  return false;
+}
+
+function normalizeNginxMode(value) {
+  if (!value) return "";
+  return String(value).trim().toLowerCase();
+}
+
+function firstValue(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+export function extractAppRoutingState({ appRouting = null, addonProfiles = null, defaultDomain = null } = {}) {
+  const addon = addonProfiles ?? {};
+  const nginxMode = normalizeNginxMode(
+    firstValue(
+      appRouting?.nginx?.type,
+      appRouting?.nginx?.mode,
+      appRouting?.defaultNginxController,
+      appRouting?.config?.nginx,
+      addon?.appRouting?.config?.nginx,
+      addon?.appRoutingAddon?.config?.nginx,
+      addon?.httpApplicationRouting?.enabled ? "annotationControlled" : "",
+    ),
+  );
+
+  const gatewayApiEnabled = Boolean(
+    asEnabled(firstValue(appRouting?.gatewayApi?.enabled, appRouting?.istio?.enabled)) ||
+      normalizeNginxMode(appRouting?.gatewayApi?.implementation) === "istio" ||
+      normalizeNginxMode(appRouting?.gatewayApi?.gatewayClass) === "approuting-istio" ||
+      asEnabled(addon?.appRoutingIstio?.enabled) ||
+      asEnabled(addon?.approutingIstio?.enabled) ||
+      asEnabled(addon?.appRoutingIstio?.config?.gatewayApi),
+  );
+
+  const defaultDomainEnabled = Boolean(
+    asEnabled(firstValue(defaultDomain?.enabled, defaultDomain?.defaultDomain?.enabled)) ||
+      Boolean(defaultDomain?.fqdn || defaultDomain?.name),
+  );
+
+  return { nginxMode, gatewayApiEnabled, defaultDomainEnabled };
+}
+
+export async function readAppRoutingState(cfg, { exec = execDefault } = {}) {
+  const [appRouting, addonProfiles, defaultDomain] = await Promise.all([
+    exec.capture(
+      "az",
+      ["aks", "approuting", "show", "--resource-group", cfg.RESOURCE_GROUP, "--name", cfg.CLUSTER_NAME, "--output", "json"],
+      { json: true, allowFailure: true },
+    ),
+    exec.capture(
+      "az",
+      ["aks", "show", "--name", cfg.CLUSTER_NAME, "--resource-group", cfg.RESOURCE_GROUP, "--query", "addonProfiles", "--output", "json"],
+      { json: true, allowFailure: true },
+    ),
+    exec.capture(
+      "az",
+      ["aks", "approuting", "defaultdomain", "show", "--resource-group", cfg.RESOURCE_GROUP, "--name", cfg.CLUSTER_NAME, "--output", "json"],
+      { json: true, allowFailure: true },
+    ),
+  ]);
+
+  return extractAppRoutingState({
+    appRouting: appRouting.code === 0 ? appRouting.json : null,
+    addonProfiles: addonProfiles.code === 0 ? addonProfiles.json : null,
+    defaultDomain: defaultDomain.code === 0 ? defaultDomain.json : null,
+  });
+}
+
+export async function reconcileExistingClusterAppRouting(cfg, { exec = execDefault, log = logDefault } = {}) {
+  const state = await readAppRoutingState(cfg, { exec });
+  const needsGateway = !state.gatewayApiEnabled;
+  const needsNginx = state.nginxMode !== "none";
+  const needsDefaultDomain = !state.defaultDomainEnabled;
+
+  if (!needsGateway && !needsNginx && !needsDefaultDomain) {
+    log.skip("Existing cluster app-routing already matches the desired Gateway API / nginx=None / default-domain state.");
+    return state;
+  }
+
+  log.info("Reconciling existing cluster app-routing settings to the desired Gateway API / nginx=None state...");
+  if (needsGateway) {
+    log.info("  Enabling App Routing Gateway API via Istio for the existing cluster...");
+    await exec.run("az", [
+      "aks",
+      "approuting",
+      "gateway",
+      "istio",
+      "enable",
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--name",
+      cfg.CLUSTER_NAME,
+      "--output",
+      "none",
+    ]);
+  }
+
+  if (needsNginx || needsDefaultDomain) {
+    log.info("  Updating App Routing to disable the managed nginx controller and ensure the default domain is enabled...");
+    await exec.run("az", [
+      "aks",
+      "approuting",
+      "update",
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--name",
+      cfg.CLUSTER_NAME,
+      "--nginx",
+      "None",
+      "--enable-default-domain",
+      "--output",
+      "none",
+    ]);
+  }
+
+  return readAppRoutingState(cfg, { exec });
+}
+
 /**
  * Provisions ACR + AKS cluster for Agentweaver: faithful port of
  * 10-create-cluster.sh.
@@ -147,6 +269,7 @@ export async function run(cfg, opts = {}) {
   if (await aksClusterExists(cfg, { exec })) {
     log.info("");
     log.skip(`AKS cluster '${cfg.CLUSTER_NAME}' already exists.`);
+    await reconcileExistingClusterAppRouting(cfg, { exec, log });
   } else {
     log.info("");
     log.info(`Creating AKS cluster '${cfg.CLUSTER_NAME}' (~10-15 minutes)...`);

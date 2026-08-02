@@ -203,6 +203,27 @@ export async function verifyImage(label, image, paths, verifyCommit, cfg, deps =
     return { status: "fail", message: `${label}: could not determine live digest from running pods` };
   }
 
+  const importedSource = cfg.IMPORTED_IMAGE_SOURCES?.[image];
+  if (importedSource) {
+    if (liveState.digest !== importedSource.digest) {
+      return {
+        status: "fail",
+        message: `${label}: live digest ${liveState.digest.slice(0, 19)} does not match the imported GHCR digest ${importedSource.digest.slice(0, 19)} captured in ACR for ${image} (${importedSource.sourceRef})`,
+      };
+    }
+    const quiet = await git.diffIsQuiet(importedSource.sourceCommit, verifyCommit, paths, { cwd: cfg.repoRoot });
+    if (quiet) {
+      return {
+        status: "ok",
+        message: `${label}: ${liveState.podCount} live pod(s) match imported digest ${importedSource.digest.slice(0, 19)} from ${importedSource.sourceRef} (${importedSource.sourceCommit.slice(0, 12)}); no drift in watched paths vs ${verifyCommit.slice(0, 12)}`,
+      };
+    }
+    return {
+      status: "fail",
+      message: `${label}: imported digest ${importedSource.digest.slice(0, 19)} matches live pods, but watched paths changed since ${importedSource.sourceCommit.slice(0, 12)} vs ${verifyCommit.slice(0, 12)} -- STALE IMAGE`,
+    };
+  }
+
   const provTags = await provenanceTagsForDigest(image, liveState.digest, cfg, { exec });
   if (provTags.length === 0) {
     return {

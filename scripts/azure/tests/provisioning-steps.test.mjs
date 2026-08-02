@@ -137,6 +137,82 @@ test("10-create-cluster: skips resource creation when everything already exists"
   assert.ok(!runCommands.some((c) => c.startsWith("az aks create")));
 });
 
+test("10-create-cluster: existing cluster app-routing reconciliation is a no-op when already in gateway-api/nginx-none state", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args, opts) => {
+      if (cmd === "az" && args[0] === "group" && args[1] === "exists") return { stdout: "true", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "acr" && args[1] === "show" && args.includes("--query") && args[args.indexOf("--query") + 1] === "id") {
+        return { stdout: "/subscriptions/x/resourceGroups/agentweaver-rg/providers/Microsoft.ContainerRegistry/registries/agentweaverregistry", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show" && args.includes("--query") && args[args.indexOf("--query") + 1] === "addonProfiles") {
+        return { stdout: "", stderr: "", code: 0, json: { appRoutingIstio: { enabled: true } } };
+      }
+      if (cmd === "az" && args[0] === "aks" && args[1] === "approuting" && args[2] === "show") {
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          json: { nginx: { type: "None" }, gatewayApi: { enabled: true, implementation: "istio" } },
+        };
+      }
+      if (cmd === "az" && args[0] === "aks" && args[1] === "approuting" && args[2] === "defaultdomain" && args[3] === "show") {
+        return { stdout: "", stderr: "", code: 0, json: { enabled: true, fqdn: "example.eastus.aksapp.io" } };
+      }
+      if (cmd === "kubectl" && args[0] === "get" && args[1] === "crd") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "ok", stderr: "", code: 0, json: opts?.json ? {} : undefined };
+    },
+  });
+  await createCluster.run(CFG, { exec, log: noopLog() });
+  const reconciliationCalls = exec.calls.run.filter(
+    (call) => call.cmd === "az" && call.args[0] === "aks" && call.args[1] === "approuting",
+  );
+  assert.equal(reconciliationCalls.length, 0, "already-reconciled clusters must not run approuting update commands");
+});
+
+test("10-create-cluster: existing cluster app-routing reconciliation performs targeted updates only when needed", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args, opts) => {
+      if (cmd === "az" && args[0] === "group" && args[1] === "exists") return { stdout: "true", stderr: "", code: 0 };
+      if (cmd === "az" && args[0] === "acr" && args[1] === "show" && args.includes("--query") && args[args.indexOf("--query") + 1] === "id") {
+        return { stdout: "/subscriptions/x/resourceGroups/agentweaver-rg/providers/Microsoft.ContainerRegistry/registries/agentweaverregistry", stderr: "", code: 0 };
+      }
+      if (cmd === "az" && args[0] === "aks" && args[1] === "show" && args.includes("--query") && args[args.indexOf("--query") + 1] === "addonProfiles") {
+        return { stdout: "", stderr: "", code: 0, json: { httpApplicationRouting: { enabled: true } } };
+      }
+      if (cmd === "az" && args[0] === "aks" && args[1] === "approuting" && args[2] === "show") {
+        return { stdout: "", stderr: "", code: 0, json: { nginx: { type: "External" }, gatewayApi: { enabled: false } } };
+      }
+      if (cmd === "az" && args[0] === "aks" && args[1] === "approuting" && args[2] === "defaultdomain" && args[3] === "show") {
+        return { stdout: "", stderr: "not enabled", code: 1 };
+      }
+      if (cmd === "kubectl" && args[0] === "get" && args[1] === "crd") return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "ok", stderr: "", code: 0, json: opts?.json ? {} : undefined };
+    },
+  });
+  await createCluster.run(CFG, { exec, log: noopLog() });
+  const gatewayEnable = exec.calls.run.find(
+    (call) =>
+      call.cmd === "az" &&
+      call.args[0] === "aks" &&
+      call.args[1] === "approuting" &&
+      call.args[2] === "gateway" &&
+      call.args[3] === "istio" &&
+      call.args[4] === "enable",
+  );
+  assert.ok(gatewayEnable, "existing clusters missing Gateway API must enable the Istio gateway implementation");
+  const appRoutingUpdate = exec.calls.run.find(
+    (call) =>
+      call.cmd === "az" &&
+      call.args[0] === "aks" &&
+      call.args[1] === "approuting" &&
+      call.args[2] === "update",
+  );
+  assert.ok(appRoutingUpdate, "existing clusters with managed nginx/default-domain drift must run a targeted approuting update");
+  assert.ok(appRoutingUpdate.args.includes("--nginx"));
+  assert.ok(appRoutingUpdate.args.includes("None"));
+  assert.ok(appRoutingUpdate.args.includes("--enable-default-domain"));
+});
+
 // -------------------- 15-setup-identity.mjs --------------------
 
 test("15-setup-identity: resolveGithubCredentials throws a clear error when non-interactive and unset", async () => {
