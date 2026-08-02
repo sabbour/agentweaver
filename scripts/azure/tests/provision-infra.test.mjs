@@ -94,17 +94,18 @@ test("parseArgs: recognizes GHCR import flags", () => {
     "--image-source",
     "ghcr",
     "--ghcr-ref=v0.15.0",
-    "--ghcr-owner",
-    "sabbour",
     "--ghcr-token",
     "topsecret",
     "--force",
   ]);
   assert.equal(parsed.flags.IMAGE_SOURCE, "ghcr");
   assert.equal(parsed.flags.GHCR_REF, "v0.15.0");
-  assert.equal(parsed.flags.GHCR_OWNER, "sabbour");
   assert.equal(parsed.flags.GHCR_TOKEN, "topsecret");
   assert.equal(parsed.flags.FORCE, true);
+});
+
+test("parseArgs: rejects ghcr-owner overrides so GHCR owner is always derived from origin", () => {
+  assert.throws(() => parseArgs(["--ghcr-owner", "sabbour"]), /Unknown argument/);
 });
 
 test("parseArgs: --params-file / --config both set paramsFile", () => {
@@ -326,6 +327,28 @@ test("run: IMAGE_SOURCE=ghcr requires GHCR_REF", async () => {
       resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
     }),
     /GHCR_REF is required/,
+  );
+});
+
+test("run: IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner cannot be overridden", async () => {
+  const exec = {
+    async run() {
+      return { code: 0 };
+    },
+    async capture() {
+      return { stdout: "", stderr: "", code: 1 };
+    },
+  };
+  await assert.rejects(
+    run({
+      argv: ["--image-source", "ghcr", "--ghcr-ref", "v0.15.0", "--github-client-id", "id", "--github-client-secret", "secret"],
+      env: {},
+      prompt: { isInteractive: () => false },
+      exec,
+      log: noopLog(),
+      resolveVariables: async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "v0.15.0", AGENTHOST_IMAGE_TAG: "v0.15.0" }),
+    }),
+    /requires a GitHub origin remote/i,
   );
 });
 

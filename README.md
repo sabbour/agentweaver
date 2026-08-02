@@ -254,9 +254,10 @@ To reuse the container images already published by `.github/workflows/publish-im
 instead of rebuilding them into ACR, pass `--image-source ghcr --ghcr-ref <ref>`.
 `<ref>` must be immutable: either a published `vX.Y.Z` GitHub Release tag or a
 `sha-<hex>` image tag. Moving tags such as `dev`, `main`, `latest`, and `rc-*`
-are rejected. `--ghcr-owner <owner>` defaults to the repo's GitHub owner,
-`--ghcr-token`/`GHCR_TOKEN` is available for private-package auth, and
-`--force` is required before overwriting an existing conflicting ACR tag.
+are rejected. The GHCR owner/repository is always derived from the repo's
+GitHub origin remote, `--ghcr-token`/`GHCR_TOKEN` is available for private-
+package auth, and `--force` is required before overwriting an existing
+conflicting ACR tag.
 
 **Deploying current local work to an existing environment:**
 

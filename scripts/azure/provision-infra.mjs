@@ -88,7 +88,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
  * Recognizes: --skip-postgres, --skip-oauth-key, --force,
  * --image-tag <tag>, --image-source <acr-build|ghcr>, --ghcr-ref <ref>,
- * --ghcr-owner <owner>, --ghcr-token <token> (or =value forms),
+ * --ghcr-token <token> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
  * --acr-name, --location, --keyvault-name, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
@@ -128,10 +128,6 @@ export function parseArgs(argv = []) {
     } else if (arg === "--ghcr-ref" || arg.startsWith("--ghcr-ref=")) {
       const { value, consumed } = takeValue(i, "--ghcr-ref");
       flags.GHCR_REF = value;
-      i += consumed;
-    } else if (arg === "--ghcr-owner" || arg.startsWith("--ghcr-owner=")) {
-      const { value, consumed } = takeValue(i, "--ghcr-owner");
-      flags.GHCR_OWNER = value;
       i += consumed;
     } else if (arg === "--ghcr-token" || arg.startsWith("--ghcr-token=")) {
       const { value, consumed } = takeValue(i, "--ghcr-token");
@@ -201,7 +197,6 @@ Flags:
   --image-tag <tag>           Use this image tag instead of the derived default.
   --image-source <source>     Image source: 'acr-build' (default) or 'ghcr'.
   --ghcr-ref <ref>            Required with --image-source ghcr; only accepts immutable refs (vX.Y.Z or sha-<hex>).
-  --ghcr-owner <owner>        GHCR namespace owner (default: derived from the repo's GitHub origin remote).
   --ghcr-token <token>        Optional GHCR registry token for private-package import; NEVER echoed/logged.
   --params-file <path>        JSON/JSONC params file (see scripts/azure/params.example.json).
   --config <path>             Alias for --params-file.
@@ -304,7 +299,7 @@ export function normalizeGithubOrgList(value) {
 }
 
 /** Builds the lib/config.mjs field schema for the AKS deploy config. */
-function buildSchema({ prompt, az, ghcrOwnerDefault }) {
+function buildSchema({ prompt, az }) {
   return {
     RESOURCE_GROUP: { default: DEFAULTS.RESOURCE_GROUP },
     CLUSTER_NAME: { default: DEFAULTS.CLUSTER_NAME },
@@ -324,13 +319,6 @@ function buildSchema({ prompt, az, ghcrOwnerDefault }) {
       validate: (value, config) => {
         if (config.IMAGE_SOURCE !== "ghcr") return undefined;
         return value ? undefined : "GHCR_REF is required when IMAGE_SOURCE=ghcr.";
-      },
-    },
-    GHCR_OWNER: {
-      default: ghcrOwnerDefault,
-      validate: (value, config) => {
-        if (config.IMAGE_SOURCE !== "ghcr") return undefined;
-        return value ? undefined : "GHCR_OWNER could not be derived; pass --ghcr-owner or set GHCR_OWNER.";
       },
     },
     GHCR_TOKEN: {
@@ -533,8 +521,13 @@ export async function run(opts = {}) {
   }
 
   const githubRepo = await resolveGitHubRepository({ repoRoot, exec }).catch(() => null);
-  const schema = buildSchema({ prompt, az, ghcrOwnerDefault: githubRepo?.owner ?? "" });
+  const ghcrOwner = githubRepo?.owner ?? "";
+  const ghcrRepository = githubRepo?.repo ?? "";
+  const schema = buildSchema({ prompt, az });
   const config = await resolveConfig(schema, { flags, env, paramsFile });
+  if (config.IMAGE_SOURCE === "ghcr" && (!ghcrOwner || !ghcrRepository)) {
+    throw new Error("IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner/repository can be derived automatically.");
+  }
 
   log.info("");
   log.section("Resolved deploy configuration");
@@ -546,7 +539,7 @@ export async function run(opts = {}) {
   log.field("Namespace", config.NAMESPACE);
   log.field("Image source", config.IMAGE_SOURCE);
   if (config.IMAGE_SOURCE === "ghcr") {
-    log.field("GHCR owner", config.GHCR_OWNER);
+    log.field("GHCR owner", ghcrOwner);
     log.field("GHCR ref", config.GHCR_REF);
   }
   log.field("GitHub OAuth client ID", config.GITHUB_CLIENT_ID);
@@ -571,8 +564,8 @@ export async function run(opts = {}) {
     ...cfg,
     IMAGE_SOURCE: config.IMAGE_SOURCE,
     GHCR_REF: config.GHCR_REF,
-    GHCR_OWNER: config.GHCR_OWNER,
-    GHCR_REPOSITORY: githubRepo?.repo ?? "",
+    GHCR_OWNER: ghcrOwner,
+    GHCR_REPOSITORY: ghcrRepository,
     GHCR_TOKEN: config.GHCR_TOKEN,
     FORCE: Boolean(flags.FORCE),
     GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
@@ -595,8 +588,8 @@ export async function run(opts = {}) {
     ...cfg,
     IMAGE_SOURCE: config.IMAGE_SOURCE,
     GHCR_REF: config.GHCR_REF,
-    GHCR_OWNER: config.GHCR_OWNER,
-    GHCR_REPOSITORY: githubRepo?.repo ?? "",
+    GHCR_OWNER: ghcrOwner,
+    GHCR_REPOSITORY: ghcrRepository,
     GHCR_TOKEN: config.GHCR_TOKEN,
     FORCE: Boolean(flags.FORCE),
     GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,

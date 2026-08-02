@@ -388,6 +388,70 @@ test("importImagesFromGhcr: refuses to overwrite a conflicting existing ACR tag 
   assert.equal(promotedImports.length, 0, "conflicting tags must fail before any staged digest is promoted");
 });
 
+test("importImagesFromGhcr: a last-image conflict blocks every earlier promotion and provenance stamp", async () => {
+  const cfg = {
+    ...CFG,
+    IMAGE_SOURCE: "ghcr",
+    GHCR_REF: "sha-deadbee",
+    GHCR_OWNER: "sabbour",
+    GHCR_REPOSITORY: "agentweaver",
+  };
+  const git = { revParseCommit: async () => "d".repeat(40) };
+  const stageDigestByImage = new Map([
+    ["agentweaver-api", "sha256:" + "1".repeat(64)],
+    ["agentweaver-frontend", "sha256:" + "2".repeat(64)],
+    ["agentweaver-mcp", "sha256:" + "3".repeat(64)],
+    ["agentweaver-agent-host", "sha256:" + "4".repeat(64)],
+  ]);
+  const finalDigestLookups = new Map();
+  const exec = fakeExec({
+    captureImpl: async (_cmd, args) => {
+      if (args.includes("import")) return { stdout: "", stderr: "", code: 0 };
+      if (args.includes("show-manifests")) {
+        const image = args[args.indexOf("--repository") + 1];
+        const query = args[args.indexOf("--query") + 1];
+        const tag = /@=='([^']+)'/.exec(query)?.[1] ?? "";
+        if (tag.startsWith("prov-") || tag === "v1.2.3") {
+          return { stdout: `${stageDigestByImage.get(image) ?? ""}\n`, stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && args[2] === "show") {
+        const imageRef = args[args.indexOf("--image") + 1];
+        const [image, tag] = imageRef.split(":");
+        if (tag.includes("ghcr-preflight")) return { stdout: stageDigestByImage.get(image), stderr: "", code: 0 };
+        const count = (finalDigestLookups.get(imageRef) ?? 0) + 1;
+        finalDigestLookups.set(imageRef, count);
+        if (image === "agentweaver-agent-host") return { stdout: "sha256:" + "9".repeat(64), stderr: "", code: 0 };
+        if (count === 1) return { stdout: "", stderr: "not found", code: 1 };
+        return { stdout: stageDigestByImage.get(image), stderr: "", code: 0 };
+      }
+      if (args[0] === "acr" && args[1] === "repository" && (args[2] === "untag" || args[2] === "update")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+
+  await assert.rejects(() => importImagesFromGhcr(cfg, { exec, git, sleep: async () => {} }), /refusing to overwrite/i);
+  const earlierImages = new Set(["agentweaver-api", "agentweaver-frontend", "agentweaver-mcp"]);
+  const promotedImports = exec.calls.capture.filter((call) =>
+    call.args.includes("import")
+    && earlierImages.has(call.args[call.args.indexOf("--image") + 1].split(":")[0])
+    && call.args[call.args.indexOf("--image") + 1].endsWith(":v1.2.3"),
+  );
+  assert.equal(promotedImports.length, 0, "no earlier final deployment tag should be promoted when a later image conflicts");
+  const provenanceMutations = exec.calls.capture.filter((call) => {
+    if (call.args[0] !== "acr" || call.args[1] !== "import" && call.args[2] !== "update") return false;
+    const imageArgIndex = call.args.indexOf("--image");
+    if (imageArgIndex < 0) return false;
+    const imageRef = call.args[imageArgIndex + 1];
+    const [image, tag] = imageRef.split(":");
+    return earlierImages.has(image) && tag.startsWith("prov-");
+  });
+  assert.equal(provenanceMutations.length, 0, "no earlier provenance tag should be stamped when promotion preflight fails");
+});
+
 test("importImagesFromGhcr: captures final digests and returns imported provenance inputs", async () => {
   const cfg = {
     ...CFG,

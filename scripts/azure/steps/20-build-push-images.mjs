@@ -494,18 +494,27 @@ export async function importImagesFromGhcr(cfg, deps = {}) {
     );
   }
 
+  const promotionPlans = await Promise.all(successfulStages.map(async (stage) => ({
+    ...stage,
+    existingDigest: await acrRepositoryDigestForImage(stage.image.name, stage.targetTag, resolvedCfg, { exec }),
+  })));
+  const conflictingPromotions = promotionPlans.filter(
+    (stage) => stage.existingDigest && stage.existingDigest !== stage.stageDigest && !resolvedCfg.FORCE,
+  );
+  if (conflictingPromotions.length > 0) {
+    throw new Error(
+      `Refusing to overwrite conflicting existing ACR tags without --force: ${conflictingPromotions.map((stage) => (
+        `${stage.image.name}:${stage.targetTag} already exists in ACR with digest ${stage.existingDigest}; requested digest ${stage.stageDigest}`
+      )).join("; ")}`,
+    );
+  }
+
   const expectedImageDigests = {};
   const importedImageSources = {};
 
   try {
-    for (const stage of successfulStages) {
-      const existingDigest = await acrRepositoryDigestForImage(stage.image.name, stage.targetTag, resolvedCfg, { exec });
-      if (existingDigest && existingDigest !== stage.stageDigest && !resolvedCfg.FORCE) {
-        throw new Error(
-          `${stage.image.name}:${stage.targetTag} already exists in ACR with digest ${existingDigest}; refusing to overwrite with ${stage.stageDigest} without --force.`,
-        );
-      }
-
+    for (const stage of promotionPlans) {
+      const { existingDigest } = stage;
       if (existingDigest === stage.stageDigest) {
         log.skip(`${stage.image.name}:${stage.targetTag} already resolves to imported digest ${stage.stageDigest}`);
       } else {
