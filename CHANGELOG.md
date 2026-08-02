@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- 3ec039f: Publish Agentweaver container images to GitHub's container/artifact registry. A new `Publish images` workflow builds `agentweaver-api`, `agentweaver-frontend`, `agentweaver-mcp`, and `agentweaver-agent-host` and pushes them to `ghcr.io`, with tags that map to each stage of the `dev → release/vX.Y.Z → main` topology: `dev` pushes, release-candidate branches, `main`, published releases (`X.Y.Z`/`vX.Y.Z`/`latest`), and manual runs of an arbitrary commit. Every build also publishes an immutable `sha-<short>` tag. The build matrix is derived from the existing `image-spec.mjs` source of truth rather than restated in YAML.
+- 10087fe: `npm run azure:provision-infra` can now reuse the four container images already published to GHCR instead of always rebuilding them into ACR. Operators opt in with `--image-source ghcr --ghcr-ref <ref>`, where `<ref>` must be an immutable published release tag (`vX.Y.Z`) or `sha-<hex>` tag; the importer preflights all four images together, captures the destination ACR digests for provenance verification, redacts optional GHCR credentials, and refuses conflicting tag overwrites unless `--force` is passed.
+
+  Provisioning an existing AKS cluster now also reconciles legacy App Routing state only when needed. If the cluster predates the Gateway API / `nginx=None` policy, `10-create-cluster` detects the mismatch, enables the Istio-backed Gateway API path, and disables the managed nginx controller/default-domain drift with targeted idempotent updates; already-correct clusters remain untouched.
+
+### Patch Changes
+
+- 520b6ea: Make Azure installer image work easier to diagnose with elapsed lifecycle progress, remove unused recording and worktree content from ACR build contexts, and accept the documented GitHub organization allowlist rules including the global `*` wildcard.
+- 0e52eb0: Allow Entra browser sign-in to redeem authorization codes with PKCE only when no client secret is configured, while keeping secret-based redemption available for tenants that allow it.
+- b4c3fc1: Wire `Auth:Mode` and `Auth:Entra:*` config through the AKS deploy pipeline (`AUTH_MODE`/`ENTRA_CLIENT_ID`/`ENTRA_TENANT_ID` deploy-time environment variables) so Entra sign-in mode can actually be enabled on deployed environments.
+
 ## 0.14.0
 
 ### Minor Changes
