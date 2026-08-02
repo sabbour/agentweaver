@@ -65,6 +65,13 @@ export function validateCaptureConfig(config) {
     if (beat.steps !== undefined && !Array.isArray(beat.steps)) fail(`${location}.steps must be an array`);
     if (beat.expectedCues !== undefined && !Array.isArray(beat.expectedCues)) fail(`${location}.expectedCues must be an array`);
     if (beat.cueOrder !== undefined && !Array.isArray(beat.cueOrder)) fail(`${location}.cueOrder must be an array`);
+    if (beat.disableApprovalWatcher !== undefined && typeof beat.disableApprovalWatcher !== 'boolean') {
+      fail(`${location}.disableApprovalWatcher must be a boolean`);
+    }
+    if (beat.approvalWatcherGraceMs !== undefined
+      && (!Number.isInteger(beat.approvalWatcherGraceMs) || beat.approvalWatcherGraceMs < 0)) {
+      fail(`${location}.approvalWatcherGraceMs must be a non-negative integer`);
+    }
     for (const [cueIndex, name] of (beat.expectedCues ?? []).entries()) {
       if (typeof name !== 'string' || !name) fail(`${location}.expectedCues[${cueIndex}] must be a cue name`);
     }
