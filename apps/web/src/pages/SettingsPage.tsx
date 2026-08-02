@@ -19,7 +19,7 @@ import {
   useId,
   useToastController,
 } from '@fluentui/react-components';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount, SandboxPolicy, ServerInfo } from '../api/types';
 import {
@@ -211,8 +211,13 @@ export function SettingsPage() {
 
   // Redirect landing from AuthEndpoints' GitHub linking flow (`/settings?auth=github_linked&login=...`).
   // Surface a confirmation toast, then strip the query params so a refresh doesn't re-fire it.
+  // linkToastShownRef guards against StrictMode's dev-only double effect invocation dispatching
+  // the toast twice before setSearchParams' URL update is reflected back into searchParams.
+  const linkToastShownRef = useRef(false);
   useEffect(() => {
     if (searchParams.get('auth') !== 'github_linked') return;
+    if (linkToastShownRef.current) return;
+    linkToastShownRef.current = true;
     const login = searchParams.get('login');
     dispatchToast(
       <Toast>

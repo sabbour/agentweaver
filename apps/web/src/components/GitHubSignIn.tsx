@@ -299,12 +299,12 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
   return (
     <Popover positioning="above-start">
       <PopoverTrigger disableButtonEnhancement>
-        <Tooltip content={tooltipContent} relationship="label" withArrow positioning="above">
+        <Tooltip content={tooltipContent} relationship="description" withArrow positioning="above">
           <Button
             appearance="transparent"
             className={collapsed ? mergeClasses(styles.trigger, styles.triggerCollapsed) : styles.trigger}
             type="button"
-            aria-label={tooltipContent}
+            aria-label="GitHub account switcher"
           >
             <span className={collapsed ? mergeClasses(styles.triggerInner, styles.triggerInnerCollapsed) : styles.triggerInner}>
               {triggerAvatar ? (
