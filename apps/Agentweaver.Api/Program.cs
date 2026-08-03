@@ -212,14 +212,21 @@ if (string.Equals(tokenStoreProvider, "keyvault", StringComparison.OrdinalIgnore
     var diskFs = new FileSystemGitHubTokenStore(); // migration source only
     var kvTokenStore = new KeyVaultGitHubTokenStore(kvSecretStore, diskFallback: diskFs, diskMirror: null);
     var cachedTokenStore = new CachingGitHubTokenStore(kvTokenStore);
+    // Outermost decorator: rewrite legacy per-user scopes onto the caller's ACTIVE linked GitHub
+    // identity so Entra-signed-in users (whose credentials live under user-link:{oid}:{login})
+    // resolve a real token everywhere.
+    var linkedIdentityTokenStore = new LinkedIdentityGitHubTokenStore(cachedTokenStore);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
-    builder.Services.AddSingleton<IGitHubTokenStore>(cachedTokenStore);
+    builder.Services.AddSingleton<IGitHubTokenStore>(linkedIdentityTokenStore);
+    builder.Services.AddSingleton<IEffectiveGitHubTokenScopeResolver>(linkedIdentityTokenStore);
     builder.Services.AddSingleton<IGitHubDeviceFlowStore>(new SecretStoreGitHubDeviceFlowStore(kvSecretStore));
     builder.Services.AddSingleton(secretClient); // exposed for SPC startup re-sync
 }
 else
 {
-    builder.Services.AddSingleton<IGitHubTokenStore, OsCredentialStoreGitHubTokenStore>();
+    var localTokenStore = new LinkedIdentityGitHubTokenStore(new OsCredentialStoreGitHubTokenStore());
+    builder.Services.AddSingleton<IGitHubTokenStore>(localTokenStore);
+    builder.Services.AddSingleton<IEffectiveGitHubTokenScopeResolver>(localTokenStore);
     builder.Services.AddSingleton<IGitHubDeviceFlowStore, InMemoryGitHubDeviceFlowStore>();
     // Provide an in-memory ISecretStore so replica-safe run-secret consumers (e.g. the per-run
     // preview-runner credential — spec-006 decouple-preview) always resolve a store outside the

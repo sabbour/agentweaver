@@ -396,7 +396,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             runId);
 
         // ghtok-user--{base32(userId)} — the SAME mapping the API uses when persisting the token to KV.
-        var kvUserSecretName = KeyVaultSecretStore.SanitizeKey("user:" + submittingUser);
+        // With Entra sign-in the user's credentials live under the ACTIVE linked GitHub identity's
+        // scope (user-link:{oid}:{login}), so resolve the effective scope rather than assuming the
+        // legacy per-user scope, which is never written in that mode.
+        var effectiveScope = _tokenStore is IEffectiveGitHubTokenScopeResolver scopeResolver
+            ? await scopeResolver.ResolveEffectiveScopeAsync(submittingUser!, ct).ConfigureAwait(false)
+            : GitHubTokenScope.ForUser(submittingUser!);
+        var kvUserSecretName = KeyVaultSecretStore.SanitizeKey(effectiveScope.Key);
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
         try
