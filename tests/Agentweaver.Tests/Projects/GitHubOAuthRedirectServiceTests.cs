@@ -91,6 +91,23 @@ public sealed class GitHubOAuthRedirectServiceTests : IDisposable
     }
 
     // =========================================================================
+    // OAR-03: the "link another GitHub account" flow must force the account chooser
+    // =========================================================================
+    [Fact]
+    public void CreateAuthorizationUrl_ForceAccountSelection_AddsSelectAccountPrompt()
+    {
+        var (svc, _) = BuildService(new InMemoryGitHubTokenStore(),
+            tokenJson: """{"access_token":"ghp_classic"}""",
+            userJson: """{"login":"octocat"}""");
+
+        svc.CreateAuthorizationUrl("state-1", forceAccountSelection: true)
+            .Should().Contain("prompt=select_account");
+
+        // Plain sign-in keeps GitHub's default behavior (reuse the current github.com session).
+        svc.CreateAuthorizationUrl("state-1").Should().NotContain("prompt=");
+    }
+
+    // =========================================================================
     // Helpers
     // =========================================================================
 

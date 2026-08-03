@@ -85,7 +85,17 @@ public sealed class GitHubOAuthRedirectService
         return CreateAuthorizationUrl(state);
     }
 
-    public string CreateAuthorizationUrl(string state)
+    /// <summary>
+    /// Builds the GitHub authorization URL for <paramref name="state"/>.
+    /// </summary>
+    /// <param name="forceAccountSelection">
+    /// When true, adds <c>prompt=select_account</c> so GitHub always shows the account chooser
+    /// instead of silently re-authorizing the account already signed in to github.com. Required by
+    /// the "link an additional GitHub account" flow — without it a user who is already signed in to
+    /// GitHub is bounced straight back with the account they linked first, making it impossible to
+    /// link a second identity.
+    /// </param>
+    public string CreateAuthorizationUrl(string state, bool forceAccountSelection = false)
     {
         var clientId = RequireClientId();
         var callbackUrl = RequireCallbackUrl();
@@ -93,7 +103,8 @@ public sealed class GitHubOAuthRedirectService
                $"?client_id={Uri.EscapeDataString(clientId)}" +
                $"&redirect_uri={Uri.EscapeDataString(callbackUrl)}" +
                $"&scope={Uri.EscapeDataString(_scopes)}" +
-               $"&state={Uri.EscapeDataString(state)}";
+               $"&state={Uri.EscapeDataString(state)}" +
+               (forceAccountSelection ? "&prompt=select_account" : string.Empty);
     }
 
     /// <summary>Exchanges an authorization code for a token. Returns (login, accessToken) on success.</summary>
