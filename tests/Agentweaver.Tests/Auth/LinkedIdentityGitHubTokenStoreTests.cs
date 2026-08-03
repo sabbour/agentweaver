@@ -66,6 +66,23 @@ public sealed class LinkedIdentityGitHubTokenStoreTests
     }
 
     [Fact]
+    public async Task Set_ForLegacyUserScope_WithDifferentLogin_DoesNotClobberTheActiveAccount()
+    {
+        var inner = new InMemoryGitHubTokenStore();
+        var store = new LinkedIdentityGitHubTokenStore(inner);
+
+        await store.LinkIdentityAsync(EntraUserId, Token("tok-alice", "alice"), isDefault: true);
+
+        // e.g. a device-flow sign-in completed for a different GitHub account.
+        await store.SetAsync(GitHubTokenScope.ForUser(EntraUserId), Token("tok-mallory", "mallory"));
+
+        (await inner.GetTokenAsync(GitHubTokenScope.ForLinkedIdentity(EntraUserId, "alice")))!
+            .AccessToken.Should().Be("tok-alice");
+        (await inner.GetTokenAsync(GitHubTokenScope.ForLinkedIdentity(EntraUserId, "mallory")))!
+            .AccessToken.Should().Be("tok-mallory");
+    }
+
+    [Fact]
     public async Task Unlinking_TheOnlyAccount_FallsBackToTheLegacyScope()
     {
         var store = new LinkedIdentityGitHubTokenStore(new InMemoryGitHubTokenStore());

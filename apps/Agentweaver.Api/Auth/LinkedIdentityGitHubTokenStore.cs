@@ -58,7 +58,8 @@ public sealed class LinkedIdentityGitHubTokenStore
         await _inner.GetTokenAsync(await ResolveAsync(scope, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
 
     public async Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) =>
-        await _inner.SetAsync(await ResolveAsync(scope, ct).ConfigureAwait(false), token, ct).ConfigureAwait(false);
+        await _inner.SetAsync(await ResolveForWriteAsync(scope, token, ct).ConfigureAwait(false), token, ct)
+            .ConfigureAwait(false);
 
     public async Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
         await _inner.GetIdentityAsync(await ResolveAsync(scope, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
@@ -146,15 +147,53 @@ public sealed class LinkedIdentityGitHubTokenStore
 
     private async Task<GitHubTokenScope> ResolveAsync(GitHubTokenScope scope, CancellationToken ct)
     {
-        if (!scope.Key.StartsWith(UserScopePrefix, StringComparison.Ordinal))
-            return scope;
-
-        var userId = scope.Key[UserScopePrefix.Length..];
-        if (string.IsNullOrWhiteSpace(userId))
+        if (!TryGetUserId(scope, out var userId))
             return scope;
 
         var login = await ResolveActiveLoginAsync(userId, ct).ConfigureAwait(false);
         return login is null ? scope : GitHubTokenScope.ForLinkedIdentity(userId, login);
+    }
+
+    /// <summary>
+    /// Write-side resolution. Identical to <see cref="ResolveAsync"/> except that the token being
+    /// written decides WHICH linked identity is targeted: a rotated token keeps the same GitHub login
+    /// (so it lands back on the same linked identity), while a token obtained for a different GitHub
+    /// account (e.g. a device-flow sign-in) is never allowed to overwrite the active account's
+    /// credential under a mismatched login.
+    /// </summary>
+    private async Task<GitHubTokenScope> ResolveForWriteAsync(
+        GitHubTokenScope scope,
+        GitHubToken token,
+        CancellationToken ct)
+    {
+        if (!TryGetUserId(scope, out var userId))
+            return scope;
+
+        var login = await ResolveActiveLoginAsync(userId, ct).ConfigureAwait(false);
+        if (login is null)
+            return scope;
+
+        if (!string.IsNullOrWhiteSpace(token.Login)
+            && !string.Equals(login, token.Login, StringComparison.OrdinalIgnoreCase))
+        {
+            login = token.Login;
+        }
+
+        return GitHubTokenScope.ForLinkedIdentity(userId, login);
+    }
+
+    private static bool TryGetUserId(GitHubTokenScope scope, out string userId)
+    {
+        userId = string.Empty;
+        if (!scope.Key.StartsWith(UserScopePrefix, StringComparison.Ordinal))
+            return false;
+
+        var candidate = scope.Key[UserScopePrefix.Length..];
+        if (string.IsNullOrWhiteSpace(candidate))
+            return false;
+
+        userId = candidate;
+        return true;
     }
 
     private async Task<string?> ResolveActiveLoginAsync(string userId, CancellationToken ct)
