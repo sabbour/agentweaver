@@ -12,6 +12,7 @@ import * as logDefault from "./lib/log.mjs";
 import * as gitDefault from "./lib/git.mjs";
 import * as kubectlDefault from "./lib/kubectl.mjs";
 import { resolveVariables, DEFAULT_REPO_ROOT } from "./variables.mjs";
+import { resolveGitHubRepository } from "./lib/github.mjs";
 import * as buildImagesDefault from "./steps/20-build-push-images.mjs";
 import * as verifyProvenanceDefault from "./steps/25-verify-image-provenance.mjs";
 import * as deployStepDefault from "./steps/30-deploy.mjs";
@@ -32,16 +33,38 @@ import {
 
 export class PublishedReleaseError extends Error {}
 
+const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr"]);
+
 export function parseArgs(argv = []) {
   let tag;
   let dryRun = false;
   let help = false;
+  let imageSource = "acr-build";
+  let ghcrToken;
 
-  for (const arg of argv) {
+  const takeValue = (i, name) => {
+    const raw = argv[i];
+    const eq = raw.indexOf("=");
+    if (eq !== -1) return { value: raw.slice(eq + 1), consumed: 0 };
+    const next = argv[i + 1];
+    if (next === undefined) throw new Error(`${name} requires a value`);
+    return { value: next, consumed: 1 };
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
     if (arg === "--dry-run") {
       dryRun = true;
     } else if (["-h", "--help", "help"].includes(arg)) {
       help = true;
+    } else if (arg === "--image-source" || arg.startsWith("--image-source=")) {
+      const { value, consumed } = takeValue(i, "--image-source");
+      imageSource = value;
+      i += consumed;
+    } else if (arg === "--ghcr-token" || arg.startsWith("--ghcr-token=")) {
+      const { value, consumed } = takeValue(i, "--ghcr-token");
+      ghcrToken = value;
+      i += consumed;
     } else if (!tag && !arg.startsWith("-")) {
       tag = arg;
     } else {
@@ -53,18 +76,29 @@ export function parseArgs(argv = []) {
     throw new Error("Usage: azure:deploy-from-release -- vX.Y.Z");
   }
 
-  return { tag, dryRun, help };
+  if (!help && !IMAGE_SOURCE_VALUES.includes(imageSource)) {
+    throw new Error(`--image-source must be one of: ${IMAGE_SOURCE_VALUES.join(", ")}.`);
+  }
+
+  return { tag, dryRun, help, imageSource, ghcrToken };
 }
 
 export const HELP_TEXT = `deploy-from-release -- deploy an existing published Agentweaver release
 
 Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source ghcr [--ghcr-token <token>]
 
 Requires an existing annotated git tag and matching GitHub Release. The
-working tree must be clean and HEAD must equal the tag commit. Builds or
-retags vX.Y.Z images, deploys them, verifies live provenance against the tag,
-waits for the AgentHost warm pool, and runs health verification.
+working tree must be clean and HEAD must equal the tag commit. By default
+(--image-source acr-build), builds vX.Y.Z images from source into ACR. Pass
+--image-source ghcr to import the images already published for this release
+by .github/workflows/publish-images.yml instead of rebuilding them -- the
+GHCR ref is always the release tag itself, and the GHCR owner/repository is
+derived from the repo's GitHub origin remote. --ghcr-token/GHCR_TOKEN is only
+needed for private-package auth. Either way, this deploys them, verifies live
+provenance against the tag, waits for the AgentHost warm pool, and runs
+health verification.
 `;
 
 export async function previousReleaseTag(tag, { cwd, capture }) {
@@ -151,6 +185,7 @@ export async function run(opts = {}) {
     git = gitDefault,
     kubectl = kubectlDefault,
     resolveVariables: resolveVariablesFn = resolveVariables,
+    resolveGitHubRepository: resolveGitHubRepositoryFn = resolveGitHubRepository,
     steps = {},
     readFile = fs.readFileSync,
     validatedRelease,
@@ -189,12 +224,37 @@ export async function run(opts = {}) {
       releaseEnv.PREVIOUS_IMAGE_TAG = previous;
     }
 
+    let ghcrOwner;
+    let ghcrRepository;
+    if (parsed.imageSource === "ghcr") {
+      const githubRepo = await resolveGitHubRepositoryFn({ repoRoot, exec }).catch(() => null);
+      ghcrOwner = githubRepo?.owner ?? "";
+      ghcrRepository = githubRepo?.repo ?? "";
+      if (!ghcrOwner || !ghcrRepository) {
+        throw new PublishedReleaseError("--image-source ghcr requires a GitHub origin remote so the GHCR owner/repository can be derived automatically.");
+      }
+    }
+
     const cfg = {
       ...(await resolveVariablesFn({ env: releaseEnv, repoRoot })),
       TARGET_GIT_REF: release.commit ?? tag,
       PREVIOUS_IMAGE_TAG: previous || undefined,
+      IMAGE_SOURCE: parsed.imageSource,
+      ...(parsed.imageSource === "ghcr"
+        ? {
+            GHCR_REF: tag,
+            GHCR_OWNER: ghcrOwner,
+            GHCR_REPOSITORY: ghcrRepository,
+            GHCR_TOKEN: parsed.ghcrToken || process.env.GHCR_TOKEN,
+          }
+        : {}),
       repoRoot,
     };
+    log.field("Image source", cfg.IMAGE_SOURCE);
+    if (parsed.imageSource === "ghcr") {
+      log.field("GHCR owner", cfg.GHCR_OWNER);
+      log.field("GHCR ref", cfg.GHCR_REF);
+    }
     const buildImages = steps.buildImages ?? buildImagesDefault;
     const deployStep = steps.deployStep ?? deployStepDefault;
     const verifyProvenance = steps.verifyProvenance ?? verifyProvenanceDefault;

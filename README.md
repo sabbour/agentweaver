@@ -352,7 +352,7 @@ uncommitted local state.
 [AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
 
 - `npm run release:publish` — create the tag and GitHub Release only.
-- `npm run azure:deploy-from-release -- vX.Y.Z` — deploy an existing published release.
+- `npm run azure:deploy-from-release -- vX.Y.Z` — deploy an existing published release. By default this rebuilds images from source into ACR; add `--image-source ghcr` to import the images `.github/workflows/publish-images.yml` already published for that tag instead (the GHCR ref is always the release tag, and the owner/repository is derived from the GitHub origin remote — pass `--ghcr-token`/`GHCR_TOKEN` for private packages). This is the lightweight, images-only way to deploy a version bump: it never touches cluster/ACR/Postgres/identity infrastructure.
 - `npm run azure:release` — publish and perform the first deployment as one resumable orchestration.
 - `npm run azure:verify` — runs the post-deploy health verification checks on their own.
 
