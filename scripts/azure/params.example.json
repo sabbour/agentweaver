@@ -37,6 +37,13 @@
   // this params file, or an interactive prompt).
   "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
   "GITHUB_CLIENT_SECRET": "",
+  // "GITHUB_ALLOWED_ORG": "microsoft", // Comma-separated GitHub org login(s) allowed to sign in.
+
+  // Optional: switch sign-in mode. Valid values: "GitHubLegacy" (default) or "Entra" (Microsoft
+  // Entra ID). When AUTH_MODE is "Entra", ENTRA_CLIENT_ID and ENTRA_TENANT_ID are required.
+  // "AUTH_MODE": "Entra",
+  // "ENTRA_CLIENT_ID": "your-entra-app-client-id",
+  // "ENTRA_TENANT_ID": "your-entra-tenant-id",
 
   // Optional overrides.
   // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.

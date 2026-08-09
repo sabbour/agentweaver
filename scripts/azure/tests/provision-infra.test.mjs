@@ -1026,6 +1026,125 @@ test("run: --github-allowed-org rejects an invalid org login with a clear valida
   );
 });
 
+test("run: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID resolve from flags, appear in the resolved-config log, and reach resolveVariables' env override", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls),
+    verifyProvenance: fakeStep("verifyProvenance", calls),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, {}),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 1, fail: 0 }),
+  };
+  const exec = { async run() { return { code: 0 }; }, async capture() { return { stdout: "", stderr: "", code: 0 }; } };
+  let capturedEnv;
+  const resolveVariablesFn = async ({ env: e }) => {
+    capturedEnv = e;
+    return {
+      RESOURCE_GROUP: e.RESOURCE_GROUP,
+      AUTH_MODE: e.AUTH_MODE,
+      ENTRA_CLIENT_ID: e.ENTRA_CLIENT_ID,
+      ENTRA_TENANT_ID: e.ENTRA_TENANT_ID,
+      IMAGE_TAG: "dev",
+      AGENTHOST_IMAGE_TAG: "dev",
+    };
+  };
+  const fields = [];
+  const log = { ...noopLog(), field: (label, value) => fields.push([label, value]) };
+
+  await run({
+    argv: [
+      "--resource-group",
+      "my-rg",
+      "--github-client-id",
+      "id",
+      "--github-client-secret",
+      "sec",
+      "--auth-mode",
+      "Entra",
+      "--entra-client-id",
+      "11111111-1111-1111-1111-111111111111",
+      "--entra-tenant-id",
+      "22222222-2222-2222-2222-222222222222",
+    ],
+    env: {},
+    prompt: { isInteractive: () => false },
+    exec,
+    log,
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  assert.equal(capturedEnv.AUTH_MODE, "Entra");
+  assert.equal(capturedEnv.ENTRA_CLIENT_ID, "11111111-1111-1111-1111-111111111111");
+  assert.equal(capturedEnv.ENTRA_TENANT_ID, "22222222-2222-2222-2222-222222222222");
+  const authModeField = fields.find(([label]) => label === "Auth mode");
+  assert.ok(authModeField, "expected an 'Auth mode' field in the resolved-config/outputs logs");
+  assert.equal(authModeField[1], "Entra");
+});
+
+test("run: AUTH_MODE defaults to GitHubLegacy when not provided", async () => {
+  const calls = [];
+  const steps = {
+    createCluster: fakeStep("createCluster", calls),
+    setupIdentity: fakeStep("setupIdentity", calls),
+    provisionMonitoring: fakeStep("provisionMonitoring", calls),
+    oauthSigningKey: fakeStep("oauthSigningKey", calls),
+    provisionPostgres: fakeStep("provisionPostgres", calls),
+    buildImages: fakeStep("buildImages", calls),
+    verifyProvenance: fakeStep("verifyProvenance", calls),
+    genA2aMtlsCerts: fakeStep("genA2aMtlsCerts", calls),
+    deployStep: fakeStep("deployStep", calls, {}),
+    verifyStep: fakeStep("verifyStep", calls, { ok: true, pass: 1, fail: 0 }),
+  };
+  const exec = { async run() { return { code: 0 }; }, async capture() { return { stdout: "", stderr: "", code: 0 }; } };
+  let capturedEnv;
+  const resolveVariablesFn = async ({ env: e }) => {
+    capturedEnv = e;
+    return { RESOURCE_GROUP: e.RESOURCE_GROUP, AUTH_MODE: e.AUTH_MODE, IMAGE_TAG: "dev", AGENTHOST_IMAGE_TAG: "dev" };
+  };
+
+  await run({
+    argv: ["--resource-group", "my-rg", "--github-client-id", "id", "--github-client-secret", "sec"],
+    env: {},
+    prompt: { isInteractive: () => false },
+    exec,
+    log: noopLog(),
+    resolveVariables: resolveVariablesFn,
+    steps,
+  });
+
+  assert.equal(capturedEnv.AUTH_MODE, "GitHubLegacy");
+});
+
+test("run: --auth-mode rejects an invalid value with a clear validation error", async () => {
+  await assert.rejects(
+    run({
+      argv: ["--github-client-id", "id", "--github-client-secret", "sec", "--auth-mode", "bogus"],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+    }),
+    /AUTH_MODE/,
+  );
+});
+
+test("run: --auth-mode Entra without --entra-client-id/--entra-tenant-id fails with a clear error", async () => {
+  await assert.rejects(
+    run({
+      argv: ["--github-client-id", "id", "--github-client-secret", "sec", "--auth-mode", "Entra"],
+      env: {},
+      prompt: { isInteractive: () => false },
+      log: noopLog(),
+    }),
+    /ENTRA_CLIENT_ID|ENTRA_TENANT_ID/,
+  );
+});
+
 test("run: NEVER logs the GitHub OAuth client secret anywhere in output", async () => {
   const calls = [];
   const steps = {
