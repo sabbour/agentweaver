@@ -62,6 +62,8 @@ Click **Connect GitHub** to start the authorization flow. After authorizing, the
 
 In Entra mode, a single platform account can link **multiple GitHub accounts**. One linked GitHub identity acts as the default, and project-specific overrides can be used when a different GitHub identity should own the repository relationship or provide GitHub Copilot entitlement for that project.
 
+Linking an additional account always opens GitHub's account picker, so you can choose a different GitHub identity even when you are already signed in to github.com in that browser. The linked account marked as **default** is your *active* account: Agentweaver uses its token for repository access, GitHub Copilot entitlement, and agent sessions. Switching the default in **Settings → GitHub accounts** switches the token everything uses.
+
 Project roles in Agentweaver do **not** translate to GitHub permissions. Being a project `Owner`, `Contributor`, or `Viewer` only affects what you can do inside Agentweaver. Repository clone/push/PR/admin rights come solely from the resolved linked GitHub account's real permission on GitHub.
 
 You can also type `owner/repo` manually in the repository field without connecting GitHub — useful if you know the repository name and don't need the browse-and-search experience.

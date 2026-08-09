@@ -39,3 +39,19 @@ public interface IMultiIdentityGitHubTokenStore : IGitHubTokenStore
         string githubLogin,
         CancellationToken ct = default);
 }
+
+/// <summary>
+/// Resolves the GitHub token scope that a caller/user id actually resolves to at runtime.
+///
+/// <para>
+/// With Entra sign-in a platform user has no token at the legacy <c>user:{id}</c> scope: their GitHub
+/// credentials live under <c>user-link:{entraUserId}:{githubLogin}</c>, one per linked account. Any
+/// component that needs the *name* of the effective scope (rather than just reading the token through
+/// <see cref="IGitHubTokenStore"/>) must resolve it through this interface so it targets the caller's
+/// active (default) linked GitHub account instead of the empty legacy scope.
+/// </para>
+/// </summary>
+public interface IEffectiveGitHubTokenScopeResolver
+{
+    Task<GitHubTokenScope> ResolveEffectiveScopeAsync(string userId, CancellationToken ct = default);
+}

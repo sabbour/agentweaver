@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import https from 'node:https';
 import path from 'node:path';
 
 export class AISettings {
@@ -10,6 +11,8 @@ export class AISettings {
     chatApiVersion = '2025-04-01-preview',
     ttsVoice = 'en-US-Ava:DragonHDLatestNeural',
     speechRegion,
+    speechEndpoint,
+    speechKey,
   }) {
     this.endpoint = endpoint;
     this.apiKey = apiKey;
@@ -18,6 +21,8 @@ export class AISettings {
     this.chatApiVersion = chatApiVersion;
     this.ttsVoice = ttsVoice;
     this.speechRegion = speechRegion;
+    this.speechEndpoint = speechEndpoint;
+    this.speechKey = speechKey;
   }
 
   static fromEnv(env = process.env) {
@@ -34,6 +39,8 @@ export class AISettings {
       chatApiVersion: env.AGENTWEAVER_DEMO_CHAT_API_VERSION || '2025-04-01-preview',
       ttsVoice: env.AGENTWEAVER_DEMO_TTS_VOICE || 'en-US-Ava:DragonHDLatestNeural',
       speechRegion: env.AGENTWEAVER_DEMO_SPEECH_REGION || '',
+      speechEndpoint: env.AGENTWEAVER_DEMO_SPEECH_ENDPOINT || '',
+      speechKey: env.AGENTWEAVER_DEMO_SPEECH_KEY || apiKey,
     });
   }
 }
@@ -92,7 +99,11 @@ export async function generateNarrationText(settings, { beat, contextSummary }) 
 
 export async function synthesizeSpeechToFile(settings, { text, outputPath, voiceName }) {
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const synthesisUrl = new URL('/tts/cognitiveservices/v1', settings.endpoint);
+  const synthesisUrl = settings.speechEndpoint
+    ? new URL(settings.speechEndpoint)
+    : settings.speechRegion
+      ? new URL(`https://${settings.speechRegion}.tts.speech.microsoft.com/cognitiveservices/v1`)
+      : new URL('/tts/cognitiveservices/v1', settings.endpoint);
   const body = [
     `<speak version="1.0" xml:lang="en-US">`,
     `  <voice name="${voiceName || settings.ttsVoice}">`,
@@ -103,21 +114,40 @@ export async function synthesizeSpeechToFile(settings, { text, outputPath, voice
     '  </voice>',
     '</speak>',
   ].join('');
-  const response = await fetch(synthesisUrl, {
-    method: 'POST',
-    headers: {
-      'Ocp-Apim-Subscription-Key': settings.apiKey,
-      'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': 'riff-24khz-16bit-mono-pcm',
-      'User-Agent': 'agentweaver-demo-recording',
-    },
-    body,
-  });
-  if (!response.ok) {
-    throw new Error(`Speech synthesis failed (${response.status}): ${await response.text()}`);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const audioBuffer = await new Promise((resolve, reject) => {
+        const request = https.request(synthesisUrl, {
+          method: 'POST',
+          headers: {
+            'Ocp-Apim-Subscription-Key': settings.speechKey,
+            'Content-Type': 'application/ssml+xml',
+            'X-Microsoft-OutputFormat': 'riff-24khz-16bit-mono-pcm',
+            'User-Agent': 'agentweaver-demo-recording',
+            'Content-Length': Buffer.byteLength(body),
+          },
+        }, (response) => {
+          const chunks = [];
+          response.on('data', (chunk) => chunks.push(chunk));
+          response.on('end', () => {
+            const payload = Buffer.concat(chunks);
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              reject(new Error(`Speech synthesis failed (${response.statusCode}): ${payload.toString('utf8')}`));
+              return;
+            }
+            resolve(payload);
+          });
+        });
+        request.on('error', reject);
+        request.end(body);
+      });
+      await fs.writeFile(outputPath, audioBuffer);
+      return;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+    }
   }
-  const audioBuffer = Buffer.from(await response.arrayBuffer());
-  await fs.writeFile(outputPath, audioBuffer);
 }
 
 export function deriveSpeechRegion(endpoint) {
