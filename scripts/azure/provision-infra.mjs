@@ -210,6 +210,18 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--github-allowed-org");
       flags.GITHUB_ALLOWED_ORG = value;
       i += consumed;
+    } else if (arg === "--auth-mode" || arg.startsWith("--auth-mode=")) {
+      const { value, consumed } = takeValue(i, "--auth-mode");
+      flags.AUTH_MODE = value;
+      i += consumed;
+    } else if (arg === "--entra-client-id" || arg.startsWith("--entra-client-id=")) {
+      const { value, consumed } = takeValue(i, "--entra-client-id");
+      flags.ENTRA_CLIENT_ID = value;
+      i += consumed;
+    } else if (arg === "--entra-tenant-id" || arg.startsWith("--entra-tenant-id=")) {
+      const { value, consumed } = takeValue(i, "--entra-tenant-id");
+      flags.ENTRA_TENANT_ID = value;
+      i += consumed;
     } else {
       throw new Error(`Unknown argument: ${arg}. Run 'provision-infra --help' for usage.`);
     }
@@ -255,6 +267,9 @@ Flags:
   --github-client-id <id>
   --github-client-secret <secret>   NEVER echoed/logged; prefer env/params-file/prompt instead.
   --github-allowed-org <orgs>  Comma-separated GitHub org login(s) allowed to sign in (default: microsoft).
+  --auth-mode <mode>           Sign-in mode: 'GitHubLegacy' (default) or 'Entra' (Microsoft Entra ID).
+  --entra-client-id <id>        Required when --auth-mode=Entra; Entra app registration client (application) ID.
+  --entra-tenant-id <id>        Required when --auth-mode=Entra; Entra tenant (directory) ID.
   -h, --help                  Show this help.
 
 Need a GitHub OAuth App? Create one at https://github.com/settings/applications/new -- the
@@ -266,6 +281,10 @@ Non-interactive (no TTY) never prompts -- missing required fields fail with a cl
 `;
 
 const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr", "custom"]);
+// Must match apps/Agentweaver.Api/Auth/AuthMode.cs's AuthModeResolver.Parse() contract exactly:
+// case-insensitive "GitHubLegacy" or "Entra" are the only two valid values (any other string
+// there silently resolves to Entra, so we validate here rather than let a typo slip through).
+const AUTH_MODE_VALUES = Object.freeze(["GitHubLegacy", "Entra"]);
 const POSTGRES_HA_MODE_VALUES = Object.freeze(["ZoneRedundant", "Disabled"]);
 const POSTGRES_ACCESS_MODE_VALUES = Object.freeze(["private", "public"]);
 const POSTGRES_SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
@@ -360,6 +379,25 @@ function validatePostgresServerName(value) {
     return "PG_SERVER_NAME must be 3-63 chars of lowercase letters, numbers, or hyphens, and cannot start or end with a hyphen.";
   }
   return true;
+}
+
+function validateAuthMode(value) {
+  const mode = String(value ?? "");
+  const match = AUTH_MODE_VALUES.find((v) => v.toLowerCase() === mode.toLowerCase());
+  if (!match) {
+    return `AUTH_MODE must be one of: ${AUTH_MODE_VALUES.join(", ")} (case-insensitive).`;
+  }
+  return true;
+}
+
+function validateEntraConfiguration(config) {
+  if (String(config.AUTH_MODE ?? "").toLowerCase() !== "entra") return;
+  const missing = [];
+  if (!config.ENTRA_CLIENT_ID) missing.push("ENTRA_CLIENT_ID (--entra-client-id)");
+  if (!config.ENTRA_TENANT_ID) missing.push("ENTRA_TENANT_ID (--entra-tenant-id)");
+  if (missing.length > 0) {
+    throw new Error(`AUTH_MODE=Entra requires ${missing.join(" and ")} to be set.`);
+  }
 }
 
 function validatePostgresHaMode(value) {
@@ -508,6 +546,15 @@ function buildSchema({ prompt, az }) {
           validate: validateGithubOrgList,
         }),
     },
+    AUTH_MODE: {
+      default: DEFAULTS.AUTH_MODE,
+      validate: (value) => {
+        const result = validateAuthMode(value);
+        return result === true ? undefined : result;
+      },
+    },
+    ENTRA_CLIENT_ID: {},
+    ENTRA_TENANT_ID: {},
   };
 }
 
@@ -708,6 +755,7 @@ export async function run(opts = {}) {
   let config = await resolveConfig(schema, { flags, env, paramsFile });
   config = normalizePostgresConfig(config);
   validatePostgresAccessConfiguration(config);
+  validateEntraConfiguration(config);
   if (config.IMAGE_SOURCE === "ghcr" && (!ghcrOwner || !ghcrRepository)) {
     throw new Error("IMAGE_SOURCE=ghcr requires a GitHub origin remote so the GHCR owner/repository can be derived automatically.");
   }
@@ -737,6 +785,11 @@ export async function run(opts = {}) {
   }
   log.field("GitHub OAuth client ID", config.GITHUB_CLIENT_ID);
   log.field("Allowed GitHub org(s)", config.GITHUB_ALLOWED_ORG);
+  log.field("Auth mode", config.AUTH_MODE);
+  if (String(config.AUTH_MODE).toLowerCase() === "entra") {
+    log.field("Entra client ID", config.ENTRA_CLIENT_ID);
+    log.field("Entra tenant ID", config.ENTRA_TENANT_ID);
+  }
 
   const envOverride = {
     RESOURCE_GROUP: config.RESOURCE_GROUP,
@@ -751,6 +804,9 @@ export async function run(opts = {}) {
     PG_ACCESS_MODE: config.PG_ACCESS_MODE,
     NAMESPACE: config.NAMESPACE,
     GITHUB_ALLOWED_ORG: config.GITHUB_ALLOWED_ORG,
+    AUTH_MODE: config.AUTH_MODE,
+    ENTRA_CLIENT_ID: config.ENTRA_CLIENT_ID,
+    ENTRA_TENANT_ID: config.ENTRA_TENANT_ID,
     IMAGE_API: config.IMAGE_API,
     IMAGE_FRONTEND: config.IMAGE_FRONTEND,
     IMAGE_MCP: config.IMAGE_MCP,

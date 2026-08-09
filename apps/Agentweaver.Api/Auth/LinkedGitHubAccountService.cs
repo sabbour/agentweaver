@@ -46,7 +46,10 @@ public sealed class LinkedGitHubAccountService(
             ExpiresAt = DateTimeOffset.UtcNow.Add(LinkStateLifetime),
         });
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        return oauthService.CreateAuthorizationUrl(state);
+        // Always force GitHub's account chooser for the link flow: the caller is explicitly asking to
+        // add a DIFFERENT GitHub identity, and GitHub would otherwise silently re-authorize the
+        // account already signed in to github.com (returning the identity that is already linked).
+        return oauthService.CreateAuthorizationUrl(state, forceAccountSelection: true);
     }
 
     public async Task<bool> IsPendingStateAsync(string state, CancellationToken ct = default)
