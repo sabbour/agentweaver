@@ -22,7 +22,15 @@ npm run azure:deploy-from-release -- vX.Y.Z
 
 `release:publish` creates the annotated tag and GitHub Release only.
 `azure:deploy-from-release` requires that existing published tag, builds or
-retags its images, deploys them, and verifies the live environment.
+retags its images, deploys them, and verifies the live environment. Add
+`--image-source ghcr` to import the images already published for that tag by
+`.github/workflows/publish-images.yml` instead of rebuilding them from source —
+this is the fastest way to deploy an already-tagged release and never touches
+cluster/ACR/Postgres/identity infrastructure:
+
+```bash
+npm run azure:deploy-from-release -- vX.Y.Z --image-source ghcr
+```
 
 For the normal first shipment to the default environment:
 
@@ -120,7 +128,7 @@ npm run azure:deploy-from-commit -- <sha-or-ref>
 |---|---|
 | `npm run azure:release` | Full semver release (see above) |
 | `npm run release:publish` | Create the annotated tag and GitHub Release without deploying |
-| `npm run azure:deploy-from-release -- vX.Y.Z` | Deploy an existing published release |
+| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source ghcr]` | Deploy an existing published release (rebuild from source, or import already-published GHCR images) |
 | `npm run azure:provision-infra` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
 | `npm run azure:deploy-from-local` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Deploy an arbitrary exact commit through a temporary detached worktree |
