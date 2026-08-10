@@ -19,6 +19,7 @@ Agents often start development servers inside isolated environments. Browser pre
 - port selection within allowed range
 - live preview URL and stop/expiry behavior
 - run-scoped preview ownership
+- a first-class run lifecycle that keeps preview retention and cleanup policies aligned
 
 ### Out
 - preview for local non-pod runs
@@ -32,9 +33,15 @@ Agents often start development servers inside isolated environments. Browser pre
 - [ ] The preview URL opens the server running in the run’s own sandbox.
 - [ ] Users can stop a preview explicitly, and inactive previews expire automatically.
 - [ ] Agent-initiated previews require approval unless explicitly auto-approved by policy.
+- [ ] While any preview is active, its sandbox claim TTL is renewed, API/worker reapers defer
+      deletion, active use reasserts retention, and the backing pod is protected from autoscaler
+      eviction through one idempotent lifecycle transition.
+- [ ] When the final preview stops or expires, the same lifecycle transition restores the normal
+      claim TTL and eviction policy so sandbox cleanup remains bounded.
 
 ## Notable edge cases
 
 - Invalid ports are rejected.
 - No preview URL case is explained clearly.
 - A preview cannot be used to reach a different run’s sandbox.
+- Stopping one of several previews for a run does not remove protection from the remaining previews.

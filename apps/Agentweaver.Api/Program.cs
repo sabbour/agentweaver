@@ -732,7 +732,12 @@ builder.Services.AddSingleton<PortForwardService>();
             clock: null,
             previewRunnerClient: sp.GetService<Agentweaver.Api.Sandbox.Preview.IPreviewRunnerHttpClient>(),
             originResolver: sp.GetService<Agentweaver.Api.Sandbox.IAgentHostOriginResolver>(),
-            secretStore: sp.GetService<Agentweaver.Api.Auth.ISecretStore>());
+            secretStore: sp.GetService<Agentweaver.Api.Auth.ISecretStore>(),
+            kubernetesOptions: new KubernetesSandboxOptions
+            {
+                TimeoutSeconds = builder.Configuration.GetValue<int?>(
+                    "Sandbox:Kubernetes:TimeoutSeconds") ?? 600,
+            });
     });
 
     // Replica-safe annotation-driven reaper. No-ops when preview disabled.

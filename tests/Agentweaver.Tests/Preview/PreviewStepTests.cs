@@ -689,14 +689,9 @@ public sealed class PreviewStepTests : IDisposable
         public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PreviewSession>>([]);
 
-        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult(false);
-
-        public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
+            string runId, CancellationToken ct = default) =>
+            Task.FromResult(PreviewLifecycleState.Previewable);
 
         public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
 
