@@ -34,8 +34,10 @@ the tool waits without terminating any process, then fails clearly if the exact 
 cannot be refreshed.
 
 Authentication files stay under `scripts\demo-recording\.auth\`. Git ignores this
-directory. The CLI refuses to use an auth directory that Git does not ignore and never
-prints cookies, tokens, storage-state contents, or session-storage values.
+directory. Before any authentication write or profile copy, the CLI resolves the real
+destination, rejects junction/reparse escapes, and verifies that it remains inside the
+repository's protected, Git-ignored auth root. It never prints cookies, tokens,
+storage-state contents, or session-storage values.
 
 ## Start a persistent recording session
 
@@ -45,8 +47,10 @@ npm run demo:record -- start `
 ```
 
 `open`, `start`, and `capture` each refresh sign-in state from the exact Edge Default
-source before opening the named `playwright-cli` session. They do not reuse stale
-saved authentication as a fallback. The default session name is `agentweaver-demo`.
+source before opening the named `playwright-cli` session. If that named session is
+already open, the CLI closes only that owned session before waiting for Edge; it never
+terminates unrelated Edge processes. It does not reuse stale saved authentication as a
+fallback. The default session name is `agentweaver-demo`.
 
 ## Capture
 

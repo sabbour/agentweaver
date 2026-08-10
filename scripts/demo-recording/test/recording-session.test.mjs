@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { recordingHelp } from '../cli.mjs';
 import {
   assertAuthenticatedSnapshot,
@@ -9,12 +11,17 @@ import {
   buildEdgeLaunchOptions,
   parsePlaywrightSessionList,
   parseRecordingCommandOptions,
+  refreshRecordingAuthentication,
   recordingAuthPaths,
   resolveLiteralEdgeDefaultProfile,
+  resolveSafeAuthDestination,
   shouldCopyEdgeProfileEntry,
   validateLiteralEdgeDefaultProfile,
   waitForEdgeToClose,
 } from '../lib/recording-session.mjs';
+
+const packageRoot = path.dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
+const repositoryRoot = path.resolve(packageRoot, '..', '..');
 
 test('recording commands use one canonical session and protected auth root', () => {
   assert.deepEqual(parseRecordingCommandOptions('open', []), {
@@ -132,6 +139,41 @@ test('recording auth must stay inside the repository', () => {
     () => assertAuthRootWithinRepository(path.resolve(repository, '..', 'outside'), repository),
     /child of the repository/,
   );
+});
+
+test('auth refresh closes only the owned Playwright session before inspecting Edge', async () => {
+  const events = [];
+  await refreshRecordingAuthentication(
+    { session: 'agentweaver-demo' },
+    {
+      closeSession: (session) => events.push(`close:${session}`),
+      signIn: async () => events.push('refresh-default'),
+    },
+  );
+  assert.deepEqual(events, ['close:agentweaver-demo', 'refresh-default']);
+});
+
+test('auth destinations reject a junction that escapes the ignored auth root', async () => {
+  const id = `${process.pid}-${Date.now()}`;
+  const authRoot = path.join(packageRoot, '.auth', `junction-test-${id}`);
+  const outsideTarget = path.join(packageRoot, 'test', `.auth-escape-target-${id}`);
+  const junction = path.join(authRoot, 'edge-default-automation');
+  await fs.mkdir(authRoot, { recursive: true });
+  await fs.mkdir(outsideTarget, { recursive: true });
+  try {
+    await fs.symlink(outsideTarget, junction, process.platform === 'win32' ? 'junction' : 'dir');
+    await assert.rejects(
+      () => resolveSafeAuthDestination(junction, {
+        authRoot,
+        repositoryRoot,
+      }),
+      /junction, symlink, or reparse point/,
+    );
+  } finally {
+    await fs.rm(junction, { force: true }).catch(() => {});
+    await fs.rm(authRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(outsideTarget, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test('playwright-cli session status parsing finds named open sessions', () => {
