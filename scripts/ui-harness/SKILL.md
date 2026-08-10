@@ -57,8 +57,18 @@ a JSON evidence step and requires `--session <sessionId>`:
 node scripts/ui-harness/agent-driver-ui/tools.mjs goto --session <sessionId> --path /
 node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --test-id <test-id>
 node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <sessionId> --text "<text>"
+node scripts/ui-harness/agent-driver-ui/tools.mjs drag --session <sessionId> --from-test-id <source-test-id> --to-test-id <target-test-id>
 node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId> --path /<path>
 ```
+
+`drag` performs a genuine left-pointer move/down/move/up sequence. Use stable
+`data-testid` targets, not generated React Flow classes. It defaults to the center of
+each element and 12 intermediate move steps. Use `--steps <1-100>` to tune the path,
+and optional element-relative `--from-x`, `--from-y`, `--to-x`, and `--to-y` offsets
+for handles or node repositioning. Offsets must remain inside the selected elements.
+For the visual workflow editor, targets include `workflow-canvas`,
+`workflow-node-<node-id>`, and `workflow-node-<node-id>-handle-source|target`.
+Failed drags release the pointer and append a failed evidence turn before exiting `2`.
 
 To open an Agentweaver sandbox preview returned by the UI, use the dedicated
 preview action:

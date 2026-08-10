@@ -1,6 +1,7 @@
 export function computeDriverP0(steps = []) {
   const failures = [];
   for (const step of steps) {
+    if (step.outcome === 'failed') failures.push({ kind: 'action-failed', turn: step.id, evidence: step.error?.message ?? step.action });
     for (const assertion of step.assertions ?? []) {
       if (assertion.required === true && assertion.observed !== true) failures.push({ kind: 'required-element-missing', turn: step.id, evidence: assertion.target });
     }

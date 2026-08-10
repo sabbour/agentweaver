@@ -39,7 +39,18 @@ export function attachPageCapture(page) {
   return { console, network };
 }
 
-export async function captureTurn({ page, capture, directory, id, intent, action, target, frustrationSignals = [] }) {
+export async function captureTurn({
+  page,
+  capture,
+  directory,
+  id,
+  intent,
+  action,
+  target,
+  outcome = 'succeeded',
+  error = null,
+  frustrationSignals = [],
+}) {
   await mkdir(directory, { recursive: true });
   const screenshotPath = path.join(directory, `turn-${id}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -51,7 +62,7 @@ export async function captureTurn({ page, capture, directory, id, intent, action
     userFacing: visibleAlert && entry.status >= 400 && ['fetch', 'xhr'].includes(entry.resourceType),
   }));
   return redact({
-    id, at: new Date().toISOString(), intent, action, target, url: page.url(), domSnapshot, screenshotPath,
+    id, at: new Date().toISOString(), intent, action, target, outcome, error, url: page.url(), domSnapshot, screenshotPath,
     screenshotHash: evidenceHash(await readFile(screenshotPath)),
     console: capture.console.splice(0), network, frustrationSignals,
   });

@@ -13,6 +13,7 @@ import { adaptUiEvidence } from '../../harness-judge/adapters/ui.mjs';
 import { ensureAuthDirectory, DEFAULT_STORAGE_STATE, saveSessionStorageSeed } from '../lib/auth.mjs';
 import { attachPageCapture, captureTurn } from '../lib/evidence.mjs';
 import { guardedUrl, keyedLocator, openBrowserSession } from '../lib/browser.mjs';
+import { dragOptionsFromArgs, performPointerDrag } from '../lib/drag.mjs';
 import { computeDriverP0, reportDriverP0 } from '../lib/reporter-ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -143,6 +144,7 @@ async function action(args) {
     ...options(args),
   });
   const capture = attachPageCapture(runtime.page);
+  let target = { testId: args['test-id'], role: args.role, name: args.name };
   try {
     if (command === 'goto') await runtime.goto(args.path ?? '/');
     else if (command === 'open-preview') {
@@ -151,6 +153,25 @@ async function action(args) {
     }
     else if (command === 'click') await keyedLocator(runtime.page, { testId: args['test-id'], role: args.role, name: args.name }).click({ timeout: Number(args.timeout ?? 10_000) });
     else if (command === 'type-coordinator') await keyedLocator(runtime.page, { testId: args['test-id'] ?? 'coordinator-composer', role: args.role, name: args.name }).fill(args.text ?? '');
+    else if (command === 'drag') {
+      const fromTestId = args['from-test-id'];
+      const toTestId = args['to-test-id'];
+      if (typeof fromTestId !== 'string' || typeof toTestId !== 'string') {
+        throw new Error('drag requires --from-test-id and --to-test-id');
+      }
+      const dragOptions = dragOptionsFromArgs(args);
+      target = {
+        from: { testId: fromTestId, offset: dragOptions.sourceOffset },
+        to: { testId: toTestId, offset: dragOptions.targetOffset },
+        steps: dragOptions.steps,
+      };
+      await performPointerDrag({
+        page: runtime.page,
+        source: keyedLocator(runtime.page, { testId: fromTestId }),
+        target: keyedLocator(runtime.page, { testId: toTestId }),
+        ...dragOptions,
+      });
+    }
     else if (command === 'resolve-approval') {
       // The adapter is checked independently from any judge/DOM recommendation.
       assertApprovalAllowed({
@@ -164,11 +185,24 @@ async function action(args) {
     else throw new Error(`unsupported command "${command}"`);
     const step = await captureTurn({
       page: runtime.page, capture, directory: path.join(ROOT, 'transcripts-ui', session.id), id: session.steps.length + 1,
-      intent: args.thought ?? null, action: command, target: { testId: args['test-id'], role: args.role, name: args.name },
+      intent: args.thought ?? null, action: command, target, outcome: 'succeeded',
     });
     session.steps.push(step);
     await saveSession(session);
     console.log(JSON.stringify(step, null, 2));
+  } catch (error) {
+    if (command === 'drag') {
+      const step = await captureTurn({
+        page: runtime.page, capture, directory: path.join(ROOT, 'transcripts-ui', session.id), id: session.steps.length + 1,
+        intent: args.thought ?? null, action: command, target, outcome: 'failed',
+        error: { message: error instanceof Error ? error.message : String(error) },
+        frustrationSignals: ['action-failed'],
+      });
+      session.steps.push(step);
+      await saveSession(session);
+      console.log(JSON.stringify(step, null, 2));
+    }
+    throw error;
   } finally {
     await runtime.close();
   }
