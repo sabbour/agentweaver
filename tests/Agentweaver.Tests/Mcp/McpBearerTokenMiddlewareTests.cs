@@ -1,11 +1,16 @@
 using System.IO;
 using System.Net;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 using Agentweaver.Mcp;
 
 namespace Agentweaver.Tests.Mcp;
@@ -95,6 +100,99 @@ public sealed class McpBearerTokenMiddlewareTests
             "no static key path remains; an unknown token must fail GitHub validation");
     }
 
+    [Fact]
+    public async Task EntraBearer_WithValidIssuerAudienceTenant_PassesThroughAndIsForwardable()
+    {
+        using var rsa = RSA.Create(2048);
+        var fixture = CreateEntraFixture(rsa);
+        string? forwardedToken = null;
+        RequestDelegate next = context =>
+        {
+            forwardedToken = context.Items["mcp.bearer_token"] as string;
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            return Task.CompletedTask;
+        };
+        var middleware = BuildMiddleware(
+            next,
+            configValues: fixture.Configuration);
+        var context = MakeContext(McpPath, fixture.CreateToken());
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        forwardedToken.Should().Be(context.Request.Headers.Authorization.ToString()["Bearer ".Length..],
+            "MCP must forward the same validated Entra bearer so the API can independently validate and authorize it");
+        context.Items["mcp.user"].Should().Be(fixture.ObjectId);
+    }
+
+    [Theory]
+    [InlineData("wrong-issuer", false, true)]
+    [InlineData("wrong-audience", true, false)]
+    [InlineData("wrong-tenant", true, true)]
+    public async Task EntraBearer_WithMismatchedTrustBoundary_Returns401(
+        string mismatch,
+        bool validIssuer,
+        bool validAudience)
+    {
+        using var rsa = RSA.Create(2048);
+        var fixture = CreateEntraFixture(rsa);
+        var middleware = BuildMiddleware(
+            nextStatusCode: 200,
+            githubHandler: new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized),
+            configValues: fixture.Configuration);
+        var token = fixture.CreateToken(
+            issuer: validIssuer ? fixture.Issuer : "https://invalid.example/tenant/v2.0",
+            audience: validAudience ? fixture.ClientId : "different-client-id",
+            tenantId: mismatch == "wrong-tenant" ? "different-tenant-id" : fixture.TenantId);
+        var context = MakeContext(McpPath, token);
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized,
+            "issuer, audience, and tenant binding must remain fail-closed for forwarded Entra credentials");
+        context.Items.Should().NotContainKey("mcp.bearer_token");
+    }
+
+    [Fact]
+    public async Task EntraBearer_WithUntrustedSignature_Returns401()
+    {
+        using var trustedRsa = RSA.Create(2048);
+        using var untrustedRsa = RSA.Create(2048);
+        var trustedFixture = CreateEntraFixture(trustedRsa);
+        var untrustedFixture = CreateEntraFixture(untrustedRsa);
+        var middleware = BuildMiddleware(
+            nextStatusCode: 200,
+            githubHandler: new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized),
+            configValues: trustedFixture.Configuration);
+        var context = MakeContext(McpPath, untrustedFixture.CreateToken());
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        context.Items.Should().NotContainKey("mcp.bearer_token");
+    }
+
+    [Fact]
+    public async Task EntraBearer_WhenExpired_Returns401()
+    {
+        using var rsa = RSA.Create(2048);
+        var fixture = CreateEntraFixture(rsa);
+        var middleware = BuildMiddleware(
+            nextStatusCode: 200,
+            githubHandler: new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized),
+            configValues: fixture.Configuration);
+        var context = MakeContext(
+            McpPath,
+            fixture.CreateToken(
+                issuedAt: DateTime.UtcNow.AddMinutes(-10),
+                expires: DateTime.UtcNow.AddMinutes(-5)));
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        context.Items.Should().NotContainKey("mcp.bearer_token");
+    }
+
     // =========================================================================
     // S1-04 (STUB — requires Tank T6)
     // After T6: missing-token 401 must include WWW-Authenticate header with:
@@ -171,22 +269,24 @@ public sealed class McpBearerTokenMiddlewareTests
 
     private McpBearerTokenMiddleware BuildMiddleware(
         int nextStatusCode = 200,
-        HttpMessageHandler? githubHandler = null)
+        HttpMessageHandler? githubHandler = null,
+        IReadOnlyDictionary<string, string?>? configValues = null)
     {
         RequestDelegate next = ctx =>
         {
             ctx.Response.StatusCode = nextStatusCode;
             return Task.CompletedTask;
         };
-        return BuildMiddleware(next, githubHandler);
+        return BuildMiddleware(next, githubHandler, configValues);
     }
 
     private McpBearerTokenMiddleware BuildMiddleware(
         RequestDelegate next,
-        HttpMessageHandler? githubHandler = null)
+        HttpMessageHandler? githubHandler = null,
+        IReadOnlyDictionary<string, string?>? configValues = null)
     {
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .AddInMemoryCollection(configValues ?? new Dictionary<string, string?>())
             .Build();
 
         var cache    = new MemoryCache(new MemoryCacheOptions());
@@ -197,14 +297,61 @@ public sealed class McpBearerTokenMiddlewareTests
             cache,
             factory,
             NullLogger<McpAccessTokenValidator>.Instance);
+        var entraValidator = new McpEntraAccessTokenValidator(
+            config,
+            factory,
+            NullLogger<McpEntraAccessTokenValidator>.Instance);
 
         return new McpBearerTokenMiddleware(
             next,
             validator,
+            entraValidator,
             config,
             cache,
             factory,
             NullLogger<McpBearerTokenMiddleware>.Instance);
+    }
+
+    private static EntraFixture CreateEntraFixture(RSA rsa)
+    {
+        const string tenantId = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+        const string clientId = "11111111-2222-3333-4444-555555555555";
+        const string issuer = $"https://login.microsoftonline.com/{tenantId}/v2.0";
+        const string objectId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        var key = new RsaSecurityKey(rsa) { KeyId = "mcp-entra-test-key" };
+        var parameters = rsa.ExportParameters(false);
+        var jwks = JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new
+                {
+                    kty = "RSA",
+                    use = "sig",
+                    alg = SecurityAlgorithms.RsaSha256,
+                    kid = key.KeyId,
+                    n = Base64UrlEncoder.Encode(parameters.Modulus),
+                    e = Base64UrlEncoder.Encode(parameters.Exponent),
+                },
+            },
+        });
+
+        return new EntraFixture(
+            tenantId,
+            clientId,
+            issuer,
+            objectId,
+            new SigningCredentials(key, SecurityAlgorithms.RsaSha256),
+            new Dictionary<string, string?>
+            {
+                ["Auth:Mode"] = "Entra",
+                ["Auth:Entra:TenantId"] = tenantId,
+                ["Auth:Entra:ClientId"] = clientId,
+                ["Auth:Entra:Issuer"] = issuer,
+                ["Auth:Entra:JwksJson"] = jwks,
+                ["Auth:Mcp:AllowGitHubPassthrough"] = "true",
+            });
     }
 
     private static DefaultHttpContext MakeContext(string path, string? bearerToken = null)
@@ -247,5 +394,34 @@ public sealed class McpBearerTokenMiddlewareTests
         private readonly HttpMessageHandler _handler;
         public SingleClientHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
         public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    }
+
+    private sealed record EntraFixture(
+        string TenantId,
+        string ClientId,
+        string Issuer,
+        string ObjectId,
+        SigningCredentials SigningCredentials,
+        IReadOnlyDictionary<string, string?> Configuration)
+    {
+        public string CreateToken(
+            string? issuer = null,
+            string? audience = null,
+            string? tenantId = null,
+            DateTime? issuedAt = null,
+            DateTime? expires = null) =>
+            new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+            {
+                Issuer = issuer ?? Issuer,
+                Audience = audience ?? ClientId,
+                Subject = new ClaimsIdentity(
+                [
+                    new Claim("oid", ObjectId),
+                    new Claim("tid", tenantId ?? TenantId),
+                ]),
+                IssuedAt = issuedAt ?? DateTime.UtcNow.AddMinutes(-1),
+                Expires = expires ?? DateTime.UtcNow.AddMinutes(10),
+                SigningCredentials = SigningCredentials,
+            });
     }
 }
