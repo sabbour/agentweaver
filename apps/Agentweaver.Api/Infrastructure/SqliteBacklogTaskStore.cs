@@ -27,11 +27,11 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.CommandText =
             """
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
-                                       captured_by, created_at, committed_at, claimed_at, run_id,
+                                       captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                                        workflow_override_id, archived_at, source_file_path,
                                        parent_prd_run_id, promotion_key, promotion_reason)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
-                    $capturedBy, $createdAt, $committedAt, $claimedAt, $runId,
+                    $capturedBy, $capturedByUserId, $createdAt, $committedAt, $claimedAt, $runId,
                     $workflowOverrideId, $archivedAt, $sourceFilePath,
                     $parentPrdRunId, $promotionKey, $promotionReason);
             """;
@@ -681,6 +681,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$state", task.State.ToApiString());
         command.Parameters.AddWithValue("$orderKey", task.OrderKey);
         command.Parameters.AddWithValue("$capturedBy", task.CapturedBy);
+        command.Parameters.AddWithValue("$capturedByUserId", (object?)task.CapturedByUserId ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdAt", Ts(task.CreatedAt));
         command.Parameters.AddWithValue("$committedAt", NullableTs(task.CommittedAt));
         command.Parameters.AddWithValue("$claimedAt", NullableTs(task.ClaimedAt));
@@ -694,12 +695,13 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
     }
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
-    //           6=captured_by 7=created_at 8=committed_at 9=claimed_at 10=run_id 11=workflow_override_id
-    //           12=archived_at 13=source_file_path 14=parent_prd_run_id 15=promotion_key 16=promotion_reason
+    //           6=captured_by 7=captured_by_user_id 8=created_at 9=committed_at 10=claimed_at
+    //           11=run_id 12=workflow_override_id 13=archived_at 14=source_file_path
+    //           15=parent_prd_run_id 16=promotion_key 17=promotion_reason
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
-              captured_by, created_at, committed_at, claimed_at, run_id,
+              captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
               workflow_override_id, archived_at, source_file_path,
               parent_prd_run_id, promotion_key, promotion_reason
           FROM backlog_tasks
@@ -714,16 +716,17 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         State       = BacklogTaskStateExtensions.ParseState(r.GetString(4)),
         OrderKey    = r.GetString(5),
         CapturedBy  = r.GetString(6),
-        CreatedAt   = DateTimeOffset.Parse(r.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        CommittedAt = r.IsDBNull(8)  ? null : DateTimeOffset.Parse(r.GetString(8),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        ClaimedAt   = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        RunId       = r.IsDBNull(10) ? null : RunId.Parse(r.GetString(10)),
-        WorkflowOverrideId = r.IsDBNull(11) ? null : r.GetString(11),
-        ArchivedAt  = r.IsDBNull(12) ? null : DateTimeOffset.Parse(r.GetString(12), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        SourceFilePath = r.IsDBNull(13) ? null : r.GetString(13),
-        ParentPrdRunId = r.IsDBNull(14) ? null : RunId.Parse(r.GetString(14)),
-        PromotionKey = r.IsDBNull(15) ? null : r.GetString(15),
-        PromotionReason = r.IsDBNull(16) ? null : r.GetString(16),
+        CapturedByUserId = r.IsDBNull(7) ? null : r.GetString(7),
+        CreatedAt   = DateTimeOffset.Parse(r.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        CommittedAt = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        ClaimedAt   = r.IsDBNull(10) ? null : DateTimeOffset.Parse(r.GetString(10), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        RunId       = r.IsDBNull(11) ? null : RunId.Parse(r.GetString(11)),
+        WorkflowOverrideId = r.IsDBNull(12) ? null : r.GetString(12),
+        ArchivedAt  = r.IsDBNull(13) ? null : DateTimeOffset.Parse(r.GetString(13), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        SourceFilePath = r.IsDBNull(14) ? null : r.GetString(14),
+        ParentPrdRunId = r.IsDBNull(15) ? null : RunId.Parse(r.GetString(15)),
+        PromotionKey = r.IsDBNull(16) ? null : r.GetString(16),
+        PromotionReason = r.IsDBNull(17) ? null : r.GetString(17),
     };
 
     private static string AddTaskIdParameters(SqliteCommand command, IReadOnlyCollection<BacklogTaskId> taskIds)

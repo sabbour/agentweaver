@@ -273,6 +273,7 @@ public static class BacklogDecomposeEndpoints
                         State = BacklogTaskState.Backlog,
                         OrderKey = newKey,
                         CapturedBy = capturedBy,
+                        CapturedByUserId = caller.User,
                         CreatedAt = now,
                         SourceFilePath = normalizedPath,
                     }, ct);

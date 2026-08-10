@@ -13,13 +13,19 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
     private readonly IAgentRunner _agentRunner;
     private readonly string _workingDirectory;
     private readonly string? _modelId;
+    private readonly string? _projectId;
     private bool _disposed;
 
-    public AgentweaverAgentRuntime(IAgentRunner agentRunner, string workingDirectory, string? modelId = null)
+    public AgentweaverAgentRuntime(
+        IAgentRunner agentRunner,
+        string workingDirectory,
+        string? modelId = null,
+        string? projectId = null)
     {
         _agentRunner = agentRunner ?? throw new ArgumentNullException(nameof(agentRunner));
         _workingDirectory = workingDirectory ?? throw new ArgumentNullException(nameof(workingDirectory));
         _modelId = modelId;
+        _projectId = projectId;
     }
 
     /// <summary>
@@ -30,7 +36,7 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var runId = Guid.NewGuid().ToString("N");
-        return await _agentRunner.ExecuteAsync(
+        return await _agentRunner.ExecuteForProjectAsync(
             task: prompt,
             workingDirectory: _workingDirectory,
             repositoryPath: _workingDirectory,
@@ -39,7 +45,8 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
             modelId: _modelId,
             stream: null,
             ct: ct,
-            userId: userId).ConfigureAwait(false);
+            userId: userId,
+            projectId: _projectId).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -230,12 +230,14 @@ public sealed class ProjectService
     /// platform auto-selecting an owner.
     /// </summary>
     public async Task<IReadOnlyList<GitHubRepositoryOwner>> ListRepositoryOwnersAsync(
-        string owner, CancellationToken ct = default)
+        string owner,
+        CancellationToken ct = default,
+        ProjectId? projectId = null)
     {
         if (_repositoryClient is null)
             throw new InvalidOperationException("No GitHub repository client is configured.");
 
-        var accessToken = await ResolveAccessTokenAsync(owner, ct).ConfigureAwait(false);
+        var accessToken = await ResolveAccessTokenAsync(owner, projectId, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(accessToken))
             throw new InvalidOperationException(
                 "GitHub sign-in is required to list repository owners. Sign in with 'agentweaver github sign-in'.");
@@ -271,7 +273,7 @@ public sealed class ProjectService
                 $"Project '{id}' already has a connected repository ('{project.Origin.SourceRepository}'). " +
                 "This operation only connects a currently-unconnected project.");
 
-        var accessToken = await ResolveAccessTokenAsync(caller, ct).ConfigureAwait(false);
+        var accessToken = await ResolveAccessTokenAsync(caller, id, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(accessToken))
             throw new InvalidOperationException(
                 "GitHub sign-in is required to create a repository. Sign in with 'agentweaver github sign-in'.");
@@ -295,9 +297,14 @@ public sealed class ProjectService
         return project with { Origin = origin, UpdatedAt = now };
     }
 
-    private async Task<string?> ResolveAccessTokenAsync(string owner, CancellationToken ct)
+    private async Task<string?> ResolveAccessTokenAsync(
+        string owner,
+        ProjectId? projectId,
+        CancellationToken ct)
     {
-        var scope = _scopeProvider.Resolve(owner);
+        var scope = await _scopeProvider
+            .ResolveAsync(owner, projectId?.ToString(), ct)
+            .ConfigureAwait(false);
         if (_accessTokenProvider is not null)
             return await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
 

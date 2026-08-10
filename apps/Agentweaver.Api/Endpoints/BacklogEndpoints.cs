@@ -72,6 +72,7 @@ public static class BacklogEndpoints
                 State = BacklogTaskState.Backlog,
                 OrderKey = orderKey,
                 CapturedBy = capturedBy,
+                CapturedByUserId = caller.User,
                 CreatedAt = DateTimeOffset.UtcNow,
                 SourceFilePath = externalId,
             };

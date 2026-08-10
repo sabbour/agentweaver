@@ -162,6 +162,7 @@ public static class ProjectAuthorization
         {
             CallerTokenScopeProvider.SelectProjectIdentity(
                 httpContext,
+                projectId,
                 caller.EntraObjectId,
                 effective.EffectiveLink.GitHubLogin);
         }

@@ -190,6 +190,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Resolves the run owner's GitHub token so the API can pass it in /configure, avoiding the need
     // for the kata VM pod to call Azure AD or Key Vault (blocked by Cilium FQDN policies).
     private readonly IGitHubTokenStore? _tokenStore;
+    private readonly IGitHubTokenScopeProvider? _tokenScopeProvider;
     // Refresh-aware token accessor (issue #523): a Build & Test gate can launch its AgentHost pod for
     // the FIRST time (a fresh pod, not yet /configure'd for this run) many minutes after the run's
     // earlier subtask stages — long enough for the submitting user's Copilot-entitled OAuth access
@@ -240,7 +241,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
-        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null)
+        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
+        IGitHubTokenScopeProvider? tokenScopeProvider = null)
     {
         _client = client;
         _options = options;
@@ -251,6 +253,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _submittingUserResolver = submittingUserResolver;
         _httpClientFactory = httpClientFactory;
         _tokenStore = tokenStore;
+        _tokenScopeProvider = tokenScopeProvider;
         _secretStore = secretStore;
         _runEventStream = runEventStream;
         _runOptions = runOptions;
@@ -395,13 +398,21 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             "KubernetesSandboxExecutor: resolved submitting user for run {RunId}; will configure pod via /configure.",
             runId);
 
+        var (configProjectId, configAgentName) = _submittingUserResolver is not null
+            ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
+            : (null, null);
+
         // ghtok-user--{base32(userId)} — the SAME mapping the API uses when persisting the token to KV.
         // With Entra sign-in the user's credentials live under the ACTIVE linked GitHub identity's
         // scope (user-link:{oid}:{login}), so resolve the effective scope rather than assuming the
         // legacy per-user scope, which is never written in that mode.
-        var effectiveScope = _tokenStore is IEffectiveGitHubTokenScopeResolver scopeResolver
-            ? await scopeResolver.ResolveEffectiveScopeAsync(submittingUser!, ct).ConfigureAwait(false)
-            : GitHubTokenScope.ForUser(submittingUser!);
+        var effectiveScope = _tokenScopeProvider is not null
+            ? await _tokenScopeProvider
+                .ResolveAsync(submittingUser!, configProjectId, ct)
+                .ConfigureAwait(false)
+            : _tokenStore is IEffectiveGitHubTokenScopeResolver scopeResolver
+                ? await scopeResolver.ResolveEffectiveScopeAsync(submittingUser!, ct).ConfigureAwait(false)
+                : GitHubTokenScope.ForUser(submittingUser!);
         var kvUserSecretName = KeyVaultSecretStore.SanitizeKey(effectiveScope.Key);
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
@@ -514,12 +525,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // immutable source refs; AgentHost creates their effective root inside execution-scratch.
             if (claimCreated)
             {
-                var (configProjectId, configAgentName) = _submittingUserResolver is not null
-                    ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
-                    : (null, null);
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
                     podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
-                    await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
+                    await ResolveGitHubAccessTokenAsync(effectiveScope, submittingUser, ct).ConfigureAwait(false),
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     configProjectId,
@@ -834,10 +842,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// Never throws — a lookup failure degrades gracefully: the pod will attempt the KV fetch itself
     /// (which may fail) rather than causing a hard launch failure here.
     /// </summary>
-    private async Task<string?> ResolveGitHubAccessTokenAsync(string userId, CancellationToken ct)
+    private async Task<string?> ResolveGitHubAccessTokenAsync(
+        GitHubTokenScope scope,
+        string userId,
+        CancellationToken ct)
     {
-        var scope = GitHubTokenScope.ForUser(userId);
-
         // Prefer the refresh-aware provider (issue #523): a fresh AgentHost pod launched late in a
         // long-running assembly (e.g. the Build & Test gate, well after the run's earlier subtask
         // stages) can be handed a near-expiry or already-expired access token if we only ever read

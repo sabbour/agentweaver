@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Skills;
 
@@ -77,6 +78,17 @@ public interface IMarketplaceCatalogIndexer
         string? submittingUser,
         string? parseStrategy,
         CancellationToken ct);
+
+    Task<MarketplaceCatalogIndex> GetOrBuildForProjectAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<GitHubTreeBlob> blobs,
+        string? submittingUser,
+        string? parseStrategy,
+        CancellationToken ct,
+        ProjectId? projectId = null) =>
+        GetOrBuildAsync(owner, repo, branch, blobs, submittingUser, parseStrategy, ct);
 }
 
 /// <summary>
@@ -101,14 +113,26 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         _classifier = classifier;
     }
 
-    public async Task<MarketplaceCatalogIndex> GetOrBuildAsync(
+    public Task<MarketplaceCatalogIndex> GetOrBuildAsync(
         string owner,
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
         string? submittingUser,
         string? parseStrategy,
-        CancellationToken ct)
+        CancellationToken ct) =>
+        GetOrBuildForProjectAsync(
+            owner, repo, branch, blobs, submittingUser, parseStrategy, ct, projectId: null);
+
+    public async Task<MarketplaceCatalogIndex> GetOrBuildForProjectAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<GitHubTreeBlob> blobs,
+        string? submittingUser,
+        string? parseStrategy,
+        CancellationToken ct,
+        ProjectId? projectId = null)
     {
         var repository = $"{owner}/{repo}";
         var fingerprint = ComputeFingerprint(blobs);
@@ -126,7 +150,8 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         }
         else if (strategy is "auto" or "llm" && _classifier is not null)
         {
-            var llmEntries = await BuildWithLlmAsync(owner, repo, branch, blobs, submittingUser, ct).ConfigureAwait(false);
+            var llmEntries = await BuildWithLlmAsync(
+                owner, repo, branch, blobs, submittingUser, ct, projectId).ConfigureAwait(false);
             index = new MarketplaceCatalogIndex(repository, branch, fingerprint, "llm", llmEntries);
         }
         else
@@ -160,10 +185,18 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
     }
 
     private async Task<IReadOnlyList<MarketplaceCatalogEntry>> BuildWithLlmAsync(
-        string owner, string repo, string branch, IReadOnlyList<GitHubTreeBlob> blobs, string? submittingUser, CancellationToken ct)
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<GitHubTreeBlob> blobs,
+        string? submittingUser,
+        CancellationToken ct,
+        ProjectId? projectId)
     {
         var treePaths = blobs.Select(b => b.Path).ToList();
-        var proposed = await _classifier!.ClassifyAsync(owner, repo, branch, treePaths, submittingUser, ct).ConfigureAwait(false);
+        var proposed = await _classifier!
+            .ClassifyForProjectAsync(owner, repo, branch, treePaths, submittingUser, ct, projectId)
+            .ConfigureAwait(false);
         if (proposed is null || proposed.Count == 0)
             return Array.Empty<MarketplaceCatalogEntry>();
 

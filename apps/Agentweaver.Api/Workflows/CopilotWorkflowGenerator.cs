@@ -56,7 +56,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         var basePrompt = BuildPrompt(request);
 
         // First pass.
-        var rawFirst = await RunModelAsync(basePrompt, ct, request.UserId, request.GenerationModel).ConfigureAwait(false);
+        var rawFirst = await RunModelAsync(
+            basePrompt, ct, request.UserId, request.ProjectId, request.GenerationModel).ConfigureAwait(false);
         var (yamlFirst, defFirst, errorFirst) = ParseCandidate(rawFirst, request);
         if (defFirst is not null)
             return new WorkflowGenerationResult(defFirst, yamlFirst, WasCorrected: false);
@@ -67,7 +68,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         // Correction pass (FR-060): exactly one retry with the failed YAML + error appended.
         var correctionPrompt = BuildCorrectionPrompt(basePrompt, yamlFirst, errorFirst!);
-        var rawSecond = await RunModelAsync(correctionPrompt, ct, request.UserId, request.GenerationModel).ConfigureAwait(false);
+        var rawSecond = await RunModelAsync(
+            correctionPrompt, ct, request.UserId, request.ProjectId, request.GenerationModel).ConfigureAwait(false);
         var (yamlSecond, defSecond, errorSecond) = ParseCandidate(rawSecond, request);
         if (defSecond is not null)
             return new WorkflowGenerationResult(defSecond, yamlSecond, WasCorrected: true);
@@ -414,14 +416,19 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         return sb.ToString().TrimEnd();
     }
 
-    private async Task<string> RunModelAsync(string prompt, CancellationToken ct, string? userId = null, string? modelId = null)
+    private async Task<string> RunModelAsync(
+        string prompt,
+        CancellationToken ct,
+        string? userId = null,
+        string? projectId = null,
+        string? modelId = null)
     {
         var scratch = Path.Combine(AppPaths.DataDirectory, "workflow-scratch", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
         try
         {
             var runId = Guid.NewGuid().ToString("N");
-            return await _agentRunner.ExecuteAsync(
+            return await _agentRunner.ExecuteForProjectAsync(
                 task: prompt,
                 workingDirectory: scratch,
                 repositoryPath: scratch,
@@ -430,7 +437,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 modelId: modelId ?? _defaultModel,
                 stream: null,
                 ct: ct,
-                userId: userId).ConfigureAwait(false);
+                userId: userId,
+                projectId: projectId).ConfigureAwait(false);
         }
         finally
         {

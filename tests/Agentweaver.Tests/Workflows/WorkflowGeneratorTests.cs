@@ -207,9 +207,11 @@ public sealed class WorkflowGeneratorTests
 
         await generator.GenerateAsync(new WorkflowGenerationRequest(
             "A simple manual workflow.",
+            ProjectId: "00000000-0000-0000-0000-000000000712",
             GenerationModel: "gpt-5-mini"));
 
         runner.LastModelId.Should().Be("gpt-5-mini");
+        runner.LastProjectId.Should().Be("00000000-0000-0000-0000-000000000712");
     }
 
 
@@ -632,6 +634,7 @@ public sealed class WorkflowGeneratorTests
         public int CallCount { get; private set; }
         public string? LastTask { get; private set; }
         public string? LastModelId { get; private set; }
+        public string? LastProjectId { get; private set; }
 
         public ScriptedAgentRunner(params string[] responses) => _responses = new Queue<string>(responses);
 
@@ -645,6 +648,25 @@ public sealed class WorkflowGeneratorTests
             LastModelId = modelId;
             var next = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;
             return Task.FromResult(next);
+        }
+
+        public Task<string> ExecuteForProjectAsync(
+            string task,
+            string workingDirectory,
+            string repositoryPath,
+            ModelSource modelSource,
+            string runId,
+            string? modelId,
+            ChannelWriter<RunEvent>? stream,
+            CancellationToken ct,
+            string? systemPromptContext = null,
+            string? userId = null,
+            string? projectId = null)
+        {
+            LastProjectId = projectId;
+            return ExecuteAsync(
+                task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct,
+                systemPromptContext, userId);
         }
     }
 

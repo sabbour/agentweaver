@@ -27,16 +27,25 @@ public sealed class CallerTokenScopeProviderTests
     }
 
     [Fact]
-    public void Resolve_AfterProjectIdentitySelection_ReturnsSelectedLinkedScopeForSameUserOnly()
+    public async Task Resolve_AfterProjectIdentitySelection_ReturnsSelectedLinkedScopeForSameUserAndProjectOnly()
     {
         var context = new DefaultHttpContext();
         var accessor = new HttpContextAccessor { HttpContext = context };
         var provider = new CallerTokenScopeProvider(accessor);
-        CallerTokenScopeProvider.SelectProjectIdentity(context, "entra-user", "altcat");
+        var selectedProjectId = ProjectId.Parse("00000000-0000-0000-0000-000000000001");
+        CallerTokenScopeProvider.SelectProjectIdentity(
+            context,
+            selectedProjectId,
+            "entra-user",
+            "altcat");
 
         provider.Resolve("entra-user").Should()
             .BeEquivalentTo(GitHubTokenScope.ForLinkedIdentity("entra-user", "altcat"));
         provider.Resolve("other-user").Should()
             .BeEquivalentTo(GitHubTokenScope.ForUser("other-user"));
+        (await provider.ResolveAsync("entra-user", selectedProjectId.ToString())).Should()
+            .BeEquivalentTo(GitHubTokenScope.ForLinkedIdentity("entra-user", "altcat"));
+        (await provider.ResolveAsync("entra-user", "00000000-0000-0000-0000-000000000002")).Should()
+            .BeEquivalentTo(GitHubTokenScope.ForUser("entra-user"));
     }
 }
