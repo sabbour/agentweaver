@@ -107,8 +107,12 @@ Run only the suite(s) relevant to what you changed:
 # dev machines to avoid the Copilot SDK trying to download a CLI binary)
 dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 
-# Node.js provisioning/deployment/release toolchain
+# Node.js provisioning/deployment/release toolchain and CI contracts
 node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
+
+# UI harness fixture/regression suite
+npm ci --prefix scripts/ui-harness
+npm --prefix scripts/ui-harness test
 
 # Web frontend (Vitest)
 npm --prefix apps/web run test
@@ -135,7 +139,7 @@ as passing for required-status-checks purposes:
 | Job | What it runs | Gating | Runs when |
 |---|---|---|---|
 | `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
-| `Node toolchain tests` | `node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs` | Blocking — must pass | `scripts/azure/**`, `scripts/changesets/**` or `scripts/ci/**` changed |
+| `Node toolchain tests` | Node toolchain/CI contract tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
 | `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass | `apps/web/**` changed |
 | `Web lint` | `npm --prefix apps/web run lint` | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
