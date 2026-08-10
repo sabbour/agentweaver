@@ -42,6 +42,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
+import { ScheduleTriggerDialog } from '../components/ScheduleTriggerDialog';
 import { BLANK_TEMPLATE, WorkflowEditor } from '../components/WorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
 import {
@@ -68,6 +69,7 @@ import type {
   WorkflowEventPredicateType,
   WorkflowEventTrigger,
   WorkflowEventType,
+  WorkflowScheduleTrigger,
 } from '../utils/workflowYaml';
 
 // Spec 010 (FR-039/041) — project Workflows management page, and the reference
@@ -294,10 +296,6 @@ export function WorkflowsPage() {
   const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
   const [duplicatingWorkflowId, setDuplicatingWorkflowId] = useState<string | null>(null);
   const [scheduleWorkflow, setScheduleWorkflow] = useState<WorkflowSummaryDto | null>(null);
-  const [scheduleInterval, setScheduleInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
-  const [scheduleTime, setScheduleTime] = useState('09:00');
-  const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState('monday');
-  const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState('1');
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [eventWorkflow, setEventWorkflow] = useState<WorkflowSummaryDto | null>(null);
   const [eventTrigger, setEventTriggerState] = useState<WorkflowEventTrigger>(defaultEventTrigger);
@@ -423,37 +421,26 @@ export function WorkflowsPage() {
   }, [projectId]);
 
   const handleOpenSchedule = useCallback((wf: WorkflowSummaryDto) => {
-    const trigger = workflowTrigger(wf, 'schedule');
     setScheduleWorkflow(wf);
-    setScheduleInterval(trigger?.interval ?? 'daily');
-    setScheduleTime(trigger?.time_of_day ?? '09:00');
-    setScheduleDayOfWeek(trigger?.day_of_week ?? 'monday');
-    setScheduleDayOfMonth(String(trigger?.day_of_month ?? 1));
   }, []);
 
-  const handleSaveSchedule = useCallback(async (remove = false) => {
+  const handleSaveSchedule = useCallback(async (trigger: WorkflowScheduleTrigger | null) => {
     if (!projectId || !scheduleWorkflow?.id) return;
     setSavingSchedule(true);
     setError(null);
     try {
       const yaml = await apiClient.getWorkflowYaml(projectId, scheduleWorkflow.id);
-      const dayOfMonth = Number(scheduleDayOfMonth);
-      const updatedYaml = setScheduleTrigger(yaml, remove ? null : {
-        interval: scheduleInterval,
-        timeOfDay: scheduleTime,
-        dayOfWeek: scheduleDayOfWeek,
-        dayOfMonth,
-      });
+      const updatedYaml = setScheduleTrigger(yaml, trigger);
       await apiClient.saveWorkflowYaml(projectId, scheduleWorkflow.id, updatedYaml);
       setData(await apiClient.listWorkflows(projectId));
       setScheduleWorkflow(null);
-      setSyncMessage(remove ? 'Schedule trigger removed.' : 'Schedule trigger saved.');
+      setSyncMessage(trigger ? 'Schedule trigger saved.' : 'Schedule trigger removed.');
     } catch (err) {
       setError(formatError(err));
     } finally {
       setSavingSchedule(false);
     }
-  }, [projectId, scheduleWorkflow, scheduleInterval, scheduleTime, scheduleDayOfWeek, scheduleDayOfMonth]);
+  }, [projectId, scheduleWorkflow]);
 
   const handleOpenEvent = useCallback(async (wf: WorkflowSummaryDto) => {
     if (!projectId || !wf.id) return;
@@ -1084,45 +1071,26 @@ export function WorkflowsPage() {
     </Dialog>
   );
 
+  const scheduleTriggerDto = scheduleWorkflow ? workflowTrigger(scheduleWorkflow, 'schedule') : undefined;
+  const scheduleTrigger: WorkflowScheduleTrigger | null = scheduleTriggerDto?.interval
+    && scheduleTriggerDto.time_of_day
+    ? {
+      interval: scheduleTriggerDto.interval,
+      timeOfDay: scheduleTriggerDto.time_of_day,
+      dayOfWeek: scheduleTriggerDto.day_of_week ?? undefined,
+      dayOfMonth: scheduleTriggerDto.day_of_month ?? undefined,
+    }
+    : null;
+
   const scheduleDialog = (
-    <Dialog open={scheduleWorkflow !== null} onOpenChange={(_, d) => { if (!savingSchedule && !d.open) setScheduleWorkflow(null); }}>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>Schedule workflow</DialogTitle>
-          <DialogContent>
-            <Field label="Cadence">
-              <Select value={scheduleInterval} onChange={(_, d) => setScheduleInterval(d.value as typeof scheduleInterval)} disabled={savingSchedule}>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-              </Select>
-            </Field>
-            {scheduleInterval === 'weekly' && (
-              <Field label="Day of week" style={{ marginTop: tokens.spacingVerticalS }}>
-                <Select value={scheduleDayOfWeek} onChange={(_, d) => setScheduleDayOfWeek(d.value)} disabled={savingSchedule}>
-                  {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => <option key={day} value={day}>{day}</option>)}
-                </Select>
-              </Field>
-            )}
-            {scheduleInterval === 'monthly' && (
-              <Field label="Day of month (1–28)" style={{ marginTop: tokens.spacingVerticalS }}>
-                <Input type="number" min="1" max="28" value={scheduleDayOfMonth} onChange={(_, d) => setScheduleDayOfMonth(d.value)} disabled={savingSchedule} />
-              </Field>
-            )}
-            <Field label="UTC time" hint="Schedules are evaluated in UTC." style={{ marginTop: tokens.spacingVerticalS }}>
-              <Input type="time" value={scheduleTime} onChange={(_, d) => setScheduleTime(d.value)} disabled={savingSchedule} />
-            </Field>
-          </DialogContent>
-          <DialogActions>
-            {scheduleWorkflow && workflowTrigger(scheduleWorkflow, 'schedule') && <Button appearance="subtle" disabled={savingSchedule} onClick={() => { void handleSaveSchedule(true); }}>Remove schedule</Button>}
-            <Button appearance="subtle" disabled={savingSchedule} onClick={() => setScheduleWorkflow(null)}>Cancel</Button>
-            <Button appearance="primary" disabled={savingSchedule || !/^\d{2}:\d{2}$/.test(scheduleTime) || (scheduleInterval === 'monthly' && (Number(scheduleDayOfMonth) < 1 || Number(scheduleDayOfMonth) > 28))} onClick={() => { void handleSaveSchedule(); }}>
-              {savingSchedule ? 'Saving…' : 'Save schedule'}
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+    <ScheduleTriggerDialog
+      open={scheduleWorkflow !== null}
+      trigger={scheduleTrigger}
+      saving={savingSchedule}
+      onDismiss={() => setScheduleWorkflow(null)}
+      onSave={handleSaveSchedule}
+      onRemove={() => handleSaveSchedule(null)}
+    />
   );
 
   // Editor takes over the whole page when open.

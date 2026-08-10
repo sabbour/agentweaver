@@ -1,5 +1,6 @@
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
+import { apiClient } from '../api/apiClient';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -49,7 +50,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
 
 afterEach(() => {
   cleanup();
-  fitViewSpy.mockClear();
+  vi.clearAllMocks();
 });
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -115,6 +116,36 @@ edges:
     to: merge
   - from: merge
     to: scribe
+`;
+
+const YAML_WITH_SCHEDULE = `id: scheduled
+name: Scheduled workflow
+description: Runs every week.
+start: done
+trigger:
+  type: schedule
+  interval: weekly
+  day_of_week: monday
+  time_of_day: "09:00"
+nodes:
+  - id: done
+    type: terminal
+    label: Done
+edges: []
+`;
+
+const YAML_WITH_EVENT = `id: event-driven
+name: Event-driven workflow
+description: Runs for issues.
+start: done
+trigger:
+  type: event
+  event_name: github.issues
+nodes:
+  - id: done
+    type: terminal
+    label: Done
+edges: []
 `;
 
 function renderEditor(yaml: string) {
@@ -230,5 +261,66 @@ describe('VisualWorkflowEditor — stable drag targets (#557)', () => {
     expect(await screen.findByTestId('workflow-node-implement')).toBeDefined();
     expect(await screen.findByTestId('workflow-node-implement-handle-source')).toBeDefined();
     expect(await screen.findByTestId('workflow-node-rai-check-handle-target')).toBeDefined();
+  });
+});
+
+describe('VisualWorkflowEditor — schedule trigger (#561)', () => {
+  it('edits the YAML buffer and persists the schedule with the normal editor save', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Scheduled workflow' } as never);
+    renderEditor(YAML_WITH_SCHEDULE);
+
+    expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit schedule trigger' }));
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Day of week' }), { target: { value: 'tuesday' } });
+    fireEvent.change(screen.getByLabelText('UTC time'), { target: { value: '13:30' } });
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+
+    expect(screen.getByText('weekly · 13:30 UTC')).toBeDefined();
+    expect(screen.getByText('Unsaved changes')).toBeDefined();
+    expect(apiClient.saveWorkflowYaml).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalledWith(
+      'proj-1',
+      'scheduled',
+      expect.stringContaining('day_of_week: tuesday'),
+    ));
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls.at(-1)?.[2]).toContain('time_of_day: 13:30');
+  });
+
+  it('removes an existing schedule from the buffer before saving', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Scheduled workflow' } as never);
+    renderEditor(YAML_WITH_SCHEDULE);
+
+    expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit schedule trigger' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove schedule' }));
+
+    expect(screen.getByText('Manual only')).toBeDefined();
+    expect(screen.getByText('Unsaved changes')).toBeDefined();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls.at(-1)?.[2]).not.toContain('trigger:');
+  });
+
+  it('adds a schedule without replacing the current event trigger', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Event-driven workflow' } as never);
+    renderEditor(YAML_WITH_EVENT);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add schedule trigger' }));
+    await user.click(await screen.findByRole('button', { name: 'Save schedule' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
+    const savedYaml = vi.mocked(apiClient.saveWorkflowYaml).mock.calls.at(-1)?.[2] ?? '';
+    expect(savedYaml).toContain('triggers:');
+    expect(savedYaml).toContain('type: event');
+    expect(savedYaml).toContain('event_name: github.issues');
+    expect(savedYaml).toContain('type: schedule');
   });
 });
