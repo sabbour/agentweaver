@@ -10,24 +10,16 @@ using Agentweaver.Tests.Helpers;
 namespace Agentweaver.Tests.Coordinator;
 
 /// <summary>
-/// Regression tests for the 403 ownership bug that the CapturedBy=GitHub-login change introduced:
-/// a backlog-pickup coordinator run stores its accountable human (the captured GitHub login, e.g.
-/// "sabbour") as <c>Run.SubmittingUser</c>, but ownership was checked against the API-key principal
-/// (Auth:User, e.g. "projects-test-user"). The two never matched, so every owner-scoped endpoint
-/// (GET /api/runs/{id}, /outcome-spec, /work-plan, /graph, /children, assembly/*) 403'd and the
-/// Orchestration page showed "API error 403".
-///
-/// The fix makes ownership GitHub-identity aware: the per-request caller is enriched in
-/// <c>ApiKeyAuthMiddleware</c> with the signed-in GitHub login (resolved from the LOCAL token store,
-/// never the network), and <c>CallerContext.Owns</c> matches a run whose SubmittingUser equals EITHER
-/// the API-key principal OR that GitHub login. Interactive runs (SubmittingUser = the API principal)
-/// keep resolving via the principal branch.
+/// Regression coverage for backlog-pickup coordinator runs whose accountable
+/// <c>Run.SubmittingUser</c> is a captured GitHub login. Project-scoped runs authorize from their
+/// persisted <c>ProjectId</c>, so the project owner keeps access regardless of whether that audit
+/// identity matches the current API principal or linked GitHub login.
 ///
 /// These tests run against the real in-process host (<see cref="ProjectsWebApplicationFactory"/>) with
 /// the sanctioned in-memory <see cref="Agentweaver.Api.Auth.InMemoryGitHubTokenStore"/> (a real
 /// component, not a mock — Principle VII). A pickup-shaped run is inserted directly via the real
-/// <see cref="SqliteRunStore"/> so the test stays fully hermetic (no orchestration, no live model, no
-/// network) while still exercising the exact ownership path the bug lived on.
+/// <see cref="SqliteRunStore"/> so the test stays fully hermetic while exercising the persisted-project
+/// authorization path.
 /// </summary>
 public sealed class PickupRunOwnershipTests : IClassFixture<ProjectsWebApplicationFactory>
 {
@@ -43,7 +35,7 @@ public sealed class PickupRunOwnershipTests : IClassFixture<ProjectsWebApplicati
     }
 
     [Fact]
-    public async Task SignedInGitHubUser_CanView_PickupRun_AttributedToThatLogin()
+    public async Task ProjectOwner_CanView_PickupRun_AttributedToLinkedGitHubLogin()
     {
         // Sign the caller's installation scope in as the GitHub login that captured the task.
         await _factory.TokenStore.SetAsync(
@@ -56,13 +48,13 @@ public sealed class PickupRunOwnershipTests : IClassFixture<ProjectsWebApplicati
         var resp = await _client.GetAsync($"/api/runs/{runId}");
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK,
-            "the signed-in GitHub user owns a pickup run attributed to their login; it must not 403");
+            "the persisted project grants access independently of the run's audit identity");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("status").GetString().Should().Be("failed");
     }
 
     [Fact]
-    public async Task SignedInGitHubUser_StreamEndpoint_IsViewable_NotHidden()
+    public async Task ProjectOwner_CanStream_PickupRun()
     {
         await _factory.TokenStore.SetAsync(
             GitHubTokenScope.Installation,
@@ -70,20 +62,19 @@ public sealed class PickupRunOwnershipTests : IClassFixture<ProjectsWebApplicati
 
         var runId = await InsertPickupRunAsync(submittingUser: GitHubLogin);
 
-        // The /stream owner check returns 404 (not 403) to hide run existence on mismatch. With the
-        // identity-aware fix the signed-in owner is recognized, so the stream must NOT 404 for them.
+        // The stream endpoint hides unauthorized runs with 404, so project authorization must be
+        // resolved before the in-memory stream owner's identity is considered.
         var resp = await _client.GetAsync($"/api/runs/{runId}/stream",
             HttpCompletionOption.ResponseHeadersRead);
 
         resp.StatusCode.Should().NotBe(HttpStatusCode.NotFound,
-            "the identity-aware owner check must let the signed-in GitHub user stream their pickup run");
+            "the persisted project owner must be allowed to stream the run");
     }
 
     [Fact]
-    public async Task SignedInGitHubUser_CannotView_RunOwnedByDifferentUser()
+    public async Task ProjectOwner_CanView_RunWithDifferentSubmittingIdentity()
     {
-        // Signed in as "sabbour", but the run is attributed to someone else entirely — neither the
-        // API principal nor the signed-in GitHub login owns it.
+        // SubmittingUser is an audit identity, not the authorization boundary for project-scoped runs.
         await _factory.TokenStore.SetAsync(
             GitHubTokenScope.Installation,
             new GitHubToken("access-tok", null, null, GitHubLogin, null, Array.Empty<string>()));
@@ -92,14 +83,14 @@ public sealed class PickupRunOwnershipTests : IClassFixture<ProjectsWebApplicati
 
         var resp = await _client.GetAsync($"/api/runs/{runId}");
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden,
-            "a run owned by neither the API principal nor the signed-in GitHub login must stay 403");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK,
+            "the caller owns the persisted project even though the run has a different submitting identity");
     }
 
     [Fact]
-    public async Task InteractiveRun_OwnedByApiPrincipal_StillResolves_WhenSignedOut()
+    public async Task ProjectOwner_CanView_InteractiveRun_WhenSignedOut()
     {
-        // No GitHub identity: ownership must still work via the API-key principal (interactive parity).
+        // No GitHub identity: project authorization still resolves through the API-key principal.
         await _factory.TokenStore.SignOutAsync(GitHubTokenScope.Installation);
 
         var runId = await InsertPickupRunAsync(
@@ -108,22 +99,21 @@ public sealed class PickupRunOwnershipTests : IClassFixture<ProjectsWebApplicati
         var resp = await _client.GetAsync($"/api/runs/{runId}");
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK,
-            "interactive runs stored under the API principal must keep resolving regardless of GitHub state");
+            "project authorization does not depend on GitHub sign-in state");
     }
 
     [Fact]
-    public async Task SignedOut_PickupRunAttributedToGitHubLogin_Stays403()
+    public async Task ProjectOwner_CanView_PickupRun_WhenSignedOut()
     {
-        // With no signed-in identity the caller's GitHubLogin is null, so a run attributed to a GitHub
-        // login matches neither identity — the pre-fix-correct deny is preserved (no over-broad access).
+        // The persisted project, not the linked GitHub identity, is authoritative.
         await _factory.TokenStore.SignOutAsync(GitHubTokenScope.Installation);
 
         var runId = await InsertPickupRunAsync(submittingUser: GitHubLogin);
 
         var resp = await _client.GetAsync($"/api/runs/{runId}");
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden,
-            "without a signed-in GitHub identity a run attributed to a GitHub login is not owned");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK,
+            "the project owner remains authorized without a linked GitHub session");
     }
 
     [Fact]

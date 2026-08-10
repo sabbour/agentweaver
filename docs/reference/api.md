@@ -26,15 +26,27 @@ Keys map to the user accountable for the runs they submit. You can configure mul
 }
 ```
 
-A request without a recognized key returns `401 Unauthorized`. A request for a run the caller does not own returns `403 Forbidden`. When no keys are configured, authenticated API requests are unauthorized.
+A request without recognized credentials returns `401 Unauthorized`. A request for a run the caller
+cannot access returns `403 Forbidden` (or `404 Not Found` on existence-hiding artifact routes).
+When no credentials are configured, authenticated API requests are unauthorized.
 
-Authorization is ownership-based after authentication. Project, team, run, backlog, workflow, workspace, and memory endpoints load the relevant resource and require the authenticated caller to own it (`caller.Owns(...)` in endpoint code) before returning or mutating it. Agentweaver has no built-in superuser role derived from a GitHub username: a login named `admin` is treated like any other caller and does not bypass ownership checks.
+A run with a persisted `project_id` inherits authorization from that project. In Entra mode,
+`Viewer` can use read, stream, history, graph, metrics, workspace, file, and preview-list endpoints;
+`Contributor` and `Owner` can also use run mutations such as review, approval, steering, retry,
+archive, cancellation, and sandbox preview control. In GitHubLegacy mode, the persisted project
+owner remains the boundary. The server resolves the project from the stored run record, never from
+caller input. Linked GitHub identities provide repository and Copilot access but do not grant
+project access. Runs with no `project_id` retain submitting-user ownership. The trusted internal
+service identity remains allowed for run-bound callbacks.
 
 ## Endpoints
 
 ### Runs
 
-Run endpoints are owner-scoped. The authenticated caller must own the run being read, streamed, reviewed, retried, archived, merged, steered, or used for sandbox preview; there is no username-based administrative override.
+Project-scoped run endpoints use the authorization boundary of the run's persisted project: in Entra
+mode, viewers may inspect a run and contributors or owners may operate it; in GitHubLegacy mode, the
+project owner retains access. Older runs without a project remain submitting-user scoped. There is no
+username-based administrative override.
 
 | Method | Path | Purpose |
 | --- | --- | --- |

@@ -143,7 +143,7 @@ app.MapGet("/api/runs/{id}/assembly/files", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
     if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run))
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
         return NotFoundError("run_not_found", "The coordinator run was not found.");
 
     string? aggregateDiff;
@@ -184,7 +184,7 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     }
 
     if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run))
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
         return NotFoundError("run_not_found", "The coordinator run was not found.");
     var normalizedPath = path.Replace('\\', '/').TrimEnd('/');
     if (string.IsNullOrEmpty(normalizedPath))
@@ -245,7 +245,7 @@ app.MapGet("/api/runs/{id}/assembly/workspace", async (
     }
 
     if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run))
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
         return NotFoundError("run_not_found", "The coordinator run was not found.");
     if (string.IsNullOrEmpty(run.RepositoryPath))
         return Results.Json(Array.Empty<WorkspaceNode>());
@@ -302,7 +302,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     }
 
     if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-    if (!EndpointHelpers.IsOwner(httpContext, run))
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
         return NotFoundError("run_not_found", "The coordinator run was not found.");
     if (string.IsNullOrEmpty(run.RepositoryPath))
         return NotFoundError("repository_not_found", "The coordinator run repository was not found.");
@@ -363,7 +363,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         }
 
         if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
+            return ForbiddenError();
 
         var spec = await ReadOutcomeSpecWithBriefWaitAsync(coordinator, id, ct);
         if (spec is null) return NotFoundError("outcome_spec_not_found", "The coordinator outcome spec was not found.");
@@ -401,7 +402,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         }
 
         if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
+            return ForbiddenError();
 
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
@@ -453,7 +455,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         }
 
         if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
+            return ForbiddenError();
 
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
         var outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
@@ -495,7 +498,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         }
 
         if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
+            return ForbiddenError();
 
         var plan = await ReadWorkPlanWithBriefWaitAsync(coordinator, coordinatorRunId, ct);
         if (plan is null) return NotFoundError("work_plan_not_found", "The coordinator work plan was not found.");
@@ -531,7 +535,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         }
 
         if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
+            return ForbiddenError();
 
         var children = await coordinator.GetChildrenAsync(coordinatorRunId, ct);
         return Results.Json(children.Select(MapChild).ToList());
@@ -572,7 +577,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         }
 
         if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
+            return ForbiddenError();
 
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
@@ -584,7 +590,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                 string.IsNullOrWhiteSpace(request.TargetChildRunId) ? null : request.TargetChildRunId,
                 request.Instruction ?? string.Empty,
                 caller.User,
-                caller.GitHubLogin,
+                run.ProjectId is null ? caller.GitHubLogin : run.SubmittingUser,
                 ct);
 
             var statusCode = directive.Status == SteeringStatus.Deferred
@@ -638,7 +644,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         }
 
         if (run is null) return NotFoundError("run_not_found", "The coordinator run was not found.");
-        if (!EndpointHelpers.IsOwner(httpContext, run)) return ForbiddenError();
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
+            return ForbiddenError();
 
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
@@ -655,7 +662,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             coordinatorRunId,
             decision,
             caller.User,
-            caller.GitHubLogin,
+            run.ProjectId is null ? caller.GitHubLogin : run.SubmittingUser,
             ct).ConfigureAwait(false);
 
         logger.LogInformation(
