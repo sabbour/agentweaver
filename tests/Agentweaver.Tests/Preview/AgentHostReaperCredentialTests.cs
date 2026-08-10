@@ -165,6 +165,100 @@ public sealed class AgentHostReaperCredentialTests
     }
 
     [Fact]
+    public async Task Sweep_TerminalDirectBackedPreview_SurvivesWorkerSweeps_ThenReapsAfterIdleExpiry()
+    {
+        // #560's real execution subtask reports sandbox.backend=direct, but its serving process is
+        // still backed by an agent-* SandboxClaim. Exercise the actual cluster-backed preview service
+        // with worker-style Enabled=false, rather than a stub, across the original 20+ minute repro
+        // window and then beyond the bounded idle expiry.
+        const string runId = "run-560-direct-terminal";
+        const string podName = "agentweaver-agent-host-direct";
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        var now = new DateTimeOffset(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(now);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(ListPath, ClaimsListJson(claimName, runId));
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/{Namespace}/sandboxclaims/{claimName}",
+            JsonSerializer.Serialize(new
+            {
+                status = new
+                {
+                    conditions = new[] { new { type = "Ready", status = "True" } },
+                    sandbox = new { name = podName },
+                },
+            }));
+        handler.OnGet(
+            "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            $$"""
+            {
+              "kind": "HTTPRouteList",
+              "items": [{
+                "metadata": {
+                  "name": "preview-direct-terminal",
+                  "annotations": {
+                    "agentweaver.dev/preview-token": "{{token}}",
+                    "agentweaver.dev/preview-run": "{{sanitizedRun}}",
+                    "agentweaver.dev/preview-expires-at": "{{now.AddMinutes(30):O}}",
+                    "agentweaver.dev/preview-max-until": "{{now.AddHours(8):O}}"
+                  }
+                }
+              }]
+            }
+            """);
+
+        var preview = new SandboxPreviewService(
+            ClientFor(handler),
+            new SandboxPreviewOptions
+            {
+                Enabled = false, // worker does not provision routes, but must read their cluster state
+                Namespace = Namespace,
+                MaxLifetimeHours = 8,
+            },
+            NullLogger<SandboxPreviewService>.Instance,
+            clock);
+        var secrets = new InMemorySecretStore();
+        var credentialKey = PreviewRunnerCredential.SecretKey(runId);
+        await secrets.SetSecretAsync(credentialKey, PreviewRunnerCredential.Mint());
+        var reaper = new AgentHostReaperService(
+            ClientFor(handler),
+            new EmptyRunStore(), // terminal child => orphaned by active-run status
+            new KubernetesSandboxOptions { Namespace = Namespace },
+            NullLogger<AgentHostReaperService>.Instance,
+            secrets,
+            preview);
+
+        (await reaper.SweepOrphanedPodsAsync()).Should().Be(0);
+        clock.Advance(TimeSpan.FromMinutes(20));
+        (await reaper.SweepOrphanedPodsAsync()).Should().Be(0,
+            "a direct-backed terminal subtask preview must survive repeated worker sweeps through the reported 20+ minute window");
+
+        handler.Requests.Should().NotContain(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        handler.Requests.Count(r =>
+                r.Method == "PATCH" && r.Path.Contains("/sandboxclaims/"))
+            .Should().BeGreaterThanOrEqualTo(4,
+                "each active-preview sweep renews both possible backing claim conventions");
+        handler.Requests.Count(r =>
+                r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}") &&
+                r.Body!.Contains("\"false\"", StringComparison.Ordinal))
+            .Should().Be(2,
+                "each worker sweep re-pins the live preview pod against autoscaler scale-down");
+        (await secrets.GetSecretAsync(credentialKey)).Found.Should().BeTrue();
+
+        clock.Advance(TimeSpan.FromMinutes(11));
+        (await reaper.SweepOrphanedPodsAsync()).Should().Be(1,
+            "once the route's idle lifetime ends, the terminal claim must be reaped instead of leaking");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        (await secrets.GetSecretAsync(credentialKey)).Found.Should().BeFalse(
+            "bounded teardown must also remove the terminal run's preview credential");
+    }
+
+    [Fact]
     public async Task Sweep_OrphanClaim_WithNoActivePreview_IsReaped()
     {
         const string runId = "run-542-reaper-noactive";
@@ -267,6 +361,17 @@ public sealed class AgentHostReaperCredentialTests
             CreatedAt: createdAt,
             Orphaned: true,
             AnnotatedRunId: null);
+
+    private sealed class MutableTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow;
+
+        public MutableTimeProvider(DateTimeOffset utcNow) => _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration) => _utcNow += duration;
+    }
 
     // Minimal ISandboxPreviewService test double for the reaper defer path (#542): only
     // HasActivePreviewAsync is consulted; every other member throws so an unexpected call is loud.
