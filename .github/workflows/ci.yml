@@ -9,6 +9,7 @@ name: CI
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
 #   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 #   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
+#   - npm --prefix scripts/ui-harness test
 #   - npm --prefix apps/web run test
 #   - npm --prefix apps/web run lint
 #   - npm run docs:build
@@ -75,6 +76,10 @@ jobs:
               - 'scripts/azure/**'
               - 'scripts/changesets/**'
               - 'scripts/ci/**'
+              - 'scripts/ui-harness/**'
+              - 'scripts/harness-judge/**'
+              - 'scripts/harness-shared/**'
+              - 'scripts/persona-briefs/**'
               - '.github/workflows/**'
             docs:
               - 'docs/**'
@@ -128,11 +133,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: scripts/ui-harness/package-lock.json
 
-      # The scripts/azure toolchain uses only Node built-ins (no dependencies),
-      # so there is nothing to install -- run the built-in test runner directly.
+      - name: Install UI harness dependencies
+        run: npm ci --prefix scripts/ui-harness
+
       - name: Run Node toolchain tests
         run: node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
+
+      - name: Run UI harness tests
+        run: npm --prefix scripts/ui-harness test
 
   web-tests:
     name: Web tests

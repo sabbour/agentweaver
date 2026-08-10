@@ -18,7 +18,7 @@ verified solely from its output.
 From the repository root, install the harness dependencies and run its fixture tests:
 
 ```powershell
-npm --prefix scripts/ui-harness install
+npm ci --prefix scripts/ui-harness
 npm --prefix scripts/ui-harness test
 ```
 
@@ -41,6 +41,9 @@ resume Playwright. The command saves the local, git-ignored storage state at
 headless commands. Treat that file as a credential: never print, commit, log, or attach
 it to evidence. The harness never automates reauthentication. On `AUTH_EXPIRED`, run
 the headful `login` command again (or pass `--storage-state <local-path>` consistently).
+`init` validates that the selected storage-state file exists and has a usable
+Playwright shape before it creates a scenario session; it does not launch or automate
+the login flow.
 
 ## Run a persona flow
 
@@ -59,6 +62,16 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --
 node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <sessionId> --text "<text>"
 node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId> --path /<path>
 ```
+
+`goto` and `capture` wait up to 30 seconds for the authenticated Agentweaver app shell
+after `domcontentloaded`; a transient authentication spinner is allowed to resolve
+during that window. A persistent authentication-loading shell or visible sign-in
+prompt exits `3` as `AUTH_EXPIRED`, while another page that never becomes usable exits
+`2` as `APP_NOT_READY`. For a route with a different legitimate semantic readiness
+anchor, declare either `--ready-test-id <test-id>` or both
+`--ready-role <aria-role> --ready-name <exact-accessible-name>`. Override the wait only
+when necessary with `--readiness-timeout <milliseconds>`. A declared readiness anchor
+is mandatory for that command: the generic app shell cannot satisfy it.
 
 To open an Agentweaver sandbox preview returned by the UI, use the dedicated
 preview action:
@@ -92,5 +105,7 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs finish --session <sessionId> -
 ```
 
 The result contains `driver` P0 facts plus `normalizedEvidence`. It does not certify
-subjective UX quality. The harness exits `3` for `AUTH_EXPIRED` and `2` for other command
-errors; a successful command exits `0`.
+subjective UX quality. `driver.pass` is false when no successful evidence exists, a
+command failed, or captured evidence shows an authentication/loading shell instead of
+the app. The harness exits `3` for `AUTH_EXPIRED` and `2` for other command errors; a
+successful command exits `0`.
