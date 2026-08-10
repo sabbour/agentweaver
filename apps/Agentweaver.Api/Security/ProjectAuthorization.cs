@@ -80,7 +80,10 @@ public static class ProjectAuthorization
 
         var authorization = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
         if (await authorization.HasRoleAsync(caller, project.Id, minimumRole, ct).ConfigureAwait(false))
+        {
+            await SelectProjectGitHubIdentityAsync(httpContext, caller, project.Id, ct).ConfigureAwait(false);
             return null;
+        }
 
         var legacyBackfill = httpContext.RequestServices.GetRequiredService<ILegacyProjectRoleBackfillService>();
         return await legacyBackfill.GetClaimStateAsync(caller, project, ct).ConfigureAwait(false) switch
@@ -136,5 +139,31 @@ public static class ProjectAuthorization
         return CanAccess(caller, project.Owner, configuration)
             ? null
             : Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
+
+    private static async Task SelectProjectGitHubIdentityAsync(
+        HttpContext httpContext,
+        CallerContext caller,
+        ProjectId projectId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
+            return;
+
+        var tokenStore = httpContext.RequestServices.GetRequiredService<IGitHubTokenStore>();
+        if (tokenStore is not IMultiIdentityGitHubTokenStore)
+            return;
+
+        var identityService = httpContext.RequestServices.GetRequiredService<ProjectGitHubIdentityService>();
+        var effective = await identityService
+            .GetEffectiveIdentityAsync(projectId, caller.EntraObjectId, ct)
+            .ConfigureAwait(false);
+        if (effective.EffectiveLink is not null)
+        {
+            CallerTokenScopeProvider.SelectProjectIdentity(
+                httpContext,
+                caller.EntraObjectId,
+                effective.EffectiveLink.GitHubLogin);
+        }
     }
 }

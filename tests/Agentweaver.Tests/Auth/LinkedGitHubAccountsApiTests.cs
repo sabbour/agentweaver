@@ -171,6 +171,101 @@ public sealed class LinkedGitHubAccountsApiTests
         cleared.ResolutionSource.Should().Be("default");
     }
 
+    [Fact]
+    public async Task ProjectAuthorizedGitHubOperation_UsesSelectedLinkedIdentityToken()
+    {
+        const string entraUserId = "00000000-0000-0000-0000-00000000aa05";
+        using var factory = new LinkedGitHubAccountsWebApplicationFactory(_ => Json(HttpStatusCode.NotFound, new { }));
+        await factory.TokenStore.LinkIdentityAsync(entraUserId, Token("tok-alice", "alice"), isDefault: true);
+        await factory.TokenStore.LinkIdentityAsync(entraUserId, Token("tok-bob", "bob"));
+
+        using var client = factory.CreateAuthenticatedClient(entraUserId, roles: [PlatformRoles.ProjectCreator]);
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Selected Token Project",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var project = await create.Content.ReadFromJsonAsync<ProjectResponse>();
+
+        (await client.PutAsJsonAsync(
+            $"/api/projects/{project!.ProjectId}/github-identity",
+            new UpdateProjectGitHubIdentityRequest { GitHubLogin = "bob" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var capture = await client.PostAsJsonAsync($"/api/projects/{project.ProjectId}/backlog/tasks", new
+        {
+            title = "Use selected identity",
+        });
+
+        capture.StatusCode.Should().Be(HttpStatusCode.Created);
+        var captured = await capture.Content.ReadFromJsonAsync<JsonElement>();
+        captured.GetProperty("captured_by").GetString().Should().Be("bob");
+    }
+
+    [Fact]
+    public async Task ProjectIdentityOverride_RejectsCrossUserAndUnlinkedLogins_AndPreservesRoleBoundaries()
+    {
+        const string ownerId = "00000000-0000-0000-0000-00000000aa06";
+        const string viewerId = "00000000-0000-0000-0000-00000000aa07";
+        const string contributorId = "00000000-0000-0000-0000-00000000aa08";
+        const string otherUserId = "00000000-0000-0000-0000-00000000aa09";
+        using var factory = new LinkedGitHubAccountsWebApplicationFactory(_ => Json(HttpStatusCode.NotFound, new { }));
+        await factory.TokenStore.LinkIdentityAsync(ownerId, Token("tok-owner", "owner"), isDefault: true);
+        await factory.TokenStore.LinkIdentityAsync(contributorId, Token("tok-contributor", "contributor"), isDefault: true);
+        await factory.TokenStore.LinkIdentityAsync(otherUserId, Token("tok-other", "other-user"), isDefault: true);
+
+        using var owner = factory.CreateAuthenticatedClient(ownerId, roles: [PlatformRoles.ProjectCreator]);
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Role Boundary Project",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var project = await create.Content.ReadFromJsonAsync<ProjectResponse>();
+        var identityUrl = $"/api/projects/{project!.ProjectId}/github-identity";
+
+        (await owner.PutAsJsonAsync(
+            identityUrl,
+            new UpdateProjectGitHubIdentityRequest { GitHubLogin = "other-user" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await owner.PutAsJsonAsync(
+            identityUrl,
+            new UpdateProjectGitHubIdentityRequest { GitHubLogin = "unlinked" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        using var otherUser = factory.CreateAuthenticatedClient(otherUserId, roles: [PlatformRoles.Contributor]);
+        (await otherUser.GetAsync(identityUrl)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await otherUser.PutAsJsonAsync(
+            identityUrl,
+            new UpdateProjectGitHubIdentityRequest { GitHubLogin = "other-user" }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        (await owner.PostAsJsonAsync($"/api/projects/{project.ProjectId}/role-assignments", new
+        {
+            principal_id = viewerId,
+            role = "Viewer",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await owner.PostAsJsonAsync($"/api/projects/{project.ProjectId}/role-assignments", new
+        {
+            principal_id = contributorId,
+            role = "Contributor",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var viewer = factory.CreateAuthenticatedClient(viewerId, roles: [PlatformRoles.Viewer]);
+        (await viewer.GetAsync(identityUrl)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await viewer.PutAsJsonAsync(
+            identityUrl,
+            new UpdateProjectGitHubIdentityRequest { GitHubLogin = null }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        using var contributor = factory.CreateAuthenticatedClient(contributorId, roles: [PlatformRoles.Contributor]);
+        (await contributor.PutAsJsonAsync(
+            identityUrl,
+            new UpdateProjectGitHubIdentityRequest { GitHubLogin = "contributor" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+    }
+
     private static GitHubToken Token(string accessToken, string login) =>
         new(accessToken, RefreshToken: null, ExpiresAt: null, Login: login, AvatarUrl: $"https://avatars.example/{login}", Scopes: []);
 
