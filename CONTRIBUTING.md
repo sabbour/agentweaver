@@ -100,18 +100,46 @@ The complete operating flow is in [RELEASING.md](RELEASING.md).
 
 ## Testing
 
-Run only the suite(s) relevant to what you changed:
+Prepare dependencies once per worktree. On developer machines this materializes from an
+immutable, lockfile-keyed tree in Git's common directory; CI, npm workspaces/local links, and
+unsupported filesystems fall back to an isolated `npm ci`:
 
 ```bash
-# .NET API / packages (requires -p:CopilotSkipCliDownload=true on ARM64/Windows
-# dev machines to avoid the Copilot SDK trying to download a CLI binary)
+npm run deps:ensure
+```
+
+For an ordinary branch or a layer in a stacked change, run only the affected areas:
+
+```bash
+npm run validate:layer
+
+# .NET changes require a focused VSTest filter at layer level.
+npm run validate:layer -- --area dotnet \
+  --dotnet-filter "FullyQualifiedName~Agentweaver.Tests.Coordinator"
+```
+
+The layer profile detects Node toolchain, web, docs, and .NET paths relative to
+`origin/dev`. It runs web tests and lint after one dependency setup. A .NET layer must
+name a focused filter; NuGet packages are already shared by the user cache, while
+`bin/` and `obj/` remain worktree-local.
+
+At the top of a completed stack, run the full profile:
+
+```bash
+npm run validate:full
+```
+
+The underlying area commands remain available for focused troubleshooting:
+
+```bash
+# .NET API / packages
 dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
 
 # Node.js provisioning/deployment/release toolchain and CI contracts
 node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
 
 # UI harness fixture/regression suite
-npm ci --prefix scripts/ui-harness
+node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness
 npm --prefix scripts/ui-harness test
 
 # Web frontend (Vitest)
@@ -123,6 +151,9 @@ npm --prefix apps/web run lint
 # Docs site build (only if you changed docs/)
 npm run docs:build
 ```
+
+See [Validation workflow](docs/guide/validation.md) for cache keys, invalidation,
+fallback behavior, and timing output.
 
 ## Continuous integration
 
@@ -138,10 +169,10 @@ as passing for required-status-checks purposes:
 
 | Job | What it runs | Gating | Runs when |
 |---|---|---|---|
-| `.NET tests` | `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
-| `Node toolchain tests` | Node toolchain/CI contract tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
-| `Web tests` | `npm --prefix apps/web run test` | Blocking — must pass | `apps/web/**` changed |
-| `Web lint` | `npm --prefix apps/web run lint` | Blocking — must pass | `apps/web/**` changed |
+| `.NET tests` | Full `dotnet test … -p:CopilotSkipCliDownload=true` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
+| `Node toolchain tests` | Full Node toolchain/CI-helper tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
+| `Web tests` | Web tests and lint after one isolated `npm ci` | Blocking — must pass | `apps/web/**` changed |
+| `Web lint` | Confirms lint passed in the co-located `Web tests` job | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
 | `Changeset advisory` | `npm run version:check && npm run changeset:check` | Blocking — must pass | Always, on every PR |
 
@@ -152,6 +183,10 @@ is **active**, so admission is mechanical: direct pushes to `dev` are rejected a
 merges are blocked until the branch is current and the required checks are green.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
+
+CI is the full-suite authority and deliberately keeps job filesystems isolated. Its npm
+steps call the same dependency helper with `--isolated`, preserving `npm ci`
+reproducibility while local concurrent worktrees use the shared content-addressed path.
 
 ### Container image publishing
 

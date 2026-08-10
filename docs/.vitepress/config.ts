@@ -6,6 +6,7 @@ export default withMermaid({
   base: '/agentweaver/',
   ignoreDeadLinks: true,
   vite: {
+    cacheDir: '.vitepress/cache',
     resolve: {
       // The landing page reuses production sources outside the docs root.
       // Resolve their public runtime packages from docs/node_modules in clean Pages builds.
@@ -69,6 +70,7 @@ export default withMermaid({
           text: 'Setup',
           items: [
             { text: 'Configuration', link: '/guide/configuration' },
+            { text: 'Validation workflow', link: '/guide/validation' },
             { text: 'Deploy to AKS', link: '/guide/deployment-aks' },
             { text: 'AKS Architecture', link: '/guide/architecture-aks' },
           ],

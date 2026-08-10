@@ -36,8 +36,9 @@ agents must not work issue changes in the shared primary checkout.
    git worktree add ".worktrees/{branch-slug}" \
      -b "squad/{issue-number}-{kebab-case-slug}" origin/dev
    ```
-3. Make the worktree ready. Reuse a `node_modules` junction/symlink from the primary
-   checkout when safe; otherwise install dependencies in the worktree.
+3. Make the worktree ready with `npm run deps:ensure`. This uses the repository's
+   lockfile-keyed shared cache when safe and isolated `npm ci` otherwise. Never point a
+   worktree at the primary checkout's `node_modules`.
 4. Pass `WORKTREE_PATH` and `TEAM_ROOT` in the spawn context.
 5. A worktree isolates files and indexes; it does **not** provide integration
    safety. Before merge, the feature branch must be updated to current

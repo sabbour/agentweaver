@@ -8,11 +8,9 @@ name: CI
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
 #   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
-#   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
-#   - npm --prefix scripts/ui-harness test
-#   - npm --prefix apps/web run test
-#   - npm --prefix apps/web run lint
-#   - npm run docs:build
+#   - node scripts/ci/validate.mjs --profile ci --area node,harness
+#   - node scripts/ci/validate.mjs --profile ci --area web
+#   - node scripts/ci/validate.mjs --profile ci --area docs
 #
 # A `changes` job classifies the PR/push diff by path group first, and every
 # suite job below only runs `if:` its group actually changed (a change to this
@@ -71,6 +69,8 @@ jobs:
               - '.github/workflows/**'
             web:
               - 'apps/web/**'
+              - 'scripts/ci/shared-deps.mjs'
+              - 'scripts/ci/validate.mjs'
               - '.github/workflows/**'
             node-toolchain:
               - 'scripts/azure/**'
@@ -83,6 +83,8 @@ jobs:
               - '.github/workflows/**'
             docs:
               - 'docs/**'
+              - 'scripts/ci/shared-deps.mjs'
+              - 'scripts/ci/validate.mjs'
               - '.github/workflows/**'
             diagrams:
               - 'docs/diagrams/**'
@@ -136,14 +138,8 @@ jobs:
           cache: npm
           cache-dependency-path: scripts/ui-harness/package-lock.json
 
-      - name: Install UI harness dependencies
-        run: npm ci --prefix scripts/ui-harness
-
-      - name: Run Node toolchain tests
-        run: node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
-
-      - name: Run UI harness tests
-        run: npm --prefix scripts/ui-harness test
+      - name: Run Node toolchain and UI harness tests
+        run: node scripts/ci/validate.mjs --profile ci --area node,harness
 
   web-tests:
     name: Web tests
@@ -160,36 +156,20 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      - name: Install web dependencies
-        run: npm ci
-        working-directory: apps/web
-
-      - name: Run web tests (Vitest)
-        run: npm run test
-        working-directory: apps/web
+      # Tests and lint deliberately share one job so npm ci runs only once.
+      # The lightweight Web lint status job below preserves the existing
+      # branch-protection check name.
+      - name: Run web tests and lint
+        run: node scripts/ci/validate.mjs --profile ci --area web
 
   web-lint:
     name: Web lint
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
+    needs: [changes, web-tests]
+    if: always() && needs.changes.outputs.web == 'true' && needs.web-tests.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-
-      - name: Install web dependencies
-        run: npm ci
-        working-directory: apps/web
-
-      - name: Run web lint (ESLint)
-        run: npm run lint
-        working-directory: apps/web
+      - name: Confirm co-located lint passed
+        run: echo "Web lint passed in the Web tests job."
 
   docs-build:
     name: Docs build
@@ -206,14 +186,10 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
-      - name: Install docs dependencies
-        run: npm ci
-        working-directory: docs
-
       # Builds the VitePress site (source of truth for sabbour.me/agentweaver).
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
-        run: npm run docs:build
+        run: node scripts/ci/validate.mjs --profile ci --area docs
 
   diagrams-in-sync:
     name: Architecture diagrams are in sync
@@ -230,7 +206,7 @@ jobs:
           cache: npm
 
       - name: Install root dependencies
-        run: npm ci
+        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
 
       # README.md's "Block diagram" and architecture-aks.md's "Component
       # diagram"s are pre-rendered as static PNGs from Fluent-styled React
@@ -260,6 +236,6 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
       - run: npm run version:check
       - run: npm run changeset:check -- --base origin/${{ github.base_ref }}
