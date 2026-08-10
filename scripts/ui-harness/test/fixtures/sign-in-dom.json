@@ -1,0 +1,9 @@
+[
+  {
+    "testId": null,
+    "role": "button",
+    "name": "Sign in with Microsoft Entra ID",
+    "title": null,
+    "visible": true
+  }
+]
