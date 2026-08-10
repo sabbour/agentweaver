@@ -37,7 +37,8 @@ archive, cancellation, and sandbox preview control. In GitHubLegacy mode, the pe
 owner remains the boundary. The server resolves the project from the stored run record, never from
 caller input. Linked GitHub identities provide repository and Copilot access but do not grant
 project access. Runs with no `project_id` retain submitting-user ownership. The trusted internal
-service identity remains allowed for run-bound callbacks.
+service identity is denied on ordinary run read and mutation routes; only explicitly opted-in,
+run-bound callbacks such as agent-initiated preview creation accept it.
 
 ## Endpoints
 

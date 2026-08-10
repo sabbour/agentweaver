@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
@@ -112,7 +113,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
     }
 
     [Fact]
-    public async Task InternalService_CanReadProjectRun()
+    public async Task InternalService_CannotUseOrdinaryProjectRunEndpoints()
     {
         var projectId = await CreateProjectAsync(VictimOwnerOid);
         var runId = await InsertRunAsync(projectId, "unrelated-submitting-user");
@@ -120,9 +121,45 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         internalService.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", "internal-test-api-key");
 
-        var response = await internalService.GetAsync($"/api/runs/{runId}");
+        var requests = new[]
+        {
+            new HttpRequestMessage(HttpMethod.Get, $"/api/runs/{runId}"),
+            new HttpRequestMessage(HttpMethod.Get, $"/api/runs/{runId}/events"),
+            new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/archive"),
+            new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/cancel"),
+            new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/retry"),
+            new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/sandbox/port-forward")
+            {
+                Content = JsonContent.Create(new { targetPort = 3000 }),
+            },
+        };
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        foreach (var request in requests)
+        {
+            using (request)
+            using (var response = await internalService.SendAsync(request))
+                response.StatusCode.Should().Be(HttpStatusCode.Forbidden, request.RequestUri!.ToString());
+        }
+        (await GetRunAsync(runId)).ArchivedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task InternalService_CanInvokeExplicitProjectRunPreviewCallback()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(projectId, "unrelated-submitting-user");
+        _factory.Services.GetRequiredService<IRunOptionsStore>().SetAutoApproveTools(runId, true);
+        using var internalService = _factory.CreateClient();
+        internalService.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", "internal-test-api-key");
+
+        var response = await internalService.PostAsJsonAsync(
+            $"/api/runs/{runId}/sandbox/preview",
+            new { target_port = 3000 });
+
+        response.StatusCode.Should().Be(
+            HttpStatusCode.Conflict,
+            "the callback must pass authorization before the fixture reports that no sandbox pod is registered");
     }
 
     [Fact]
@@ -156,7 +193,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
             await GetRunAsync(runId),
             ProjectRole.Contributor,
             CancellationToken.None,
-            allowLegacyInternalService: true);
+            allowInternalService: true);
 
         result.Should().BeNull();
     }
@@ -330,11 +367,92 @@ public sealed class LegacyRunAuthorizationTests : IClassFixture<ReviewWebApplica
         (await projectOwner.GetAsync($"/api/runs/{runId}")).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
+    [Fact]
+    public async Task InternalService_CannotUseOrdinaryProjectRunEndpoints_InGitHubLegacyMode()
+    {
+        var projectId = await CreateProjectAsync(ReviewWebApplicationFactory.OtherUser);
+        var runId = await InsertRunAsync(projectId, "unrelated-submitting-user");
+        foreach (var apiKey in new[]
+                 {
+                     ReviewWebApplicationFactory.InternalServiceApiKey,
+                     ReviewWebApplicationFactory.OwnerApiKey,
+                 })
+        {
+            using var internalService = CreateClient(apiKey);
+            var requests = new[]
+            {
+                new HttpRequestMessage(HttpMethod.Get, $"/api/runs/{runId}"),
+                new HttpRequestMessage(HttpMethod.Get, $"/api/runs/{runId}/events"),
+                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/archive"),
+                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/cancel"),
+                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/retry"),
+                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/sandbox/port-forward")
+                {
+                    Content = JsonContent.Create(new { targetPort = 3000 }),
+                },
+            };
+
+            foreach (var request in requests)
+            {
+                using (request)
+                using (var response = await internalService.SendAsync(request))
+                    response.StatusCode.Should().Be(HttpStatusCode.Forbidden, request.RequestUri!.ToString());
+            }
+        }
+        (await GetRunAsync(runId)).ArchivedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task InternalService_CanInvokeExplicitProjectRunPreviewCallback_InGitHubLegacyMode()
+    {
+        var projectId = await CreateProjectAsync(ReviewWebApplicationFactory.OtherUser);
+        var runId = await InsertRunAsync(projectId, "unrelated-submitting-user");
+        _factory.Services.GetRequiredService<IRunOptionsStore>().SetAutoApproveTools(runId, true);
+        foreach (var apiKey in new[]
+                 {
+                     ReviewWebApplicationFactory.InternalServiceApiKey,
+                     ReviewWebApplicationFactory.OwnerApiKey,
+                 })
+        {
+            using var internalService = CreateClient(apiKey);
+            var response = await internalService.PostAsJsonAsync(
+                $"/api/runs/{runId}/sandbox/preview",
+                new { target_port = 3000 });
+
+            response.StatusCode.Should().Be(
+                HttpStatusCode.Conflict,
+                "the callback must pass authorization before the fixture reports that no sandbox pod is registered");
+        }
+    }
+
     private HttpClient CreateClient(string apiKey)
     {
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         return client;
+    }
+
+    private async Task<ProjectId> CreateProjectAsync(string owner)
+    {
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow;
+        await _factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = projectId,
+            Name = $"Legacy run auth {Guid.NewGuid():N}",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = AppContext.BaseDirectory,
+            DefaultBranch = "main",
+            Owner = owner,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        return projectId;
     }
 
     private async Task<string> InsertRunAsync(ProjectId? projectId, string submittingUser)
@@ -355,4 +473,7 @@ public sealed class LegacyRunAuthorizationTests : IClassFixture<ReviewWebApplica
         await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(run);
         return run.Id.ToString();
     }
+
+    private async Task<Run> GetRunAsync(string runId) =>
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId)))!;
 }

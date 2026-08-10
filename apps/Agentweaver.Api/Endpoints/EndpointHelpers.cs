@@ -31,22 +31,22 @@ internal static class EndpointHelpers
 /// Authorizes access to a persisted run without trusting caller-supplied project context. Project-scoped
 /// runs inherit the authorization rules of the project identified by <see cref="Run.ProjectId"/>.
 /// Older runs without a project retain submitting-user ownership. A dangling project reference fails
-/// closed instead of falling back to the run's identity string. Endpoints that historically accepted
-/// the trusted internal service for legacy runs opt in explicitly.
+/// closed instead of falling back to the run's identity string. The trusted internal service is denied
+/// by default in both authorization modes and must be explicitly enabled by a run-bound callback.
 /// </summary>
 internal static async Task<IResult?> RequireRunAccessAsync(
     HttpContext context,
     Run run,
     ProjectRole minimumRole,
     CancellationToken ct,
-    bool allowLegacyInternalService = false)
+    bool allowInternalService = false)
 {
     var configuration = context.RequestServices.GetRequiredService<IConfiguration>();
+    var caller = ApiKeyAuthMiddleware.GetCaller(context);
     if (run.ProjectId is not { } projectId)
     {
-        var caller = ApiKeyAuthMiddleware.GetCaller(context);
         return caller.Owns(run.SubmittingUser)
-            || (allowLegacyInternalService
+            || (allowInternalService
                 && ProjectAuthorization.IsInternalServiceCaller(caller, configuration))
             ? null
             : Results.StatusCode(StatusCodes.Status403Forbidden);
@@ -58,7 +58,13 @@ internal static async Task<IResult?> RequireRunAccessAsync(
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     return await ProjectAuthorization
-        .RequireAccessAsync(context, project, configuration, minimumRole, ct)
+        .RequireAccessAsync(
+            context,
+            project,
+            configuration,
+            minimumRole,
+            ct,
+            allowInternalService)
         .ConfigureAwait(false);
 }
 

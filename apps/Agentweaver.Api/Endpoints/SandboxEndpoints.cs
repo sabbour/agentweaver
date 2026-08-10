@@ -84,7 +84,7 @@ public static class SandboxEndpoints
                     run,
                     ProjectRole.Contributor,
                     ct,
-                    allowLegacyInternalService: true) is { } denied)
+                    allowInternalService: true) is { } denied)
                 return denied;
 
             var previewContext = LatestPreviewContext(streamStore, runId);
