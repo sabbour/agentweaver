@@ -921,3 +921,21 @@ This explains why the earlier #578 TTL-renewal attempt was live-refuted even wit
 - status: open
 
 scripts/azure/variables.mjs still defaults RESOURCE_GROUP=agentweaver-rg, ACR_NAME=agentweaverregistry, and CLUSTER_NAME=agentweaver-aks, but this operator's real staging environment in subscription 'AKS INT/Staging Test' is RESOURCE_GROUP=asabbour2, ACR_NAME=agwv2acr, CLUSTER_NAME=agwv2, KEYVAULT_NAME=agwv2kv. For this staging environment, every azure:deploy-from-commit / azure:deploy-from-local invocation must set all four env vars explicitly or the deploy will target the wrong or nonexistent resources. This was confirmed only after two failed defaulted deploy attempts, then by checking az account list, az group list, and az resource list --resource-group asabbour2.
+
+---
+
+## UI capture must wait for semantic app readiness, not DOM content loaded
+
+- date: 2026-08-10
+- category: bug
+- surface: ui
+- status: fixed
+
+`domcontentloaded` only proves that the document arrived; it can fire while Agentweaver
+is still stuck on the `Loading sign-in options` authentication bootstrap shell. UI
+`goto`/`capture` now wait for the authenticated `Main content` app landmark (or an
+explicit semantic readiness target), allow slow initialization within the configured
+timeout, and fail persistent auth/loading or sign-in states closed. Failed commands are
+persisted separately from successful evidence, and `finish` also rejects empty,
+auth-shell-only, or failed-command sessions so a transient bootstrap screen cannot
+produce `driver.pass: true`.
