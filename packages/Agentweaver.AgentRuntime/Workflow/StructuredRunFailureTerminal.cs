@@ -1,6 +1,6 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
 
 namespace Agentweaver.AgentRuntime.Workflow;
 
@@ -12,13 +12,8 @@ internal static class StructuredRunFailureTerminal
     internal const string InternalErrorCode = "agent_turn_internal_error";
     private const int MaxDiagnosticLength = 2048;
 
-    private static readonly Regex BearerCredential = new(
-        @"(?i)\bBearer\s+[^\s,;""'}\]]+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly Regex NamedCredential = new(
-        @"(?i)([""']?\b(?:api[-_]?key|token|password|secret)\b[""']?\s*[:=]\s*[""']?)[^""'\s,;}\]]+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly SandboxOutputRedactor DiagnosticRedactor =
+        SandboxOutputRedactor.CreateDefault(redactPii: false);
 
     internal static StructuredRunFailure? TryRead(RunEvent runEvent)
     {
@@ -97,12 +92,10 @@ internal static class StructuredRunFailureTerminal
         if (string.IsNullOrWhiteSpace(diagnostic))
             return "No additional diagnostic detail was available.";
 
-        var sanitized = diagnostic
+        var sanitized = DiagnosticRedactor.Redact(diagnostic)
             .Replace('\r', ' ')
             .Replace('\n', ' ')
             .Replace('\t', ' ');
-        sanitized = BearerCredential.Replace(sanitized, "Bearer ******");
-        sanitized = NamedCredential.Replace(sanitized, "$1******");
 
         return sanitized.Length <= MaxDiagnosticLength
             ? sanitized
