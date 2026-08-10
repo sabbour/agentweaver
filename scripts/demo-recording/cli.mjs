@@ -21,8 +21,8 @@ import {
   openRecordingSession,
   parseRecordingCommandOptions,
   prepareCaptureScripts,
+  refreshRecordingAuthentication,
   recordingStatus,
-  signInRecordingSession,
 } from './lib/recording-session.mjs';
 
 const RECORDING_COMMANDS = new Set(['signin', 'open', 'start', 'prepare', 'capture', 'status', 'close']);
@@ -275,10 +275,12 @@ async function printPrepared(result) {
   for (const item of result.scripts) process.stdout.write(`  Beat ${item.beatId}: ${item.scriptPath}\n`);
 }
 
-async function runRecordingCommand(command, argv) {
+export async function runRecordingCommand(command, argv, {
+  refreshAuthentication = refreshRecordingAuthentication,
+} = {}) {
   const options = parseRecordingCommandOptions(command, argv);
   if (command === 'signin') {
-    await signInRecordingSession(options);
+    await refreshAuthentication(options);
   } else if (command === 'open') {
     await openRecordingSession(options);
   } else if (command === 'start') {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recordingHelp } from '../cli.mjs';
+import { recordingHelp, runRecordingCommand } from '../cli.mjs';
 import {
   assertAuthenticatedSnapshot,
   assertAuthRootWithinRepository,
@@ -151,6 +151,19 @@ test('auth refresh closes only the owned Playwright session before inspecting Ed
     },
   );
   assert.deepEqual(events, ['close:agentweaver-demo', 'refresh-default']);
+});
+
+test('signin CLI routing cannot bypass the close-first authentication helper', async () => {
+  const calls = [];
+  await runRecordingCommand(
+    'signin',
+    ['--session', 'owned-session'],
+    {
+      refreshAuthentication: async (options) => calls.push(options),
+    },
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].session, 'owned-session');
 });
 
 test('auth destinations reject a junction that escapes the ignored auth root', async () => {
