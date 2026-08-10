@@ -247,7 +247,7 @@ export function setScheduleTrigger(
   return withDoc(text, (doc) => {
     if (!isMap(doc.contents)) return;
     if (trigger === null) {
-      doc.contents.delete('trigger');
+      writeTriggers(doc, readTriggers(doc).filter((entry) => entry.type !== 'schedule'));
       return;
     }
     const value: Record<string, string | number> = {
@@ -257,8 +257,37 @@ export function setScheduleTrigger(
     };
     if (trigger.interval === 'weekly' && trigger.dayOfWeek) value.day_of_week = trigger.dayOfWeek;
     if (trigger.interval === 'monthly' && trigger.dayOfMonth) value.day_of_month = trigger.dayOfMonth;
-    doc.contents.set('trigger', value);
+    writeTriggers(doc, upsertTrigger(readTriggers(doc), value));
   });
+}
+
+function readTriggers(doc: Document): Array<Record<string, unknown>> {
+  const root = doc.toJS();
+  if (!isRecord(root)) return [];
+  if (Array.isArray(root.triggers)) {
+    return root.triggers.filter((entry): entry is Record<string, unknown> => isRecord(entry));
+  }
+  return isRecord(root.trigger) ? [root.trigger] : [];
+}
+
+function writeTriggers(doc: Document, triggers: Array<Record<string, unknown>>): void {
+  if (!isMap(doc.contents)) return;
+  doc.contents.delete('trigger');
+  doc.contents.delete('triggers');
+  if (triggers.length === 1) {
+    doc.contents.set('trigger', triggers[0]);
+  } else if (triggers.length > 1) {
+    doc.contents.set('triggers', triggers);
+  }
+}
+
+function upsertTrigger(
+  triggers: Array<Record<string, unknown>>,
+  replacement: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const index = triggers.findIndex((entry) => entry.type === replacement.type);
+  if (index < 0) return [...triggers, replacement];
+  return triggers.map((entry, entryIndex) => entryIndex === index ? replacement : entry);
 }
 
 function normalizeEventName(event: WorkflowEventType): string {
@@ -390,7 +419,9 @@ export function getEventTrigger(text: string): WorkflowEventTrigger | null {
     return null;
   }
 
-  const trigger = isRecord(js.trigger) ? js.trigger : null;
+  const trigger = Array.isArray(js.triggers)
+    ? js.triggers.find((entry): entry is Record<string, unknown> => isRecord(entry) && entry.type === 'event') ?? null
+    : isRecord(js.trigger) ? js.trigger : null;
   if (!trigger || trigger.type !== 'event') return null;
   const event = parseEventName(trigger.event_name);
   if (!event) return null;
@@ -412,7 +443,7 @@ export function setEventTrigger(text: string, trigger: WorkflowEventTrigger | nu
   return withDoc(text, (doc) => {
     if (!isMap(doc.contents)) return;
     if (trigger === null) {
-      doc.contents.delete('trigger');
+      writeTriggers(doc, readTriggers(doc).filter((entry) => entry.type !== 'event'));
       return;
     }
 
@@ -437,7 +468,7 @@ export function setEventTrigger(text: string, trigger: WorkflowEventTrigger | nu
       event_name: eventName,
     };
     if (serializedConditions.length > 0) value.if = serializedConditions;
-    doc.contents.set('trigger', value);
+    writeTriggers(doc, upsertTrigger(readTriggers(doc), value));
   });
 }
 

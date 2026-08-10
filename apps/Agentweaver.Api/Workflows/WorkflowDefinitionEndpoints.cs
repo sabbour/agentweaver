@@ -86,14 +86,11 @@ public static class WorkflowDefinitionEndpoints
             var result = registry.Get(project!, workflowId);
             if (result?.Definition is null) return Results.NotFound();
 
-            return Results.Ok(new WorkflowTriggerConfigResponse
-            {
-                Trigger = result.Definition.Trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(result.Definition.Trigger),
-            });
+            return Results.Ok(WorkflowDtoMapper.ToTriggerConfigResponse(result.Definition.Triggers));
         });
 
-        // PUT /api/projects/{projectId}/workflows/{workflowId}/trigger — replace/create the
-        // workflow's trigger via structured JSON instead of raw YAML editing.
+        // PUT /api/projects/{projectId}/workflows/{workflowId}/trigger — create or replace one
+        // trigger by type while preserving triggers of other types.
         app.MapPut("/api/projects/{projectId}/workflows/{workflowId}/trigger", async (
             HttpContext httpContext,
             string projectId,
@@ -120,14 +117,12 @@ public static class WorkflowDefinitionEndpoints
                     out var triggerError))
                 return Results.BadRequest(new { error = triggerError ?? "Trigger validation failed." });
 
-            var updatedDefinition = current.Definition with { Trigger = trigger };
+            var updatedTriggers = UpsertTrigger(current.Definition.Triggers, trigger!);
+            var updatedDefinition = current.Definition with { Triggers = updatedTriggers };
             var persistError = await PersistWorkflowDefinitionAsync(project!, workflowId, updatedDefinition, projectStore, registry, ct);
             if (persistError is not null) return persistError;
 
-            return Results.Ok(new WorkflowTriggerConfigResponse
-            {
-                Trigger = trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(trigger),
-            });
+            return Results.Ok(WorkflowDtoMapper.ToTriggerConfigResponse(updatedTriggers));
         });
 
         // PATCH /api/projects/{projectId}/workflows/{workflowId}/trigger — partial trigger update.
@@ -152,11 +147,27 @@ public static class WorkflowDefinitionEndpoints
             var current = registry.Get(project!, workflowId);
             if (current?.Definition is null) return Results.NotFound();
 
+            WorkflowTrigger? currentTrigger;
+            if (!string.IsNullOrWhiteSpace(request.Type))
+            {
+                if (!TryParseTriggerType(request.Type, out var requestedType))
+                    return Results.BadRequest(new { error = "type must be 'schedule' or 'event'." });
+                currentTrigger = current.Definition.Triggers.FirstOrDefault(t => t.Type == requestedType);
+            }
+            else if (current.Definition.Triggers.Count <= 1)
+            {
+                currentTrigger = current.Definition.Triggers.FirstOrDefault();
+            }
+            else
+            {
+                return Results.BadRequest(new { error = "type is required when a workflow has multiple triggers." });
+            }
+
             WorkflowTriggerDto mergedTriggerDto;
             try
             {
                 mergedTriggerDto = WorkflowDtoMapper.MergeTriggerPatch(
-                    current.Definition.Trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(current.Definition.Trigger),
+                    currentTrigger is null ? null : WorkflowDtoMapper.ToTriggerDto(currentTrigger),
                     request);
             }
             catch (ArgumentException ex)
@@ -171,18 +182,16 @@ public static class WorkflowDefinitionEndpoints
                     out var triggerError))
                 return Results.BadRequest(new { error = triggerError ?? "Trigger validation failed." });
 
-            var updatedDefinition = current.Definition with { Trigger = trigger };
+            var updatedTriggers = UpsertTrigger(current.Definition.Triggers, trigger!);
+            var updatedDefinition = current.Definition with { Triggers = updatedTriggers };
             var persistError = await PersistWorkflowDefinitionAsync(project!, workflowId, updatedDefinition, projectStore, registry, ct);
             if (persistError is not null) return persistError;
 
-            return Results.Ok(new WorkflowTriggerConfigResponse
-            {
-                Trigger = trigger is null ? null : WorkflowDtoMapper.ToTriggerDto(trigger),
-            });
+            return Results.Ok(WorkflowDtoMapper.ToTriggerConfigResponse(updatedTriggers));
         });
 
-        // DELETE /api/projects/{projectId}/workflows/{workflowId}/trigger — clear the trigger while
-        // preserving the rest of the workflow definition.
+        // DELETE without a type clears all triggers for backward compatibility. Supplying
+        // ?type=schedule|event removes only that trigger type.
         app.MapDelete("/api/projects/{projectId}/workflows/{workflowId}/trigger", async (
             HttpContext httpContext,
             string projectId,
@@ -199,11 +208,24 @@ public static class WorkflowDefinitionEndpoints
             var current = registry.Get(project!, workflowId);
             if (current?.Definition is null) return Results.NotFound();
 
-            var updatedDefinition = current.Definition with { Trigger = null };
+            var requestedType = httpContext.Request.Query["type"].ToString();
+            IReadOnlyList<WorkflowTrigger> updatedTriggers;
+            if (string.IsNullOrWhiteSpace(requestedType))
+            {
+                updatedTriggers = [];
+            }
+            else
+            {
+                if (!TryParseTriggerType(requestedType, out var triggerType))
+                    return Results.BadRequest(new { error = "type must be 'schedule' or 'event'." });
+                updatedTriggers = current.Definition.Triggers.Where(t => t.Type != triggerType).ToList();
+            }
+
+            var updatedDefinition = current.Definition with { Triggers = updatedTriggers };
             var persistError = await PersistWorkflowDefinitionAsync(project!, workflowId, updatedDefinition, projectStore, registry, ct);
             if (persistError is not null) return persistError;
 
-            return Results.Ok(new WorkflowTriggerConfigResponse { Trigger = null });
+            return Results.Ok(WorkflowDtoMapper.ToTriggerConfigResponse(updatedTriggers));
         });
 
         // PUT /api/projects/{projectId}/workflows/default — set the project's default workflow (FR-041).
@@ -691,6 +713,35 @@ public static class WorkflowDefinitionEndpoints
     /// <summary>Normalizes an incoming workflow id: trims and treats empty/whitespace as null (clear).</summary>
     private static string? Normalize(string? workflowId) =>
         string.IsNullOrWhiteSpace(workflowId) ? null : workflowId.Trim();
+
+    private static IReadOnlyList<WorkflowTrigger> UpsertTrigger(
+        IReadOnlyList<WorkflowTrigger> current,
+        WorkflowTrigger replacement)
+    {
+        var updated = current.ToList();
+        var index = updated.FindIndex(trigger => trigger.Type == replacement.Type);
+        if (index >= 0)
+            updated[index] = replacement;
+        else
+            updated.Add(replacement);
+        return updated;
+    }
+
+    private static bool TryParseTriggerType(string raw, out WorkflowTriggerType type)
+    {
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "schedule":
+                type = WorkflowTriggerType.Schedule;
+                return true;
+            case "event":
+                type = WorkflowTriggerType.Event;
+                return true;
+            default:
+                type = default;
+                return false;
+        }
+    }
 
     private static WorkflowListResponse BuildListResponse(Project project, ProjectWorkflowSet set)
     {
