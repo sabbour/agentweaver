@@ -578,7 +578,7 @@ export class AgentweaverApiClient {
   }
 
   setProjectGitHubIdentityOverride(projectId: string, githubLogin: string | null): Promise<void> {
-    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github/identity`, {
+    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github-identity`, {
       github_login: githubLogin,
     });
   }

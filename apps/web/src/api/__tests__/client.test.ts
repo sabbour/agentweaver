@@ -120,6 +120,29 @@ describe('AgentweaverApiClient keepalive', () => {
   });
 });
 
+describe('AgentweaverApiClient project GitHub identity', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the project GitHub identity endpoint when switching linked accounts', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await client.setProjectGitHubIdentityOverride('project/1', 'altcat');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.test/api/projects/project%2F1/github-identity');
+    expect(init.method).toBe('PUT');
+    expect(init.body).toBe('{"github_login":"altcat"}');
+  });
+});
+
 // #208 point 5 regression coverage: an AbortSignal passed to a metrics-fetching client method must
 // reach the underlying `fetch` call so callers (DashboardPage/OverviewPage) can actually cancel
 // in-flight requests on unmount/range-change/overlapping-poll instead of the option being a no-op.
