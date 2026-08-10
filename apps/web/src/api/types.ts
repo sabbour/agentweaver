@@ -1282,7 +1282,9 @@ export interface WorkflowSummaryDto {
   error: string | null;
   is_built_in: boolean;
   is_default: boolean;
+  /** Legacy first-trigger alias. */
   trigger?: WorkflowTriggerDto | null;
+  triggers?: WorkflowTriggerDto[];
 }
 
 export interface WorkflowTriggerDto {
@@ -1341,6 +1343,9 @@ export interface WorkflowDetailDto {
   is_default: boolean;
   nodes: WorkflowNodeDto[];
   edges: WorkflowEdgeDto[];
+  /** Legacy first-trigger alias. */
+  trigger?: WorkflowTriggerDto | null;
+  triggers?: WorkflowTriggerDto[];
 }
 
 // Workflow graph descriptor (US6). Matches GraphDescriptor shape for WorkflowGraphPanel.

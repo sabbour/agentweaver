@@ -85,13 +85,42 @@ For existing project workflows, use **Edit** to open the YAML editor or **Edit v
 
 ## Running and scheduling workflows
 
-Each workflow row shows whether it is **Manual only**, has a **schedule**, or has a GitHub **event** trigger. Use **Run now** to queue a Ready task bound to that workflow; it is picked up and shown on the board through the same normal coordinator path as other work.
+Each workflow row shows all configured automation triggers, or **Manual only** when none are
+configured. Use **Run now** to queue a Ready task bound to that workflow; it is picked up and shown
+on the board through the same normal coordinator path as other work.
 
-For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily, weekly, or monthly at a UTC time. Choose **Add event** or **Edit event** to start the workflow from a curated GitHub webhook event instead. A workflow has exactly one `trigger:` block at a time, so switching from schedule → event (or back again) replaces the previous trigger. Removing the trigger returns the workflow to manual-only operation.
+For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily,
+weekly, or monthly at a UTC time. Choose **Add event** or **Edit event** to also start the same
+workflow from a curated GitHub webhook event. Each editor removes only its own trigger, so a weekly
+schedule and a GitHub event can coexist.
+
+Existing workflow files with one `trigger:` object remain valid and continue to round-trip in that
+shape. Workflows with multiple triggers use a `triggers:` list, with at most one schedule and one
+event trigger:
+
+```yaml
+triggers:
+  - type: schedule
+    interval: weekly
+    day_of_week: monday
+    time_of_day: "09:00"
+  - type: event
+    event_name: github.issues.labeled
+    if:
+      - has_label: { label: "roadmap-review" }
+```
+
+The structured trigger API returns both `triggers` (the complete list) and the legacy `trigger`
+field (the first trigger). `PUT .../trigger` creates or replaces the requested trigger type without
+removing other types. `DELETE .../trigger?type=schedule` and `?type=event` remove one type;
+`DELETE .../trigger` without a type retains its legacy behavior and clears all triggers.
 
 The visual event-trigger editor is intentionally constrained:
 
 - an **event picker** limits you to the supported GitHub event shortlist;
+- an **Issue action** picker distinguishes **Any issue action**, **Opened**, **Labeled**, and the
+  other GitHub Issues webhook actions, so label-added automation persists
+  `github.issues.labeled` instead of an action-hidden `github.issues.opened`;
 - the **condition-row builder** only offers predicates valid for the selected event;
 - separate condition rows are **ANDed by default**;
 - the common “match any of these values” case is represented as an `or:` group behind the scenes;
@@ -221,7 +250,7 @@ body into downstream prompts through the trigger path.
 
 ### Generate from description
 
-Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. Trigger generation now covers both recurring schedules and curated GitHub events, so prompts such as “run this every Monday at 09:00 UTC” or “trigger this whenever someone comments `/agentweaver:triage`” produce a first draft with the matching `trigger:` block.
+Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. Trigger generation covers recurring schedules and curated GitHub events, including prompts that request both on one workflow; generated automation uses the `triggers:` list while existing singular `trigger:` drafts remain valid.
 
 The generator is still preview-first. It teaches the model the workflow schema, the supported
 trigger shapes, and a few-shot set of natural-language → trigger examples, then validates the draft

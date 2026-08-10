@@ -5,6 +5,7 @@ import {
   parseWorkflowYaml,
   setBranchTarget,
   setEventTrigger,
+  setScheduleTrigger,
 } from '../utils/workflowYaml';
 import { describe, expect, it } from 'vitest';
 const baseYaml = `
@@ -144,5 +145,30 @@ trigger:
         { predicate: 'isNotLabeledWith', values: ['skip-triage'], matchAny: false },
       ],
     });
+  });
+
+  it('keeps a schedule and event trigger together while editing either one', () => {
+    const scheduled = setScheduleTrigger(baseYaml, {
+      interval: 'weekly',
+      dayOfWeek: 'monday',
+      timeOfDay: '09:00',
+    });
+    const combined = setEventTrigger(scheduled, {
+      event: 'issues',
+      eventName: 'github.issues.labeled',
+      conditions: [
+        { predicate: 'hasLabel', values: ['roadmap-review'], matchAny: false },
+      ],
+    });
+
+    expect(combined).toContain('triggers:');
+    expect(combined).toContain('type: schedule');
+    expect(combined).toContain('type: event');
+    expect(getEventTrigger(combined)?.eventName).toBe('github.issues.labeled');
+
+    const scheduleOnly = setEventTrigger(combined, null);
+    expect(scheduleOnly).toContain('trigger:');
+    expect(scheduleOnly).toContain('type: schedule');
+    expect(scheduleOnly).not.toContain('type: event');
   });
 });
