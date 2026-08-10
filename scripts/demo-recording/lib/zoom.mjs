@@ -35,7 +35,14 @@ export function browserZoomBootstrapSource() {
       // behind them zooms/pans, which reads as "zoom hits the wrong layer".
       // Transforming 'body' keeps '#root' and any portal content in lockstep.
       const root = document.body;
-      if (!root || existing) return;
+      if (!root) return;
+      // Consecutive beats intentionally reuse the same page. Replace only the
+      // recording overlay and its observer so each beat gets a fresh epoch;
+      // the application DOM and its live state remain untouched.
+      window.__demoActivityObserver?.disconnect();
+      existing?.remove();
+      document.getElementById('demo-cursor-ripple')?.remove();
+      document.getElementById('demo-cursor-style')?.remove();
       document.documentElement.style.overflow = 'hidden';
       document.body.style.overflow = 'hidden';
       root.style.transformOrigin = '0 0';
@@ -111,10 +118,12 @@ export function browserZoomBootstrapSource() {
       pushActivity('capture-ready');
       const observer = new MutationObserver(() => pushActivity('mutation'));
       observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+      window.__demoActivityObserver = observer;
       window.__demoActivityMark = (kind, detail = {}) => pushActivity(kind, detail);
       window.__demoGetActivityLog = () => loadLog();
       window.__demoStopActivity = () => {
         observer.disconnect();
+        if (window.__demoActivityObserver === observer) delete window.__demoActivityObserver;
         pushActivity('capture-stop');
         return loadLog();
       };

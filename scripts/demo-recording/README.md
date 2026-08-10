@@ -1,0 +1,82 @@
+# Demo recording CLI
+
+Use one command surface for sign-in, session setup, plan preparation, capture, and
+status:
+
+```powershell
+npm run demo:record -- help
+```
+
+## First use or expired sign-in
+
+```powershell
+npm run demo:record -- signin
+```
+
+The command uses **only** the literal Microsoft Edge `Default` work profile at
+`%LOCALAPPDATA%\Microsoft\Edge\User Data\Default`. Chrome and every other Edge
+profile are refused. Close all Edge windows when prompted. The command then:
+
+1. Validates that `Local State` identifies that exact `Default` profile, then copies
+   it into a freshly created disposable, Git-ignored directory.
+2. Opens that copy in Microsoft Edge for the human Entra sign-in.
+3. Saves the Playwright storage state and Agentweaver `sessionStorage` sidecar.
+4. Closes and deletes the disposable Edge profile.
+
+The live Default directory is never automated. Microsoft Edge requires Edge instances
+to be closed for DevTools attachment, and current Chromium releases reject remote
+debugging against the default browser data directory. The disposable copy preserves
+the required work-profile state without attaching automation to the live profile. It
+launches Edge with `--profile-directory=Default`. A copy is built in a temporary
+directory and only replaces the automation copy after a complete refresh succeeds; the
+tool never falls back to an old clone or another profile. If Edge leaves a file locked,
+the tool waits without terminating any process, then fails clearly if the exact source
+cannot be refreshed.
+
+Authentication files stay under `scripts\demo-recording\.auth\`. Git ignores this
+directory. The CLI refuses to use an auth directory that Git does not ignore and never
+prints cookies, tokens, storage-state contents, or session-storage values.
+
+## Start a persistent recording session
+
+```powershell
+npm run demo:record -- start `
+  --plan scripts\demo-recording\plans\blueprint-demo.capture.json
+```
+
+`open`, `start`, and `capture` each refresh sign-in state from the exact Edge Default
+source before opening the named `playwright-cli` session. They do not reuse stale
+saved authentication as a fallback. The default session name is `agentweaver-demo`.
+
+## Capture
+
+Capture one beat:
+
+```powershell
+npm run demo:record -- capture `
+  --plan scripts\demo-recording\plans\blueprint-demo.capture.json `
+  --beat 1.1
+```
+
+Capture the complete plan:
+
+```powershell
+npm run demo:record -- capture `
+  --plan scripts\demo-recording\plans\blueprint-demo.capture.json `
+  --all
+```
+
+The capture command restores and verifies the persistent session before it runs the
+generated script with `playwright-cli --raw`.
+
+## Other commands
+
+```powershell
+npm run demo:record -- open
+npm run demo:record -- prepare --plan <capture-plan>
+npm run demo:record -- status
+npm run demo:record -- close
+```
+
+Use `npm run demo:record -- help` for all options. Existing media processing commands
+on `scripts\demo-recording\cli.mjs` remain available through the same entry point.
