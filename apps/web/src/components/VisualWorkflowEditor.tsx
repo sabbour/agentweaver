@@ -2,6 +2,7 @@ import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import {
+  Badge,
   Button,
   Dropdown,
   Field,
@@ -43,23 +44,28 @@ import {
   WarningRegular,
 } from '@fluentui/react-icons';
 import { EmptyState, PageHeader } from './ui';
+import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
 import { DAG_NODE_SEP,
   layoutDag,
   workflowNodeSizeHint } from '../utils/dagLayout';
 import { addEdge,
   addNode,
   AUTHORABLE_WORKFLOW_NODE_TYPES,
+  getEventTrigger,
+  getScheduleTrigger,
   NODE_TYPE_LABELS,
   parseWorkflowYaml,
   readWorkflowId,
   removeEdgeAt,
   removeNode,
   renameNode,
+  scheduleTriggerLabel,
   setBranchTarget,
   setEdgeFieldAt,
   setHeaderField,
   setNodeField,
   setNodeStringArrayField,
+  setScheduleTrigger,
   } from '../utils/workflowYaml';
 import { ActiveEdgeContext,
   ExecutionModalContext,
@@ -221,12 +227,41 @@ const useStyles = makeStyles({
     gridTemplateColumns: '1fr 1fr',
     gap: tokens.spacingHorizontalM,
     flexGrow: 1,
+    '@media (max-width: 760px)': { gridTemplateColumns: '1fr' },
   },
-  identityWide: { gridColumn: '1 / -1' },
+  identityWide: {
+    gridColumn: '1 / -1',
+    '@media (max-width: 760px)': { gridColumn: 'auto' },
+  },
+  scheduleRow: {
+    gridColumn: '1 / -1',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    '@media (max-width: 760px)': {
+      gridColumn: 'auto',
+      alignItems: 'stretch',
+      flexDirection: 'column',
+    },
+  },
+  scheduleSummary: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
   split: {
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     minHeight: '560px',
+    '@media (max-width: 900px)': {
+      flexDirection: 'column',
+      minHeight: 0,
+    },
   },
   canvasPane: {
     flexBasis: '60%',
@@ -235,6 +270,7 @@ const useStyles = makeStyles({
     position: 'relative',
     backgroundColor: tokens.colorNeutralBackground2,
     borderRadius: tokens.borderRadiusMedium,
+    '@media (max-width: 900px)': { minHeight: '420px' },
   },
   sidePane: {
     display: 'flex',
@@ -246,6 +282,10 @@ const useStyles = makeStyles({
     padding: tokens.spacingHorizontalL,
     backgroundColor: tokens.colorNeutralBackground1,
     borderRadius: tokens.borderRadiusMedium,
+    '@media (max-width: 900px)': {
+      flexBasis: 'auto',
+      maxHeight: 'none',
+    },
   },
   paneHeader: {
     display: 'flex',
@@ -449,6 +489,7 @@ export function VisualWorkflowEditor({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeIndex, setSelectedEdgeIndex] = useState<number | null>(null);
   const [rightMode, setRightMode] = useState<'inspector' | 'yaml'>('inspector');
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<{ message: string; line: number | null } | null>(null);
@@ -562,6 +603,8 @@ export function VisualWorkflowEditor({
   const selectableTargets = model?.nodes.filter((n) => n.id !== selectedNode?.id) ?? [];
 
   const warnings = useMemo(() => (model ? unroutedVerdicts(model) : []), [model]);
+  const scheduleTrigger = useMemo(() => getScheduleTrigger(yamlText), [yamlText]);
+  const eventTrigger = useMemo(() => getEventTrigger(yamlText), [yamlText]);
 
   const handleRenameNode = useCallback((oldId: string, newId: string) => {
     if (!newId || newId === oldId) return;
@@ -601,6 +644,18 @@ export function VisualWorkflowEditor({
     setSelectedEdgeIndex(null);
     setYamlText((t) => removeEdgeAt(t, idx));
   }, [selectedEdgeIndex]);
+
+  const handleScheduleSave = useCallback((trigger: NonNullable<ReturnType<typeof getScheduleTrigger>>) => {
+    setYamlText((text) => setScheduleTrigger(text, trigger));
+    setSaveError(null);
+    setScheduleOpen(false);
+  }, []);
+
+  const handleScheduleRemove = useCallback(() => {
+    setYamlText((text) => setScheduleTrigger(text, null));
+    setSaveError(null);
+    setScheduleOpen(false);
+  }, []);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -683,6 +738,25 @@ export function VisualWorkflowEditor({
             rows={2}
           />
         </Field>
+        <div className={styles.scheduleRow}>
+          <div className={styles.scheduleSummary}>
+            <Text weight="semibold">Schedule trigger</Text>
+            {scheduleTrigger ? (
+              <Badge appearance="tint" color="informative">
+                {scheduleTriggerLabel(scheduleTrigger)}
+              </Badge>
+            ) : (
+              <Text size={200}>{eventTrigger ? 'No schedule configured' : 'Manual only'}</Text>
+            )}
+          </div>
+          <Button
+            appearance="secondary"
+            disabled={Boolean(parseError)}
+            onClick={() => setScheduleOpen(true)}
+          >
+            {scheduleTrigger ? 'Edit schedule trigger' : 'Add schedule trigger'}
+          </Button>
+        </div>
       </div>
 
       {parseError && (
@@ -960,6 +1034,13 @@ export function VisualWorkflowEditor({
           </Button>
         </div>
       </div>
+      <ScheduleTriggerDialog
+        open={scheduleOpen}
+        trigger={scheduleTrigger}
+        onDismiss={() => setScheduleOpen(false)}
+        onSave={handleScheduleSave}
+        onRemove={handleScheduleRemove}
+      />
     </div>
   );
 }

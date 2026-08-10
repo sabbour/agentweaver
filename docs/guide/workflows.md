@@ -81,6 +81,8 @@ Use **Edit visually** to build a workflow as a node graph. Drag roles onto the c
 
 Click **Add node** to insert a new step. The palette is grouped under **Reviewers & gates**, **Agent steps**, and **Flow control**, and each entry shows an icon and a one-line description. **Build & Test** appears once, as a ready-to-use preset.
 
+The **Schedule trigger** section shows whether the workflow is manual-only or scheduled. Choose **Add schedule trigger** or **Edit schedule trigger** to configure a daily, weekly, or monthly UTC schedule. Schedule changes update the editor's current YAML draft and are persisted with the rest of the workflow when you choose **Save**, so unsaved graph or YAML edits are never overwritten by a separate schedule save.
+
 For existing project workflows, use **Edit** to open the YAML editor or **Edit visually** to open the graph editor. Built-in workflows are read-only; use **Duplicate to project** to create an editable copy and open it in the visual editor.
 
 ## Running and scheduling workflows
@@ -89,10 +91,11 @@ Each workflow row shows all configured automation triggers, or **Manual only** w
 configured. Use **Run now** to queue a Ready task bound to that workflow; it is picked up and shown
 on the board through the same normal coordinator path as other work.
 
-For project workflows, choose **Add schedule** or **Edit schedule** to run the workflow daily,
-weekly, or monthly at a UTC time. Choose **Add event** or **Edit event** to also start the same
-workflow from a curated GitHub webhook event. Each editor removes only its own trigger, so a weekly
-schedule and a GitHub event can coexist.
+For project workflows, configure a schedule from the workflow row (**Add schedule** / **Edit
+schedule**) or from the visual editor to run the workflow daily, weekly, or monthly at a UTC time.
+Choose **Add event** or **Edit event** to also start the same workflow from a curated GitHub webhook
+event. Each editor removes only its own trigger, so a weekly schedule and a GitHub event can coexist.
+Built-in workflows cannot be scheduled directly; duplicate one into the project first.
 
 Existing workflow files with one `trigger:` object remain valid and continue to round-trip in that
 shape. Workflows with multiple triggers use a `triggers:` list, with at most one schedule and one
