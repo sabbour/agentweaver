@@ -55,6 +55,16 @@ The bridge exists to close two gaps a direct `CopilotAIAgent` registration would
 
 The **run-scoped** setup is now deferred until a warm pod is claimed. AgentHost starts without a `RunId`, enters standby, and accepts `POST /configure` while still excluded from the readiness gate. The executor binds a pod from the shared `agentweaver-agent-host` warm pool, then posts `runId`, `userId`, `turnBearerToken`, `kvUserSecretName`, `workingDirectory`, and `autoApproveTools`. `workingDirectory` is the run's `WorktreePath`; `AgentHostStartupService.ConfigureAsync(...)` passes it into `CopilotAIAgent.SetupAsync` so the pod's file-tool root is the same path the run's system prompt references. `autoApproveTools` carries the run's auto-approve option (read from the API-side `IRunOptionsStore`) and seeds the pod's own `IRunOptionsStore`, so the pod HITL gate can auto-approve `web_fetch` under autopilot instead of stalling on a fresh store that defaults the flag to `false` (issue #221). `AgentHostRuntimeState.TryConfigure(...)` stores the runtime values once, and only after setup does `/healthz` return ready. Backward-compatible env-launched pods still initialize from `AgentHostOptions` at startup.
 
+Terminal failure normalization is shared by both halves of the bridge. A pod-emitted
+`run.failed` without an `errorCode` is normalized in place to the retryable
+`agent_turn_internal_error` contract, retaining only bounded, credential-redacted diagnostic
+fields. If the pod or transport aborts before any terminal arrives, the bridge or worker
+synthesizes that same terminal exactly once. Caller cancellation remains cancellation, and
+existing typed timeout/failure terminals remain authoritative. Because every remoted role uses
+`RemoteAgentProxy`, general agent turns, RAI review, and assembly Build & Test all receive the
+same terminal semantics instead of leaking a purpose-prefixed
+`a2a_protocol_event_unsupported` reason.
+
 The security property remains per-run: each AgentHost pod accepts only the token configured for that run on `message:stream`. A stolen token from one run cannot be replayed against another run's pod because the other pod has a different runtime token, and NetworkPolicy/mTLS still constrain which callers can reach port `8088`. `/configure` itself is not protected by that token (it delivers it); the NetworkPolicy restricting AgentHost ingress to API/worker pods is the guard.
 
 MAF therefore stays **in-process on the worker only**. The pod is just a hosted leaf agent behind a thin bridge.

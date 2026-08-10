@@ -234,6 +234,134 @@ public sealed class A2ARoundTripIntegrationTests
     }
 
     [Fact]
+    public async Task RemoteAgentProxy_Resiliency_NormalizesUnstructuredRunFailedAcrossA2AFault()
+    {
+        var port = GetFreeTcpPort();
+        var runner = new UnstructuredFailingTurnRunner();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls($"http://localhost:{port}");
+        var agentHostedBuilder = builder.AddAIAgent(
+            A2ATurnBridgeAgent.AgentName,
+            (sp, _) => new A2ATurnBridgeAgent(
+                new MinimalInnerAgent(),
+                runner,
+                NullLogger<A2ATurnBridgeAgent>.Instance),
+            ServiceLifetime.Singleton);
+#pragma warning disable MEAI001
+        agentHostedBuilder.AddA2AServer(options => options.AgentRunMode = AgentRunMode.DisallowBackground);
+#pragma warning restore MEAI001
+
+        await using var app = builder.Build();
+        app.MapA2AHttpJson(agentHostedBuilder, "/a2a/agent");
+        await app.StartAsync();
+
+        try
+        {
+            using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
+            var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
+            var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
+            await using var proxy = new RemoteAgentProxy(
+                resolver,
+                httpFactory,
+                NullLoggerFactory.Instance,
+                RemoteApiBaseUrl);
+            var workerEvents = Channel.CreateUnbounded<RunEvent>();
+            await proxy.SetupAsync(
+                "/workspace",
+                "/workspace",
+                "run-unstructured-failure-522",
+                modelId: null,
+                systemPromptContext: null,
+                workerEvents.Writer,
+                projectId: null,
+                agentName: null,
+                apiBaseUrl: null,
+                apiKey: null,
+                TestCt,
+                userId: null);
+
+            var act = () => proxy.RunTurnAsync("review", isRevision: false, TestCt);
+
+            var ex = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+            ex.Which.Reason.Should().Be("agent_turn_internal_error");
+            ex.Which.IsRetryable.Should().BeTrue();
+
+            var forwarded = await workerEvents.Reader.ReadAsync(TestCt);
+            forwarded.Type.Should().Be(EventTypes.RunFailed);
+            StructuredRunFailureTerminal.TryRead(forwarded)!.ErrorCode
+                .Should().Be("agent_turn_internal_error");
+            workerEvents.Reader.TryRead(out _).Should().BeFalse(
+                "normalization must not add a second terminal event");
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RemoteAgentProxy_Resiliency_SynthesizesTerminalWhenServerAbortsWithoutRunFailed()
+    {
+        var port = GetFreeTcpPort();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls($"http://localhost:{port}");
+        var agentHostedBuilder = builder.AddAIAgent(
+            A2ATurnBridgeAgent.AgentName,
+            (sp, _) => new BareFaultingAgent(),
+            ServiceLifetime.Singleton);
+#pragma warning disable MEAI001
+        agentHostedBuilder.AddA2AServer(options => options.AgentRunMode = AgentRunMode.DisallowBackground);
+#pragma warning restore MEAI001
+
+        await using var app = builder.Build();
+        app.MapA2AHttpJson(agentHostedBuilder, "/a2a/agent");
+        await app.StartAsync();
+
+        try
+        {
+            using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
+            var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
+            var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
+            await using var proxy = new RemoteAgentProxy(
+                resolver,
+                httpFactory,
+                NullLoggerFactory.Instance,
+                RemoteApiBaseUrl);
+            var workerEvents = Channel.CreateUnbounded<RunEvent>();
+            await proxy.SetupAsync(
+                "/workspace",
+                "/workspace",
+                "run-bare-abort-522",
+                modelId: null,
+                systemPromptContext: null,
+                workerEvents.Writer,
+                projectId: null,
+                agentName: null,
+                apiBaseUrl: null,
+                apiKey: null,
+                TestCt,
+                userId: null);
+
+            var act = () => proxy.RunTurnAsync("review", isRevision: false, TestCt);
+
+            var ex = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+            ex.Which.Reason.Should().Be("agent_turn_internal_error");
+            ex.Which.IsRetryable.Should().BeTrue();
+
+            var forwarded = await workerEvents.Reader.ReadAsync(TestCt);
+            StructuredRunFailureTerminal.TryRead(forwarded)!.ErrorCode
+                .Should().Be("agent_turn_internal_error");
+            workerEvents.Reader.TryRead(out _).Should().BeFalse();
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task RemoteAgentProxy_CleanStreamWithoutTurnEnd_FailsRetryably_InsteadOfPhantomSuccess()
     {
         // #242 regression: the pod streams progress (deltas) and then its A2A stream ends CLEANLY
@@ -577,6 +705,28 @@ public sealed class A2ARoundTripIntegrationTests
         }
     }
 
+    private sealed class UnstructuredFailingTurnRunner : IPodTurnRunner
+    {
+        private ChannelWriter<RunEvent>? _writer;
+
+        public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) => _writer = streamWriter;
+
+        public async Task<string> RunTurnAsync(
+            string task,
+            bool isRevision,
+            CancellationToken cancellationToken)
+        {
+            await (_writer ?? throw new InvalidOperationException("Stream writer not attached."))
+                .WriteAsync(new RunEvent(1, EventTypes.RunFailed, new
+                {
+                    reason = "a2a_protocol_event_unsupported",
+                    message = "Only message, task, task update events are supported. Received: None",
+                }), cancellationToken)
+                .ConfigureAwait(false);
+            throw new InvalidOperationException("transport terminated");
+        }
+    }
+
     /// <summary>Fixed endpoint resolver pointing the proxy at the loopback Kestrel listener.</summary>
     private sealed class FixedEndpointResolver : ISandboxAgentEndpointResolver
     {
@@ -621,6 +771,47 @@ public sealed class A2ARoundTripIntegrationTests
             new(new MinimalSession());
 
         private sealed class MinimalSession : AgentSession;
+    }
+
+    private sealed class BareFaultingAgent : AIAgent
+    {
+        public override string Name => A2ATurnBridgeAgent.AgentName;
+
+        protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken) =>
+            new(new BareFaultingSession());
+
+        protected override Task<AgentResponse> RunCoreAsync(
+            IEnumerable<ChatMessage> messages,
+            AgentSession? session,
+            AgentRunOptions? options,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("pod stream aborted");
+
+        protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
+            IEnumerable<ChatMessage> messages,
+            AgentSession? session,
+            AgentRunOptions? options,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            if (!cancellationToken.IsCancellationRequested)
+                throw new InvalidOperationException("pod stream aborted");
+            yield break;
+        }
+
+        protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
+            AgentSession? session,
+            JsonSerializerOptions? jsonSerializerOptions,
+            CancellationToken cancellationToken) =>
+            new(JsonSerializer.SerializeToElement(new { }));
+
+        protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
+            JsonElement serializedState,
+            JsonSerializerOptions? jsonSerializerOptions,
+            CancellationToken cancellationToken) =>
+            new(new BareFaultingSession());
+
+        private sealed class BareFaultingSession : AgentSession;
     }
 
     /// <summary>
