@@ -48,6 +48,13 @@ public interface IProjectStore
     Task UpdatePickupSettingsAsync(
         ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default);
 
+    /// <summary>Updates the project-scoped live-preview HITL approval window.</summary>
+    Task UpdatePreviewApprovalTimeoutAsync(
+        ProjectId id,
+        int timeoutMinutes,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default) => Task.CompletedTask;
+
     /// <summary>
     /// Sets (or clears, when <paramref name="workflowId"/> is null) the project's default workflow
     /// reference (Feature 010, FR-041).

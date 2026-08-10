@@ -26,6 +26,7 @@ vi.mock('../api/apiClient', () => ({
     autoCreateProjectWebhook: vi.fn(),
     rotateProjectWebhookSecret: vi.fn(),
     updateProjectProviderSettings: vi.fn(),
+    updateProjectPreviewSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
   },
 }));
@@ -62,12 +63,16 @@ beforeEach(() => {
     blueprint_generation_model: null,
     workflow_generation_model: 'claude-sonnet-4.6',
     outcome_spec_generation_model: null,
+    preview_approval_timeout_minutes: 30,
     available: true,
     state: 'active',
     created_at: '2026-07-07T00:00:00Z',
     updated_at: '2026-07-07T00:00:00Z',
   } as never);
   vi.mocked(apiClient.updateProjectProviderSettings).mockResolvedValue(undefined as never);
+  vi.mocked(apiClient.updateProjectPreviewSettings).mockResolvedValue({
+    approval_timeout_minutes: 45,
+  } as never);
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: 'C:/data' } as never);
   vi.mocked(apiClient.getSandboxPolicy).mockResolvedValue({
     repository_path: 'C:/demo',
@@ -371,5 +376,40 @@ describe('ProjectSettingsPage', () => {
     switches = screen.getAllByRole('switch') as HTMLInputElement[];
     expect(switches[1].checked).toBe(true);
     expect(switches[2].disabled).toBe(false);
+  });
+
+  it('saves the project-scoped preview approval timeout', async () => {
+    renderPage('proj-1');
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
+
+    const input = await screen.findByRole('spinbutton', {
+      name: 'Preview approval timeout in minutes',
+    });
+    expect((input as HTMLInputElement).value).toBe('30');
+    fireEvent.change(input, { target: { value: '45' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save preview approval' }));
+
+    await waitFor(() => expect(apiClient.updateProjectPreviewSettings).toHaveBeenCalledWith('proj-1', {
+      approval_timeout_minutes: 45,
+    }));
+    expect(await screen.findByText('Preview approval timeout saved.')).toBeDefined();
+  });
+
+  it('validates the preview approval timeout before calling the API', async () => {
+    renderPage('proj-1');
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
+
+    const input = await screen.findByRole('spinbutton', {
+      name: 'Preview approval timeout in minutes',
+    });
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save preview approval' }));
+
+    expect(await screen.findByText(
+      'Approval timeout must be a whole number between 1 and 1440 minutes.',
+    )).toBeDefined();
+    expect(apiClient.updateProjectPreviewSettings).not.toHaveBeenCalled();
   });
 });
