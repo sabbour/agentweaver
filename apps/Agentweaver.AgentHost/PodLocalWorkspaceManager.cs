@@ -133,7 +133,7 @@ internal sealed class PodLocalWorkspaceManager
                     spec.BaseCommitSha)
                 .ConfigureAwait(false);
 
-            ConfigureSandboxHome(workspacePath);
+            ConfigureSandboxHome(spec.RunId);
             var prepared = new PreparedWorkspace(
                 spec.RunId,
                 workspacePath,
@@ -491,25 +491,17 @@ internal sealed class PodLocalWorkspaceManager
         }
     }
 
-    private static void ConfigureSandboxHome(string workspacePath)
+    private void ConfigureSandboxHome(string runId)
     {
-        var excludePath = Path.Combine(workspacePath, ".git", "info", "exclude");
-        Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-        var excludeEntry = $"/{SandboxHomeDirectoryName}/";
-        var existingExcludes = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
-        if (!existingExcludes
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Contains(excludeEntry, StringComparer.Ordinal))
-        {
-            File.AppendAllText(excludePath, excludeEntry + Environment.NewLine);
-        }
-
-        var home = SandboxHomeDirectoryName;
-        var cache = $"{home}/.cache";
-        var data = $"{home}/.local/share";
-        var config = $"{home}/.config";
+        var home = Path.Combine(
+            Path.GetFullPath(_options.ExecutionScratchRoot),
+            "runtime-home",
+            PodLocalExecutionWorkspace.GetRunHash(runId));
+        var cache = Path.Combine(home, ".cache");
+        var data = Path.Combine(home, ".local", "share");
+        var config = Path.Combine(home, ".config");
         foreach (var path in new[] { home, cache, data, config })
-            Directory.CreateDirectory(Path.Combine(workspacePath, path));
+            Directory.CreateDirectory(path);
 
         Environment.SetEnvironmentVariable("HOME", home);
         Environment.SetEnvironmentVariable("XDG_CACHE_HOME", cache);
@@ -544,6 +536,10 @@ internal sealed class PodLocalWorkspaceManager
                 CreateNoWindow = true,
             },
         };
+        process.StartInfo.ArgumentList.Add("-c");
+        process.StartInfo.ArgumentList.Add("core.hooksPath=/dev/null");
+        process.StartInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        process.StartInfo.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
         if (environment is not null)

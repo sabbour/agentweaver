@@ -89,6 +89,13 @@ public sealed class SandboxedFileTools
     public async Task<(long BytesWritten, SandboxWriteFailure? Failure)> WriteFileAsync(
         string requestedPath, string content, CancellationToken ct = default)
     {
+        if (IsGitControlPath(requestedPath))
+        {
+            return (0, new SandboxWriteFailure(
+                SandboxFailureKind.Rejected,
+                "Git control files (.git) are runtime-managed and cannot be modified by file tools."));
+        }
+
         string resolvedPath;
         try
         {
@@ -212,6 +219,13 @@ public sealed class SandboxedFileTools
     public async Task<(long BytesWritten, SandboxWriteFailure? Failure)> CreateFileAsync(
         string requestedPath, string content, CancellationToken ct = default)
     {
+        if (IsGitControlPath(requestedPath))
+        {
+            return (0, new SandboxWriteFailure(
+                SandboxFailureKind.Rejected,
+                "Git control files (.git) are runtime-managed and cannot be modified by file tools."));
+        }
+
         string resolvedPath;
         try
         {
@@ -273,6 +287,13 @@ public sealed class SandboxedFileTools
     public async Task<(bool Replaced, SandboxWriteFailure? Failure)> StrReplaceAsync(
         string requestedPath, string oldStr, string newStr, CancellationToken ct = default)
     {
+        if (IsGitControlPath(requestedPath))
+        {
+            return (false, new SandboxWriteFailure(
+                SandboxFailureKind.Rejected,
+                "Git control files (.git) are runtime-managed and cannot be modified by file tools."));
+        }
+
         if (string.IsNullOrEmpty(oldStr))
             return (false, new SandboxWriteFailure(SandboxFailureKind.Error, "oldStr must not be empty."));
 
@@ -363,6 +384,13 @@ public sealed class SandboxedFileTools
     public async Task<(bool Inserted, SandboxWriteFailure? Failure)> InsertAtLineAsync(
         string requestedPath, int insertLine, string newStr, CancellationToken ct = default)
     {
+        if (IsGitControlPath(requestedPath))
+        {
+            return (false, new SandboxWriteFailure(
+                SandboxFailureKind.Rejected,
+                "Git control files (.git) are runtime-managed and cannot be modified by file tools."));
+        }
+
         string resolvedPath;
         try
         {
@@ -451,6 +479,15 @@ public sealed class SandboxedFileTools
         var resolvedPaths = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var hunk in hunks)
         {
+            if (IsGitControlPath(hunk.Path) ||
+                (hunk.MoveTo is not null && IsGitControlPath(hunk.MoveTo)))
+            {
+                return new ApplyPatchResult(
+                    false,
+                    "Git control files (.git) are runtime-managed and cannot be modified by patches.",
+                    []);
+            }
+
             if (!resolvedPaths.ContainsKey(hunk.Path))
             {
                 try
@@ -804,6 +841,14 @@ public sealed class SandboxedFileTools
             i++;
         }
         return s.Length;
+    }
+
+    private static bool IsGitControlPath(string requestedPath)
+    {
+        var segments = requestedPath.Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Any(segment =>
+            string.Equals(segment, ".git", StringComparison.OrdinalIgnoreCase));
     }
 
     private enum PatchHunkType { AddFile, DeleteFile, UpdateFile }

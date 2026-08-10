@@ -31,12 +31,12 @@
 # (networkpolicy-sandbox.yaml) and the public MCP no longer shares the pod-create/exec
 # identity (serviceaccount-mcp.yaml) — shrinking the exfiltration/escalation surface.
 #
-# COMPOUNDING CONTROL (#476, command-text guard): because the Kata-mode PassthroughExecutor has
-# no bwrap/mount view, the per-run filesystem policy is now ALSO enforced at the executor boundary.
-# SharedWorkspacePathGuard (packages/Agentweaver.SandboxFs) rejects any shell command that embeds
-# an absolute path under this shared /workspace mount but outside the run's own allowed roots
-# (e.g. `cat /workspace/<other-project>/secrets`). This is defense-in-depth, NOT a substitute for
-# the per-run-volume follow-up above — a text filter cannot catch every obfuscation.
+# BOUNDED REMEDIATION (#476): Kata AgentHost shell and preview child processes run inside a
+# fail-closed bubblewrap mount namespace. It binds only the current run's worktree/scratch and
+# read-only linked-worktree git metadata; the PVC root and sibling worktrees are absent. A synthetic
+# minimal /proc prevents /proc/<pid>/root from recovering the parent AgentHost mount namespace.
+# SharedWorkspacePathGuard remains defense-in-depth only. #481 still owns relocating worktrees to
+# per-run volumes, controller warm-pool validation, and secure volume teardown.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

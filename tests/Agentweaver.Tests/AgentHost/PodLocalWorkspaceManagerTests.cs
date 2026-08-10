@@ -21,9 +21,9 @@ namespace Agentweaver.Tests.AgentHost;
 public sealed class PodLocalWorkspaceManagerTests : IDisposable
 {
     private readonly string _root = Path.Combine(
-        AppContext.BaseDirectory,
-        ".pod-local-workspace-tests",
-        Guid.NewGuid().ToString("n"));
+        Directory.GetCurrentDirectory(),
+        ".pod-local-tests",
+        Guid.NewGuid().ToString("n")[..8]);
 
     public PodLocalWorkspaceManagerTests() => Directory.CreateDirectory(_root);
 
@@ -143,17 +143,20 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             Git(prepared.WorkspacePath, "branch", "--show-current").Should().BeEmpty(
                 "the local workspace must not use git worktree administration");
             File.Exists(Path.Combine(prepared.WorkspacePath, "package.json")).Should().BeTrue();
-            Environment.GetEnvironmentVariable("HOME").Should().Be(".agentweaver-home");
+            var runtimeHome = Path.GetFullPath(Path.Combine(
+                _root,
+                "scratch",
+                "runtime-home",
+                PodLocalExecutionWorkspace.GetRunHash("workspace-run")));
+            Environment.GetEnvironmentVariable("HOME").Should().Be(runtimeHome);
             Environment.GetEnvironmentVariable("XDG_CACHE_HOME")
-                .Should().Be(".agentweaver-home/.cache");
+                .Should().Be(Path.Combine(runtimeHome, ".cache"));
             Environment.GetEnvironmentVariable("XDG_DATA_HOME")
-                .Should().Be(".agentweaver-home/.local/share");
+                .Should().Be(Path.Combine(runtimeHome, ".local", "share"));
             Environment.GetEnvironmentVariable("XDG_CONFIG_HOME")
-                .Should().Be(".agentweaver-home/.config");
+                .Should().Be(Path.Combine(runtimeHome, ".config"));
             foreach (var variable in sandboxHomeVariables)
-                Directory.Exists(Path.Combine(
-                    prepared.WorkspacePath,
-                    Environment.GetEnvironmentVariable(variable)!)).Should().BeTrue();
+                Directory.Exists(Environment.GetEnvironmentVariable(variable)!).Should().BeTrue();
         }
         finally
         {

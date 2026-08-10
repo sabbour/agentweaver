@@ -117,9 +117,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     psmisc \
     htop \
     tmux \
-    # Sandboxed command execution (RunCommandTool / SandboxExecutorFactory
-    # requires bwrap on PATH; without it, execution silently falls back to
-    # PassthroughExecutor with no isolation, or fails outright — see #269)
+    # Sandboxed command execution. Kata AgentHost startup probes bwrap and fails closed if the
+    # hardened security context cannot create its per-run mount namespace (#476).
     bubblewrap \
     # Text editors
     vim \
@@ -270,4 +269,3 @@ EXPOSE 8088
 ENV ASPNETCORE_ENVIRONMENT=Production
 
 ENTRYPOINT ["dotnet", "Agentweaver.AgentHost.dll"]
-

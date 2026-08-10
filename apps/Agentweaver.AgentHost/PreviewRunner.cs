@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentTools;
+using Agentweaver.SandboxExec;
 using Agentweaver.SandboxFs;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
@@ -221,13 +222,20 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     private readonly ILogger<PreviewRunner> _logger;
     private readonly TimeProvider _clock;
     private readonly AgentHostRuntimeState? _runtimeState;
+    private readonly ISandboxExecutor? _sandboxExecutor;
 
-    public PreviewRunner(IOptions<PreviewRunnerOptions> options, ILogger<PreviewRunner> logger, TimeProvider? clock = null, AgentHostRuntimeState? runtimeState = null)
+    public PreviewRunner(
+        IOptions<PreviewRunnerOptions> options,
+        ILogger<PreviewRunner> logger,
+        TimeProvider? clock = null,
+        AgentHostRuntimeState? runtimeState = null,
+        ISandboxExecutor? sandboxExecutor = null)
     {
         _options = options.Value;
         _logger = logger;
         _clock = clock ?? TimeProvider.System;
         _runtimeState = runtimeState;
+        _sandboxExecutor = sandboxExecutor;
     }
 
     public async Task<PreviewProcessStartResult> StartPreviewProcessAsync(
@@ -255,6 +263,18 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         var sessionId = Guid.NewGuid().ToString("n")[..12];
         var process = BuildProcess(command, fullCwd);
         ScrubChildEnvironment(process.StartInfo);
+        if (_sandboxExecutor is KataBwrapExecutor kataExecutor)
+        {
+            var sanitizedEnvironment = process.StartInfo.Environment
+                .Where(pair => pair.Value is not null)
+                .ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.Ordinal);
+            process.Dispose();
+            process = kataExecutor.CreateProcess(
+                command,
+                fullCwd,
+                sanitizedEnvironment,
+                networkEnabled: true);
+        }
         var state = new PreviewProcessState(
             sessionId,
             runId ?? string.Empty,
