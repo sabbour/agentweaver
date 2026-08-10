@@ -46,6 +46,22 @@ idle-expires (`Sandbox:Preview:IdleTimeoutMinutes`, default 30) or hits its hard
 (`Sandbox:Preview:MaxLifetimeHours`, default 8); the `SandboxPreviewReaperService` then deletes the
 route, and the next `AgentHostReaperService` sweep — now seeing no active preview — reaps the pod.
 
+### Direct-backed execution subtasks and worker reaper parity
+
+Coordinator-dispatched execution subtasks may report `sandbox.backend=direct` because their tool
+traffic goes directly to the per-run AgentHost. Their preview process is nevertheless backed by the
+same `agent-*` `SandboxClaim` and pod lifecycle described above. Both API and worker roles run
+heartbeat/reaper paths, so both must read the shared `HTTPRoute` state before treating a terminal
+child claim as orphaned.
+
+The worker deployment therefore mirrors the API's `Sandbox__Preview__*` cluster configuration.
+Its sandbox Role has read-only `httproutes` access plus `sandboxclaims: patch,update` and
+`pods: patch`. This lets the worker reaper see an active route, renew its backing claim TTL, and
+re-assert `safe-to-evict=false` instead of deleting the claim. The worker still cannot create,
+modify, or delete preview routes. When the route idle/max lifetime ends, the positive preview check
+becomes false and the next orphan sweep deletes the terminal claim and credential, preserving
+bounded cleanup.
+
 ### Cluster-side claim TTL renewal (issue #560)
 
 Deferring the **API-side** deletes above is necessary but not sufficient. Every `SandboxClaim` is
