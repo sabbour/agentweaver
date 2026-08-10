@@ -22,6 +22,12 @@ public enum WorkflowNodeType
     /// </summary>
     OpenPullRequest,
 
+    /// <summary>
+    /// An agent-backed publishing step that packages or delivers approved output without invoking code-merge
+    /// semantics. It uses the same agent/prompt/charter fields as <see cref="Prompt"/>.
+    /// </summary>
+    Publish,
+
     /// <summary>A gate/condition that routes on an upstream verdict/predicate — FR-016.</summary>
     Check,
 

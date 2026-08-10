@@ -581,6 +581,7 @@ public static class WorkflowDefinitionLoader
             case "peer_review": type = WorkflowNodeType.PeerReview; return true;
             case "build_test": type = WorkflowNodeType.BuildTest; return true;
             case "open_pull_request": type = WorkflowNodeType.OpenPullRequest; return true;
+            case "publish": type = WorkflowNodeType.Publish; return true;
             case "check": type = WorkflowNodeType.Check; return true;
             case "fan_out": type = WorkflowNodeType.FanOut; return true;
             case "fan_in": type = WorkflowNodeType.FanIn; return true;

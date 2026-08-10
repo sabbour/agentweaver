@@ -1,4 +1,5 @@
 import { Document, isMap, isSeq, parseDocument } from 'yaml';
+import workflowNodeTypeContract from '../contracts/workflowNodeTypes.json';
 /**
  * workflowYaml — client-side YAML ↔ execution-graph conversion for the visual
  * workflow editor (Feature 015, US8 / FR-050).
@@ -12,41 +13,29 @@ import { Document, isMap, isSeq, parseDocument } from 'yaml';
  * All authoritative validation/persistence remains server-side; this is only a
  * view-and-edit convenience layer over the canonical YAML text.
  */
+interface WorkflowNodeTypeContractEntry {
+  yamlType: string;
+  apiType: string;
+  label: string;
+  authorable: boolean;
+}
+
+const WORKFLOW_NODE_TYPE_CONTRACT =
+  workflowNodeTypeContract satisfies WorkflowNodeTypeContractEntry[];
+
 /** The canonical node `type` strings the runtime loader accepts (WorkflowDefinitionLoader.TryParseNodeType). */
-export const WORKFLOW_NODE_TYPES = [
-  'prompt',
-  'peer_review',
-  'build_test',
-  'check',
-  'fan_out',
-  'fan_in',
-  'coordinator_composed',
-  'serial',
-  'merge',
-  'scribe',
-  'terminal',
-] as const;
+export const WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPE_CONTRACT.map((entry) => entry.yamlType);
 
 export type WorkflowNodeTypeName = (typeof WORKFLOW_NODE_TYPES)[number];
 
-export const AUTHORABLE_WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPES.filter(
-  (t) => t !== 'merge' && t !== 'scribe',
-);
+export const AUTHORABLE_WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPE_CONTRACT
+  .filter((entry) => entry.authorable)
+  .map((entry) => entry.yamlType);
 
 /** Human-friendly labels for the node-type picker. */
-export const NODE_TYPE_LABELS: Record<string, string> = {
-  prompt: 'Prompt (agent turn)',
-  peer_review: 'Peer review',
-  build_test: 'Build & Test',
-  check: 'Check / gate',
-  fan_out: 'Fan-out',
-  fan_in: 'Fan-in',
-  coordinator_composed: 'Coordinator-composed',
-  serial: 'Serial',
-  merge: 'Merge',
-  scribe: 'Scribe',
-  terminal: 'Terminal',
-};
+export const NODE_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  WORKFLOW_NODE_TYPE_CONTRACT.map((entry) => [entry.yamlType, entry.label]),
+);
 
 export interface WfNode {
   id: string;

@@ -27,7 +27,9 @@ import {
   AddRegular,
   ArrowJoinRegular,
   ArrowSplitRegular,
+  ArrowUploadRegular,
   BeakerRegular,
+  BranchRegular,
   CheckmarkCircleRegular,
   CodeRegular,
   DeleteRegular,
@@ -109,6 +111,8 @@ const TYPE_ROLE: Record<string, string> = {
   prompt: 'agent',
   peer_review: 'review',
   build_test: 'review',
+  open_pull_request: 'action',
+  publish: 'agent',
   check: 'rai',
   fan_out: 'subtask',
   fan_in: 'assembly',
@@ -123,6 +127,8 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
   prompt: 'agent',
   peer_review: 'gate',
   build_test: 'gate',
+  open_pull_request: 'action',
+  publish: 'action',
   check: 'gate',
   fan_out: 'action',
   fan_in: 'action',
@@ -134,7 +140,7 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
 };
 
 // Node types whose `agent` field is meaningful (FR-045 type-aware authoring).
-const AGENT_TYPES = new Set(['prompt', 'peer_review', 'build_test', 'coordinator_composed']);
+const AGENT_TYPES = new Set(['prompt', 'peer_review', 'build_test', 'coordinator_composed', 'publish']);
 const READONLY_NODE_TYPES = new Set(['merge', 'scribe']);
 
 const SPECIAL_GATES = [
@@ -189,7 +195,7 @@ const DEFAULT_BRANCHES: Record<string, string[]> = Object.fromEntries(
 );
 
 // Groups the "Add node" palette buckets primitives into (FR-050 authoring UX, #558).
-type NodePaletteGroup = 'gates' | 'steps' | 'flow';
+type NodePaletteGroup = 'gates' | 'steps' | 'actions' | 'flow';
 
 // Per-primitive palette metadata: a scannable icon + a one-line, plain-language
 // description + the group header it sits under. `build_test` is deliberately absent:
@@ -200,6 +206,8 @@ const NODE_TYPE_META: Record<string, { Icon: ComponentType; description: string;
   prompt: { Icon: SparkleRegular, description: 'A single agent turn that produces work.', group: 'steps' },
   peer_review: { Icon: PeopleTeamRegular, description: "Another agent reviews the previous step's output.", group: 'gates' },
   check: { Icon: CheckmarkCircleRegular, description: 'Generic verdict gate that branches on an outcome.', group: 'gates' },
+  open_pull_request: { Icon: BranchRegular, description: 'Open a pull request on the connected GitHub repository.', group: 'actions' },
+  publish: { Icon: ArrowUploadRegular, description: 'Package or deliver approved output with an agent turn.', group: 'actions' },
   fan_out: { Icon: ArrowSplitRegular, description: 'Split work into parallel subtasks.', group: 'flow' },
   fan_in: { Icon: ArrowJoinRegular, description: 'Gather parallel subtask results back together.', group: 'flow' },
   coordinator_composed: { Icon: FlowchartRegular, description: 'Delegate to a nested coordinator sub-workflow.', group: 'flow' },
@@ -802,6 +810,11 @@ export function VisualWorkflowEditor({
                   </MenuGroup>
                   <MenuDivider />
                   <MenuGroup>
+                    <MenuGroupHeader>Actions</MenuGroupHeader>
+                    {renderPrimitiveItems('actions')}
+                  </MenuGroup>
+                  <MenuDivider />
+                  <MenuGroup>
                     <MenuGroupHeader>Flow control</MenuGroupHeader>
                     {renderPrimitiveItems('flow')}
                   </MenuGroup>
@@ -909,7 +922,7 @@ export function VisualWorkflowEditor({
                   />
                 </Field>
               )}
-              {selectedNode.type === 'prompt' && (
+              {(selectedNode.type === 'prompt' || selectedNode.type === 'publish') && (
                 <Field label="Prompt">
                   <Textarea
                     defaultValue={selectedNode.prompt ?? ''}
