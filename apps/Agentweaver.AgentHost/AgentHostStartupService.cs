@@ -233,7 +233,8 @@ internal sealed class AgentHostStartupService : IHostedService
             apiKey: opts.ApiKey,
             ct: ct,
             userId: configuration.UserId,
-            purpose: configuration.Purpose).ConfigureAwait(false);
+            purpose: configuration.Purpose,
+            apiCapabilityToken: configuration.TurnBearerToken).ConfigureAwait(false);
 
         _ready = true;
         _logger.LogInformation(

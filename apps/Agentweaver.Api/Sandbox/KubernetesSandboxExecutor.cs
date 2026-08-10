@@ -176,6 +176,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private readonly ILogger<KubernetesSandboxExecutor> _logger;
     private readonly IPodNameRegistry? _podRegistry;
     private readonly IAgentHostTurnTokenRegistry? _turnTokenRegistry;
+    private readonly Security.IRunAuthorshipCapabilityStore? _authorshipCapabilityStore;
     // Polls the AgentHost /healthz after bind and before returning the endpoint, closing the
     // A2A cold-start race (pod Running ~20-30s before Kestrel binds :8088). Null in unit tests
     // that only assert the claim body → readiness gate is skipped.
@@ -240,7 +241,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
-        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null)
+        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
+        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
     {
         _client = client;
         _options = options;
@@ -256,6 +258,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _runOptions = runOptions;
         _accessTokenProvider = accessTokenProvider;
         _previewService = previewService;
+        _authorshipCapabilityStore = authorshipCapabilityStore;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -471,6 +474,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             if (claimCreated)
                 _turnTokenRegistry?.RegisterTurnToken(runId, turnToken);
 
+            var activeTurnToken = claimCreated
+                ? turnToken
+                : _turnTokenRegistry?.TryGetTurnToken(runId);
+            if (_authorshipCapabilityStore is not null && !string.IsNullOrWhiteSpace(activeTurnToken))
+            {
+                await _authorshipCapabilityStore.RegisterAsync(
+                    runId, activeTurnToken, DateTimeOffset.UtcNow.AddDays(1), ct).ConfigureAwait(false);
+            }
+
             var podIp = await GetPodIpAsync(podName, ct).ConfigureAwait(false);
 
             var endpointUrl = AgentHostEndpoint.Build(
@@ -550,6 +562,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 await DeleteClaimAsync(claimName).ConfigureAwait(false);
             _podRegistry?.Unregister(runId);
             _turnTokenRegistry?.UnregisterTurnToken(runId);
+            if (_authorshipCapabilityStore is not null)
+            {
+                await _authorshipCapabilityStore.RemoveAsync(runId, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
             // Crash/timeout during launch: delete any credential minted before the failure so it is
             // never left behind (spec-006 decouple-preview, RESIDUAL rev3 gap).
             await DeletePreviewRunnerCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
@@ -594,6 +611,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         await DeleteClaimAsync(claimName, ct).ConfigureAwait(false);
         _podRegistry?.Unregister(runId);
         _turnTokenRegistry?.UnregisterTurnToken(runId);
+        if (_authorshipCapabilityStore is not null)
+            await _authorshipCapabilityStore.RemoveAsync(runId, ct).ConfigureAwait(false);
         await DeletePreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(

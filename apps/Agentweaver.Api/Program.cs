@@ -473,6 +473,7 @@ builder.Services.AddSingleton<IExecutionPodNameStore, RunEventExecutionPodNameSt
 builder.Services.AddSingleton<IPodNameRegistry, PodNameRegistry>();
 builder.Services.AddSingleton<IAgentHostTurnTokenRegistry>(sp =>
     (PodNameRegistry)sp.GetRequiredService<IPodNameRegistry>());
+builder.Services.AddSingleton<IRunAuthorshipCapabilityStore, EfRunAuthorshipCapabilityStore>();
 // Resolves a run's submitting user (from IRunStore) so the pod-per-run executor can inject
 // AgentHost__UserId, scoping the in-pod GitHub Copilot auth to the user's Copilot-entitled token
 // instead of the installation token (which fails the first model turn).

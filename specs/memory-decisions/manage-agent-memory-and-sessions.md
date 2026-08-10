@@ -32,9 +32,12 @@ Agentweaver memory captures durable learnings, patterns, context, and the curren
 - [ ] Current session context can be started, updated, summarized, and ended.
 - [ ] Run completion can add useful learnings without changing the run outcome.
 - [ ] Memory remains scoped to the project and relevant agents.
+- [ ] Agent-authored cross-team memory remains pending until a project owner or verified Coordinator approves it.
+- [ ] Stored memory and session text is delivered to models as escaped, explicitly untrusted data rather than prompt instructions.
 
 ## Notable edge cases
 
 - Empty memory states explain that no entries exist yet.
 - Session updates handle an already-open session predictably.
 - Low-quality or obsolete memory can be updated rather than silently overriding decisions.
+- Existing memory without verifiable provenance fails closed and requires approval before cross-agent use.

@@ -2993,9 +2993,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         await SeedCoordinatorRunAsync(coordinatorRunId);
         await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
-        await SeedInboxEntryAsync(projectKey, "use-event-sourcing", "architectural", "Adopt event sourcing");
-        await SeedInboxEntryAsync(projectKey, "exclude-billing", "scope", "Billing is out of scope");
-        await SeedInboxEntryAsync(projectKey, "cache-gotcha", "learning", "Cache invalidation gotcha");
+        await SeedInboxEntryAsync(projectKey, coordinatorRunId, "use-event-sourcing", "architectural", "Adopt event sourcing");
+        await SeedInboxEntryAsync(projectKey, coordinatorRunId, "exclude-billing", "scope", "Billing is out of scope");
+        await SeedInboxEntryAsync(projectKey, coordinatorRunId, "cache-gotcha", "learning", "Cache invalidation gotcha");
+        await SeedInboxEntryAsync(
+            projectKey, coordinatorRunId, "legacy-forged-coordinator", "architectural",
+            "Unverified coordinator boundary", verifiedRun: false);
         _streamStore.Create(coordinatorRunId, "alice");
 
         var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", projectId);
@@ -3023,6 +3026,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // The learning entry is the per-run Scribe's responsibility, not the coordinator backstop.
         var learning = await db.DecisionInbox.SingleAsync(e => e.Slug == "cache-gotcha");
         learning.Status.Should().Be("pending");
+        var unverified = await db.DecisionInbox.SingleAsync(e => e.Slug == "legacy-forged-coordinator");
+        unverified.Status.Should().Be("pending",
+            "a client-supplied coordinator name without verified run provenance must not auto-promote");
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -3370,7 +3376,13 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _reviewGate.IsArmed(coordinatorRunId).Should().BeTrue("the pipeline should arm the review gate");
     }
 
-    private async Task SeedInboxEntryAsync(string projectId, string slug, string type, string title)
+    private async Task SeedInboxEntryAsync(
+        string projectId,
+        string coordinatorRunId,
+        string slug,
+        string type,
+        string title,
+        bool verifiedRun = true)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -3383,6 +3395,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Title = title,
             Content = $"Content for {slug}",
             Status = "pending",
+            SourceKind = verifiedRun ? MemorySourceKinds.Run : MemorySourceKinds.Legacy,
+            SourceIdentity = verifiedRun ? $"run:{coordinatorRunId}" : null,
+            SourceRunId = verifiedRun ? coordinatorRunId : null,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
