@@ -100,14 +100,14 @@ internal sealed class PreviewRunnerToolProvider(
         yield return AIFunctionFactory.Create(
             async (
                 [Description("Command that starts the preview app/server. Use the project script directly, e.g. npm run dev -- --host 0.0.0.0.")] string command,
-                [Description("Working directory for the command. Defaults to the current run worktree.")] string? cwd = null,
+                [Description("Working directory for the command. Defaults to the current run worktree. Accepts a sandbox-relative path or an absolute path contained by the run worktree.")] string? cwd = null,
                 [Description("Optional assembly work plan id for metadata correlation.")] string? work_plan_id = null,
                 [Description("Optional assembly tree hash for metadata correlation.")] string? tree_hash = null,
                 CancellationToken ct = default) =>
             {
                 var resolvedCwd = string.IsNullOrWhiteSpace(cwd)
                     ? context.WorkingDirectory
-                    : SandboxPathValidator.ValidateAndResolve(cwd, context.WorkingDirectory);
+                    : SandboxPathValidator.ValidateRelativeOrAbsoluteContained(cwd, context.WorkingDirectory);
                 var result = await runner.StartPreviewProcessAsync(
                     command,
                     resolvedCwd,
@@ -246,9 +246,9 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         var sandboxRoot = _runtimeState?.EffectiveWorkingDirectory;
         var fullCwd = string.IsNullOrWhiteSpace(sandboxRoot)
             ? Path.GetFullPath(cwd)
-            : Path.IsPathRooted(cwd)
-                ? SandboxPathValidator.ValidateAbsoluteContained(cwd, sandboxRoot)
-                : SandboxPathValidator.ValidateAndResolve(cwd, sandboxRoot);
+            : SandboxPathValidator.ValidateRelativeOrAbsoluteContained(
+                cwd,
+                SandboxPathValidator.ValidateSandboxRoot(sandboxRoot));
         if (!Directory.Exists(fullCwd))
             throw new DirectoryNotFoundException($"Preview working directory does not exist: {fullCwd}");
 
