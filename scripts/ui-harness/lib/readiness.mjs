@@ -23,10 +23,6 @@ export function classifyAppReadiness({ url = '', domSnapshot = [], target = null
   }
 
   const visible = visibleElements(domSnapshot);
-  if (visible.some((element) => matchesTarget(element, APP_SHELL_TARGET))) {
-    return { state: 'ready', target: APP_SHELL_TARGET };
-  }
-
   const authLoading = visible.find((element) =>
     ['progressbar', 'status'].includes(element.role) && AUTH_LOADING_NAME.test(String(element.name ?? '')));
   if (authLoading) {
@@ -38,8 +34,12 @@ export function classifyAppReadiness({ url = '', domSnapshot = [], target = null
     return { state: 'auth-required', reason: authPrompt.name };
   }
 
-  if (target && visible.some((element) => matchesTarget(element, target))) {
-    return { state: 'ready', target };
+  if (target) {
+    if (visible.some((element) => matchesTarget(element, target))) {
+      return { state: 'ready', target };
+    }
+  } else if (visible.some((element) => matchesTarget(element, APP_SHELL_TARGET))) {
+    return { state: 'ready', target: APP_SHELL_TARGET };
   }
 
   const loading = visible.find((element) =>
@@ -48,7 +48,12 @@ export function classifyAppReadiness({ url = '', domSnapshot = [], target = null
     return { state: 'loading', reason: loading.name ?? loading.role };
   }
 
-  return { state: 'not-ready', reason: 'authenticated app shell or declared readiness target is not visible' };
+  return {
+    state: 'not-ready',
+    reason: target
+      ? 'declared readiness target is not visible'
+      : 'authenticated app shell is not visible',
+  };
 }
 
 function readinessError(result, timeout) {

@@ -64,6 +64,16 @@ test('capture readiness permits a legitimately slow authenticated app load', asy
   assert.deepEqual(result.target, { role: 'main', name: 'Main content' });
 });
 
+test('default capture readiness accepts the authenticated app shell', async () => {
+  const result = classifyAppReadiness({
+    url: 'https://agentweaver.example.staging/projects',
+    domSnapshot: await fixture('app-shell-dom.json'),
+  });
+
+  assert.equal(result.state, 'ready');
+  assert.deepEqual(result.target, { role: 'main', name: 'Main content' });
+});
+
 test('capture readiness treats a visible sign-in prompt as expired authentication', async () => {
   const result = classifyAppReadiness({
     url: 'https://agentweaver.example.staging/projects',
@@ -73,12 +83,44 @@ test('capture readiness treats a visible sign-in prompt as expired authenticatio
   assert.equal(result.state, 'auth-required');
 });
 
-test('capture readiness accepts an explicit semantic target after auth checks', () => {
+test('explicit capture readiness cannot pass merely because the app shell is visible', async () => {
   const result = classifyAppReadiness({
     url: 'https://agentweaver.example.staging/custom',
-    domSnapshot: [{ testId: 'custom-ready', role: 'div', name: null, visible: true }],
+    domSnapshot: await fixture('app-shell-dom.json'),
     target: { testId: 'custom-ready' },
   });
 
+  assert.equal(result.state, 'not-ready');
+  assert.equal(result.reason, 'declared readiness target is not visible');
+});
+
+test('explicit capture readiness waits for its semantic target after the shell appears', async () => {
+  const shell = await fixture('app-shell-dom.json');
+  const target = { testId: 'custom-ready', role: 'div', name: null, visible: true };
+  const page = fakePage([shell, shell, [...shell, target]]);
+
+  const result = await waitForAppReadiness(page, {
+    timeout: 100,
+    pollInterval: 1,
+    target: { testId: 'custom-ready' },
+    snapshotPage: (candidate) => candidate.snapshot(),
+  });
+
   assert.equal(result.state, 'ready');
+  assert.deepEqual(result.target, { testId: 'custom-ready' });
+});
+
+test('authentication loading fails closed even when shell and explicit target are visible', async () => {
+  const domSnapshot = [
+    ...await fixture('app-shell-dom.json'),
+    ...await fixture('auth-loading-dom.json'),
+    { testId: 'custom-ready', role: 'div', name: null, visible: true },
+  ];
+  const result = classifyAppReadiness({
+    url: 'https://agentweaver.example.staging/custom',
+    domSnapshot,
+    target: { testId: 'custom-ready' },
+  });
+
+  assert.equal(result.state, 'auth-loading');
 });

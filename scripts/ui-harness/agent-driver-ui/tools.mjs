@@ -162,13 +162,13 @@ export async function init(args) {
   console.log(JSON.stringify({ sessionId: session.id, prompt: buildDriverTurnPrompt({ personaText: persona.text, observedUi: { message: 'session initialized' } }) }, null, 2));
 }
 
-async function action(args) {
+export async function action(args, { openBrowser = openBrowserSession } = {}) {
   const session = await loadSession(args.session);
   const command = args._[0];
   let runtime;
   let readiness = null;
   try {
-    runtime = await openBrowserSession({
+    runtime = await openBrowser({
       baseUrl: session.baseUrl,
       storageState: session.storageState,
       headless: true,
@@ -224,7 +224,7 @@ async function action(args) {
   }
 }
 
-async function finish(args) {
+export async function finish(args, { write = console.log } = {}) {
   const session = await loadSession(args.session);
   const transcript = {
     metadata: {
@@ -237,8 +237,10 @@ async function finish(args) {
     steps: session.steps,
   };
   const driver = computeDriverP0(session.steps, session.commandFailures);
-  reportDriverP0({ steps: session.steps, commandFailures: session.commandFailures });
-  console.log(JSON.stringify({ driver, normalizedEvidence: adaptUiEvidence(transcript) }, null, 2));
+  reportDriverP0({ steps: session.steps, commandFailures: session.commandFailures }, write);
+  const result = { driver, normalizedEvidence: adaptUiEvidence(transcript) };
+  write(JSON.stringify(result, null, 2));
+  return result;
 }
 
 async function main() {

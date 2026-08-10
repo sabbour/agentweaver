@@ -18,7 +18,7 @@ verified solely from its output.
 From the repository root, install the harness dependencies and run its fixture tests:
 
 ```powershell
-npm --prefix scripts/ui-harness install
+npm ci --prefix scripts/ui-harness
 npm --prefix scripts/ui-harness test
 ```
 
@@ -70,7 +70,8 @@ prompt exits `3` as `AUTH_EXPIRED`, while another page that never becomes usable
 `2` as `APP_NOT_READY`. For a route with a different legitimate semantic readiness
 anchor, declare either `--ready-test-id <test-id>` or both
 `--ready-role <aria-role> --ready-name <exact-accessible-name>`. Override the wait only
-when necessary with `--readiness-timeout <milliseconds>`.
+when necessary with `--readiness-timeout <milliseconds>`. A declared readiness anchor
+is mandatory for that command: the generic app shell cannot satisfy it.
 
 To open an Agentweaver sandbox preview returned by the UI, use the dedicated
 preview action:
