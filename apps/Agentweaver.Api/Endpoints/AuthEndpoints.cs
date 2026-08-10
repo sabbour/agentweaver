@@ -64,6 +64,29 @@ app.MapGet("/api/auth/context", (HttpContext httpContext, IConfiguration configu
     });
 });
 
+// GET /api/auth/session — the web app's post-sign-in identity/session check (AuthGate in
+// apps/web/src/App.tsx). Reaching this handler at all means the caller already presented a
+// valid bearer token (GitHubTokenAuthMiddleware ran first), so `authenticated` is always true
+// here; an absent/invalid token 401s before this route is ever matched, which the web app's
+// apiClient already treats as "signed out". This route is exempt from
+// PlatformRoleAuthorizationMiddleware so a signed-in caller with zero platform roles can still
+// see their own identity/roles (empty) instead of a 403 dead end.
+app.MapGet("/api/auth/session", (HttpContext httpContext, IConfiguration configuration) =>
+{
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    return Results.Ok(new
+    {
+        authenticated = true,
+        auth_mode = AuthModeResolver.ToWireValue(AuthModeResolver.Resolve(configuration)),
+        display_name = caller.DisplayName,
+        email = caller.Email,
+        login = caller.GitHubLogin,
+        avatar_url = (string?)null,
+        entra_object_id = caller.EntraObjectId,
+        platform_roles = caller.PlatformRoles,
+    });
+});
+
 // GET /auth/github/authorize — begin OAuth redirect flow
 app.MapGet("/auth/github/authorize", async (HttpContext httpContext, GitHubOAuthRedirectService oauthService, CancellationToken ct) =>
 {
@@ -151,12 +174,15 @@ app.MapGet("/auth/github/callback", async (
         try
         {
             var linked = await linkedAccountService.CompleteLinkAsync(code, state, ct).ConfigureAwait(false);
+            // Linked-account management lives on the Settings page regardless of which UI
+            // surface (sidebar switcher or Settings itself) started the link flow, so always
+            // land there rather than the app root after a successful link.
             return Results.Redirect(
-                $"{frontendUrl}/?auth=github_linked&login={Uri.EscapeDataString(linked.GitHubLogin)}");
+                $"{frontendUrl}/settings?auth=github_linked&login={Uri.EscapeDataString(linked.GitHubLogin)}");
         }
         catch (Exception ex)
         {
-            return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
+            return Results.Redirect($"{frontendUrl}/settings?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
         }
     }
 
@@ -368,6 +394,8 @@ app.MapGet("/api/auth/github-accounts/accessible-repos", async (
         DefaultBranch = repo.DefaultBranch,
         HtmlUrl = repo.HtmlUrl,
         AccessibleViaLogin = repo.AccessibleViaLogin,
+        AccessibleViaAvatarUrl = repo.AccessibleViaAvatarUrl,
+        AccessibleViaIsDefault = repo.AccessibleViaIsDefault,
         Permission = repo.Permission,
     }));
 });

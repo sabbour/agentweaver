@@ -1095,7 +1095,8 @@ export function ProjectSettingsPage() {
                   <Body as="p" tone="muted">
                     This project was started without a connected GitHub repository, so runs can't
                     open pull requests. Create a new repository (or connect one you own) to enable
-                    publishing. Agentweaver now requires a real linked GitHub identity for every GitHub action; there is no shared fallback token.
+                    publishing. GitHub actions run as your linked GitHub identity, so make sure
+                    you've linked an account first.
                   </Body>
                   <div className={styles.formActions}>
                     <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>

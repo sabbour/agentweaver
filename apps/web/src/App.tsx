@@ -1,4 +1,5 @@
 import { apiClient } from './api/apiClient';
+import { ApiError } from './api/client';
 import { Button, FluentProvider, MessageBar, MessageBarBody, Spinner, makeStyles, tokens } from '@fluentui/react-components';
 import { agentweaverLightTheme } from './theme';
 import { AppShell } from './components/shell/AppShell';
@@ -53,7 +54,7 @@ function Shell({ githubLinkRequired }: { githubLinkRequired: boolean }) {
   const banner = githubLinkRequired ? (
     <MessageBar intent="warning">
       <MessageBarBody>
-        You are signed in to Agentweaver, but no GitHub account is linked yet. Link one in Account settings before importing repositories, connecting project repositories, or running GitHub/Copilot actions. Agentweaver no longer uses a shared fallback GitHub token.
+        You are signed in to Agentweaver, but no GitHub account is linked yet. Link one in Account settings before importing repositories, connecting project repositories, or running GitHub/Copilot actions.
       </MessageBarBody>
       <Button appearance="secondary" as="a" href="/settings">
         Open account settings
@@ -110,11 +111,51 @@ function LegacyProjectSessionsRedirect() {
   return <Navigate to={`/sessions${search}`} replace />;
 }
 
+/**
+ * Turns a session-check failure into a message the user can actually act on, instead of a silent
+ * "you're signed out" with no explanation. A missing/invalid bearer token (401) is the normal,
+ * expected "not signed in yet" case and stays quiet; everything else (a platform-role denial, a
+ * 404 from a misconfigured deployment, a 5xx, a network failure) is surfaced verbatim so the
+ * failure is diagnosable from the UI alone.
+ */
+function describeSessionCheckError(err: unknown): string | null {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return null;
+    const payload = err.payload as
+      | {
+          error?: string;
+          entra_object_id?: string;
+          entra_tenant_id?: string;
+          entra_client_id?: string;
+          roles_found_on_token?: string[];
+        }
+      | null;
+    if (payload?.error) {
+      const details: string[] = [];
+      if (payload.entra_client_id) details.push(`app ${payload.entra_client_id}`);
+      if (payload.entra_tenant_id) details.push(`tenant ${payload.entra_tenant_id}`);
+      if (payload.entra_object_id) details.push(`user ${payload.entra_object_id}`);
+      if (payload.roles_found_on_token) {
+        details.push(
+          payload.roles_found_on_token.length > 0
+            ? `roles found: ${payload.roles_found_on_token.join(', ')}`
+            : 'no roles found on token',
+        );
+      }
+      return details.length > 0 ? `${payload.error} (${details.join(', ')})` : payload.error;
+    }
+    return `Sign-in check failed (HTTP ${err.status}). ${err.body || 'No further details from the server.'}`;
+  }
+  if (err instanceof Error) return `Sign-in check failed: ${err.message}`;
+  return 'Sign-in check failed for an unknown reason.';
+}
+
 function AuthGate() {
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode | undefined>(undefined);
   const [githubLinkRequired, setGitHubLinkRequired] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,6 +167,7 @@ function AuthGate() {
         setAuthMode(mode);
         const session = await apiClient.getAuthSession();
         if (cancelled) return;
+        setSessionError(null);
         if (!session.authenticated) {
           clearSessionAuth();
           setSignedIn(false);
@@ -157,10 +199,11 @@ function AuthGate() {
         }
         setAuthChecked(true);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (cancelled) return;
         clearSessionAuth();
         setSignedIn(false);
+        setSessionError(describeSessionCheckError(err));
         setAuthChecked(true);
       });
     return () => { cancelled = true; };
@@ -176,7 +219,7 @@ function AuthGate() {
   }
 
   if (!signedIn) {
-    return <SignInPage authMode={authMode} />;
+    return <SignInPage authMode={authMode} sessionError={sessionError} />;
   }
 
   return <Shell githubLinkRequired={githubLinkRequired} />;

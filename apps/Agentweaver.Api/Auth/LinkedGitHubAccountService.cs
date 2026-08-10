@@ -17,7 +17,9 @@ public sealed record AccessibleGitHubRepository(
     string DefaultBranch,
     string? HtmlUrl,
     string AccessibleViaLogin,
-    string Permission);
+    string Permission,
+    string? AccessibleViaAvatarUrl,
+    bool AccessibleViaIsDefault);
 
 public sealed class LinkedGitHubAccountService(
     MemoryDbContext db,
@@ -44,7 +46,10 @@ public sealed class LinkedGitHubAccountService(
             ExpiresAt = DateTimeOffset.UtcNow.Add(LinkStateLifetime),
         });
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        return oauthService.CreateAuthorizationUrl(state);
+        // Always force GitHub's account chooser for the link flow: the caller is explicitly asking to
+        // add a DIFFERENT GitHub identity, and GitHub would otherwise silently re-authorize the
+        // account already signed in to github.com (returning the identity that is already linked).
+        return oauthService.CreateAuthorizationUrl(state, forceAccountSelection: true);
     }
 
     public async Task<bool> IsPendingStateAsync(string state, CancellationToken ct = default)
@@ -167,7 +172,9 @@ public sealed class LinkedGitHubAccountService(
                     repo.DefaultBranch ?? "main",
                     repo.HtmlUrl,
                     link.GitHubLogin,
-                    ResolvePermission(repo.Permissions))));
+                    ResolvePermission(repo.Permissions),
+                    link.AvatarUrl,
+                    link.IsDefault)));
 
                 if (repos.Length < perPage)
                     break;

@@ -169,7 +169,7 @@ The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 
-Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. AgentHost user tokens no longer use CSI projection, per-run `SecretProviderClass` objects, or cloned templates/warm pools. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`). At run launch, `KubernetesSandboxExecutor` claims a pod from the shared `agentweaver-agent-host` pool, calls `POST /configure` with the run owner's secret name, and the pod's `KeyVaultUserTokenProvider` fetches only that secret through `SecretClient` + `DefaultAzureCredential`, caching it for the pod lifetime. `AgentHostUserTokenSyncService` and per-run SPC cleanup have both been removed.
+Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`). At run launch, `KubernetesSandboxExecutor` claims a pod from the shared `agentweaver-agent-host` pool, calls `POST /configure` with the run owner's secret name, and the pod's `KeyVaultUserTokenProvider` fetches only that secret through `SecretClient` + `DefaultAzureCredential`, caching it for the pod lifetime.
 
 ---
 

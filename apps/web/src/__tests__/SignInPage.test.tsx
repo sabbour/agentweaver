@@ -15,7 +15,7 @@ describe('SignInPage', () => {
 
     expect(screen.getByRole('button', { name: 'Sign in with Microsoft Entra ID' })).toBeDefined();
     expect(screen.getByText(/link at least one GitHub account/i)).toBeDefined();
-    expect(screen.getByText(/no longer use any shared fallback token/i)).toBeDefined();
+    expect(screen.getByText(/link a github account whenever you're ready/i)).toBeDefined();
   });
 
   it('renders GitHub sign-in copy for GitHub-mode deployments', () => {
@@ -27,5 +27,16 @@ describe('SignInPage', () => {
 
     expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).toBeDefined();
     expect(screen.queryByText(/link at least one GitHub account/i)).toBeNull();
+  });
+
+  it('surfaces a session-check error instead of failing silently', () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <SignInPage authMode="entra" sessionError="Access denied. A recognized Agentweaver platform role is required. (no roles found on token)" />
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.getByText(/couldn't check your sign-in status/i)).toBeDefined();
+    expect(screen.getByText(/no roles found on token/i)).toBeDefined();
   });
 });

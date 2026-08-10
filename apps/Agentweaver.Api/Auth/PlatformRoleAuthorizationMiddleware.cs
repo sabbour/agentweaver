@@ -10,6 +10,7 @@ public sealed class PlatformRoleAuthorizationMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly IAuthorizationService _authorizationService;
+    private readonly IConfiguration _configuration;
 
     private static readonly string[] ExemptPrefixes =
     [
@@ -28,6 +29,10 @@ public sealed class PlatformRoleAuthorizationMiddleware
         // credential) and runs BEFORE any platform role exists, so it must be exempt here exactly as
         // it is in the bearer-token auth middleware; otherwise Entra web sign-in cannot complete.
         "/api/auth/session/exchange",
+        // A signed-in caller with zero platform roles must still be able to read their own
+        // identity/roles back — otherwise they hit a 403 brick wall with no way to see what
+        // Entra actually sent, and no way to self-diagnose or report the right details to an admin.
+        "/api/auth/session",
         "/oauth",
         "/.well-known",
         "/openapi",
@@ -36,10 +41,12 @@ public sealed class PlatformRoleAuthorizationMiddleware
 
     public PlatformRoleAuthorizationMiddleware(
         RequestDelegate next,
-        IAuthorizationService authorizationService)
+        IAuthorizationService authorizationService,
+        IConfiguration configuration)
     {
         _next = next;
         _authorizationService = authorizationService;
+        _configuration = configuration;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -59,9 +66,21 @@ public sealed class PlatformRoleAuthorizationMiddleware
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             context.Response.ContentType = "application/json";
+            var rawRoles = context.User.FindAll("raw_role").Select(c => c.Value).ToArray();
+            var clientId = _configuration["Auth:Entra:ClientId"];
+            var tenantId = context.User.FindFirst("tid")?.Value ?? _configuration["Auth:Entra:TenantId"];
             await context.Response.WriteAsJsonAsync(new
             {
-                error = "Access denied. A recognized Agentweaver platform role is required."
+                error = "Access denied. A recognized Agentweaver platform role is required.",
+                entra_object_id = context.User.FindFirst("oid")?.Value,
+                entra_tenant_id = tenantId,
+                entra_client_id = clientId,
+                // What Microsoft Entra actually put on the token's `roles` claim (may be empty if
+                // no App Role assignment exists at all, or non-empty-but-unrecognized if the wrong
+                // role name was assigned). Empty means: grant an App Role assignment on this app
+                // registration/service principal for this user or one of their groups.
+                roles_found_on_token = rawRoles,
+                recognized_platform_roles = PlatformRoles.All,
             }).ConfigureAwait(false);
             return;
         }

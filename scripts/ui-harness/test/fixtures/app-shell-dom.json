@@ -1,0 +1,16 @@
+[
+  {
+    "testId": null,
+    "role": "main",
+    "name": "Main content",
+    "title": null,
+    "visible": true
+  },
+  {
+    "testId": "app-navigation-menu",
+    "role": "div",
+    "name": "Overview Projects",
+    "title": null,
+    "visible": true
+  }
+]

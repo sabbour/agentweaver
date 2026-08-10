@@ -457,12 +457,13 @@ test('capture script auto-clicks concurrent approval cards from their own appear
   assert.ok(secondCard.clickedAtMs[0] > firstCard.clickedAtMs[0], 'expected the later-appearing card to be clicked after the first card');
 });
 
-test('capture script supports eval, waitFor, forced clicks and selector-scoped press', () => {
+test('capture script supports eval, drag, waitFor, forced clicks and selector-scoped press', () => {
   const src = renderCaptureScript({
     startUrl: 'https://x/y',
     videoPath: 'a.webm',
     steps: [
       { type: 'eval', expression: "document.querySelector('.dup')?.remove();" },
+      { type: 'drag', selector: "page.getByTestId('task-card-1')", target: "page.getByTestId('column-ready')", after: 500 },
       { type: 'waitFor', selector: "page.getByTestId('dashboard-chart')", timeout: 45000 },
       { type: 'click', selector: "page.getByRole('button', { name: 'Approve' })", scale: 1, force: true },
       { type: 'press', selector: "page.getByRole('textbox')", key: 'Enter', after: 300 },
@@ -472,6 +473,9 @@ test('capture script supports eval, waitFor, forced clicks and selector-scoped p
   assert.ok(src.includes("document.querySelector('.dup')?.remove();"), 'expected the eval expression to be emitted');
   assert.ok(src.includes("__demoActivityMark?.('eval')"), 'expected an eval activity mark');
   assert.ok(src.includes('await page.evaluate(async () =>'), 'expected eval to be wrapped in an async evaluate so snippets may await');
+  // dragTo uses the application's actual HTML5 drag handlers rather than recreating state.
+  assert.ok(src.includes(".dragTo((page.getByTestId('column-ready')))"), 'expected a real locator drag to the Ready column');
+  assert.ok(src.includes("__demoActivityMark?.('drag')"), 'expected the drag to be retained as capture activity');
   // waitFor waits on a real element becoming visible (replaces fixed short timeouts)
   assert.ok(src.includes(".waitFor({ state: 'visible', timeout: 45000 })"), 'expected a visible waitFor with the given timeout');
   // forced clicks pass { force: true } through to locator.click
