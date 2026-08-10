@@ -10,9 +10,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPersona } from '../../persona-briefs/index.mjs';
 import { adaptUiEvidence } from '../../harness-judge/adapters/ui.mjs';
-import { ensureAuthDirectory, DEFAULT_STORAGE_STATE, saveSessionStorageSeed } from '../lib/auth.mjs';
-import { attachPageCapture, captureTurn } from '../lib/evidence.mjs';
+import { ensureAuthDirectory, DEFAULT_STORAGE_STATE, loadStorageState, saveSessionStorageSeed } from '../lib/auth.mjs';
+import { attachPageCapture, captureTurn, redact } from '../lib/evidence.mjs';
 import { guardedUrl, keyedLocator, openBrowserSession } from '../lib/browser.mjs';
+import { DEFAULT_READINESS_TIMEOUT_MS, waitForAppReadiness } from '../lib/readiness.mjs';
 import { computeDriverP0, reportDriverP0 } from '../lib/reporter-ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -65,6 +66,33 @@ async function loadSession(id) {
 async function saveSession(session) {
   await mkdir(SESSIONS, { recursive: true });
   await writeFile(sessionPath(session.id), JSON.stringify(session, null, 2), 'utf8');
+}
+
+function readinessTarget(args) {
+  if (args['ready-test-id']) return { testId: args['ready-test-id'] };
+  if (args['ready-role'] || args['ready-name']) {
+    if (!args['ready-role'] || !args['ready-name']) {
+      throw new Error('--ready-role and --ready-name must be provided together');
+    }
+    return { role: args['ready-role'], name: args['ready-name'] };
+  }
+  return null;
+}
+
+function readinessOptions(args) {
+  const timeout = Number(args['readiness-timeout'] ?? DEFAULT_READINESS_TIMEOUT_MS);
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    throw new Error('--readiness-timeout must be a non-negative number');
+  }
+  return {
+    timeout,
+    target: readinessTarget(args),
+  };
+}
+
+export async function navigateForAppEvidence(runtime, destination, options) {
+  await runtime.goto(destination);
+  return waitForAppReadiness(runtime.page, options);
 }
 
 export function buildDriverTurnPrompt({ personaText, observedUi }) {
@@ -120,31 +148,37 @@ async function login(args) {
   }
 }
 
-async function init(args) {
+export async function init(args) {
   if (!args.persona || !args['base-url']) throw new Error('--persona and --base-url are required');
+  const storageState = args['storage-state'] ?? DEFAULT_STORAGE_STATE;
+  await loadStorageState(storageState);
   const persona = await loadPersona(args.persona, 'ui');
   const baseUrl = guardedUrl(args['base-url'], '/', options(args)).toString();
   const session = {
     id: randomUUID(), baseUrl, persona: { id: persona.id, name: persona.name, coreVersion: persona.version, adapterVersion: persona.adapter.version, text: persona.text },
-    storageState: args['storage-state'] ?? DEFAULT_STORAGE_STATE, steps: [], createdAt: new Date().toISOString(),
+    storageState, steps: [], commandFailures: [], createdAt: new Date().toISOString(),
   };
   await saveSession(session);
   console.log(JSON.stringify({ sessionId: session.id, prompt: buildDriverTurnPrompt({ personaText: persona.text, observedUi: { message: 'session initialized' } }) }, null, 2));
 }
 
-async function action(args) {
+export async function action(args, { openBrowser = openBrowserSession } = {}) {
   const session = await loadSession(args.session);
   const command = args._[0];
-  const runtime = await openBrowserSession({
-    baseUrl: session.baseUrl,
-    storageState: session.storageState,
-    headless: true,
-    allowAgentweaverPreviewNavigation: command === 'open-preview',
-    ...options(args),
-  });
-  const capture = attachPageCapture(runtime.page);
+  let runtime;
+  let readiness = null;
   try {
-    if (command === 'goto') await runtime.goto(args.path ?? '/');
+    runtime = await openBrowser({
+      baseUrl: session.baseUrl,
+      storageState: session.storageState,
+      headless: true,
+      allowAgentweaverPreviewNavigation: command === 'open-preview',
+      ...options(args),
+    });
+    const capture = attachPageCapture(runtime.page);
+    if (command === 'goto') {
+      readiness = await navigateForAppEvidence(runtime, args.path ?? '/', readinessOptions(args));
+    }
     else if (command === 'open-preview') {
       if (!args.url) throw new Error('--url is required for open-preview');
       await runtime.gotoPreview(args.url);
@@ -160,21 +194,37 @@ async function action(args) {
       });
       await keyedLocator(runtime.page, { testId: args['test-id'], role: args.role, name: args.name }).click({ timeout: Number(args.timeout ?? 10_000) });
     }
-    else if (command === 'capture') await runtime.goto(args.path ?? '/');
+    else if (command === 'capture') {
+      readiness = await navigateForAppEvidence(runtime, args.path ?? '/', readinessOptions(args));
+    }
     else throw new Error(`unsupported command "${command}"`);
+    const eventId = session.steps.length + (session.commandFailures?.length ?? 0) + 1;
     const step = await captureTurn({
-      page: runtime.page, capture, directory: path.join(ROOT, 'transcripts-ui', session.id), id: session.steps.length + 1,
-      intent: args.thought ?? null, action: command, target: { testId: args['test-id'], role: args.role, name: args.name },
+      page: runtime.page, capture, directory: path.join(ROOT, 'transcripts-ui', session.id), id: eventId,
+      intent: args.thought ?? null, action: command, target: { testId: args['test-id'], role: args.role, name: args.name }, readiness,
     });
     session.steps.push(step);
     await saveSession(session);
     console.log(JSON.stringify(step, null, 2));
+  } catch (error) {
+    session.commandFailures ??= [];
+    session.commandFailures.push(redact({
+      id: session.steps.length + session.commandFailures.length + 1,
+      at: new Date().toISOString(),
+      action: command,
+      target: { testId: args['test-id'], role: args.role, name: args.name },
+      code: error.code ?? 'COMMAND_FAILED',
+      message: String(error.message ?? error),
+      readiness: error.readiness ?? null,
+    }));
+    await saveSession(session);
+    throw error;
   } finally {
-    await runtime.close();
+    if (runtime) await runtime.close();
   }
 }
 
-async function finish(args) {
+export async function finish(args, { write = console.log } = {}) {
   const session = await loadSession(args.session);
   const transcript = {
     metadata: {
@@ -186,9 +236,11 @@ async function finish(args) {
     persona: { name: session.persona.name, briefText: session.persona.text, surfaceAdapterText: session.persona.text },
     steps: session.steps,
   };
-  const driver = computeDriverP0(session.steps);
-  reportDriverP0({ steps: session.steps });
-  console.log(JSON.stringify({ driver, normalizedEvidence: adaptUiEvidence(transcript) }, null, 2));
+  const driver = computeDriverP0(session.steps, session.commandFailures);
+  reportDriverP0({ steps: session.steps, commandFailures: session.commandFailures }, write);
+  const result = { driver, normalizedEvidence: adaptUiEvidence(transcript) };
+  write(JSON.stringify(result, null, 2));
+  return result;
 }
 
 async function main() {
