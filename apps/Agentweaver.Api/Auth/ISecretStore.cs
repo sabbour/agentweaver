@@ -54,6 +54,8 @@ public interface ISecretStore
     /// Creates or replaces a secret.  When <paramref name="etag"/> is supplied the write is
     /// conditional: if the stored ETag no longer matches, <see cref="SecretPreconditionFailedException"/>
     /// is thrown so the caller can re-read and decide whether to retry.
+    /// Implementations with recoverable deletion must make a previously deleted key writable again
+    /// rather than exposing provider-specific tombstone conflicts to callers.
     /// Returns the ETag of the newly stored value.
     /// </summary>
     Task<string> SetSecretAsync(string key, string value, string? etag = null, CancellationToken ct = default);
