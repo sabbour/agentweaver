@@ -199,7 +199,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // whenever a pre-resolved token arrives) — producing GitHubCopilotUnauthorizedException at
     // /configure. Routing through the same GetValidAccessTokenAsync used by GitHubCopilotClientFactory
     // ensures a near-expiry token is transparently rotated before being handed to a newly-launched pod.
-    // Null in unit tests → falls back to the raw (non-refreshing) token store read.
+    // Null in unit tests → falls back to the raw (non-refreshing) token store read. When present,
+    // it is authoritative: a null/failed refresh must never fall back to the rejected raw token.
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     // Replica-safe run secret store used to persist the per-run preview-runner credential so a
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
@@ -540,7 +541,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     : (null, null);
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
                     podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
-                    await ResolveGitHubAccessTokenAsync(submittingUser, ct).ConfigureAwait(false),
+                    effectiveScope,
+                    await ResolveGitHubAccessTokenAsync(effectiveScope, submittingUser, ct).ConfigureAwait(false),
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     configProjectId,
@@ -855,10 +857,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// Never throws — a lookup failure degrades gracefully: the pod will attempt the KV fetch itself
     /// (which may fail) rather than causing a hard launch failure here.
     /// </summary>
-    private async Task<string?> ResolveGitHubAccessTokenAsync(string userId, CancellationToken ct)
+    private async Task<string?> ResolveGitHubAccessTokenAsync(
+        GitHubTokenScope scope,
+        string userId,
+        CancellationToken ct)
     {
-        var scope = GitHubTokenScope.ForUser(userId);
-
         // Prefer the refresh-aware provider (issue #523): a fresh AgentHost pod launched late in a
         // long-running assembly (e.g. the Build & Test gate, well after the run's earlier subtask
         // stages) can be handed a near-expiry or already-expired access token if we only ever read
@@ -872,15 +875,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             {
                 var refreshed = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct)
                     .ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(refreshed))
-                    return refreshed;
+                if (string.IsNullOrEmpty(refreshed))
+                {
+                    _logger.LogWarning(
+                        "KubernetesSandboxExecutor: refresh-aware GitHub token provider returned no valid credential " +
+                        "for {UserId} (scope {Scope}); refusing raw-token fallback.",
+                        userId,
+                        scope.Key);
+                }
+                return refreshed;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex,
                     "KubernetesSandboxExecutor: failed to resolve/refresh GitHub token for {UserId} via " +
-                    "IGitHubAccessTokenProvider — falling back to raw token store read.",
-                    userId);
+                    "IGitHubAccessTokenProvider (scope {Scope}); refusing raw-token fallback.",
+                    userId,
+                    scope.Key);
+                return null;
             }
         }
 
@@ -913,7 +925,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task<string?> CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
-        string kvUserSecretName, string? gitHubAccessToken, string? sharedWorkingDirectory,
+        string kvUserSecretName, GitHubTokenScope tokenScope, string? gitHubAccessToken,
+        string? sharedWorkingDirectory,
         AgentHostLaunchContext launchContext,
         string? projectId,
         string? agentName,
@@ -995,6 +1008,39 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             catch (JsonException)
             {
                 // Plain-text legacy errors keep the generic typed reason.
+            }
+
+            if (string.Equals(
+                    reason,
+                    "agenthost_configure_copilot_unauthorized",
+                    StringComparison.Ordinal) &&
+                _accessTokenProvider is not null)
+            {
+                var refreshed = await _accessTokenProvider
+                    .RefreshAfterUnauthorizedAsync(tokenScope, gitHubAccessToken, ct)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(refreshed) &&
+                    !string.Equals(refreshed, gitHubAccessToken, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning(
+                        "KubernetesSandboxExecutor: AgentHost /configure rejected the Copilot credential for run {RunId}; " +
+                        "scope {Scope} was refreshed and the pod must be recreated (recoveryAttempt=1, maxRecoveryAttempts=1).",
+                        runId,
+                        tokenScope.Key);
+                    throw new AgentHostConfigureException(
+                        "agenthost_configure_copilot_token_refreshed",
+                        $"AgentHost /configure rejected the Copilot credential for run '{runId}'. " +
+                        "The credential was refreshed; recreate the one-time-configured pod and retry once.",
+                        (int)response.StatusCode,
+                        retryable: true,
+                        recoveryAction: "recreate_pod_with_refreshed_credential");
+                }
+
+                _logger.LogWarning(
+                    "KubernetesSandboxExecutor: AgentHost /configure rejected the Copilot credential for run {RunId}; " +
+                    "scope {Scope} could not produce a different refreshed credential, so the failure is not retryable.",
+                    runId,
+                    tokenScope.Key);
             }
 
             throw new AgentHostConfigureException(

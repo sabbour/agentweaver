@@ -288,6 +288,21 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     {
         throw;
     }
+    catch (GitHubCopilotUnauthorizedException ex)
+    {
+        var logger = ctx.RequestServices.GetRequiredService<ILogger<AgentHostRuntimeState>>();
+        logger.LogWarning(
+            ex,
+            "AgentHost /configure: GitHub Copilot rejected the run credential for run {RunId}; the API may refresh and recreate this pod once.",
+            configuration.RunId);
+        return Results.Json(
+            new
+            {
+                error = "agenthost_configure_copilot_unauthorized",
+                message = ex.Message,
+            },
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
     catch (Exception ex)
     {
         // Any exception here that is NOT an AgentHostConfigurationException previously escaped this

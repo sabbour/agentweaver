@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Http;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Endpoints;
@@ -2448,6 +2449,64 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunBuildTestAsync_RefreshedConfigureCredential_RecreatesPodOnceThenStopsOnPersistentAuth()
+    {
+        var repoPath = CreateGitRepository();
+        var worktreesBase = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-auth-{Guid.NewGuid():N}");
+        var lifecycle = new ConfigureRecoveryPodLifecycle();
+
+        try
+        {
+            var worktreeManager = new WorktreeManager(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Worktrees:BasePath"] = worktreesBase,
+                    })
+                    .Build(),
+                NullLogger<WorktreeManager>.Instance);
+            var pipeline = new CollectiveAssemblyPipeline(
+                worktreeManager,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                NullLoggerFactory.Instance,
+                lifecycle,
+                Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }));
+
+            var act = () => pipeline.RunBuildTestAsync(
+                new CollectiveBuildTestRequest(
+                    RunId.New().ToString(),
+                    ProjectId: null,
+                    repoPath,
+                    "main",
+                    "tree",
+                    "diff",
+                    "alice"),
+                CancellationToken.None);
+
+            var ex = await act.Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
+            ex.Which.Reason.Should().Be("agenthost_configure_copilot_unauthorized");
+            ex.Which.Retryable.Should().BeFalse(
+                "the bounded credential recovery must not mask persistent authorization failure");
+            lifecycle.LaunchCalls.Should().Be(2,
+                "Build & Test retries only after a credential was actually rotated");
+            lifecycle.ReleaseCalls.Should().Be(1,
+                "the one-time-configured failed pod must be released before the retry");
+        }
+        finally
+        {
+            TryDeleteDirectory(repoPath);
+            TryDeleteDirectory(worktreesBase);
+        }
+    }
+
+    [Fact]
     public async Task RunBuildTestAsync_total_timeout_releases_retained_claim()
     {
         var repoPath = CreateGitRepository();
@@ -3822,6 +3881,40 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             return "";
+        }
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            LaunchAgentHostPodAsync(runId, ct);
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            ReleaseCalls++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ConfigureRecoveryPodLifecycle : IAgentHostPodLifecycle
+    {
+        public int LaunchCalls { get; private set; }
+        public int ReleaseCalls { get; private set; }
+
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            LaunchCalls++;
+            return LaunchCalls == 1
+                ? Task.FromException<string>(new AgentHostConfigureException(
+                    "agenthost_configure_copilot_token_refreshed",
+                    "credential rotated",
+                    StatusCodes.Status401Unauthorized,
+                    retryable: true,
+                    recoveryAction: "recreate_pod_with_refreshed_credential"))
+                : Task.FromException<string>(new AgentHostConfigureException(
+                    "agenthost_configure_copilot_unauthorized",
+                    "persistent authorization failure",
+                    StatusCodes.Status401Unauthorized));
         }
 
         public Task<string> LaunchAgentHostPodAsync(

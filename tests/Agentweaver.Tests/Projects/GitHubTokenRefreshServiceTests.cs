@@ -173,6 +173,41 @@ public sealed class GitHubTokenRefreshServiceTests
             "the replica that lost the lease must re-read the winner's rotated token");
     }
 
+    [Fact]
+    public async Task ExplicitlyRejectedValidToken_ForcesSingleRefreshAndPersistsRotation()
+    {
+        var store = new InMemoryGitHubTokenStore();
+        var scope = GitHubTokenScope.ForUser("alice");
+        await store.SetAsync(scope, new GitHubToken(
+            "ghu_rejected", "ghr_refresh", DateTimeOffset.UtcNow.AddHours(4), "alice", null, ["repo"]));
+
+        var (svc, handler) = BuildService(store, RefreshSuccessJson);
+
+        var token = await svc.RefreshAfterUnauthorizedAsync(scope, "ghu_rejected");
+
+        token.Should().Be("ghu_new_access");
+        handler.CallCount.Should().Be(1,
+            "an explicit downstream 401 may force one refresh even before the expiry window");
+        (await store.GetTokenAsync(scope))!.AccessToken.Should().Be("ghu_new_access");
+    }
+
+    [Fact]
+    public async Task ExplicitlyRejectedToken_AlreadyRotatedByAnotherCaller_ReusesWinnerWithoutRefresh()
+    {
+        var store = new InMemoryGitHubTokenStore();
+        var scope = GitHubTokenScope.ForUser("alice");
+        await store.SetAsync(scope, new GitHubToken(
+            "ghu_rotated", "ghr_rotated", DateTimeOffset.UtcNow.AddHours(4), "alice", null, ["repo"]));
+
+        var (svc, handler) = BuildService(store, RefreshSuccessJson);
+
+        var token = await svc.RefreshAfterUnauthorizedAsync(scope, "ghu_rejected");
+
+        token.Should().Be("ghu_rotated");
+        handler.CallCount.Should().Be(0,
+            "a token changed by another replica must not be rotated again");
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
