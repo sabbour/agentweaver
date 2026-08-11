@@ -121,8 +121,8 @@ builder.Services.AddAgentHostRuntime();
 
 // The production AgentHost runs inside a per-run Kata VM, but the shared /workspace PVC is outside
 // the VM image and is visible to every pod. Add a second, process-level mount namespace that binds
-// only the current run roots. The executor uses a synthetic /proc rather than mounting procfs, which
-// works under the hardened pod security context and blocks /proc/<pid>/root namespace escapes.
+// only the current run roots. The executor mounts a private procfs for its unshared PID namespace,
+// so CoreCLR works normally without exposing AgentHost or sibling process roots.
 var useKataPassthrough =
     SandboxExecutorFactory.IsInCluster &&
     string.Equals(

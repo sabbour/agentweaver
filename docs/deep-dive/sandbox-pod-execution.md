@@ -192,8 +192,8 @@ mounts after adoption. `KataBwrapExecutor` therefore applies the per-run filesys
   performs the durable commit after the turn;
 - the PVC root and sibling worktrees are absent, so absolute paths, variable indirection, `..`,
   symlinks, and direct Python/.NET file APIs cannot resolve them;
-- `/proc` is a synthetic minimal tmpfs, preventing `/proc/<pid>/root` from recovering the parent
-  AgentHost mount namespace;
+- `/proc` is a real procfs mounted inside the unshared child PID namespace, so CoreCLR process
+  discovery works while the parent AgentHost process and its mount namespace remain invisible;
 - the child environment is cleared and rebuilt from a minimal baseline plus explicitly supplied
   values; and
 - AgentHost startup executes a real bwrap capability probe and refuses readiness if isolation cannot

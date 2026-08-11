@@ -31,6 +31,7 @@ internal sealed class PodLocalWorkspaceManager
     private readonly KataBwrapExecutor? _kataExecutor;
     private PreparedWorkspace? _preparedWorkspace;
     private string? _agentScratchPath;
+    private string? _fallbackWorkspacePath;
 
     public PodLocalWorkspaceManager(
         IOptions<AgentHostOptions> options,
@@ -189,6 +190,25 @@ internal sealed class PodLocalWorkspaceManager
 
         _agentScratchPath = scratchPath;
         return scratchPath;
+    }
+
+    public string PrepareFallbackWorkspaceDirectory(string runId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        if (_fallbackWorkspacePath is not null)
+        {
+            throw new AgentHostConfigurationException(
+                "fallback_workspace_already_prepared",
+                "A pod-private fallback workspace has already been prepared for this AgentHost.");
+        }
+
+        var path = Path.Combine(
+            Path.GetFullPath(_options.ExecutionScratchRoot),
+            "fallback-workspace",
+            PodLocalExecutionWorkspace.GetRunHash(runId));
+        Directory.CreateDirectory(path);
+        _fallbackWorkspacePath = path;
+        return path;
     }
 
     /// <summary>
@@ -380,6 +400,11 @@ internal sealed class PodLocalWorkspaceManager
         _agentScratchPath = null;
         if (!string.IsNullOrWhiteSpace(agentScratchPath))
             TryDeleteDirectory(agentScratchPath);
+
+        var fallbackWorkspacePath = _fallbackWorkspacePath;
+        _fallbackWorkspacePath = null;
+        if (!string.IsNullOrWhiteSpace(fallbackWorkspacePath))
+            TryDeleteDirectory(fallbackWorkspacePath);
         return Task.CompletedTask;
     }
 

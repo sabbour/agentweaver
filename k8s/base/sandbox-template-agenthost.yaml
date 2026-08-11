@@ -140,8 +140,8 @@ spec:
               value: "/workspace"
             # Kata isolates pods from the node. A nested bubblewrap mount namespace additionally
             # hides the shared /workspace PVC root from shell and preview child processes (#476).
-            # The executor mounts a synthetic minimal /proc, so /proc/<pid>/root cannot recover the
-            # AgentHost parent namespace and the hardened pod securityContext stays unchanged.
+            # The executor mounts procfs inside its unshared PID namespace, so .NET process discovery
+            # works while the AgentHost parent namespace remains invisible.
             - name: AgentHost__SandboxMode
               value: "kata"
             # In-cluster AgentweaverMCP /mcp URL, required unconditionally at pod startup

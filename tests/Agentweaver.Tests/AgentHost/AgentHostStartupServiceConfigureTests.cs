@@ -155,6 +155,69 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ConfigureAsync_without_shared_workspace_uses_writable_pod_private_fallback()
+    {
+        const string runId = "run-null-shared-workspace";
+        var originalEnvironment = CaptureRuntimeEnvironment();
+        var protectedWorkspace = Path.Combine(_root, "protected-workspace");
+        var scratch = Path.Combine(_root, "scratch-null-workspace");
+        Directory.CreateDirectory(protectedWorkspace);
+        Directory.CreateDirectory(scratch);
+        var executor = new KataBwrapExecutor(protectedRoots: [protectedWorkspace]);
+        var runOptions = new InMemoryRunOptionsStore();
+        var options = Options.Create(new AgentHostOptions
+        {
+            WorkingDirectory = protectedWorkspace,
+            RepositoryPath = protectedWorkspace,
+            ExecutionScratchRoot = scratch,
+            ExecutionScratchMinimumFreeBytes = 0,
+        });
+        var manager = new PodLocalWorkspaceManager(
+            options,
+            NullLogger<PodLocalWorkspaceManager>.Instance,
+            executor);
+        var runtimeState = new AgentHostRuntimeState();
+        var service = new AgentHostStartupService(
+            BuildAgent(runOptions, executor),
+            options,
+            runtimeState,
+            runOptions,
+            NullLogger<AgentHostStartupService>.Instance,
+            manager);
+
+        try
+        {
+            var task = service.ConfigureAsync(
+                new AgentHostRunConfiguration(
+                    runId,
+                    UserId: "sabbour",
+                    TurnBearerToken: "tok",
+                    KvUserSecretName: null,
+                    GitHubAccessToken: null,
+                    PreviewRunnerCredential: null,
+                    SharedWorkingDirectory: null),
+                autoApproveTools: false,
+                ct: new CancellationToken(canceled: true));
+            _ = task.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
+
+            var fallback = runtimeState.EffectiveWorkingDirectory;
+            fallback.Should().NotBeNullOrWhiteSpace();
+            fallback.Should().NotBe(protectedWorkspace);
+            fallback.Should().StartWith(Path.Combine(scratch, "fallback-workspace"));
+            File.WriteAllText(Path.Combine(fallback!, "writable.txt"), "ok");
+
+            executor.RegisterTrustedWorkspace(fallback!);
+            executor.BuildMountPlan(Command(fallback!))
+                .Should().ContainSingle(mount => mount.Source == fallback && !mount.ReadOnly);
+        }
+        finally
+        {
+            await manager.CleanupAsync();
+            RestoreRuntimeEnvironment(originalEnvironment);
+        }
+    }
+
     private (KataBwrapExecutor Executor, string Workspace, string RuntimeHome) ConfigureSharedMode(
         string runId)
     {

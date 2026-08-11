@@ -263,17 +263,23 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         var sessionId = Guid.NewGuid().ToString("n")[..12];
         var process = BuildProcess(command, fullCwd);
         ScrubChildEnvironment(process.StartInfo);
+        var processGroupId = 0;
+        var processStarted = false;
         if (_sandboxExecutor is KataBwrapExecutor kataExecutor)
         {
             var sanitizedEnvironment = process.StartInfo.Environment
                 .Where(pair => pair.Value is not null)
                 .ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.Ordinal);
             process.Dispose();
-            process = kataExecutor.CreateProcess(
+            var supervised = await kataExecutor.StartSupervisedProcessAsync(
                 command,
                 fullCwd,
                 sanitizedEnvironment,
-                networkEnabled: true);
+                networkEnabled: true,
+                ct).ConfigureAwait(false);
+            process = supervised.Process;
+            processGroupId = supervised.WorkloadProcessGroupId;
+            processStarted = true;
         }
         var state = new PreviewProcessState(
             sessionId,
@@ -297,11 +303,23 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         try
         {
-            if (!process.Start())
+            if (!processStarted && !process.Start())
                 throw new InvalidOperationException("Preview process did not start.");
-            state.AttachProcess(process, CaptureProcessIdentity(process.Id));
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            processGroupId = processGroupId == 0 ? process.Id : processGroupId;
+            state.AttachProcess(
+                process,
+                CaptureProcessIdentity(processGroupId),
+                processGroupId);
+            if (processStarted)
+            {
+                _ = PumpOutputAsync(process.StandardOutput, state, "stdout");
+                _ = PumpOutputAsync(process.StandardError, state, "stderr");
+            }
+            else
+            {
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+            }
         }
         catch
         {
@@ -311,15 +329,19 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         if (!_sessions.TryAdd(sessionId, state))
         {
-            await StopProcessTreeAsync(process, TimeSpan.FromSeconds(_options.StopGraceSeconds), ct).ConfigureAwait(false);
+            await StopProcessTreeAsync(
+                process,
+                processGroupId,
+                TimeSpan.FromSeconds(_options.StopGraceSeconds),
+                ct).ConfigureAwait(false);
             throw new InvalidOperationException($"Duplicate preview session id {sessionId}.");
         }
 
         _logger.LogInformation(
             "PreviewRunner: started session={SessionId} pid={Pid} run={RunId} cwd={Cwd}",
-            sessionId, process.Id, runId, fullCwd);
+            sessionId, processGroupId, runId, fullCwd);
 
-        return new PreviewProcessStartResult(sessionId, process.Id, state.StartedAt, fullCwd);
+        return new PreviewProcessStartResult(sessionId, processGroupId, state.StartedAt, fullCwd);
     }
 
     public async Task<PreviewPortObservation> ObserveBoundPortAsync(
@@ -547,7 +569,11 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         var process = state.Process;
         if (process is not null)
-            await StopProcessTreeAsync(process, TimeSpan.FromSeconds(_options.StopGraceSeconds), ct).ConfigureAwait(false);
+            await StopProcessTreeAsync(
+                process,
+                state.ProcessGroupId,
+                TimeSpan.FromSeconds(_options.StopGraceSeconds),
+                ct).ConfigureAwait(false);
 
         state.Dispose();
         _logger.LogInformation("PreviewRunner: stopped session={SessionId} reason={Reason}", sessionId, reason);
@@ -1089,13 +1115,17 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             out inode);
     }
 
-    private async Task StopProcessTreeAsync(Process process, TimeSpan grace, CancellationToken ct)
+    private async Task StopProcessTreeAsync(
+        Process process,
+        int processGroupId,
+        TimeSpan grace,
+        CancellationToken ct)
     {
         if (process.HasExited)
             return;
 
         if (!OperatingSystem.IsWindows())
-            await SendUnixProcessGroupSignalAsync(process.Id, "TERM", ct).ConfigureAwait(false);
+            await SendUnixProcessGroupSignalAsync(processGroupId, "TERM", ct).ConfigureAwait(false);
 
         try
         {
@@ -1111,7 +1141,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         if (!process.HasExited)
         {
             if (!OperatingSystem.IsWindows())
-                await SendUnixProcessGroupSignalAsync(process.Id, "KILL", CancellationToken.None).ConfigureAwait(false);
+                await SendUnixProcessGroupSignalAsync(processGroupId, "KILL", CancellationToken.None).ConfigureAwait(false);
 
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
@@ -1132,6 +1162,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add("-" + signal);
+        psi.ArgumentList.Add("--");
         psi.ArgumentList.Add("-" + pid.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         try
@@ -1143,6 +1174,22 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         catch
         {
             // Fallback caller will use Process.Kill where possible.
+        }
+    }
+
+    private static async Task PumpOutputAsync(
+        StreamReader reader,
+        PreviewProcessState state,
+        string stream)
+    {
+        try
+        {
+            while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+                CaptureLine(state, stream, line);
+        }
+        catch
+        {
+            // Process teardown closes redirected streams while the pump is pending.
         }
     }
 
@@ -1192,15 +1239,20 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         public DateTimeOffset StartedAt { get; }
         public DateTimeOffset LastTouchedAt { get; private set; }
         public Process? Process { get; private set; }
+        public int ProcessGroupId { get; private set; }
         public int? ExitCode { get; private set; }
         public int? ObservedPort { get; private set; }
         public ProcessIdentity RootIdentity { get; private set; }
         public bool HasExited => Volatile.Read(ref _exited) == 1;
 
-        public void AttachProcess(Process process, ProcessIdentity rootIdentity)
+        public void AttachProcess(
+            Process process,
+            ProcessIdentity rootIdentity,
+            int processGroupId)
         {
             Process = process;
             RootIdentity = rootIdentity;
+            ProcessGroupId = processGroupId;
         }
         public void Touch(DateTimeOffset now) => LastTouchedAt = now;
         public void MarkPort(int port)

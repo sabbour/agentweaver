@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Agentweaver.SandboxFs;
 using Microsoft.Extensions.Logging;
 
@@ -52,6 +53,11 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             reason = "Kata bubblewrap isolation is supported only on Linux.";
             return false;
         }
+        if (!File.Exists("/usr/bin/setsid"))
+        {
+            reason = "Kata bubblewrap isolation requires /usr/bin/setsid.";
+            return false;
+        }
 
         try
         {
@@ -68,7 +74,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
                          "--unshare-user",
                          "--unshare-pid",
                          "--die-with-parent",
-                         "--tmpfs", "/proc",
+                         "--proc", "/proc",
                          "--ro-bind", "/usr", "/usr",
                          "--symlink", "usr/bin", "/bin",
                          "--symlink", "usr/lib", "/lib",
@@ -126,6 +132,52 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             StartInfo = BuildProcessStartInfo(command),
             EnableRaisingEvents = true,
         };
+    }
+
+    public async Task<SupervisedProcess> StartSupervisedProcessAsync(
+        string commandLine,
+        string workingDirectory,
+        IReadOnlyDictionary<string, string>? environment,
+        bool networkEnabled,
+        CancellationToken ct = default)
+    {
+        var command = new SandboxCommand(
+            commandLine,
+            workingDirectory,
+            environment,
+            new SandboxFsPolicy([workingDirectory], [], []),
+            TimeoutMs: 0,
+            NetworkEnabled: networkEnabled);
+        var process = new Process
+        {
+            StartInfo = BuildProcessStartInfo(command, reportChildPid: true),
+            EnableRaisingEvents = true,
+        };
+
+        try
+        {
+            if (!process.Start())
+                throw new InvalidOperationException("Failed to start bwrap.");
+
+            var sandboxInitPid = await ReadChildPidAsync(process.StandardOutput, ct)
+                .ConfigureAwait(false);
+            var workloadProcessGroupId = await ResolveWorkloadProcessGroupAsync(
+                    sandboxInitPid,
+                    ct)
+                .ConfigureAwait(false);
+            return new SupervisedProcess(process, sandboxInitPid, workloadProcessGroupId);
+        }
+        catch
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch { }
+            process.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -280,7 +332,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, result.ExitCode.ToString());
     }
 
-    internal ProcessStartInfo BuildProcessStartInfo(SandboxCommand command)
+    internal ProcessStartInfo BuildProcessStartInfo(
+        SandboxCommand command,
+        bool reportChildPid = false)
     {
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException("Kata bubblewrap isolation requires Linux.");
@@ -305,10 +359,12 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             "--new-session",
             "--cap-drop",
             "ALL");
+        if (reportChildPid)
+            Add(psi, "--info-fd", "1");
         if (!command.NetworkEnabled)
             Add(psi, "--unshare-net");
 
-        Add(psi, "--tmpfs", "/proc");
+        Add(psi, "--proc", "/proc");
         Add(psi, "--dev", "/dev", "--tmpfs", "/run");
         foreach (var root in SystemReadOnlyRoots.Where(Directory.Exists))
             Add(psi, "--ro-bind", root, root);
@@ -331,7 +387,10 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             Add(psi, "--setenv", pair.Key, pair.Value);
 
         Add(psi, "--chdir", Path.GetFullPath(command.WorkingDirectory));
-        Add(psi, "--", "/bin/bash", "-c", command.CommandLine);
+        if (reportChildPid)
+            Add(psi, "--", "/usr/bin/setsid", "/bin/bash", "-c", command.CommandLine);
+        else
+            Add(psi, "--", "/bin/bash", "-c", command.CommandLine);
 
         psi.Environment.Clear();
         psi.Environment["PATH"] = "/usr/local/bin:/usr/bin:/bin";
@@ -666,6 +725,108 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             psi.ArgumentList.Add(argument);
     }
 
+    internal static int ParseChildPid(string? info)
+    {
+        if (string.IsNullOrWhiteSpace(info))
+            throw new InvalidOperationException("bwrap did not report its sandbox child PID.");
+
+        try
+        {
+            using var document = JsonDocument.Parse(info);
+            if (document.RootElement.TryGetProperty("child-pid", out var childPid)
+                && childPid.TryGetInt32(out var pid)
+                && pid > 0)
+            {
+                return pid;
+            }
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"bwrap returned invalid child process metadata: {info}", ex);
+        }
+
+        throw new InvalidOperationException(
+            $"bwrap did not report a valid sandbox child PID: {info}");
+    }
+
+    private static async Task<int> ReadChildPidAsync(StreamReader reader, CancellationToken ct)
+    {
+        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        startupCts.CancelAfter(TimeSpan.FromSeconds(5));
+        var info = new StringBuilder();
+        while (info.Length < 16 * 1024)
+        {
+            var line = await reader.ReadLineAsync(startupCts.Token).ConfigureAwait(false);
+            if (line is null)
+                break;
+            info.AppendLine(line);
+
+            try
+            {
+                return ParseChildPid(info.ToString());
+            }
+            catch (InvalidOperationException ex) when (ex.InnerException is JsonException)
+            {
+                // --info-fd emits pretty-printed JSON; keep reading until the object is complete.
+            }
+        }
+
+        return ParseChildPid(info.ToString());
+    }
+
+    private static async Task<int> ResolveWorkloadProcessGroupAsync(
+        int sandboxInitPid,
+        CancellationToken ct)
+    {
+        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        startupCts.CancelAfter(TimeSpan.FromSeconds(5));
+        var childrenPath = $"/proc/{sandboxInitPid}/task/{sandboxInitPid}/children";
+        while (true)
+        {
+            startupCts.Token.ThrowIfCancellationRequested();
+            try
+            {
+                var child = File.ReadAllText(childrenPath)
+                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(value => int.TryParse(value, out var pid) ? pid : 0)
+                    .FirstOrDefault(pid => pid > 0);
+                if (child > 0 && IsProcessGroupLeader(child))
+                    return child;
+            }
+            catch (IOException)
+            {
+                // The bwrap init process may not have forked the workload yet.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Retry until the startup deadline; production startup is fail-closed.
+            }
+
+            await Task.Delay(10, startupCts.Token).ConfigureAwait(false);
+        }
+    }
+
+    private static bool IsProcessGroupLeader(int pid)
+    {
+        try
+        {
+            var stat = File.ReadAllText($"/proc/{pid}/stat");
+            var commandEnd = stat.LastIndexOf(')');
+            if (commandEnd < 0 || commandEnd + 2 >= stat.Length)
+                return false;
+            var fields = stat[(commandEnd + 1)..]
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            return fields.Length > 2
+                && int.TryParse(fields[2], out var processGroupId)
+                && processGroupId == pid;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static async Task<(string Output, bool Truncated)> ReadBoundedAsync(
         StreamReader reader,
         int maxBytes,
@@ -697,4 +858,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
     }
 
     internal sealed record MountSpec(string Source, string Target, bool ReadOnly);
+
+    public sealed record SupervisedProcess(
+        Process Process,
+        int SandboxInitPid,
+        int WorkloadProcessGroupId);
 }

@@ -294,7 +294,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
-    public void ProcessNamespace_UsesSyntheticProcAndNeverBindsParentProc()
+    public void ProcessNamespace_MountsPrivateProcfsAndNeverBindsParentProc()
     {
         if (!OperatingSystem.IsLinux())
             return;
@@ -303,10 +303,72 @@ public sealed class KataBwrapExecutorTests : IDisposable
         RegisterRun(executor);
         var arguments = executor.BuildProcessStartInfo(Command(_runA)).ArgumentList.ToArray();
 
-        arguments.Should().ContainInOrder("--tmpfs", "/proc");
+        arguments.Should().ContainInOrder("--proc", "/proc");
         string.Join('\n', arguments).Should().NotContain("--ro-bind\n/proc\n/proc");
         arguments.Should().ContainInOrder("--cap-drop", "ALL");
         arguments.Should().Contain("--clearenv");
+    }
+
+    [Fact]
+    public void ChildProcessMetadata_RequiresPositiveBwrapChildPid()
+    {
+        KataBwrapExecutor.ParseChildPid("""{"child-pid":4321}""").Should().Be(4321);
+        KataBwrapExecutor.ParseChildPid(
+            """
+            {
+              "child-pid": 4321
+            }
+            """).Should().Be(4321);
+
+        var missing = () => KataBwrapExecutor.ParseChildPid("""{"version":1}""");
+        var invalid = () => KataBwrapExecutor.ParseChildPid("not-json");
+
+        missing.Should().Throw<InvalidOperationException>()
+            .WithMessage("*valid sandbox child PID*");
+        invalid.Should().Throw<InvalidOperationException>()
+            .WithMessage("*invalid child process metadata*");
+    }
+
+    [Fact]
+    public async Task PrivateProcfs_RunsManagedCoreClrAndHidesHostParentProcess()
+    {
+        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+            return;
+
+        var app = Path.Combine(_runA, "managed-proc-probe");
+        Directory.CreateDirectory(app);
+        await File.WriteAllTextAsync(
+            Path.Combine(app, "ManagedProcProbe.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            Path.Combine(app, "Program.cs"),
+            """
+            var hostParentPid = args[0];
+            Console.WriteLine($"coreclr-ok pid={Environment.ProcessId}");
+            return File.Exists($"/proc/{hostParentPid}/cmdline") ? 17 : 0;
+            """);
+        Run("dotnet", "build", Path.Combine(app, "ManagedProcProbe.csproj"), "--nologo", "--verbosity", "quiet");
+
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+        var assembly = Path.Combine(app, "bin", "Debug", "net10.0", "ManagedProcProbe.dll");
+        var result = await executor.ExecuteAsync(new SandboxCommand(
+            $"dotnet {QuoteForPosixShell(assembly)} {Environment.ProcessId}",
+            _runA,
+            null,
+            new SandboxFsPolicy([_runA], [], []),
+            30_000,
+            NetworkEnabled: true));
+
+        result.ExitCode.Should().Be(0, result.Stderr);
+        result.Stdout.Should().Contain("coreclr-ok");
     }
 
     [Fact]
@@ -441,6 +503,9 @@ public sealed class KataBwrapExecutorTests : IDisposable
         process.ExitCode.Should().Be(0, stderr);
         return stdout.Trim();
     }
+
+    private static string QuoteForPosixShell(string value) =>
+        "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
 
     public void Dispose()
     {

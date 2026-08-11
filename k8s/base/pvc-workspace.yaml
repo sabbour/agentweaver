@@ -33,8 +33,8 @@
 #
 # BOUNDED REMEDIATION (#476): Kata AgentHost shell and preview child processes run inside a
 # fail-closed bubblewrap mount namespace. It binds only the current run's worktree/scratch and
-# read-only linked-worktree git metadata; the PVC root and sibling worktrees are absent. A synthetic
-# minimal /proc prevents /proc/<pid>/root from recovering the parent AgentHost mount namespace.
+# read-only linked-worktree git metadata; the PVC root and sibling worktrees are absent. Procfs is
+# mounted under the unshared child PID namespace, where the AgentHost parent process is invisible.
 # SharedWorkspacePathGuard remains defense-in-depth only. #481 still owns relocating worktrees to
 # per-run volumes, controller warm-pool validation, and secure volume teardown.
 ---
