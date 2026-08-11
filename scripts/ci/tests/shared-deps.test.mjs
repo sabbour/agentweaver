@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -19,7 +20,9 @@ import {
   analyzeProject,
   computeCacheIdentity,
   ensureProject,
+  invalidateProject,
   resolveCommonDir,
+  verifyProjectCache,
   verifyProjectResolution,
 } from '../shared-deps.mjs';
 import {
@@ -110,6 +113,16 @@ function writeFakeInstall(projectPath, _npmArgs, cachePath) {
     writeFileSync(path.join(cachePath, '_fake-content'), 'cached');
   }
   return { elapsedSeconds: '0.01' };
+}
+
+function invalidationGenerations(cacheRoot) {
+  const generationRoot = path.join(cacheRoot, 'invalidation-generations');
+  if (!existsSync(generationRoot)) {
+    return [];
+  }
+  return readdirSync(generationRoot).map((entry) => (
+    JSON.parse(readFileSync(path.join(generationRoot, entry), 'utf8'))
+  ));
 }
 
 test.after(() => {
@@ -301,6 +314,154 @@ test('shared npm cache is reused while node_modules stays physical and worktree-
   assert.equal(
     realpathSync.native(path.join(secondWorktree, 'node_modules')).startsWith(secondWorktree),
     true,
+  );
+});
+
+test('ensure then invalidate rotates the persisted namespace and forces a fresh npm ci', () => {
+  const repoRoot = resetScratch('explicit-invalidation');
+  const cacheRoot = path.join(repoRoot, '.cache');
+  const projectPath = writeProject(repoRoot);
+  const otherProjectPath = writeProject(repoRoot, { project: 'docs' });
+  writeFakeInstall(otherProjectPath, [], null);
+  mkdirSync(path.join(cacheRoot, 'unrelated-cache'), { recursive: true });
+  writeFileSync(path.join(cacheRoot, 'unrelated-cache', 'sentinel'), 'keep');
+  const cachePaths = [];
+  let installs = 0;
+  const options = {
+    repoRoot,
+    cacheRoot,
+    runtime: runtime(),
+    environment: {},
+    runNpmCi(currentProjectPath, npmArgs, currentCachePath) {
+      installs += 1;
+      cachePaths.push(currentCachePath);
+      return writeFakeInstall(currentProjectPath, npmArgs, currentCachePath);
+    },
+  };
+
+  const firstEnsure = ensureProject(options);
+  const firstGeneration = invalidationGenerations(cacheRoot).find(
+    (marker) => marker.packageRootIdentity === '.',
+  );
+  assert.equal(existsSync(path.join(cacheRoot, 'downloads', firstEnsure.key)), true);
+
+  const invalidation = invalidateProject(options);
+  const rotatedGeneration = invalidationGenerations(cacheRoot).find(
+    (marker) => marker.packageRootIdentity === '.',
+  );
+  assert.equal(invalidation.previousKey, firstEnsure.key);
+  assert.notEqual(invalidation.key, firstEnsure.key);
+  assert.notEqual(rotatedGeneration.generation, firstGeneration.generation);
+  assert.equal(rotatedGeneration.generation, invalidation.invalidationGeneration);
+  assert.equal(existsSync(path.join(projectPath, 'node_modules')), false);
+  assert.equal(existsSync(path.join(otherProjectPath, 'node_modules', 'example')), true);
+  assert.equal(existsSync(path.join(cacheRoot, 'unrelated-cache', 'sentinel')), true);
+  assert.equal(existsSync(path.join(cacheRoot, 'downloads', firstEnsure.key)), false);
+  assert.equal(
+    readdirSync(path.join(cacheRoot, 'quarantine')).some(
+      (entry) => entry.startsWith(`${firstEnsure.key}-`),
+    ),
+    true,
+  );
+
+  const secondEnsure = ensureProject(options);
+  assert.equal(secondEnsure.key, invalidation.key);
+  assert.equal(secondEnsure.invalidationGeneration, rotatedGeneration.generation);
+  assert.equal(installs, 2);
+  assert.notEqual(cachePaths[0], cachePaths[1]);
+  let verifiedCachePath;
+  verifyProjectCache({
+    ...options,
+    runNpmCacheVerify(_projectPath, cachePath) {
+      verifiedCachePath = cachePath;
+    },
+  });
+  assert.equal(verifiedCachePath, cachePaths[1]);
+  assert.equal(ensureProject(options).mode, 'local');
+  assert.equal(installs, 2);
+});
+
+test('invalidation generations remain isolated by package root', () => {
+  const repoRoot = resetScratch('project-generation-isolation');
+  const cacheRoot = path.join(repoRoot, '.cache');
+  writeProject(repoRoot);
+  writeProject(repoRoot, { project: 'docs' });
+  const installs = new Map();
+  const options = (project) => ({
+    repoRoot,
+    project,
+    cacheRoot,
+    runtime: runtime(),
+    environment: {},
+    runNpmCi(projectPath, npmArgs, cachePath) {
+      installs.set(project, (installs.get(project) ?? 0) + 1);
+      return writeFakeInstall(projectPath, npmArgs, cachePath);
+    },
+  });
+
+  const rootBefore = ensureProject(options('.'));
+  const docsBefore = ensureProject(options('docs'));
+  const generationsBefore = invalidationGenerations(cacheRoot);
+  const rootGenerationBefore = generationsBefore.find(
+    (marker) => marker.packageRootIdentity === '.',
+  ).generation;
+  const docsGenerationBefore = generationsBefore.find(
+    (marker) => marker.packageRootIdentity === 'docs',
+  ).generation;
+
+  invalidateProject(options('.'));
+  const rootAfter = ensureProject(options('.'));
+  const docsAfter = ensureProject(options('docs'));
+  const generationsAfter = invalidationGenerations(cacheRoot);
+  assert.notEqual(rootAfter.key, rootBefore.key);
+  assert.equal(docsAfter.key, docsBefore.key);
+  assert.notEqual(
+    generationsAfter.find((marker) => marker.packageRootIdentity === '.').generation,
+    rootGenerationBefore,
+  );
+  assert.equal(
+    generationsAfter.find((marker) => marker.packageRootIdentity === 'docs').generation,
+    docsGenerationBefore,
+  );
+  assert.equal(installs.get('.'), 2);
+  assert.equal(installs.get('docs'), 1);
+});
+
+test('invalidation rotates generation when no cache namespace exists', () => {
+  const repoRoot = resetScratch('no-cache-invalidation');
+  const cacheRoot = path.join(repoRoot, '.cache');
+  writeProject(repoRoot);
+  const options = {
+    repoRoot,
+    cacheRoot,
+    runtime: runtime(),
+    environment: {},
+    runNpmCi: writeFakeInstall,
+  };
+
+  const firstInvalidation = invalidateProject(options);
+  const secondInvalidation = invalidateProject(options);
+  assert.notEqual(firstInvalidation.previousKey, firstInvalidation.key);
+  assert.equal(secondInvalidation.previousKey, firstInvalidation.key);
+  assert.notEqual(secondInvalidation.key, firstInvalidation.key);
+  assert.equal(invalidationGenerations(cacheRoot).length, 1);
+  const ensured = ensureProject(options);
+  assert.equal(ensured.key, secondInvalidation.key);
+  assert.equal(ensured.invalidationGeneration, secondInvalidation.invalidationGeneration);
+});
+
+test('package roots cannot escape the repository', () => {
+  const repoRoot = resetScratch('package-root-boundary');
+  assert.throws(
+    () => ensureProject({
+      repoRoot,
+      project: '..',
+      cacheRoot: path.join(repoRoot, '.cache'),
+      runtime: runtime(),
+      environment: {},
+      runNpmCi: writeFakeInstall,
+    }),
+    /package root escapes the repository/u,
   );
 });
 

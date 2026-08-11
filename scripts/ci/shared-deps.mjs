@@ -22,6 +22,9 @@ export const CACHE_SCHEMA = 2;
 export const DEFAULT_PROJECTS = ['.', 'apps/web', 'docs', 'scripts/ui-harness'];
 const LOCAL_MARKER = '.agentweaver-deps.json';
 const CACHE_MARKER = 'cache.json';
+const INVALIDATION_GENERATION_SCHEMA = 1;
+const INVALIDATION_GENERATION_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_STALE_LOCK_MS = 30 * 60 * 1000;
 const POLL_INTERVAL_MS = 250;
@@ -316,6 +319,57 @@ function cacheRootForRepo(repoRoot, override) {
   return path.join(commonDir, 'agentweaver-cache', `npm-v${CACHE_SCHEMA}`);
 }
 
+function invalidationGenerationPath(cacheRoot, packageRootIdentity) {
+  return path.join(
+    cacheRoot,
+    'invalidation-generations',
+    `${sha256(packageRootIdentity)}.json`,
+  );
+}
+
+function readInvalidationGeneration(cacheRoot, packageRootIdentity) {
+  const markerPath = invalidationGenerationPath(cacheRoot, packageRootIdentity);
+  if (!existsSync(markerPath)) {
+    return null;
+  }
+  const marker = readJson(markerPath);
+  if (
+    marker.schema !== INVALIDATION_GENERATION_SCHEMA
+    || marker.packageRootIdentity !== packageRootIdentity
+    || typeof marker.generation !== 'string'
+    || !INVALIDATION_GENERATION_PATTERN.test(marker.generation)
+  ) {
+    throw new Error(`invalid dependency invalidation generation at ${markerPath}`);
+  }
+  return marker.generation;
+}
+
+function ensureInvalidationGeneration(cacheRoot, packageRootIdentity) {
+  const existing = readInvalidationGeneration(cacheRoot, packageRootIdentity);
+  if (existing) {
+    return existing;
+  }
+  const markerPath = invalidationGenerationPath(cacheRoot, packageRootIdentity);
+  atomicCreateJson(markerPath, {
+    schema: INVALIDATION_GENERATION_SCHEMA,
+    packageRootIdentity,
+    generation: randomUUID(),
+    rotatedAt: new Date().toISOString(),
+  });
+  return readInvalidationGeneration(cacheRoot, packageRootIdentity);
+}
+
+function rotateInvalidationGeneration(cacheRoot, packageRootIdentity) {
+  const generation = randomUUID();
+  atomicWriteJson(invalidationGenerationPath(cacheRoot, packageRootIdentity), {
+    schema: INVALIDATION_GENERATION_SCHEMA,
+    packageRootIdentity,
+    generation,
+    rotatedAt: new Date().toISOString(),
+  });
+  return generation;
+}
+
 function canonicalWorktree(repoRoot) {
   const canonical = realpathSync.native(repoRoot);
   return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
@@ -496,14 +550,23 @@ export function runtimeInfo(repoRoot, environment = process.env) {
 }
 
 function projectInputs(repoRoot, project) {
-  const projectPath = path.resolve(repoRoot, project);
+  const resolvedRepoRoot = path.resolve(repoRoot);
+  const projectPath = path.resolve(resolvedRepoRoot, project);
+  if (!isWithin(resolvedRepoRoot, projectPath)) {
+    throw new Error(`package root escapes the repository: ${project}`);
+  }
+  const canonicalRepoRoot = realpathSync.native(resolvedRepoRoot);
+  const canonicalProjectPath = realpathSync.native(projectPath);
+  if (!isWithin(canonicalRepoRoot, canonicalProjectPath)) {
+    throw new Error(`package root resolves outside the repository: ${project}`);
+  }
   const packageJsonPath = path.join(projectPath, 'package.json');
   const lockfilePath = path.join(projectPath, 'package-lock.json');
   const packageJsonBytes = readFileSync(packageJsonPath);
   const lockfileBytes = readFileSync(lockfilePath);
   return {
     projectPath,
-    packageRootIdentity: project.replaceAll('\\', '/') || '.',
+    packageRootIdentity: path.relative(resolvedRepoRoot, projectPath).replaceAll('\\', '/') || '.',
     packageJsonBytes,
     lockfileBytes,
     packageJson: JSON.parse(packageJsonBytes),
@@ -589,6 +652,15 @@ function validateLocalTree(projectPath, packageJson, expectedKey) {
 function defaultNpmInstall(projectPath, npmArgs, cachePath, environment) {
   const cacheArgs = cachePath ? ['--cache', cachePath] : [];
   const invocation = npmInvocation(['ci', ...cacheArgs, ...npmArgs], environment);
+  return run(invocation.command, invocation.args, {
+    cwd: projectPath,
+    env: environment,
+    shell: invocation.shell,
+  });
+}
+
+function defaultNpmCacheVerify(projectPath, cachePath, environment) {
+  const invocation = npmInvocation(['cache', 'verify', '--cache', cachePath], environment);
   return run(invocation.command, invocation.args, {
     cwd: projectPath,
     env: environment,
@@ -702,106 +774,134 @@ function ensureProjectUnlocked({
     repoRoot,
     cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
   );
-  const identity = computeCacheIdentity({
-    ...inputs,
-    ...resolvedRuntime,
-    npmArgsHash: sha256(JSON.stringify(npmArgs)),
-  });
-  const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
-  const localValidation = validateLocalTree(
-    inputs.projectPath,
-    inputs.packageJson,
-    identity.key,
-  );
-  if (localValidation.valid) {
-    const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
-    console.log(`[deps] ${project} local dependency tree is current in ${elapsedSeconds}s`);
-    return { mode: 'local', key: identity.key, elapsedSeconds };
-  }
-
-  let cacheState = cacheNamespaceState(cachePath, identity.key);
-  if (!cacheState.valid) {
-    quarantineCacheNamespace(
-      resolvedCacheRoot,
-      cachePath,
-      cacheState.reason,
-      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+  while (true) {
+    const { identity, invalidationNonce } = identityForProject({
+      repoRoot,
+      project,
+      cacheRoot: resolvedCacheRoot,
+      runtime: resolvedRuntime,
+      environment,
+      npmArgs,
+    });
+    const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
+    const localValidation = validateLocalTree(
+      inputs.projectPath,
+      inputs.packageJson,
+      identity.key,
     );
-  }
-
-  const installWithLease = () => {
-    const releaseCacheUse = acquireCacheUse(
-      resolvedCacheRoot,
-      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
-    );
-    try {
-      const result = installFromDownloadCache(
-        inputs.projectPath,
-        npmArgs,
-        cachePath,
-        runNpmCi,
-        environment,
-      );
-      verifyProjectResolution(inputs.projectPath, inputs.packageJson);
-      atomicCreateJson(path.join(cachePath, CACHE_MARKER), {
-        schema: CACHE_SCHEMA,
-        key: identity.key,
-        packageRootIdentity: inputs.packageRootIdentity,
-        populatedAt: new Date().toISOString(),
-      });
-      cacheState = cacheNamespaceState(cachePath, identity.key);
-      if (!cacheState.valid) {
-        throw new Error(cacheState.reason);
+    if (localValidation.valid) {
+      if (
+        readInvalidationGeneration(resolvedCacheRoot, inputs.packageRootIdentity)
+        !== invalidationNonce
+      ) {
+        continue;
       }
-      return result;
-    } finally {
-      releaseCacheUse();
+      const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+      console.log(`[deps] ${project} local dependency tree is current in ${elapsedSeconds}s`);
+      return {
+        mode: 'local',
+        key: identity.key,
+        invalidationGeneration: invalidationNonce,
+        elapsedSeconds,
+      };
     }
-  };
 
-  let installResult;
-  try {
-    installResult = installWithLease();
-  } catch (firstError) {
-    quarantineCacheNamespace(
-      resolvedCacheRoot,
-      cachePath,
-      `npm ci failed: ${firstError?.message ?? firstError}`,
-      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
-    );
-    try {
-      installResult = installWithLease();
-    } catch (retryError) {
+    const cacheState = cacheNamespaceState(cachePath, identity.key);
+    if (!cacheState.valid) {
       quarantineCacheNamespace(
         resolvedCacheRoot,
         cachePath,
-        `cold npm ci retry failed: ${retryError?.message ?? retryError}`,
+        cacheState.reason,
         { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
       );
-      throw new AggregateError(
-        [firstError, retryError],
-        `npm ci failed after quarantining the shared cache for ${project}`,
-      );
+      continue;
     }
-  }
 
-  atomicWriteJson(path.join(inputs.projectPath, 'node_modules', LOCAL_MARKER), {
-    schema: CACHE_SCHEMA,
-    key: identity.key,
-    hiddenLockHash: hiddenLockHash(path.join(inputs.projectPath, 'node_modules')),
-    installedAt: new Date().toISOString(),
-  });
-  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
-  console.log(
-    `[deps] ${project} installed with shared npm cache ${identity.key.slice(0, 12)} `
-    + `in ${elapsedSeconds}s`,
-  );
-  return {
-    mode: 'shared-cache',
-    key: identity.key,
-    elapsedSeconds,
-    installSeconds: installResult.elapsedSeconds,
-  };
+    const installWithLease = () => {
+      const releaseCacheUse = acquireCacheUse(
+        resolvedCacheRoot,
+        { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+      );
+      try {
+        if (
+          readInvalidationGeneration(resolvedCacheRoot, inputs.packageRootIdentity)
+          !== invalidationNonce
+        ) {
+          return { generationChanged: true };
+        }
+        const result = installFromDownloadCache(
+          inputs.projectPath,
+          npmArgs,
+          cachePath,
+          runNpmCi,
+          environment,
+        );
+        verifyProjectResolution(inputs.projectPath, inputs.packageJson);
+        atomicCreateJson(path.join(cachePath, CACHE_MARKER), {
+          schema: CACHE_SCHEMA,
+          key: identity.key,
+          packageRootIdentity: inputs.packageRootIdentity,
+          populatedAt: new Date().toISOString(),
+        });
+        const installedCacheState = cacheNamespaceState(cachePath, identity.key);
+        if (!installedCacheState.valid) {
+          throw new Error(installedCacheState.reason);
+        }
+        atomicWriteJson(path.join(inputs.projectPath, 'node_modules', LOCAL_MARKER), {
+          schema: CACHE_SCHEMA,
+          key: identity.key,
+          hiddenLockHash: hiddenLockHash(path.join(inputs.projectPath, 'node_modules')),
+          installedAt: new Date().toISOString(),
+        });
+        return { generationChanged: false, result };
+      } finally {
+        releaseCacheUse();
+      }
+    };
+
+    let installAttempt;
+    try {
+      installAttempt = installWithLease();
+    } catch (firstError) {
+      quarantineCacheNamespace(
+        resolvedCacheRoot,
+        cachePath,
+        `npm ci failed: ${firstError?.message ?? firstError}`,
+        { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+      );
+      try {
+        installAttempt = installWithLease();
+      } catch (retryError) {
+        quarantineCacheNamespace(
+          resolvedCacheRoot,
+          cachePath,
+          `cold npm ci retry failed: ${retryError?.message ?? retryError}`,
+          { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+        );
+        throw new AggregateError(
+          [firstError, retryError],
+          `npm ci failed after quarantining the shared cache for ${project}`,
+        );
+      }
+    }
+
+    if (installAttempt.generationChanged) {
+      continue;
+    }
+
+    const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+    console.log(
+      `[deps] ${project} installed with shared npm cache ${identity.key.slice(0, 12)} `
+      + `in ${elapsedSeconds}s`,
+    );
+    return {
+      mode: 'shared-cache',
+      key: identity.key,
+      invalidationGeneration: invalidationNonce,
+      elapsedSeconds,
+      installSeconds: installAttempt.result.elapsedSeconds,
+    };
+  }
 }
 
 export function ensureProject({
@@ -848,54 +948,109 @@ export function ensureProject({
 function identityForProject({
   repoRoot,
   project,
+  cacheRoot,
   runtime,
-  environment,
+  environment = process.env,
   npmArgs = [],
+  invalidationNonce,
 }) {
   const inputs = projectInputs(repoRoot, project);
   const resolvedRuntime = runtime ?? runtimeInfo(inputs.projectPath, environment);
+  const resolvedCacheRoot = cacheRootForRepo(
+    repoRoot,
+    cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
+  );
+  const resolvedInvalidationNonce = invalidationNonce
+    ?? ensureInvalidationGeneration(resolvedCacheRoot, inputs.packageRootIdentity);
   return {
     inputs,
+    resolvedCacheRoot,
+    invalidationNonce: resolvedInvalidationNonce,
     identity: computeCacheIdentity({
       ...inputs,
       ...resolvedRuntime,
       npmArgsHash: sha256(JSON.stringify(npmArgs)),
+      invalidationNonce: resolvedInvalidationNonce,
     }),
   };
 }
 
 export function invalidateProject({
   repoRoot,
-  project,
+  project = '.',
   cacheRoot,
   runtime,
   environment = process.env,
   npmArgs = [],
+  lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
+  staleLockMs = DEFAULT_STALE_LOCK_MS,
   validationLockHeld = false,
 }) {
   let releaseValidation;
   if (!validationLockHeld) {
-    releaseValidation = acquireValidationLock(repoRoot, { cacheRoot });
+    releaseValidation = acquireValidationLock(repoRoot, {
+      cacheRoot,
+      timeoutMs: lockTimeoutMs,
+      staleAfterMs: staleLockMs,
+    });
   }
   try {
-    const { inputs, identity } = identityForProject({
-      repoRoot,
-      project,
-      runtime,
-      environment,
-      npmArgs,
-    });
     const resolvedCacheRoot = cacheRootForRepo(
       repoRoot,
       cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
     );
-    quarantineCacheNamespace(
-      resolvedCacheRoot,
-      path.join(resolvedCacheRoot, 'downloads', identity.key),
-      'explicit invalidation',
-    );
+    const releaseMaintenance = acquireMaintenanceLock(resolvedCacheRoot, {
+      timeoutMs: lockTimeoutMs,
+      staleAfterMs: staleLockMs,
+    });
+    let inputs;
+    let previousIdentity;
+    let nextIdentity;
+    let nextGeneration;
+    try {
+      inputs = projectInputs(repoRoot, project);
+      const previousGeneration =
+        readInvalidationGeneration(resolvedCacheRoot, inputs.packageRootIdentity) ?? '';
+      previousIdentity = identityForProject({
+        repoRoot,
+        project,
+        cacheRoot: resolvedCacheRoot,
+        runtime,
+        environment,
+        npmArgs,
+        invalidationNonce: previousGeneration,
+      }).identity;
+      nextGeneration = rotateInvalidationGeneration(
+        resolvedCacheRoot,
+        inputs.packageRootIdentity,
+      );
+      nextIdentity = identityForProject({
+        repoRoot,
+        project,
+        cacheRoot: resolvedCacheRoot,
+        runtime,
+        environment,
+        npmArgs,
+        invalidationNonce: nextGeneration,
+      }).identity;
+      quarantineCacheNamespaceLocked(
+        resolvedCacheRoot,
+        path.join(resolvedCacheRoot, 'downloads', previousIdentity.key),
+        'explicit invalidation',
+      );
+    } finally {
+      releaseMaintenance();
+    }
     removeNodeModules(path.join(inputs.projectPath, 'node_modules'));
-    console.log(`[deps] invalidated ${project} dependency state`);
+    console.log(
+      `[deps] invalidated ${project} dependency state; `
+      + `${previousIdentity.key.slice(0, 12)} -> ${nextIdentity.key.slice(0, 12)}`,
+    );
+    return {
+      previousKey: previousIdentity.key,
+      key: nextIdentity.key,
+      invalidationGeneration: nextGeneration,
+    };
   } finally {
     releaseValidation?.();
   }
@@ -903,11 +1058,12 @@ export function invalidateProject({
 
 export function verifyProjectCache({
   repoRoot,
-  project,
+  project = '.',
   cacheRoot,
   runtime,
   environment = process.env,
   npmArgs = [],
+  runNpmCacheVerify = defaultNpmCacheVerify,
   validationLockHeld = false,
 }) {
   let releaseValidation;
@@ -915,38 +1071,36 @@ export function verifyProjectCache({
     releaseValidation = acquireValidationLock(repoRoot, { cacheRoot });
   }
   try {
-    const { identity } = identityForProject({
-      repoRoot,
-      project,
-      runtime,
-      environment,
-      npmArgs,
-    });
     const resolvedCacheRoot = cacheRootForRepo(
       repoRoot,
       cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
     );
-    const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
-    if (!existsSync(cachePath)) {
-      console.log(`[deps] no shared npm cache exists for ${project}`);
-      return;
-    }
     const releaseMaintenance = acquireMaintenanceLock(resolvedCacheRoot);
     let verifyError;
     try {
-      const invocation = npmInvocation(['cache', 'verify', '--cache', cachePath], environment);
-      run(invocation.command, invocation.args, {
-        cwd: path.resolve(repoRoot, project),
-        env: environment,
-        shell: invocation.shell,
+      const { identity } = identityForProject({
+        repoRoot,
+        project,
+        cacheRoot: resolvedCacheRoot,
+        runtime,
+        environment,
+        npmArgs,
       });
-    } catch (error) {
-      verifyError = error;
-      quarantineCacheNamespaceLocked(
-        resolvedCacheRoot,
-        cachePath,
-        `npm cache verify failed: ${error?.message ?? error}`,
-      );
+      const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
+      if (!existsSync(cachePath)) {
+        console.log(`[deps] no shared npm cache exists for ${project}`);
+        return;
+      }
+      try {
+        runNpmCacheVerify(path.resolve(repoRoot, project), cachePath, environment);
+      } catch (error) {
+        verifyError = error;
+        quarantineCacheNamespaceLocked(
+          resolvedCacheRoot,
+          cachePath,
+          `npm cache verify failed: ${error?.message ?? error}`,
+        );
+      }
     } finally {
       releaseMaintenance();
     }
