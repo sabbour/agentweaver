@@ -177,9 +177,12 @@ RUN curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/nod
     && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
     && rm -f /tmp/node.tar.gz \
     && npm install -g npm@${NPM_VERSION} \
-    && npm install --prefix /usr/local/lib/node_modules/npm --workspaces=false --omit=dev --no-save --no-package-lock \
+    && mkdir -p /tmp/npm-runtime-fixes \
+    && npm install --prefix /tmp/npm-runtime-fixes --ignore-scripts --no-save --no-package-lock \
         brace-expansion@5.0.9 \
         ip-address@10.3.1 \
+    && cp -a /tmp/npm-runtime-fixes/node_modules/. /usr/local/lib/node_modules/npm/node_modules/ \
+    && rm -rf /tmp/npm-runtime-fixes \
     && npm install -g \
         nodemon@${NODEMON_VERSION} \
         typescript@${TYPESCRIPT_VERSION} \
