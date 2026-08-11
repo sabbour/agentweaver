@@ -661,7 +661,13 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         }
 
         // Remove by VALUE match against the live credentials (covers any aliased var name).
-        var secrets = new[] { _runtimeState?.TurnBearerToken, _runtimeState?.PreviewRunnerCredential }
+        var secrets = new[]
+            {
+                _runtimeState?.TurnBearerToken,
+                _runtimeState?.PreviewRunnerCredential,
+                _runtimeState?.GitHubAccessToken,
+                _runtimeState?.CallerBearerToken,
+            }
             .Where(s => !string.IsNullOrEmpty(s))
             .ToArray();
         if (secrets.Length > 0)
