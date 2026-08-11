@@ -18,6 +18,7 @@ using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Workflows;
+using Agentweaver.Api.Webhooks;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
@@ -271,6 +272,70 @@ app.MapPost("/api/projects/{id}/webhook-secret/rotate", async (
 })
     .WithName("RotateProjectWebhookSecret")
     .WithTags("Projects");
+
+// POST /api/projects/{id}/webhooks/github/provision — create or update the repository webhook.
+app.MapPost("/api/projects/{id}/webhooks/github/provision", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    IGitHubTokenScopeProvider scopeProvider,
+    ProjectGitHubIdentityService identityService,
+    IGitHubWebhookProvisioningService provisioningService,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    GitHubTokenScope tokenScope;
+    if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
+    {
+        var effective = await identityService
+            .GetEffectiveIdentityAsync(projectId, caller.EntraObjectId!, ct)
+            .ConfigureAwait(false);
+        if (effective.EffectiveLink is null)
+            return Results.Unauthorized();
+        tokenScope = GitHubTokenScope.ForLinkedIdentity(
+            caller.EntraObjectId!,
+            effective.EffectiveLink.GitHubLogin);
+    }
+    else
+    {
+        tokenScope = scopeProvider.Resolve(caller.User);
+    }
+
+    var payloadUrl = new Uri(
+        $"{httpContext.Request.Scheme}://{httpContext.Request.Host}{httpContext.Request.PathBase}" +
+        $"/api/projects/{projectId}/webhooks/github");
+
+    try
+    {
+        var result = await provisioningService
+            .ProvisionAsync(project, tokenScope, payloadUrl, ct)
+            .ConfigureAwait(false);
+        return Results.Ok(new GitHubWebhookProvisioningResponse(
+            result.HookId,
+            result.Created,
+            result.Repository,
+            result.PayloadUrl));
+    }
+    catch (GitHubWebhookProvisioningException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: ex.StatusCode);
+    }
+})
+    .WithName("ProvisionProjectGitHubWebhook")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description =
+            "Creates or updates the connected repository's GitHub webhook using the project's effective GitHub identity.";
+        return Task.CompletedTask;
+    });
 
 // GET /api/projects/{id}/github/repository-owners — accounts a new repo could be created under
 app.MapGet("/api/projects/{id}/github/repository-owners", async (
