@@ -11,7 +11,8 @@ npm run deps:ensure
 The cache lives under Git's common directory. Each namespace is keyed by the package
 root, `package.json`, `package-lock.json`, exact Node/npm versions, OS, architecture,
 libc, sanitized install-shaping npm configuration, install arguments, and lifecycle
-environment. Branch names are never part of the key.
+environment. A persisted invalidation generation for each package root is also part of
+the key. Branch names are never part of the key.
 
 Every new or changed worktree still runs `npm ci`, so npm deletes and recreates only
 that worktree's dependency tree. A worktree-local marker lets an unchanged subsequent
@@ -34,7 +35,8 @@ Workspace roots, local lockfile links, authenticated npm configuration, CI, and
 `AGENTWEAVER_DISABLE_SHARED_DEPS=1` use isolated `npm ci` instead. Set
 `AGENTWEAVER_DEPS_CACHE_DIR` to choose another cache root.
 
-Explicitly quarantine a project's cache and delete only its current worktree tree:
+Explicitly rotate a project's persisted generation, quarantine its prior cache
+namespace, and delete only its current worktree tree:
 
 ```bash
 npm run deps:invalidate -- --project apps/web
