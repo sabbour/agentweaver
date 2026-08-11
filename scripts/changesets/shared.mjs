@@ -16,25 +16,41 @@ export function readVersionMirrors(repoRoot, { readFile = fs.readFileSync } = {}
   const packageJson = JSON.parse(readFile(path.join(repoRoot, "package.json"), "utf8"));
   const lockJson = JSON.parse(readFile(path.join(repoRoot, "package-lock.json"), "utf8"));
   const packageVersion = packageJson.version;
-  const lockVersion = lockJson.packages?.[""]?.version;
+  const lockTopLevelVersion = lockJson.version;
+  const lockRootPackageVersion = lockJson.packages?.[""]?.version;
 
   for (const [name, value] of Object.entries({
     VERSION: version,
     "package.json": packageVersion,
-    "package-lock.json": lockVersion,
+    "package-lock.json.version": lockTopLevelVersion,
+    'package-lock.json.packages[""].version': lockRootPackageVersion,
   })) {
     if (!SEMVER.test(value ?? "")) {
       throw new Error(`${name} contains invalid semver: '${value ?? "missing"}'`);
     }
   }
 
-  return { version, packageVersion, lockVersion };
+  return {
+    version,
+    packageVersion,
+    lockTopLevelVersion,
+    lockRootPackageVersion,
+    lockVersion: lockRootPackageVersion,
+  };
 }
 
 export function assertVersionMirrors(repoRoot, options) {
   const mirrors = readVersionMirrors(repoRoot, options);
-  if (mirrors.version !== mirrors.packageVersion || mirrors.version !== mirrors.lockVersion) {
-    throw new Error(`Version mirrors disagree: VERSION=${mirrors.version}, package.json=${mirrors.packageVersion}, package-lock.json=${mirrors.lockVersion}`);
+  if (
+    mirrors.version !== mirrors.packageVersion
+    || mirrors.version !== mirrors.lockTopLevelVersion
+    || mirrors.version !== mirrors.lockRootPackageVersion
+  ) {
+    throw new Error(
+      `Version mirrors disagree: VERSION=${mirrors.version}, package.json=${mirrors.packageVersion}, `
+      + `package-lock.json.version=${mirrors.lockTopLevelVersion}, `
+      + `package-lock.json.packages[""].version=${mirrors.lockRootPackageVersion}`,
+    );
   }
 
   return mirrors.version;
