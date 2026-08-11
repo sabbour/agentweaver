@@ -73,7 +73,10 @@ from its exact matching section; do not run another changelog generator.
 ## Publishing and deploying
 
 From a clean checkout at the exact resulting `origin/main` SHA (including no
-untracked or unexpected git-ignored files):
+untracked or unexpected git-ignored files). Publication uses the same ignored-file
+policy as preparation: normal dependency, build, test, and harness outputs are
+allowed, while stray ignored files outside those recognized locations still block
+the release:
 
 ```bash
 # Repository identity only: tag + GitHub Release, no Azure deployment
