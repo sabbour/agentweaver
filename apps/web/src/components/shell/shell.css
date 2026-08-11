@@ -394,8 +394,9 @@
    -------------------------------------------------------------------------- */
 .aw-rail-footer {
   display: flex;
-  align-items: center;
-  gap: var(--spacingHorizontalS);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacingVerticalXS);
   padding: var(--spacingVerticalS) var(--spacingHorizontalS);
   flex-shrink: 0;
   min-width: 0;
@@ -405,11 +406,11 @@
 .aw-rail-footer > .fui-Button,
 .aw-rail-footer .fui-Menu {
   min-width: 0;
-  flex: 1 1 132px;
+  width: 100%;
+  flex: 0 0 auto;
 }
 
-/* Collapsed rail: the footer row (GitHub trigger + status/version) has no room for two
-   flex items side by side — stack them and center so nothing gets clipped/squished. */
+/* Collapsed rail: center the stacked icon-only identity and footer metadata. */
 .aw-left-nav--collapsed .aw-rail-footer {
   flex-direction: column;
   align-items: center;
@@ -433,15 +434,15 @@
   align-items: center;
   gap: var(--spacingHorizontalXS);
   min-width: 0;
-  flex: 0 1 116px;
-  max-width: 116px;
+  max-width: 100%;
+  align-self: flex-end;
 }
 
 .aw-rail-footer__version {
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  max-width: 100px;
+  max-width: 200px;
   flex: 1 1 auto;
   overflow: hidden;
 }

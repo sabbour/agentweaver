@@ -30,22 +30,22 @@ public sealed class SandboxOutputRedactor
         // that may end up echoed in an error response body.
         new Regex(@"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
             RegexOptions.Compiled, TimeSpan.FromSeconds(2)),
-        // Common header-style credential assignments (Authorization:/X-Api-Key: values).
-        new Regex(@"(?:Authorization|X-Api-Key)\s*:\s*[^\r\n]+",
+        // Header-style credentials. Stop at the credential boundary so later diagnostic context survives.
+        new Regex(@"[""']?(?:Authorization|X[-_]?Api[-_]?Key)[""']?\s*:\s*(?:""(?:(?:Basic|Bearer)\s+)?[^""]*""|'(?:(?:Basic|Bearer)\s+)?[^']*'|(?:(?:Basic|Bearer)\s+)?[^\s,;""'}\]]+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         // PEM private key blocks
         new Regex(@"-----BEGIN .*PRIVATE KEY-----.*?-----END .*PRIVATE KEY-----",
             RegexOptions.Compiled | RegexOptions.Singleline, TimeSpan.FromSeconds(2)),
         // Connection string password fragments
-        new Regex(@"(?:password|passwd|pwd)\s*=\s*[^\s;&,""']+",
+        new Regex(@"[""']?(?:password|passwd|pwd)[""']?\s*[:=]\s*(?:""[^""]*""|'[^']*'|[^\s;&,""'}\]]+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         new Regex(@"password=[^;]+",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         // Azure SAS token signature fragments
-        new Regex(@"sig=[^&\s]+",
+        new Regex(@"[""']?\bsig\b[""']?\s*=\s*(?:""[^""]*""|'[^']*'|[^&\s,;""'}\]]+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
         // Generic API key / secret assignments (key=value patterns)
-        new Regex(@"(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token)\s*[=:]\s*[^\s;&,""']+",
+        new Regex(@"[""']?(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|client[_-]?secret|token|secret)[""']?\s*[=:]\s*(?:""[^""]*""|'[^']*'|[^\s;&,""'}\]]+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)),
     ];
 

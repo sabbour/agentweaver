@@ -241,6 +241,7 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear the workflow's trigger config |
 | `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
 | `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |
+| `POST` | `/api/projects/{projectId}/webhooks/github/provision` | Create or update the connected repository's webhook using the project's effective GitHub identity |
 
 Workflow trigger objects use the existing top-level trigger fields (`type`, `interval`,
 `day_of_week`, `day_of_month`, `time_of_day`, `event_name`) plus an optional `if` predicate array

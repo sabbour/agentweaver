@@ -124,15 +124,74 @@ public sealed class PreviewRunnerToolProviderStartPreviewTests
         fakeApi.LastRequestBody.Should().Contain("\"target_port\":6800");
     }
 
+    [Fact]
+    public async Task StartPreviewProcess_AcceptsAbsoluteSandboxRootCwd()
+    {
+        var runner = new FakePreviewRunner();
+        var provider = NewProvider(runner);
+        var context = NewContext();
+        var tool = provider.BuildTools(context).Single(t => t.Name == "start_preview_process");
+
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
+        {
+            ["command"] = "npm run dev",
+            ["cwd"] = context.WorkingDirectory,
+        }));
+
+        runner.LastStartCwd.Should().Be(Path.GetFullPath(context.WorkingDirectory));
+    }
+
+    [Fact]
+    public async Task StartPreviewProcess_AcceptsAbsoluteContainedSubdirectoryCwd()
+    {
+        var runner = new FakePreviewRunner();
+        var provider = NewProvider(runner);
+        var context = NewContext();
+        var subdirectory = Path.Combine(context.WorkingDirectory, "apps", "web");
+        var tool = provider.BuildTools(context).Single(t => t.Name == "start_preview_process");
+
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
+        {
+            ["command"] = "npm run dev",
+            ["cwd"] = subdirectory,
+        }));
+
+        runner.LastStartCwd.Should().Be(Path.GetFullPath(subdirectory));
+    }
+
+    [Fact]
+    public async Task StartPreviewProcess_RejectsAbsoluteOutsideSandboxCwd()
+    {
+        var runner = new FakePreviewRunner();
+        var provider = NewProvider(runner);
+        var context = NewContext();
+        var outsidePath = Path.GetFullPath(Path.Combine(context.WorkingDirectory, "..", "outside"));
+        var tool = provider.BuildTools(context).Single(t => t.Name == "start_preview_process");
+
+        Func<Task> act = async () => await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["command"] = "npm run dev",
+                ["cwd"] = outsidePath,
+            }));
+
+        await act.Should().ThrowAsync<SandboxViolationException>();
+        runner.LastStartCwd.Should().BeNull();
+    }
+
     private sealed class FakePreviewRunner : IPreviewRunner
     {
+        public string? LastStartCwd { get; private set; }
         public PreviewPortObservation ObserveResult { get; set; } = new(
             SessionId: "sess-1", Port: 3000, Evidence: "e", Healthy: true, HealthEvidence: "h");
 
         public Task<PreviewProcessStartResult> StartPreviewProcessAsync(
             string command, string cwd, string? runId, string? workPlanId, string? treeHash,
-            CancellationToken ct = default) =>
-            Task.FromResult(new PreviewProcessStartResult("sess-1", 4242, DateTimeOffset.UtcNow, cwd));
+            CancellationToken ct = default)
+        {
+            LastStartCwd = cwd;
+            return Task.FromResult(new PreviewProcessStartResult("sess-1", 4242, DateTimeOffset.UtcNow, cwd));
+        }
 
         public Task<PreviewPortObservation> ObserveBoundPortAsync(
             string sessionId, TimeSpan? timeout = null, string healthPath = "/",
