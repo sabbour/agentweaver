@@ -674,14 +674,15 @@ export function ProjectSettingsPage() {
     setWebhookError(null);
     setWebhookInfo(null);
     try {
-      await apiClient.autoCreateProjectWebhook(projectId);
-      setWebhookInfo({ intent: 'success', body: 'GitHub webhook created.' });
+      const result = await apiClient.autoCreateProjectWebhook(projectId);
+      setWebhookInfo({
+        intent: 'success',
+        body: result.created
+          ? `GitHub webhook created for ${result.repository}.`
+          : `GitHub webhook for ${result.repository} was already configured and has been updated.`,
+      });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 501) {
-        setWebhookInfo({ intent: 'warning', body: 'Automatic webhook creation is coming soon. Use the manual setup steps below for now.' });
-      } else {
-        setWebhookError(formatError(err));
-      }
+      setWebhookError(formatError(err));
     } finally {
       setCreatingWebhook(false);
     }
