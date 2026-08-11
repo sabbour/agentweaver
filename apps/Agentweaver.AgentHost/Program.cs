@@ -552,6 +552,13 @@ internal sealed record ConfigureRequest
     public string? GitHubAccessToken { get; init; }
 
     /// <summary>
+    /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
+    /// separate from <see cref="GitHubAccessToken"/> because Entra deployments use different
+    /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
+    /// </summary>
+    public string? CallerBearerToken { get; init; }
+
+    /// <summary>
     /// The run's shared orchestration worktree path (e.g. <c>/workspace/{worktree}</c>). When present,
     /// the pod runs <c>SetupAsync</c> with this as its working directory — and therefore its file-tool
     /// root — instead of the static <c>AgentHost__WorkingDirectory</c> env default. This keeps every
@@ -634,7 +641,8 @@ internal sealed record ConfigureRequest
         CommitAuthorName,
         CommitAuthorEmail,
         ProjectId,
-        AgentName);
+        AgentName,
+        CallerBearerToken);
 }
 
 internal sealed record PreviewProcessStartRequest

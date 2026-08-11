@@ -2593,6 +2593,28 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task BuildTestAgentTurnInternalError_DoesNotLeakUnsupportedEventReason()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await InvokeParkBuildTestInfrastructureFailureAsync(
+            Context(coordinatorRunId),
+            workPlanId,
+            new CollectiveBuildTestInfrastructureException(
+                "agent_turn_internal_error",
+                "Agent turn ended unexpectedly before the pod reported a structured terminal failure.",
+                retryable: true));
+
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.AssemblyStatusReason.Should().Be("build_test_infra_agent_turn_internal_error");
+        state.AssemblyStatusReason.Should().NotContain("a2a_protocol_event_unsupported");
+    }
+
+    [Fact]
     public async Task BuildTestInfrastructureFailure_PersistsAssemblyEvent_WithInnerExceptionDetail()
     {
         var coordinatorRunId = RunId.New().ToString();

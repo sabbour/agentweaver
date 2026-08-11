@@ -414,7 +414,28 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             claimCreated = await CreateAgentHostClaimAsync(
                 claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
 
-            if (!claimCreated && launchContext.WorkspaceMode != ExecutionWorkspaceMode.Shared)
+            if (!claimCreated && launchContext.Purpose == AgentHostPurpose.OperatorAssistant)
+            {
+                // Every operator turn carries the CURRENT browser/platform bearer. An orphaned
+                // claim from a crashed prior turn is already configured with the old credential
+                // and /configure is intentionally one-shot, so it must never be reused.
+                _logger.LogInformation(
+                    "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} for a fresh operator-assistant caller credential.",
+                    claimName);
+                await DeleteClaimAsync(claimName).ConfigureAwait(false);
+                _podRegistry?.Unregister(runId);
+                _turnTokenRegistry?.UnregisterTurnToken(runId);
+                await Task.Delay(1000, ct).ConfigureAwait(false);
+                claimCreated = await CreateAgentHostClaimAsync(
+                    claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
+                if (!claimCreated)
+                {
+                    throw new InvalidOperationException(
+                        $"AgentHost claim '{claimName}' was deleted to refresh the operator-assistant caller credential, " +
+                        "but the replacement create still conflicted.");
+                }
+            }
+            else if (!claimCreated && launchContext.WorkspaceMode != ExecutionWorkspaceMode.Shared)
             {
                 _logger.LogInformation(
                     "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} for immutable pod-local workspace configuration (mode={Mode}).",
@@ -937,6 +958,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             turnBearerToken,
             kvUserSecretName,
             gitHubAccessToken,
+            callerBearerToken = launchContext.CallerBearerToken,
             // Keep the legacy property during rolling upgrades; new AgentHosts prefer the explicit
             // sharedWorkingDirectory descriptor and create any local workspace inside the pod.
             workingDirectory = sharedWorkingDirectory,

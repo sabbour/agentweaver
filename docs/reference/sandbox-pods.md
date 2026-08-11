@@ -185,13 +185,20 @@ Terminal forwards cause the API to emit `tool.approval_resolved` for the owning 
 
 The credential's secret-store key is derived by `PreviewRunnerCredential.SecretKey(runId)` with the
 prefix `preview-runner-cred--`; `KubernetesSandboxExecutor` mints it, persists it, and delivers its
-value in-memory through `/configure`.
+value in-memory through `/configure`. Key Vault cleanup uses soft delete rather than purge. If the
+same run launches again while that deterministic key is deleted but recoverable, the API recovers
+the key, waits up to 30 seconds for it to become writable, and replaces the recovered value with a
+fresh credential. Concurrent recovery attempts converge on the same active key. Secret values are
+never included in recovery errors or logs, and terminal cleanup continues to bound the credential
+lifetime to the backing pod without weakening Key Vault purge protection.
 
 Sources: `apps/Agentweaver.AgentHost/Program.cs:287-288,486-588`,
 `apps/Agentweaver.Api/Sandbox/AgentHostApprovalHttpClient.cs:28-112`,
 `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:2590-2718`,
 `apps/Agentweaver.Api/Sandbox/Preview/PreviewRunnerCredential.cs:22-35`, and
-`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:706-759`.
+`apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs:706-759`,
+`apps/Agentweaver.Api/Auth/KeyVaultSecretStore.cs`, and
+`apps/Agentweaver.Api/Auth/KeyVaultRecoverableSecretWriter.cs`.
 
 ## Pod naming and the executing-pod surface
 
