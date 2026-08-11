@@ -91,7 +91,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * --ghcr-token <token>, --image-api <ref>, --image-frontend <ref>,
  * --image-mcp <ref>, --image-agent-host <ref> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
- * --acr-name, --location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-location, --postgres-ha-mode, --postgres-access-mode, --namespace,
+ * --acr-name, --location, --monitoring-location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-location, --postgres-ha-mode, --postgres-access-mode, --namespace,
  * --github-client-id, --github-client-secret, -h/--help.
  */
 export function parseArgs(argv = []) {
@@ -169,6 +169,10 @@ export function parseArgs(argv = []) {
     } else if (arg === "--location" || arg.startsWith("--location=")) {
       const { value, consumed } = takeValue(i, "--location");
       flags.LOCATION = value;
+      i += consumed;
+    } else if (arg === "--monitoring-location" || arg.startsWith("--monitoring-location=")) {
+      const { value, consumed } = takeValue(i, "--monitoring-location");
+      flags.MONITORING_LOCATION = value;
       i += consumed;
     } else if (arg === "--node-vm-size" || arg.startsWith("--node-vm-size=")) {
       const { value, consumed } = takeValue(i, "--node-vm-size");
@@ -257,6 +261,7 @@ Flags:
   --cluster-name <name>
   --acr-name <name>
   --location <region>
+  --monitoring-location <region>
   --node-vm-size <sku>
   --keyvault-name <name>
   --postgres-server-name <name>
@@ -439,9 +444,10 @@ function validateCustomImageField(name, value, config) {
   }
 }
 
-function normalizePostgresConfig(config) {
+function normalizeDeploymentLocations(config) {
   return {
     ...config,
+    MONITORING_LOCATION: String(config.MONITORING_LOCATION ?? "").trim() || config.LOCATION,
     PG_LOCATION: String(config.PG_LOCATION ?? "").trim() || config.LOCATION,
     PG_ACCESS_MODE: String(config.PG_ACCESS_MODE ?? "").trim() || DEFAULTS.PG_ACCESS_MODE,
   };
@@ -464,6 +470,7 @@ function buildSchema({ prompt, az }) {
     CLUSTER_NAME: { default: DEFAULTS.CLUSTER_NAME },
     ACR_NAME: { default: DEFAULTS.ACR_NAME },
     LOCATION: { default: DEFAULTS.LOCATION },
+    MONITORING_LOCATION: {},
     NODE_VM_SIZE: {
       default: DEFAULTS.NODE_VM_SIZE,
       validate: (value) => {
@@ -636,6 +643,9 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
     validate: validateNodeVmSize,
   });
   collected.KEYVAULT_NAME = await prompt.text("Key Vault name", { default: PROVISION_KEYVAULT_NAME_SUGGESTION });
+  collected.MONITORING_LOCATION = await prompt.text("Monitoring location", {
+    default: collected.LOCATION,
+  });
   collected.PG_SERVER_NAME = await prompt.text("Postgres server name", {
     default: DEFAULTS.PG_SERVER_NAME,
     validate: validatePostgresServerName,
@@ -753,7 +763,7 @@ export async function run(opts = {}) {
   const ghcrRepository = githubRepo?.repo ?? "";
   const schema = buildSchema({ prompt, az });
   let config = await resolveConfig(schema, { flags, env, paramsFile });
-  config = normalizePostgresConfig(config);
+  config = normalizeDeploymentLocations(config);
   validatePostgresAccessConfiguration(config);
   validateEntraConfiguration(config);
   if (config.IMAGE_SOURCE === "ghcr" && (!ghcrOwner || !ghcrRepository)) {
@@ -766,6 +776,7 @@ export async function run(opts = {}) {
   log.field("Cluster", config.CLUSTER_NAME);
   log.field("ACR", config.ACR_NAME);
   log.field("Location", config.LOCATION);
+  log.field("Monitoring location preference", config.MONITORING_LOCATION);
   log.field("Node VM size", config.NODE_VM_SIZE);
   log.field("Key Vault", config.KEYVAULT_NAME);
   log.field("Postgres server", config.PG_SERVER_NAME);
@@ -796,6 +807,7 @@ export async function run(opts = {}) {
     CLUSTER_NAME: config.CLUSTER_NAME,
     ACR_NAME: config.ACR_NAME,
     LOCATION: config.LOCATION,
+    MONITORING_LOCATION: config.MONITORING_LOCATION,
     NODE_VM_SIZE: config.NODE_VM_SIZE,
     KEYVAULT_NAME: config.KEYVAULT_NAME,
     PG_SERVER_NAME: config.PG_SERVER_NAME,
@@ -829,6 +841,7 @@ export async function run(opts = {}) {
     IMAGE_FRONTEND: config.IMAGE_FRONTEND,
     IMAGE_MCP: config.IMAGE_MCP,
     IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
+    MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
     GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
     GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
@@ -857,6 +870,7 @@ export async function run(opts = {}) {
     IMAGE_FRONTEND: config.IMAGE_FRONTEND,
     IMAGE_MCP: config.IMAGE_MCP,
     IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
+    MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
     GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
     GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
@@ -913,6 +927,7 @@ export async function run(opts = {}) {
   log.field("ACR", cfg.ACR_LOGIN_SERVER);
   log.field("Namespace", cfg.NAMESPACE);
   log.field("Node VM size", cfg.NODE_VM_SIZE);
+  log.field("Monitoring location preference", cfg.MONITORING_LOCATION);
   log.field("Postgres server", cfg.PG_SERVER_NAME);
   log.field("Postgres location", cfg.PG_LOCATION);
   log.field("Postgres HA mode", cfg.PG_HA_MODE);

@@ -179,6 +179,21 @@ test("getUnexpectedIgnoredFiles allows nested package build artifacts", () => {
   assert.deepEqual(getUnexpectedIgnoredFiles(stdout), []);
 });
 
+test("getUnexpectedIgnoredFiles normalizes Windows separators and path casing", () => {
+  const stdout = [
+    "!! NODE_MODULES\\",
+    "!! Apps\\Web\\DIST\\",
+    "!! packages\\Agentweaver.Domain\\OBJ\\",
+    "!! packages\\Agentweaver.AgentRuntime\\BIN\\DEBUG\\",
+    "!! Tests\\Agentweaver.Tests\\TESTRESULTS\\",
+    "!! Scripts\\API-Harness\\Findings\\run-2026.json",
+    "!! Apps\\Agentweaver.Api\\APPSETTINGS.DEVELOPMENT.JSON",
+    "!! SRC\\Backdoor.TS",
+  ].join("\r\n");
+
+  assert.deepEqual(getUnexpectedIgnoredFiles(stdout), ["SRC\\Backdoor.TS"]);
+});
+
 test("getUnexpectedIgnoredFiles flags planted files outside recognized roots", () => {
   // Defense that still matters: an ignored file at the repo root or inside a tracked source
   // tree, and an unknown ignored directory, must be surfaced for a human to investigate.

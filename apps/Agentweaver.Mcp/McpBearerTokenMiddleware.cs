@@ -9,9 +9,10 @@ using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// ASP.NET Core middleware that protects the hosted MCP endpoint with bearer token auth.
-/// Two OAuth token types are accepted (there is NO shared static API key):
-///   1. Agentweaver-minted OAuth access token (signed JWT) — validated offline against the AS JWKS.
-///   2. GitHub OAuth token (transitional passthrough) — validated by calling GET
+/// Three bearer token types are accepted (there is NO shared static API key):
+///   1. Microsoft Entra access token used by the web/API session — validated against Entra JWKS.
+///   2. Agentweaver-minted OAuth access token (signed JWT) — validated offline against the AS JWKS.
+///   3. GitHub OAuth token (transitional passthrough) — validated by calling GET
 ///      https://api.github.com/user and caching the result in <see cref="IMemoryCache"/> for five minutes.
 ///
 /// Requests without a valid token receive 401 with {"error":"Bearer token required"}.
@@ -25,6 +26,7 @@ public sealed class McpBearerTokenMiddleware
 
     private readonly RequestDelegate _next;
     private readonly McpAccessTokenValidator _tokenValidator;
+    private readonly McpEntraAccessTokenValidator _entraTokenValidator;
     private readonly IConfiguration _configuration;
     private readonly IMemoryCache _cache;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -33,6 +35,7 @@ public sealed class McpBearerTokenMiddleware
     public McpBearerTokenMiddleware(
         RequestDelegate next,
         McpAccessTokenValidator tokenValidator,
+        McpEntraAccessTokenValidator entraTokenValidator,
         IConfiguration configuration,
         IMemoryCache cache,
         IHttpClientFactory httpClientFactory,
@@ -40,6 +43,7 @@ public sealed class McpBearerTokenMiddleware
     {
         _next = next;
         _tokenValidator = tokenValidator;
+        _entraTokenValidator = entraTokenValidator;
         _configuration = configuration;
         _cache = cache;
         _httpClientFactory = httpClientFactory;
@@ -68,7 +72,19 @@ public sealed class McpBearerTokenMiddleware
 
         var token = header[SchemePrefix.Length..].Trim();
 
-        // First path: Agentweaver-minted OAuth access token (signed JWT). Validated OFFLINE via the
+        // First path in Entra deployments: preserve the browser's platform identity end to end.
+        // The API validates the forwarded token again and remains the authorization authority.
+        var entraIdentity = await _entraTokenValidator.ValidateAsync(token, context.RequestAborted)
+            .ConfigureAwait(false);
+        if (entraIdentity is not null)
+        {
+            context.Items[UserItemKey] = entraIdentity.ObjectId;
+            context.Items["mcp.bearer_token"] = token;
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
+        // Agentweaver-minted OAuth access token (signed JWT). Validated OFFLINE via the
         // AS's cached JWKS (iss/aud/exp/RS256). The validated JWT is forwarded to the API, which
         // performs the authoritative jti-denylist check and per-user org enforcement (T7).
         var oauthIdentity = await _tokenValidator.ValidateAsync(token, context, context.RequestAborted)
@@ -81,7 +97,7 @@ public sealed class McpBearerTokenMiddleware
             return;
         }
 
-        // Second path (transitional, gated): raw GitHub OAuth token, cached for 5 minutes. Disabled by
+        // Transitional, gated path: raw GitHub OAuth token, cached for 5 minutes. Disabled by
         // setting Auth:Mcp:AllowGitHubPassthrough=false once all clients have migrated to the AS flow.
         if (AllowGitHubPassthrough())
         {

@@ -149,20 +149,20 @@ export function getUnexpectedIgnoredFiles(stdout) {
     /^\.security\//,
     /^\.worktrees\//,
     /^\.impeccable\/$/,
-    /^npm-debug\.log/,
+    /^npm-debug\.log(?:\..*)?$/,
     /\.(user|suo|userprefs)$/,
     // Local env / dev-only config, at the repo root or under a package (e.g. apps/web/.env).
     /^(?:.+\/)?\.env(\.local)?$/,
-    /^(?:.+\/)?appsettings\.Development\.json$/,
+    /^(?:.+\/)?appsettings\.development\.json$/,
     // Standard wholly-ignored dependency/build/output directory roots (git collapses these
     // to a single trailing-slash entry). Optional leading path prefix covers nested
     // packages such as packages/Agentweaver.Domain/obj/ or scripts/api-harness/node_modules/.
     /^(?:.+\/)?node_modules\/$/,
     /^(?:.+\/)?dist\/$/,
-    /^(?:.+\/)?bin\/(?:Debug\/|Release\/)?$/,
+    /^(?:.+\/)?bin\/(?:debug\/|release\/)?$/,
     /^(?:.+\/)?obj\/$/,
     /^(?:.+\/)?\.vite\/$/,
-    /^(?:.+\/)?[Tt]est[Rr]esults\/$/,
+    /^(?:.+\/)?testresults\/$/,
     /^(?:.+\/)?playwright-report\/$/,
     /^(?:.+\/)?test-results\/$/,
     /^(?:.+\/)?public\/specs\/$/,
@@ -180,5 +180,8 @@ export function getUnexpectedIgnoredFiles(stdout) {
     .map(line => line.trim())
     .filter(line => line.startsWith("!! "))
     .map(line => line.slice(3))
-    .filter(file => !allowedPatterns.some(pattern => pattern.test(file)));
+    .filter(file => {
+      const normalizedFile = file.replaceAll("\\", "/").toLowerCase();
+      return !allowedPatterns.some(pattern => pattern.test(normalizedFile));
+    });
 }
