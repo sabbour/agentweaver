@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.17.0
+
+### Minor Changes
+
+- c832c0e: Add `--image-source ghcr` to `azure:deploy-from-release`, so an already-published release can be redeployed by importing its existing GHCR images instead of rebuilding them from source. This skips a full container rebuild and never touches cluster, ACR, Postgres, identity, or monitoring infrastructure.
+
+### Patch Changes
+
+- 5962680: Recover assembly AgentHost credential rotation and reaped-pod races with one bounded, reason-specific retry, active linked-account token propagation, and structured diagnostics that stop on persistent authorization or lifecycle failures.
+- d6d5c7c: Let browser Assistant sessions use MCP tools with the current signed-in identity in Microsoft Entra deployments, while keeping the linked GitHub/Copilot credential separate and refreshing the platform token on each message.
+- 75a2acb: Make the project settings “Create webhook automatically” action provision or refresh the connected repository's signed GitHub webhook instead of returning a local placeholder error.
+- 0bf2e14: Keep Azure provisioning resilient when the AKS region does not support Log Analytics or Application Insights by selecting a nearby supported monitoring region, with an explicit override when needed.
+- 75d5b9c: Keep the signed-in account name and avatar readable by placing the sidebar version badge on its own footer row, while retaining the full build version in the badge tooltip.
+- 41975fa: Recover soft-deleted Key Vault preview-runner credential keys before retrying a launch. Recovery is bounded, safe under concurrent creators, preserves purge protection, and rotates to a fresh credential without logging secret values.
+- 04c8cfb: Allow `release:publish` to run from a normal built checkout containing standard dependency, build, test, and harness outputs, while continuing to reject untracked source and unexpected ignored files.
+- 6493f7b: Allow supervised preview processes to use canonical absolute working directories when they resolve to the run worktree or one of its subdirectories, while continuing to reject sandbox escapes.
+- 75314ba: Prevent agent-authored memory and decisions from becoming trusted cross-team prompt instructions until an authorized coordinator or project owner approves them.
+- 9ac9a97: Normalize aborted A2A turns to a single structured `agent_turn_internal_error` across general, Responsible AI, and Build & Test agents, while retaining bounded redacted diagnostics instead of exposing raw unsupported-event reasons.
+- 082b216: Make UI harness captures wait for the authenticated application shell or a caller-declared semantic target, preserve failed commands through finish, and report persistent sign-in loading states as expired authentication instead of producing false-green evidence.
+
 ## 0.16.2
 
 ### Patch Changes
