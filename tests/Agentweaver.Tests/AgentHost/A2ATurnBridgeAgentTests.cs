@@ -230,6 +230,37 @@ public sealed class A2ATurnBridgeAgentTests
     }
 
     [Fact]
+    public async Task StreamTurnAsync_TurnAbortsAfterUnstructuredFailure_NormalizesWithoutDuplicate()
+    {
+        var runner = new ThrowingTurnRunner
+        {
+            PreFailureEvent = new RunEvent(1, EventTypes.RunFailed, new
+            {
+                reason = "a2a_protocol_event_unsupported",
+                message = "Only message, task, task update events are supported. Received: None",
+            }),
+            Failure = new InvalidOperationException("transport terminated"),
+        };
+        var bridge = CreateBridge(runner);
+
+        var updates = new List<AgentResponseUpdate>();
+        Func<Task> act = async () =>
+        {
+            await foreach (var update in bridge.StreamTurnAsync(BuildTurnMessage("go", false), default))
+                updates.Add(update);
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        var runFailed = DecodeRunFailedEvents(updates);
+        runFailed.Should().ContainSingle("the existing terminal must be normalized in place, not duplicated");
+        var payload = JsonSerializer.Serialize(runFailed[0].Payload);
+        payload.Should().Contain("agent_turn_internal_error");
+        payload.Should().Contain("a2a_protocol_event_unsupported",
+            "the original reason remains available as bounded diagnostic detail");
+    }
+
+    [Fact]
     public void ExtractTurn_DecodesIsRevisionAndTask_FromSetupDataPart()
     {
         var (task, isRevision) = A2ATurnBridgeAgent.ExtractTurn(BuildTurnMessage("do the task", isRevision: true));
