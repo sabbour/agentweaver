@@ -143,11 +143,14 @@ failure so operators should not treat either path as a generic retryable AgentHo
 
 ## Diagnosing agent turn infrastructure failures
 
-Agent turns executed through AgentHost use structured terminal reasons. When the pod or
-A2A stream aborts without a typed terminal, Agentweaver emits
-`agent_turn_internal_error` with `retryable: true`. In the collective Build & Test
-stage, the corresponding assembly reason is prefixed as
-`build_test_infra_agent_turn_internal_error`.
+Agent turns executed through AgentHost use structured terminal reasons.
+`agent_turn_internal_error` with `retryable: true` is the fallback for an unstructured
+`run.failed`, an unsupported or unset A2A event, or a pod bridge turn that throws before
+emitting a structured terminal. Other A2A exceptions use `a2a_transport_failure`, whose
+retryability follows the transport error. A clean stream that ends without
+`agent.turn.end` uses retryable `agent_host_turn_incomplete`. In the collective Build &
+Test stage, the assembly reason prefixes the applicable reason with `build_test_infra_`,
+for example `build_test_infra_agent_host_turn_incomplete`.
 
 This fallback does not hide more specific outcomes. Caller cancellation remains
 cancellation, and typed timeouts or failures retain their original error code and

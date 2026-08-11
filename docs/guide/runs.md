@@ -170,18 +170,22 @@ Each agent run passes a **Responsible AI (RAI)** check before its output proceed
 
 ### Agent turn infrastructure failures
 
-If a remoted agent turn aborts before it reports a typed terminal failure, the run
-timeline reports `agent_turn_internal_error`. This is an execution-infrastructure
-failure, not a model request for changes. The terminal is marked `retryable: true`
-because the surrounding workflow may retry or redispatch the turn; it does not mean
-that the interrupted turn completed successfully.
+The run timeline reports `agent_turn_internal_error` when Agentweaver must supply a
+structured fallback: the pod bridge's turn throws without first emitting a structured
+`run.failed`, the worker receives an unstructured `run.failed`, or the A2A stream ends
+on an unsupported or unset event. This is an execution-infrastructure failure, not a
+model request for changes. The fallback is marked `retryable: true` because the
+surrounding workflow may retry or redispatch the turn; it does not mean that the
+interrupted turn completed successfully.
 
 Agentweaver does not replace more specific outcomes with this fallback:
 
 - a cancellation requested by the caller remains a cancellation;
 - an existing typed timeout or failure keeps its own error code and retryability;
-- an unstructured or missing terminal is normalized to one
-  `agent_turn_internal_error` rather than leaking a transport-specific reason.
+- other A2A exceptions become `a2a_transport_failure`, with retryability determined by
+  the transport failure;
+- a clean A2A stream end without `agent.turn.end` becomes the retryable
+  `agent_host_turn_incomplete`.
 
 The terminal may include a bounded diagnostic for troubleshooting. Credentials are
 redacted and multiline output is flattened before it reaches the run event. See the

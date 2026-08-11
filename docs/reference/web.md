@@ -294,10 +294,14 @@ Both tabs fetch live from the API; data is cached for the session tab switch.
 The underlying decision and memory responses also carry `sourceKind`,
 `sourceIdentity`, `sourceRunId`, `trustState`, `approvedBy`, and `approvedAt`. The
 current Team Memory cards do not render those fields, so use the API or MCP memory
-tools when auditing provenance or approving an upgrade. A record can therefore appear
-in the list while remaining inactive for prompt compilation: `legacy` records are
-excluded until approved, and `pending` memory cannot cross to another agent. Only
-active, `approved` architectural and scope decisions compile as team boundaries.
+tools when auditing provenance. MCP exposes decision inbox submit/list/merge/reject,
+decision create/list/update, memory record/list/get/search, session management, and
+memory import/export tools; it does not expose legacy memory promotion or decision
+approval. Use the REST-only memory `promote` and decision `approve` endpoints for those
+trust upgrades. A record can therefore appear in the list while remaining inactive for
+prompt compilation: `legacy` records are excluded until approved, and `pending` memory
+cannot cross to another agent. Only active, `approved` architectural and scope
+decisions compile as team boundaries.
 
 ### Casting wizard
 
