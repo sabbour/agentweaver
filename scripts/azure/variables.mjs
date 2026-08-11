@@ -211,6 +211,7 @@ export async function resolveVariables(options = {}) {
   const ACR_NAME = pick("ACR_NAME");
   const LOCATION = pick("LOCATION");
   const NODE_VM_SIZE = pick("NODE_VM_SIZE");
+  const MONITORING_LOCATION = env.MONITORING_LOCATION || LOCATION;
   const PG_SERVER_NAME = pick("PG_SERVER_NAME");
   const PG_LOCATION = env.PG_LOCATION || LOCATION;
   const PG_HA_MODE = pick("PG_HA_MODE");
@@ -287,6 +288,7 @@ export async function resolveVariables(options = {}) {
     ACR_NAME,
     LOCATION,
     NODE_VM_SIZE,
+    MONITORING_LOCATION,
     PG_SERVER_NAME,
     PG_LOCATION,
     PG_HA_MODE,
@@ -324,6 +326,7 @@ export function printSummary(vars, log) {
   log.field("ACR", vars.ACR_LOGIN_SERVER);
   log.field("Location", vars.LOCATION);
   log.field("Node VM size", vars.NODE_VM_SIZE);
+  log.field("Monitoring location preference", vars.MONITORING_LOCATION);
   log.field("Postgres server", vars.PG_SERVER_NAME);
   log.field("Postgres location", vars.PG_LOCATION);
   log.field("Postgres HA mode", vars.PG_HA_MODE);

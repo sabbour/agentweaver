@@ -19,6 +19,7 @@ const CFG = Object.freeze({
   CLUSTER_NAME: "agentweaver-aks",
   ACR_NAME: "agentweaverregistry",
   LOCATION: "westus2",
+  MONITORING_LOCATION: "westus2",
   NODE_VM_SIZE: "Standard_D4s_v6",
   PG_LOCATION: "westus2",
   PG_ACCESS_MODE: "private",
@@ -479,6 +480,164 @@ test("15-provision-monitoring: creates workspace + app insights when absent, sto
   const runCommands = exec.calls.run.map((c) => `${c.cmd} ${c.args.slice(0, 4).join(" ")}`);
   assert.ok(runCommands.some((c) => c.includes("workspace create")));
   assert.ok(runCommands.some((c) => c.includes("component create")));
+});
+
+test("15-provision-monitoring: falls back to a nearby region supported by both resource providers", async () => {
+  const warnings = [];
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd !== "az") return null;
+      if (args[0] === "monitor" && args[3] === "show" && !args.includes("--query")) {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (args[0] === "provider" && args.includes("Microsoft.OperationalInsights")) {
+        return { stdout: JSON.stringify(["East US 2", "West US 2"]), stderr: "", code: 0 };
+      }
+      if (args[0] === "provider" && args.includes("Microsoft.Insights")) {
+        return { stdout: JSON.stringify(["East US 2", "North Europe"]), stderr: "", code: 0 };
+      }
+      if (args[0] === "account" && args[1] === "list-locations") {
+        return {
+          stdout: JSON.stringify([
+            { name: "eastus2euap", displayName: "East US 2 EUAP", metadata: { geographyGroup: "US" } },
+            { name: "eastus2", displayName: "East US 2", metadata: { geographyGroup: "US" } },
+            { name: "westus2", displayName: "West US 2", metadata: { geographyGroup: "US" } },
+            { name: "northeurope", displayName: "North Europe", metadata: { geographyGroup: "Europe" } },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return null;
+    },
+  });
+  const log = { ...noopLog(), warn: (message) => warnings.push(message) };
+
+  await provisionMonitoring.run(
+    { ...CFG, LOCATION: "eastus2euap", MONITORING_LOCATION: "eastus2euap" },
+    { exec, log },
+  );
+
+  const creates = exec.calls.run.filter((call) => call.cmd === "az" && call.args.includes("create"));
+  const workspaceCreate = creates.find((call) => call.args.includes("log-analytics"));
+  const appInsightsCreate = creates.find((call) => call.args.includes("app-insights"));
+  assert.equal(workspaceCreate.args[workspaceCreate.args.indexOf("--location") + 1], "eastus2");
+  assert.equal(appInsightsCreate.args[appInsightsCreate.args.indexOf("--location") + 1], "eastus2");
+  assert.ok(warnings.some((warning) => /Using Azure-supported fallback 'eastus2'/.test(warning)));
+});
+
+test("15-provision-monitoring: honors an explicit supported monitoring location", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd !== "az") return null;
+      if (args[0] === "monitor" && args[3] === "show" && !args.includes("--query")) {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (args[0] === "provider") {
+        return { stdout: JSON.stringify(["North Europe", "West US 2"]), stderr: "", code: 0 };
+      }
+      if (args[0] === "account" && args[1] === "list-locations") {
+        return {
+          stdout: JSON.stringify([{ name: "northeurope", displayName: "North Europe", metadata: { geographyGroup: "Europe" } }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return null;
+    },
+  });
+
+  await provisionMonitoring.run(
+    { ...CFG, LOCATION: "eastus2euap", MONITORING_LOCATION: "northeurope" },
+    { exec, log: noopLog() },
+  );
+
+  for (const create of exec.calls.run.filter((call) => call.cmd === "az" && call.args.includes("create"))) {
+    if (!create.args.includes("--location")) continue;
+    assert.equal(create.args[create.args.indexOf("--location") + 1], "northeurope");
+  }
+});
+
+test("15-provision-monitoring: does not query provider locations or move existing resources", async () => {
+  const exec = fakeExec();
+  await provisionMonitoring.run(
+    { ...CFG, LOCATION: "eastus2euap", MONITORING_LOCATION: "eastus2" },
+    { exec, log: noopLog() },
+  );
+
+  assert.equal(exec.calls.capture.some((call) => call.args[0] === "provider"), false);
+  assert.equal(exec.calls.run.some((call) => call.args.includes("workspace") && call.args.includes("create")), false);
+  assert.equal(exec.calls.run.some((call) => call.args.includes("app-insights") && call.args.includes("create")), false);
+});
+
+test("15-provision-monitoring: preserves an existing workspace while completing a partial upgrade", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd !== "az") return null;
+      if (args[0] === "monitor" && args[1] === "log-analytics" && args[3] === "show") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args[0] === "monitor" && args[1] === "app-insights" && args[3] === "show" && !args.includes("--query")) {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (args[0] === "provider") {
+        return { stdout: JSON.stringify(["East US 2"]), stderr: "", code: 0 };
+      }
+      if (args[0] === "account" && args[1] === "list-locations") {
+        return {
+          stdout: JSON.stringify([
+            { name: "eastus2euap", displayName: "East US 2 EUAP", metadata: { geographyGroup: "US" } },
+            { name: "eastus2", displayName: "East US 2", metadata: { geographyGroup: "US" } },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return null;
+    },
+  });
+
+  await provisionMonitoring.run(
+    { ...CFG, LOCATION: "eastus2euap", MONITORING_LOCATION: "eastus2euap" },
+    { exec, log: noopLog() },
+  );
+
+  assert.equal(exec.calls.run.some((call) => call.args.includes("workspace") && call.args.includes("create")), false);
+  const appInsightsCreate = exec.calls.run.find(
+    (call) => call.args.includes("app-insights") && call.args.includes("create"),
+  );
+  assert.equal(appInsightsCreate.args[appInsightsCreate.args.indexOf("--location") + 1], "eastus2");
+  assert.equal(
+    exec.calls.capture.filter((call) => call.args[0] === "provider").length,
+    1,
+    "only the missing Application Insights resource type should be checked",
+  );
+});
+
+test("15-provision-monitoring: dry-run keeps the configured location without requiring provider output", async () => {
+  const exec = fakeExec({
+    captureImpl: (cmd, args) => {
+      if (cmd === "az" && args[0] === "monitor" && args[3] === "show" && !args.includes("--query")) {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (cmd === "az" && args[0] === "provider") {
+        return { stdout: "", stderr: "", code: 0, dryRun: true };
+      }
+      return null;
+    },
+  });
+  const messages = [];
+  const log = { ...noopLog(), info: (message) => messages.push(message) };
+
+  await provisionMonitoring.run(
+    { ...CFG, LOCATION: "eastus2euap", MONITORING_LOCATION: "eastus2euap" },
+    { exec, log },
+  );
+
+  const creates = exec.calls.run.filter((call) => call.args.includes("--location"));
+  assert.ok(creates.length >= 2);
+  assert.ok(creates.every((call) => call.args[call.args.indexOf("--location") + 1] === "eastus2euap"));
+  assert.ok(messages.some((message) => /Dry-run: using configured monitoring location/.test(message)));
 });
 
 // -------------------- 16-provision-oauth-signing-key.mjs --------------------

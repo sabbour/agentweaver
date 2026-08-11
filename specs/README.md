@@ -51,7 +51,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Govern agent tool use and questions](./agent-execution-sandbox/govern-agent-tools-and-questions.md) — [#19](https://github.com/sabbour/agentweaver/issues/19)
 - [Isolate agent execution and workspaces](./agent-execution-sandbox/isolate-agent-workspaces.md) — [#20](https://github.com/sabbour/agentweaver/issues/20)
 - [Preview apps running inside a sandbox](./agent-execution-sandbox/preview-sandbox-apps.md) — [#21](https://github.com/sabbour/agentweaver/issues/21)
-- [Build Docker/OCI images from AgentHost via rootless BuildKit on Kubernetes (design only)](./agent-execution-sandbox/build-images-with-rootless-buildkit.md) — [#582](https://github.com/sabbour/agentweaver/issues/582)
+- [Build Docker/OCI images from AgentHost via rootless BuildKit on Kubernetes (implementation-ready design)](./agent-execution-sandbox/build-images-with-rootless-buildkit.md) — [#582](https://github.com/sabbour/agentweaver/issues/582)
 
 ## Agent configuration
 

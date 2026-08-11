@@ -122,6 +122,25 @@ npm run azure:deploy-from-commit -- <sha-or-ref>
 - Configure `APPLICATIONINSIGHTS_CONNECTION_STRING` **and** a Log Analytics workspace id (`APPLICATIONINSIGHTS_WORKSPACE_ID` or `ApplicationInsights:WorkspaceId`) unless your connection string already embeds `WorkspaceId`.
 - If App Insights is not configured, or no workspace id can be resolved, the metrics endpoint returns empty arrays so the dashboard degrades gracefully.
 
+### AgentHost assembly recovery diagnostics
+
+Assembly RAI and Build & Test use the coordinator run's warm-pool AgentHost. Recovery is
+bounded and reason-specific:
+
+- `agenthost_configure_copilot_token_refreshed` means AgentHost explicitly rejected the
+  configured Copilot credential, the API rotated that exact user/account scope, and Build &
+  Test will recreate the one-time-configured pod once.
+- `agenthost_configure_copilot_unauthorized` means no different credential could be
+  produced. The failure is not retried; the submitting user must repair GitHub/Copilot
+  authorization.
+- `agenthost_pod_reaped` triggers one inline pod redispatch for a non-terminal run.
+  `agenthost_pod_reaped_recovery_exhausted` means the replacement was also unavailable and
+  stops further automatic redispatch.
+
+Logs include `RunId`, pod name, reason, recovery action, and bounded attempt counts. Token
+values are never logged. These reasons distinguish pod lifecycle churn from credential
+failure so operators should not treat either path as a generic retryable AgentHost error.
+
 ## Related scripts
 
 | Command | Purpose |

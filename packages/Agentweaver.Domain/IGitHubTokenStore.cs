@@ -67,4 +67,16 @@ public interface IGitHubTokenStore
 public interface IGitHubAccessTokenProvider
 {
     Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default);
+
+    /// <summary>
+    /// Handles an access token that a downstream GitHub consumer explicitly rejected as
+    /// unauthorized. Implementations may rotate refreshable credentials, but must return
+    /// <see langword="null"/> when re-authentication is required. The default preserves existing
+    /// providers that only support expiry-based refresh.
+    /// </summary>
+    Task<string?> RefreshAfterUnauthorizedAsync(
+        GitHubTokenScope scope,
+        string? rejectedAccessToken,
+        CancellationToken ct = default) =>
+        GetValidAccessTokenAsync(scope, ct);
 }

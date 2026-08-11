@@ -64,8 +64,6 @@ public sealed class RemoteAgentProxyOptions
 /// </summary>
 public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSource
 {
-    internal sealed record StructuredRunFailure(string ErrorCode, string Message, bool? IsRetryable);
-
     public const string StreamingHttpClientName = "a2a-sandbox-pod-streaming";
 
     private const string A2AAgentId = "agentweaver-worker-proxy";
@@ -331,11 +329,26 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                             if (string.Equals(runEvent.Type, EventTypes.AgentTurnEnd, StringComparison.Ordinal))
                                 sawTurnEnd = true;
 
-                            if (TryReadStructuredFailure(runEvent) is { } structuredFailure)
-                                lastStructuredFailure = structuredFailure;
+                            var forwardedEvent = runEvent;
+                            if (string.Equals(runEvent.Type, EventTypes.RunFailed, StringComparison.Ordinal))
+                            {
+                                if (StructuredRunFailureTerminal.TryRead(runEvent) is null)
+                                {
+                                    forwardedEvent =
+                                        StructuredRunFailureTerminal.NormalizeUnstructuredFailure(runEvent);
+                                    _logger.LogWarning(
+                                        "RemoteAgentProxy: normalized an unstructured run.failed event for " +
+                                        "run '{RunId}' to {ErrorCode}.",
+                                        _runId,
+                                        StructuredRunFailureTerminal.InternalErrorCode);
+                                }
+
+                                lastStructuredFailure =
+                                    StructuredRunFailureTerminal.TryRead(forwardedEvent);
+                            }
 
                             if (_streamWriter is not null)
-                                await _streamWriter.WriteAsync(runEvent, ct).ConfigureAwait(false);
+                                await _streamWriter.WriteAsync(forwardedEvent, ct).ConfigureAwait(false);
                         }
                         else
                         {
@@ -367,17 +380,32 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                 var trail = recentUpdateTrail.Count > 0
                     ? string.Join(" -> ", recentUpdateTrail)
                     : "(no prior updates observed this turn)";
+                var terminal = StructuredRunFailureTerminal.CreateInternalError(
+                    "Agent turn ended unexpectedly before a structured terminal response was received.",
+                    $"{ex.GetType().Name}: {ex.Message}; recent update trail: {trail}");
 
                 _logger.LogWarning(
                     ex,
-                    "RemoteAgentProxy: A2A SDK rejected an unsupported stream event for run '{RunId}'. " +
-                    "Recent update trail leading up to this frame: {Trail}",
-                    _runId, trail);
+                    "RemoteAgentProxy: A2A stream ended with an unsupported or unset event for run " +
+                    "'{RunId}'; synthesizing {ErrorCode}. Recent update trail: {Trail}",
+                    _runId,
+                    StructuredRunFailureTerminal.InternalErrorCode,
+                    trail);
+
+                if (_streamWriter is not null && !_streamWriter.TryWrite(terminal))
+                {
+                    _logger.LogWarning(
+                        "RemoteAgentProxy: could not forward the synthesized {ErrorCode} terminal for " +
+                        "run '{RunId}' because the run-event writer was closed.",
+                        StructuredRunFailureTerminal.InternalErrorCode,
+                        _runId);
+                }
 
                 throw new WorkflowAgentInfrastructureException(
-                    "a2a_protocol_event_unsupported",
-                    $"RemoteAgentProxy: the A2A SDK rejected an unsupported stream event for run '{_runId}': " +
-                    $"{ex.Message} (recent update trail: {trail})",
+                    StructuredRunFailureTerminal.InternalErrorCode,
+                    "Agent turn ended unexpectedly before the pod reported a structured terminal failure. " +
+                    $"Diagnostic: {StructuredRunFailureTerminal.SanitizeDiagnostic(ex.Message)} " +
+                    $"(recent update trail: {trail})",
                     ex,
                     isRetryable: true);
             }
@@ -623,54 +651,6 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         catch
         {
             // Deadline cleanup is best-effort and must never replace the typed timeout.
-        }
-    }
-
-    internal static StructuredRunFailure? TryReadStructuredFailure(RunEvent runEvent)
-    {
-        if (!string.Equals(runEvent.Type, EventTypes.RunFailed, StringComparison.Ordinal))
-            return null;
-
-        try
-        {
-            var payload = runEvent.Payload is JsonElement element
-                ? element
-                : JsonSerializer.SerializeToElement(runEvent.Payload);
-            if (payload.ValueKind != JsonValueKind.Object)
-                return null;
-
-            string? errorCode = null;
-            string? message = null;
-            bool? retryable = null;
-            foreach (var property in payload.EnumerateObject())
-            {
-                if (property.Name.Equals("errorCode", StringComparison.OrdinalIgnoreCase) &&
-                    property.Value.ValueKind == JsonValueKind.String)
-                {
-                    errorCode = property.Value.GetString();
-                }
-                else if (property.Name.Equals("message", StringComparison.OrdinalIgnoreCase) &&
-                         property.Value.ValueKind == JsonValueKind.String)
-                {
-                    message = property.Value.GetString();
-                }
-                else if (property.Name.Equals("retryable", StringComparison.OrdinalIgnoreCase) &&
-                         property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                {
-                    retryable = property.Value.GetBoolean();
-                }
-            }
-
-            return string.IsNullOrWhiteSpace(errorCode)
-                ? null
-                : new StructuredRunFailure(
-                    errorCode,
-                    string.IsNullOrWhiteSpace(message) ? errorCode : message,
-                    retryable);
-        }
-        catch
-        {
-            return null;
         }
     }
 

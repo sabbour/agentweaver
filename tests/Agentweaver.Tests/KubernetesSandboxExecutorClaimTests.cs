@@ -1,8 +1,10 @@
 using System.Reflection;
+using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -93,19 +95,82 @@ public sealed class KubernetesSandboxExecutorClaimTests
     private sealed class StubGitHubAccessTokenProvider : IGitHubAccessTokenProvider
     {
         private readonly string? _validToken;
-        public StubGitHubAccessTokenProvider(string? validToken) => _validToken = validToken;
+        private readonly string? _refreshedToken;
+
+        public StubGitHubAccessTokenProvider(string? validToken, string? refreshedToken = null)
+        {
+            _validToken = validToken;
+            _refreshedToken = refreshedToken;
+        }
+
+        public GitHubTokenScope? LastValidScope { get; private set; }
+        public GitHubTokenScope? LastRejectedScope { get; private set; }
+        public string? RejectedToken { get; private set; }
+
         public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult(_validToken);
+            Task.FromResult(RecordValidScope(scope));
+
+        public Task<string?> RefreshAfterUnauthorizedAsync(
+            GitHubTokenScope scope,
+            string? rejectedAccessToken,
+            CancellationToken ct = default)
+        {
+            LastRejectedScope = scope;
+            RejectedToken = rejectedAccessToken;
+            return Task.FromResult(_refreshedToken);
+        }
+
+        private string? RecordValidScope(GitHubTokenScope scope)
+        {
+            LastValidScope = scope;
+            return _validToken;
+        }
+    }
+
+    private sealed class EffectiveScopeGitHubTokenStore : IGitHubTokenStore, IEffectiveGitHubTokenScopeResolver
+    {
+        private readonly GitHubTokenScope _scope;
+        private readonly GitHubTokenEntry _entry;
+
+        public EffectiveScopeGitHubTokenStore(GitHubTokenScope scope, GitHubTokenEntry entry)
+        {
+            _scope = scope;
+            _entry = entry;
+        }
+
+        public Task<GitHubTokenScope> ResolveEffectiveScopeAsync(
+            string userId,
+            CancellationToken ct = default) =>
+            Task.FromResult(_scope);
+
+        public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult(_entry);
+
+        public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult<GitHubToken?>(null);
+
+        public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult<GitHubIdentity?>(null);
+
+        public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     // Records the /configure POST so the warm-pool deferred-config contract can be asserted.
     private sealed class RecordingConfigureHandler : HttpMessageHandler
     {
         private readonly string _responseBody;
+        private readonly HttpStatusCode _statusCode;
 
-        public RecordingConfigureHandler(string responseBody = """{"configured":true}""")
+        public RecordingConfigureHandler(
+            string responseBody = """{"configured":true}""",
+            HttpStatusCode statusCode = HttpStatusCode.OK)
         {
             _responseBody = responseBody;
+            _statusCode = statusCode;
         }
 
         public string? RequestUri { get; private set; }
@@ -118,7 +183,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
             Body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            return new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_responseBody),
             };
@@ -182,6 +247,25 @@ public sealed class KubernetesSandboxExecutorClaimTests
                     resp.RequestMessage = request;
                     return Task.FromResult(resp);
                 }
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    private sealed class ConflictFirstClaimHandler : DelegatingHandler
+    {
+        public int ClaimCreateRequests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (IsClaimPost(request) && ++ClaimCreateRequests == 1)
+            {
+                var response = ConflictResponse();
+                response.RequestMessage = request;
+                return Task.FromResult(response);
             }
 
             return base.SendAsync(request, cancellationToken);
@@ -331,6 +415,84 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 "the pod must fetch ONLY the run owner's KV secret (base32-encoded user id)");
     }
 
+    [Fact]
+    public async Task LaunchAgentHostPod_operator_configure_carries_platform_caller_token_separately()
+    {
+        const string runId = "run-claim-operator-caller";
+        const string callerBearerToken = "entra-platform-bearer-token";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            accessTokenProvider: new StubGitHubAccessTokenProvider("linked-github-token"));
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                CallerBearerToken: callerBearerToken));
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        var body = doc.RootElement;
+        body.GetProperty("callerBearerToken").GetString().Should().Be(callerBearerToken);
+        body.GetProperty("gitHubAccessToken").GetString().Should().Be("linked-github-token");
+        body.GetProperty("callerBearerToken").GetString().Should().NotBe(
+            body.GetProperty("gitHubAccessToken").GetString(),
+            "the Entra platform credential and linked GitHub/Copilot credential have different trust purposes");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_operator_recreates_existing_claim_before_sending_current_token()
+    {
+        const string runId = "run-claim-operator-refresh";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-2"}}}""");
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-2$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-2"},"status":{"podIP":"10.0.0.8"}}""");
+
+        var conflictFirst = new ConflictFirstClaimHandler();
+        var configureHandler = new RecordingConfigureHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflictFirst, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            turnTokenRegistry: turnTokens,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler));
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                CallerBearerToken: "current-entra-token"));
+
+        conflictFirst.ClaimCreateRequests.Should().Be(2,
+            "an existing one-shot-configured operator pod must be replaced before a refreshed bearer is delivered");
+        fake.Requests.Should().Contain(request =>
+            request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("callerBearerToken").GetString().Should().Be("current-entra-token");
+        turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty();
+    }
+
     // Issue #523: a Build & Test gate can launch its AgentHost pod for the first time (a fresh,
     // never-before-/configure'd warm pod) many minutes after the run's earlier subtask stages —
     // long enough for the submitting user's Copilot-entitled OAuth token to cross its expiry skew
@@ -371,6 +533,84 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "store read so a newly-launched pod never receives a stale/near-expiry access token");
     }
 
+    [Fact]
+    public async Task LaunchAgentHostPod_configure_uses_active_linked_scope_for_secret_and_refreshed_token()
+    {
+        const string runId = "run-claim-linked-scope";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var effectiveScope = GitHubTokenScope.ForLinkedIdentity("entra-user", "octocat");
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var tokenStore = new EffectiveScopeGitHubTokenStore(
+            effectiveScope,
+            new GitHubTokenEntry(GitHubTokenStatus.SignedIn, "raw-linked-token"));
+        var accessTokenProvider = new StubGitHubAccessTokenProvider("fresh-linked-token");
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-user"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            tokenStore: tokenStore,
+            accessTokenProvider: accessTokenProvider);
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        accessTokenProvider.LastValidScope.Should().Be(effectiveScope,
+            "the pre-resolved token and Key Vault secret must target the same active linked identity");
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("fresh-linked-token");
+        doc.RootElement.GetProperty("kvUserSecretName").GetString().Should()
+            .Be(KeyVaultSecretStore.SanitizeKey(effectiveScope.Key));
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_configure_unauthorized_refreshes_once_and_requests_pod_recreation()
+    {
+        const string runId = "run-claim-auth-recovery";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var effectiveScope = GitHubTokenScope.ForLinkedIdentity("entra-user", "octocat");
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler(
+            """{"error":"agenthost_configure_copilot_unauthorized","message":"GitHub Copilot is not authorized."}""",
+            HttpStatusCode.Unauthorized);
+        var accessTokenProvider = new StubGitHubAccessTokenProvider(
+            validToken: "rejected-token",
+            refreshedToken: "rotated-token");
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-user"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            tokenStore: new EffectiveScopeGitHubTokenStore(
+                effectiveScope,
+                new GitHubTokenEntry(GitHubTokenStatus.SignedIn, "rejected-token")),
+            accessTokenProvider: accessTokenProvider);
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var exception = await act.Should().ThrowAsync<AgentHostConfigureException>();
+        exception.Which.Reason.Should().Be("agenthost_configure_copilot_token_refreshed");
+        exception.Which.Retryable.Should().BeTrue();
+        exception.Which.RecoveryAction.Should().Be("recreate_pod_with_refreshed_credential");
+        accessTokenProvider.LastRejectedScope.Should().Be(effectiveScope);
+        accessTokenProvider.RejectedToken.Should().Be("rejected-token");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
+            "the one-time-configured pod must be discarded before the refreshed credential is retried");
+    }
+
     // Regression safety net: when no refresh-aware provider is wired (e.g. an older DI graph or a
     // narrower test), the executor must still fall back to the raw token-store read exactly as
     // before — the fix must be additive, never regressing the pre-#523 fallback behavior.
@@ -401,6 +641,35 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("raw-store-token");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_configure_does_not_fallback_to_raw_token_when_refresh_provider_returns_null()
+    {
+        const string runId = "run-claim-no-stale-fallback";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            tokenStore: new StubGitHubTokenStore(
+                new GitHubTokenEntry(GitHubTokenStatus.SignedIn, "stale-raw-token")),
+            accessTokenProvider: new StubGitHubAccessTokenProvider(validToken: null));
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("gitHubAccessToken").ValueKind.Should().Be(JsonValueKind.Null,
+            "a refresh failure must not weaken auth by forwarding the stale raw token");
     }
 
     [Fact]

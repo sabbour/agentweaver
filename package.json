@@ -26,6 +26,7 @@
     "deps:verify": "node scripts/ci/shared-deps.mjs verify",
     "validate:layer": "node scripts/ci/validate.mjs --profile layer",
     "validate:full": "node scripts/ci/validate.mjs --profile full",
+    "demo:record": "node scripts/demo-recording/cli.mjs",
     "changeset": "changeset add",
     "changeset:status": "changeset status --verbose",
     "changeset:check": "node scripts/changesets/check.mjs",
@@ -40,5 +41,5 @@
     "@types/node": "^26.1.1",
     "playwright": "^1.49.0"
   },
-  "version": "0.16.2"
+  "version": "0.17.0"
 }

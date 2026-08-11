@@ -14,6 +14,11 @@ namespace Agentweaver.SandboxFs;
 /// </summary>
 public static class SandboxPathValidator
 {
+    // Windows paths are case-insensitive. Other hosts use ordinal comparison so a
+    // case-variant sibling cannot be mistaken for the configured sandbox directory.
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     /// <summary>
     /// Validates that <paramref name="requestedPath"/> (relative, from the agent)
     /// resolves to a location inside <paramref name="sandboxRoot"/> with no
@@ -38,9 +43,8 @@ public static class SandboxPathValidator
         var combined = Path.GetFullPath(Path.Combine(sandboxRoot, requestedPath));
 
         // 4. Lexical prefix check (catches obvious escapes after normalization).
-        var rootNoSep = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
-        if (!combined.StartsWith(rootNoSep + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(combined, rootNoSep, StringComparison.OrdinalIgnoreCase))
+        var rootFull = Path.GetFullPath(sandboxRoot);
+        if (!IsSameOrDescendant(combined, rootFull))
             throw new SandboxViolationException(requestedPath, sandboxRoot, "path resolves outside sandbox boundary");
 
         // 5. Walk each existing ancestor and reject reparse points (symlinks, junctions).
@@ -49,9 +53,25 @@ public static class SandboxPathValidator
         return combined;
     }
 
+    /// <summary>
+    /// Validates either an agent-relative path or an absolute contained path.
+    /// Absolute-looking input is routed through <see cref="ValidateAbsoluteContained"/>
+    /// so device, UNC, drive-relative, traversal-escape, and reparse-point checks remain
+    /// centralized in the shared sandbox policy.
+    /// </summary>
+    public static string ValidateRelativeOrAbsoluteContained(string requestedPath, string sandboxRoot)
+    {
+        if (string.IsNullOrWhiteSpace(requestedPath))
+            throw new SandboxViolationException(requestedPath ?? string.Empty, sandboxRoot, "empty path is not permitted");
+
+        return ShouldTreatAsAbsoluteOrEscapeAttempt(requestedPath)
+            ? ValidateAbsoluteContained(requestedPath, sandboxRoot)
+            : ValidateAndResolve(requestedPath, sandboxRoot);
+    }
+
     private static void ValidateNoReparsePointsInAncestors(string fullPath, string sandboxRoot)
     {
-        var rootFull = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
+        var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sandboxRoot));
         var current = fullPath;
 
         while (true)
@@ -60,8 +80,8 @@ public static class SandboxPathValidator
             if (parent is null) break;
 
             // Stop once we reach or pass the sandbox root - the root itself is trusted.
-            if (string.Equals(current, rootFull, StringComparison.OrdinalIgnoreCase)) break;
-            if (!current.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) break;
+            if (string.Equals(current, rootFull, PathComparison)) break;
+            if (!IsSameOrDescendant(current, rootFull)) break;
 
             if (Directory.Exists(current))
             {
@@ -126,12 +146,10 @@ public static class SandboxPathValidator
 
         // Normalize both paths
         var normalized = Path.GetFullPath(absolutePath);
-        var rootNormalized = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
-        var rootPrefix = rootNormalized + Path.DirectorySeparatorChar;
+        var rootNormalized = Path.GetFullPath(sandboxRoot);
 
-        // Lexical prefix check (case-insensitive on Windows)
-        if (!normalized.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(normalized, rootNormalized, StringComparison.OrdinalIgnoreCase))
+        // Lexical prefix check using the host platform's path case semantics.
+        if (!IsSameOrDescendant(normalized, rootNormalized))
             throw new SandboxViolationException(absolutePath, sandboxRoot, "path resolves outside sandbox boundary");
 
         // Reparse-point ancestor walk
@@ -202,11 +220,24 @@ public static class SandboxPathValidator
         if (realPath is null)
             throw new SandboxViolationException(originalPath, sandboxRoot, "could not resolve real path of opened file");
 
-        var rootNoSep = Path.GetFullPath(sandboxRoot).TrimEnd(Path.DirectorySeparatorChar);
-        if (!realPath.StartsWith(rootNoSep + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(realPath, rootNoSep, StringComparison.OrdinalIgnoreCase))
+        var rootFull = Path.GetFullPath(sandboxRoot);
+        if (!IsSameOrDescendant(realPath, rootFull))
             throw new SandboxViolationException(originalPath, sandboxRoot,
                 $"opened file resolves to '{realPath}' which is outside sandbox boundary");
+    }
+
+    private static bool IsSameOrDescendant(string candidatePath, string rootPath)
+    {
+        var candidate = Path.GetFullPath(candidatePath);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
+
+        if (string.Equals(candidate, root, PathComparison))
+            return true;
+
+        var rootPrefix = Path.EndsInDirectorySeparator(root)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        return candidate.StartsWith(rootPrefix, PathComparison);
     }
 
     [SupportedOSPlatform("windows")]

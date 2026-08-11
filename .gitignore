@@ -94,3 +94,6 @@ recordings/final/*
 !recordings/final/*.webm
 !recordings/final/*.mp4
 .playwright-cli/
+
+# Demo recording authentication and disposable Edge profile data.
+scripts/demo-recording/.auth/

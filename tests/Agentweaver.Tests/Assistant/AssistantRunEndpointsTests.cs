@@ -89,6 +89,38 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
+    public async Task SendMessage_UsesCurrentCallerTokenEachTurn_WithoutPersistingIt()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var initialClient = AuthedClient(factory);
+
+        var start = await initialClient.PostAsJsonAsync("/api/assistant/runs", new { });
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var refreshedClient = AuthedClient(factory, AssistantWebApplicationFactory.RefreshedTestToken);
+        var firstTurn = await refreshedClient.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "first refreshed turn" });
+        firstTurn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var newestClient = AuthedClient(factory, AssistantWebApplicationFactory.NewestTestToken);
+        var secondTurn = await newestClient.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages", new { message = "second refreshed turn" });
+        secondTurn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        factory.Agent.Requests.Select(request => request.CallerBearerToken).Should().Equal(
+            [
+                AssistantWebApplicationFactory.RefreshedTestToken,
+                AssistantWebApplicationFactory.NewestTestToken,
+            ],
+            "every turn must use the bearer presented on that request rather than caching the session's original credential");
+
+        var persistedEvents = JsonSerializer.Serialize(await GetEventsAsync(initialClient, runId));
+        persistedEvents.Should().NotContain(AssistantWebApplicationFactory.RefreshedTestToken)
+            .And.NotContain(AssistantWebApplicationFactory.NewestTestToken,
+                "caller bearer tokens are transport-only secrets and must never enter run history or event payloads");
+    }
+
+    [Fact]
     public async Task SendMessage_ConcurrentToolCallbacks_PersistWithoutSequenceGaps()
     {
         await using var factory = new AssistantWebApplicationFactory();
@@ -787,11 +819,13 @@ public sealed class AssistantRunEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
-    private static HttpClient AuthedClient(AssistantWebApplicationFactory factory)
+    private static HttpClient AuthedClient(
+        AssistantWebApplicationFactory factory,
+        string token = AgentweaverWebApplicationFactory.TestApiKey)
     {
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", AgentweaverWebApplicationFactory.TestApiKey);
+            new AuthenticationHeaderValue("Bearer", token);
         return client;
     }
 
@@ -837,6 +871,8 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
 {
     public const string TestApiKey = AgentweaverWebApplicationFactory.TestApiKey;
     public const string TestUser = AgentweaverWebApplicationFactory.TestUser;
+    public const string RefreshedTestToken = "assistant-refreshed-token";
+    public const string NewestTestToken = "assistant-newest-token";
 
     public FakeOperatorAssistantAgent Agent { get; } = new();
     public int MaxConcurrentRunsPerUser { get; set; } = 3;
@@ -861,6 +897,10 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["Auth:Mode"] = "GitHubLegacy",
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
+                ["Auth:Keys:refreshed:Token"] = RefreshedTestToken,
+                ["Auth:Keys:refreshed:User"] = TestUser,
+                ["Auth:Keys:newest:Token"] = NewestTestToken,
+                ["Auth:Keys:newest:User"] = TestUser,
                 ["Git:Author:Name"] = "Test",
                 ["Git:Author:Email"] = "test@localhost",
                 ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
@@ -924,6 +964,7 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
     /// the conversation <see cref="OperatorAssistantRequest.History"/> the caller supplied (e.g. to
     /// verify a resumed run's opening turn was seeded with a prior conversation's transcript).</summary>
     public OperatorAssistantRequest? LastRequest { get; private set; }
+    public System.Collections.Concurrent.ConcurrentQueue<OperatorAssistantRequest> Requests { get; } = new();
 
     public async Task<OperatorAssistantResponse> RunTurnAsync(
         OperatorAssistantRequest request,
@@ -931,6 +972,7 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
         CancellationToken ct)
     {
         LastRequest = request;
+        Requests.Enqueue(request);
 
         if (sink is not null && EmitApproval)
         {

@@ -84,7 +84,11 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
             RunId: envelope.ContextRunId,
             ModelId: null,
             AgentDefinition: envelope.AgentDefinition,
-            CallerBearerToken: _runtimeState.GitHubAccessToken ?? string.Empty,
+            // New API versions provide the platform caller credential separately from the linked
+            // GitHub token. Fall back during rolling upgrades from an older API.
+            CallerBearerToken: _runtimeState.CallerBearerToken
+                ?? _runtimeState.GitHubAccessToken
+                ?? string.Empty,
             History: envelope.History);
 
         // Fail closed rather than silently degrading to an ungated turn: OperatorAssistantAgent only
