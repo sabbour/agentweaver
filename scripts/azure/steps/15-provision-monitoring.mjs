@@ -12,6 +12,7 @@
 // bash/PowerShell version) -- see that file's monitoring-provisioning check.
 //
 // cfg is the resolved variables.mjs output: RESOURCE_GROUP, LOCATION,
+// MONITORING_LOCATION,
 // KEYVAULT_NAME, CLUSTER_NAME, IDENTITY_CLIENT_ID (optional -- workspace role
 // assignment is skipped with a warning when absent, matching the bash
 // script's `[[ -z "${IDENTITY_CLIENT_ID:-}" ]]` guard).
@@ -23,6 +24,158 @@ import * as secretDefault from "../lib/secret.mjs";
 
 export const LOG_ANALYTICS_WORKSPACE_NAME = "agentweaver-logs";
 export const APP_INSIGHTS_NAME = "agentweaver-insights";
+const MONITORING_RESOURCE_TYPES = Object.freeze([
+  {
+    namespace: "Microsoft.OperationalInsights",
+    resourceType: "workspaces",
+    label: "Log Analytics workspaces",
+  },
+  {
+    namespace: "Microsoft.Insights",
+    resourceType: "components",
+    label: "Application Insights components",
+  },
+]);
+
+function normalizeLocation(value) {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function flattenLocationStrings(value) {
+  if (typeof value === "string") return [value];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(flattenLocationStrings);
+}
+
+function parseJson(stdout) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+}
+
+function canonicalLocation(raw, metadataByAlias) {
+  const normalized = normalizeLocation(raw);
+  return metadataByAlias.get(normalized)?.name ?? normalized;
+}
+
+function locationMetadataByAlias(locations) {
+  const byAlias = new Map();
+  for (const location of locations) {
+    if (!location?.name) continue;
+    for (const alias of [location.name, location.displayName, location.regionalDisplayName]) {
+      if (alias) byAlias.set(normalizeLocation(alias), location);
+    }
+  }
+  return byAlias;
+}
+
+async function querySupportedLocations(exec, resource) {
+  const result = await exec.capture(
+    "az",
+    [
+      "provider",
+      "show",
+      "--namespace",
+      resource.namespace,
+      "--query",
+      `resourceTypes[?resourceType=='${resource.resourceType}'] | [0].locations`,
+      "--output",
+      "json",
+    ],
+    { allowFailure: true },
+  );
+  if (result.dryRun) return { dryRun: true, locations: [] };
+  const parsed = parseJson(result.stdout);
+  return {
+    dryRun: false,
+    locations: result.code === 0 ? flattenLocationStrings(parsed) : [],
+  };
+}
+
+async function queryLocationMetadata(exec) {
+  const result = await exec.capture("az", ["account", "list-locations", "--output", "json"], {
+    allowFailure: true,
+  });
+  if (result.dryRun || result.code !== 0) return [];
+  const parsed = parseJson(result.stdout);
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function fallbackRank(candidate, requested, metadataByAlias) {
+  const requestedMetadata = metadataByAlias.get(normalizeLocation(requested));
+  const candidateMetadata = metadataByAlias.get(normalizeLocation(candidate));
+  const requestedPaired = new Set(
+    (requestedMetadata?.metadata?.pairedRegion ?? []).map((region) => normalizeLocation(region?.name)),
+  );
+  const euapBase = normalizeLocation(requested).replace(/euap$/, "");
+
+  if (normalizeLocation(candidate) === euapBase) return 0;
+  if (requestedPaired.has(normalizeLocation(candidate))) return 1;
+  if (
+    requestedMetadata?.metadata?.geographyGroup &&
+    candidateMetadata?.metadata?.geographyGroup === requestedMetadata.metadata.geographyGroup
+  ) {
+    return 2;
+  }
+  return 3;
+}
+
+/**
+ * Selects one Azure region that supports every monitoring resource that still
+ * needs to be created. Existing resources are deliberately excluded so
+ * upgrades never try to move or recreate them.
+ */
+export async function selectMonitoringLocation(requestedLocation, resources, { exec, log }) {
+  const requested = String(requestedLocation ?? "").trim();
+  const supportResults = await Promise.all(resources.map((resource) => querySupportedLocations(exec, resource)));
+  if (supportResults.some((result) => result.dryRun)) {
+    log.info(`Dry-run: using configured monitoring location '${requested}' without live provider discovery.`);
+    return requested;
+  }
+
+  const metadata = await queryLocationMetadata(exec);
+  const metadataByAlias = locationMetadataByAlias(metadata);
+  const supportSets = supportResults.map((result) =>
+    new Set(result.locations.map((location) => canonicalLocation(location, metadataByAlias))),
+  );
+
+  if (supportSets.some((set) => set.size === 0)) {
+    log.warn(
+      `Azure provider location metadata was unavailable for ${resources
+        .filter((_, index) => supportSets[index].size === 0)
+        .map((resource) => resource.label)
+        .join(" and ")}; attempting configured monitoring location '${requested}'.`,
+    );
+    return requested;
+  }
+
+  const requestedCanonical = canonicalLocation(requested, metadataByAlias);
+  if (supportSets.every((set) => set.has(requestedCanonical))) return requestedCanonical;
+
+  const common = [...supportSets[0]].filter((location) => supportSets.every((set) => set.has(location)));
+  if (common.length === 0) {
+    const details = resources
+      .map((resource, index) => `${resource.label}: ${[...supportSets[index]].sort().join(", ")}`)
+      .join("; ");
+    throw new Error(
+      `No common Azure region supports all monitoring resources that must be created. ${details}. ` +
+        "Set MONITORING_LOCATION (or --monitoring-location) after verifying provider availability.",
+    );
+  }
+
+  common.sort((a, b) => {
+    const rankDifference = fallbackRank(a, requested, metadataByAlias) - fallbackRank(b, requested, metadataByAlias);
+    return rankDifference || a.localeCompare(b);
+  });
+  const selected = common[0];
+  log.warn(
+    `Monitoring location '${requested}' is unavailable for ${resources.map((resource) => resource.label).join(" and ")}. ` +
+      `Using Azure-supported fallback '${selected}'. Existing monitoring resources are never moved.`,
+  );
+  return selected;
+}
 
 /**
  * Provisions Application Insights + AKS Managed Prometheus: faithful port of
@@ -37,7 +190,9 @@ export async function run(cfg, opts = {}) {
   log.info("");
   log.section("Provision Monitoring");
   log.field("Resource Group", cfg.RESOURCE_GROUP);
-  log.field("Location", cfg.LOCATION);
+  const requestedMonitoringLocation = cfg.MONITORING_LOCATION || cfg.LOCATION;
+  log.field("AKS location", cfg.LOCATION);
+  log.field("Monitoring location preference", requestedMonitoringLocation);
   log.field("Key Vault", cfg.KEYVAULT_NAME);
   log.field("Cluster", cfg.CLUSTER_NAME);
   log.info("");
@@ -49,6 +204,20 @@ export async function run(cfg, opts = {}) {
     ["monitor", "log-analytics", "workspace", "show", "--resource-group", cfg.RESOURCE_GROUP, "--workspace-name", LOG_ANALYTICS_WORKSPACE_NAME],
     { allowFailure: true },
   );
+  const appInsightsShow = await exec.capture(
+    "az",
+    ["monitor", "app-insights", "component", "show", "--app", APP_INSIGHTS_NAME, "--resource-group", cfg.RESOURCE_GROUP],
+    { allowFailure: true },
+  );
+  const missingResources = [];
+  if (workspaceShow.code !== 0) missingResources.push(MONITORING_RESOURCE_TYPES[0]);
+  if (appInsightsShow.code !== 0) missingResources.push(MONITORING_RESOURCE_TYPES[1]);
+  const monitoringLocation =
+    missingResources.length > 0
+      ? await selectMonitoringLocation(requestedMonitoringLocation, missingResources, { exec, log })
+      : requestedMonitoringLocation;
+  if (missingResources.length > 0) log.field("Selected monitoring location", monitoringLocation);
+
   if (workspaceShow.code === 0) {
     log.ok("Log Analytics workspace already exists.");
   } else {
@@ -62,7 +231,7 @@ export async function run(cfg, opts = {}) {
       "--workspace-name",
       LOG_ANALYTICS_WORKSPACE_NAME,
       "--location",
-      cfg.LOCATION,
+      monitoringLocation,
     ]);
     log.info("  [created] Log Analytics workspace.");
   }
@@ -149,11 +318,6 @@ export async function run(cfg, opts = {}) {
 
   // -- 3. Application Insights (workspace-based) --
   log.info(`Ensuring Application Insights '${APP_INSIGHTS_NAME}'...`);
-  const appInsightsShow = await exec.capture(
-    "az",
-    ["monitor", "app-insights", "component", "show", "--app", APP_INSIGHTS_NAME, "--resource-group", cfg.RESOURCE_GROUP],
-    { allowFailure: true },
-  );
   if (appInsightsShow.code === 0) {
     log.ok("Application Insights already exists.");
   } else {
@@ -167,7 +331,7 @@ export async function run(cfg, opts = {}) {
       "--app",
       APP_INSIGHTS_NAME,
       "--location",
-      cfg.LOCATION,
+      monitoringLocation,
       "--kind",
       "web",
       "--workspace",

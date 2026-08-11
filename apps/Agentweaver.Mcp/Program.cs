@@ -100,6 +100,7 @@ public sealed class McpProgram
         builder.Services.AddHttpClient();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<McpAccessTokenValidator>();
+        builder.Services.AddSingleton<McpEntraAccessTokenValidator>();
 
         var mcpBuilder = builder.Services.AddMcpServer().WithToolsFromAssembly();
 

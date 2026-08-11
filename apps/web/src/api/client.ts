@@ -411,10 +411,12 @@ export class AgentweaverApiClient {
     );
   }
 
-  autoCreateProjectWebhook(projectId: string): Promise<void> {
-    void projectId;
-    // TODO(#641): replace this placeholder with the real server-side GitHub webhook creation endpoint.
-    return Promise.reject(new ApiError(501, 'Automatic GitHub webhook creation is not implemented yet.'));
+  autoCreateProjectWebhook(projectId: string): Promise<import('./types').GitHubWebhookProvisioningResponse> {
+    return this.request<import('./types').GitHubWebhookProvisioningResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/webhooks/github/provision`,
+      {},
+    );
   }
 
   deleteProject(projectId: string): Promise<void> {

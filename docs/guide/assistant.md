@@ -20,6 +20,8 @@ Anything the Assistant does is something an external MCP client (Claude Desktop,
 
 Open **Sessions** in the left nav (it's a collapsible top-level section, next to Projects) and click **New Session**. Type your first message — the assistant responds using whichever MCP tools are relevant, and the conversation becomes an entry in your session list.
 
+The Assistant uses the same signed-in Agentweaver identity as the browser request. In Microsoft Entra deployments, the current Entra bearer is validated by the MCP service and forwarded to the API, while the separately linked GitHub account continues to supply GitHub/Copilot access. You do not need to sign in again inside the conversation.
+
 ## Resuming a session
 
 Sessions persist. Close the tab, come back a day later, or get routed to a different API replica behind the load balancer — reopening a session from the list picks the conversation back up with its full history intact.

@@ -76,11 +76,6 @@ public sealed class SandboxPathValidatorTests : IDisposable
         {
             return;
         }
-        finally
-        {
-            try { File.Delete(outsideTarget); }
-            catch { /* best effort */ }
-        }
 
         try
         {
@@ -90,6 +85,8 @@ public sealed class SandboxPathValidatorTests : IDisposable
         finally
         {
             try { File.Delete(symlinkPath); }
+            catch { /* best effort */ }
+            try { File.Delete(outsideTarget); }
             catch { /* best effort */ }
         }
     }
@@ -130,5 +127,168 @@ public sealed class SandboxPathValidatorTests : IDisposable
 
         result.Should().StartWith(_sandboxRoot);
         result.Should().EndWith("file.txt");
+    }
+
+    [Fact]
+    public void RelativeOrAbsolute_AbsoluteSandboxRoot_IsAccepted()
+    {
+        var result = SandboxPathValidator.ValidateRelativeOrAbsoluteContained(_sandboxRoot, _sandboxRoot);
+
+        result.Should().Be(Path.GetFullPath(_sandboxRoot));
+    }
+
+    [Fact]
+    public void RelativeOrAbsolute_EmptyPath_IsRejectedBySharedDispatcher()
+    {
+        var act = () => SandboxPathValidator.ValidateRelativeOrAbsoluteContained("", _sandboxRoot);
+
+        act.Should().Throw<SandboxViolationException>();
+    }
+
+    [Fact]
+    public void RelativeOrAbsolute_AbsoluteSubdirectoryInsideSandbox_IsAccepted()
+    {
+        var subdirectory = Path.Combine(_sandboxRoot, "preview", "app");
+
+        var result = SandboxPathValidator.ValidateRelativeOrAbsoluteContained(subdirectory, _sandboxRoot);
+
+        result.Should().Be(Path.GetFullPath(subdirectory));
+    }
+
+    [Fact]
+    public void RelativeOrAbsolute_AbsoluteTraversalOutsideSandbox_IsRejected()
+    {
+        var outsidePath = Path.Combine(_sandboxRoot, "..", "outside");
+
+        var act = () => SandboxPathValidator.ValidateRelativeOrAbsoluteContained(outsidePath, _sandboxRoot);
+
+        act.Should().Throw<SandboxViolationException>();
+    }
+
+    [Fact]
+    public void RelativeOrAbsolute_AbsolutePrefixSibling_IsRejected()
+    {
+        var siblingPath = _sandboxRoot + "-outside";
+
+        var act = () => SandboxPathValidator.ValidateRelativeOrAbsoluteContained(siblingPath, _sandboxRoot);
+
+        act.Should().Throw<SandboxViolationException>();
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\file.txt")]
+    [InlineData(@"\\?\C:\sandbox")]
+    [InlineData(@"\\.\C:\sandbox")]
+    [InlineData("C:relative-to-drive")]
+    [InlineData(@"D:\outside")]
+    public void RelativeOrAbsolute_WindowsAbsoluteEscapeForms_AreRejectedOnEveryPlatform(string path)
+    {
+        var act = () => SandboxPathValidator.ValidateRelativeOrAbsoluteContained(path, _sandboxRoot);
+
+        act.Should().Throw<SandboxViolationException>();
+    }
+
+    [Fact]
+    public void AbsoluteContained_WindowsAlternateSeparatorsInsideSandbox_AreAccepted()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(_sandboxRoot, "preview", "app").Replace('\\', '/');
+
+        var result = SandboxPathValidator.ValidateAbsoluteContained(path, _sandboxRoot);
+
+        result.Should().Be(Path.GetFullPath(path));
+    }
+
+    [Fact]
+    public void AbsoluteContained_PathCaseUsesHostSecuritySemantics()
+    {
+        var parent = Path.GetDirectoryName(_sandboxRoot)!;
+        var differentlyCasedRoot = Path.Combine(
+            parent,
+            Path.GetFileName(_sandboxRoot).ToUpperInvariant());
+
+        if (OperatingSystem.IsWindows())
+        {
+            SandboxPathValidator.ValidateAbsoluteContained(differentlyCasedRoot, _sandboxRoot)
+                .Should().Be(Path.GetFullPath(differentlyCasedRoot));
+        }
+        else
+        {
+            var act = () => SandboxPathValidator.ValidateAbsoluteContained(differentlyCasedRoot, _sandboxRoot);
+            act.Should().Throw<SandboxViolationException>();
+        }
+    }
+
+    [Fact]
+    public void RelativeOrAbsolute_DirectorySymlinkEscapingSandbox_IsRejected()
+    {
+        var outsideDirectory = Path.Combine(Path.GetTempPath(), $"outside-{Guid.NewGuid():N}");
+        var symlinkPath = Path.Combine(_sandboxRoot, "linked-directory");
+        Directory.CreateDirectory(outsideDirectory);
+
+        try
+        {
+            try
+            {
+                Directory.CreateSymbolicLink(symlinkPath, outsideDirectory);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            var requestedPath = Path.Combine(symlinkPath, "preview");
+            var act = () => SandboxPathValidator.ValidateRelativeOrAbsoluteContained(requestedPath, _sandboxRoot);
+
+            act.Should().Throw<SandboxViolationException>();
+        }
+        finally
+        {
+            try { Directory.Delete(symlinkPath); }
+            catch { /* best effort */ }
+            try { Directory.Delete(outsideDirectory, recursive: true); }
+            catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void ValidateSandboxRoot_SymlinkOrJunctionRoot_IsRejected()
+    {
+        var realDirectory = Path.Combine(Path.GetTempPath(), $"real-root-{Guid.NewGuid():N}");
+        var linkedRoot = Path.Combine(Path.GetTempPath(), $"linked-root-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(realDirectory);
+
+        try
+        {
+            try
+            {
+                Directory.CreateSymbolicLink(linkedRoot, realDirectory);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            var act = () => SandboxPathValidator.ValidateSandboxRoot(linkedRoot);
+
+            act.Should().Throw<SandboxViolationException>();
+        }
+        finally
+        {
+            try { Directory.Delete(linkedRoot); }
+            catch { /* best effort */ }
+            try { Directory.Delete(realDirectory, recursive: true); }
+            catch { /* best effort */ }
+        }
     }
 }

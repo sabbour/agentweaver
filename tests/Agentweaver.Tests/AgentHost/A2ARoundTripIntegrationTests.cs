@@ -442,8 +442,8 @@ public sealed class A2ARoundTripIntegrationTests
         // over a REAL A2A HTTP transport, and that:
         //  - the pod's OWN IToolApprovalGate — not the worker's — is what a tool-approval grant resolves;
         //  - a gated tool call is blocked until granted (fails closed while pending);
-        //  - the OAuth token and run id delivered via the existing /configure contract
-        //    (AgentHostRunConfiguration.GitHubAccessToken / RunId) are what reaches the assistant request;
+        //  - the platform caller token and run id delivered via the existing /configure contract
+        //    are what reaches the assistant request, independently of the linked GitHub token;
         //  - the turn completes with the definitive agent.turn.end marker (no phantom-incomplete failure).
         var port = GetFreeTcpPort();
         var runtimeState = new AgentHostRuntimeState();
@@ -457,7 +457,8 @@ public sealed class A2ARoundTripIntegrationTests
             SharedWorkingDirectory: null,
             Purpose: AgentHostPurpose.OperatorAssistant,
             ProjectId: "proj-1",
-            AgentName: "Operator")).Should().BeTrue();
+            AgentName: "Operator",
+            CallerBearerToken: "entra-platform-token-xyz")).Should().BeTrue();
 
         var approvalGate = new InMemoryToolApprovalGate();
         var fakeAssistant = new GatedFakeOperatorAssistantAgent();
@@ -537,8 +538,9 @@ public sealed class A2ARoundTripIntegrationTests
             fakeAssistant.LastRequest.Should().NotBeNull();
             fakeAssistant.LastRequest!.ConversationId.Should().Be("run-operator-roundtrip-1");
             fakeAssistant.LastRequest.CallerUser.Should().Be("user-1");
-            fakeAssistant.LastRequest.CallerBearerToken.Should().Be("gh-oauth-token-abc",
-                "the OAuth token must arrive via the SAME GitHubAccessToken field the existing /configure contract already carries");
+            fakeAssistant.LastRequest.CallerBearerToken.Should().Be("entra-platform-token-xyz",
+                "MCP calls must preserve the platform caller credential rather than substituting the linked GitHub/Copilot token");
+            fakeAssistant.LastRequest.CallerBearerToken.Should().NotBe("gh-oauth-token-abc");
             fakeAssistant.LastRequest.ProjectId.Should().Be("proj-1");
             fakeAssistant.LastRequest.Message.Should().Be("please run the tool");
             fakeAssistant.LastRequest.AgentDefinition.Should().Be("You are the operator.");
@@ -578,7 +580,8 @@ public sealed class A2ARoundTripIntegrationTests
             GitHubAccessToken: "gh-oauth-token",
             PreviewRunnerCredential: null,
             SharedWorkingDirectory: null,
-            Purpose: AgentHostPurpose.OperatorAssistant));
+            Purpose: AgentHostPurpose.OperatorAssistant,
+            CallerBearerToken: "platform-caller-token"));
 
         var runner = new OperatorPodTurnRunner(
             new GatedFakeOperatorAssistantAgent(),
