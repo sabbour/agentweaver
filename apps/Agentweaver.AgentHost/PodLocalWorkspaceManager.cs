@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
 using Microsoft.Extensions.Options;
 
 namespace Agentweaver.AgentHost;
@@ -11,11 +12,8 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal sealed class PodLocalWorkspaceManager
 {
-    private const string SandboxHomeDirectoryName = ".agentweaver-home";
-
     private static readonly HashSet<string> NestedRepositoryScanExcludedDirectories = new(
         [
-            SandboxHomeDirectoryName,
             ".git",
             ".next",
             "bin",
@@ -30,15 +28,18 @@ internal sealed class PodLocalWorkspaceManager
 
     private readonly AgentHostOptions _options;
     private readonly ILogger<PodLocalWorkspaceManager> _logger;
+    private readonly KataBwrapExecutor? _kataExecutor;
     private PreparedWorkspace? _preparedWorkspace;
     private string? _agentScratchPath;
 
     public PodLocalWorkspaceManager(
         IOptions<AgentHostOptions> options,
-        ILogger<PodLocalWorkspaceManager> logger)
+        ILogger<PodLocalWorkspaceManager> logger,
+        ISandboxExecutor? sandboxExecutor = null)
     {
         _options = options.Value;
         _logger = logger;
+        _kataExecutor = sandboxExecutor as KataBwrapExecutor;
     }
 
     public async Task<PreparedWorkspace> PrepareAsync(
@@ -133,7 +134,8 @@ internal sealed class PodLocalWorkspaceManager
                     spec.BaseCommitSha)
                 .ConfigureAwait(false);
 
-            ConfigureSandboxHome(spec.RunId);
+            var runtimeHome = ConfigureSandboxHome(spec.RunId);
+            _kataExecutor?.RegisterRuntimeHome(workspacePath, runtimeHome);
             var prepared = new PreparedWorkspace(
                 spec.RunId,
                 workspacePath,
@@ -491,7 +493,7 @@ internal sealed class PodLocalWorkspaceManager
         }
     }
 
-    private void ConfigureSandboxHome(string runId)
+    private string ConfigureSandboxHome(string runId)
     {
         var home = Path.Combine(
             Path.GetFullPath(_options.ExecutionScratchRoot),
@@ -507,6 +509,7 @@ internal sealed class PodLocalWorkspaceManager
         Environment.SetEnvironmentVariable("XDG_CACHE_HOME", cache);
         Environment.SetEnvironmentVariable("XDG_DATA_HOME", data);
         Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", config);
+        return home;
     }
 
     private static async Task<string> RunGitAsync(

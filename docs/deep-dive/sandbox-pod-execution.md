@@ -186,7 +186,8 @@ refer to git metadata outside the worktree directory and the generic warm pool c
 mounts after adoption. `KataBwrapExecutor` therefore applies the per-run filesystem policy at the
 **process/mount boundary**, not by parsing shell syntax:
 
-- only the current run worktree, its run-scoped scratch, pod-private HOME/tmp, and the exact linked
+- only the current run worktree, its explicitly registered run HOME, authorized run-scoped scratch,
+  pod-private tmp, and the exact linked
   worktree git metadata are bind-mounted; git control metadata is read-only, while the platform
   performs the durable commit after the turn;
 - the PVC root and sibling worktrees are absent, so absolute paths, variable indirection, `..`,
@@ -385,7 +386,7 @@ stages the nested directory as ordinary files, and restores the metadata even on
 The discovery walk is deliberately bounded operationally:
 
 - it checks cancellation while popping and enumerating directories;
-- it prunes `.git`, `.agentweaver-home`, `.next`, `bin`, `build`, `dist`, `node_modules`, and `obj`
+- it prunes `.git`, `.next`, `bin`, `build`, `dist`, `node_modules`, and `obj`
   unless that directory is itself a nested repository root;
 - it does not traverse reparse points; and
 - filesystem access failures become a typed `writeback_invalid` failure instead of silently producing
@@ -396,21 +397,24 @@ that an implementation turn intentionally created inside an otherwise ignored pa
 
 ##### One HOME/XDG cache contract for every toolchain
 
-Each pod-local checkout gets an ignored `.agentweaver-home` directory containing:
+Each pod-local run gets a HOME outside the checkout at
+`<execution-scratch>/runtime-home/<run-hash>`. `PodLocalWorkspaceManager` creates the directory and
+its XDG children, then registers that exact path with `KataBwrapExecutor` for the run workspace:
 
-| Variable | Relative value |
+| Variable | Registered value |
 | --- | --- |
-| `HOME` | `.agentweaver-home` |
-| `XDG_CACHE_HOME` | `.agentweaver-home/.cache` |
-| `XDG_DATA_HOME` | `.agentweaver-home/.local/share` |
-| `XDG_CONFIG_HOME` | `.agentweaver-home/.config` |
+| `HOME` | `<runtime-home>` |
+| `XDG_CACHE_HOME` | `<runtime-home>/.cache` |
+| `XDG_DATA_HOME` | `<runtime-home>/.local/share` |
+| `XDG_CONFIG_HOME` | `<runtime-home>/.config` |
 
 This tech-agnostic contract replaced the former matrix of npm-, Yarn-, and pnpm-specific variables.
 Tools that follow HOME/XDG conventions now place caches and state on the same fast scratch disk
-without every new ecosystem requiring another environment-variable exception. The directory is added
-to `.git/info/exclude`, so cache state cannot enter write-back. The WSL/bubblewrap executor also
-derives and binds the same sandbox home inside the isolated command, preserving the contract across
-the local executor boundary.
+without every new ecosystem requiring another environment-variable exception. Because the runtime
+HOME is outside the checkout, it cannot enter write-back. Kata shell and preview children fail closed
+until the workspace and runtime HOME are both registered, bind only the registered HOME read-write,
+and rebuild HOME/XDG from that immutable registration. Inherited or command-supplied HOME/XDG values
+cannot select another mount or override the registered values.
 
 Preview command discovery still reads the API-visible tree, but `PreviewStep` maps the resolved
 relative cwd into the verified local checkout. The preview therefore sees the exact dependencies and
@@ -755,13 +759,14 @@ Where this lives:
 | --- | --- |
 | Scratch checkout creation, immutable commit/tree verification | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:38-139` |
 | Alternate index, commit creation, literal non-force push | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:152-326` |
-| HOME/XDG directory creation and environment | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:459-483` |
+| HOME/XDG directory creation and Kata registration | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs` |
 | Cancellable, pruned nested-repository discovery | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:575-628` |
 | Nested metadata removal, content staging, gitlink rejection | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:631-735` |
 | Writable-turn finalization after the agent response | `apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:198-250` |
 | Existing in-pod GitHub token store | `apps/Agentweaver.AgentHost/PodGitHubTokenStore.cs:6-49` |
 | Local-writable launch coordinates | `apps/Agentweaver.Api/Sandbox/IRunAgentHostContextResolver.cs:65-99` |
 | API-side descriptor validation and authoritative fast-forward | `apps/Agentweaver.Api/Git/WorktreeManager.cs:482-644` |
+| Immutable Kata HOME mount and child environment | `packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs` |
 | HOME propagation through WSL/bubblewrap | `packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-158` |
 | Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/base/sandbox-template-agenthost.yaml:139-175` |
 

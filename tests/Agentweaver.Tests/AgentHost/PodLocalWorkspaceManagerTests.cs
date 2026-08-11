@@ -3,6 +3,8 @@ extern alias agenthost;
 using System.Diagnostics;
 using System.Text.Json;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.SandboxFs;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -120,7 +122,9 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
         var repository = CreateRepository();
         var commitSha = Git(repository, "rev-parse", "integration");
         var treeHash = Git(repository, "rev-parse", "integration^{tree}");
-        var manager = Manager();
+        var executor = new KataBwrapExecutor(
+            protectedRoots: [Path.Combine(_root, "shared-workspace")]);
+        var manager = Manager(executor);
         var sandboxHomeVariables = new[]
         {
             "HOME",
@@ -157,6 +161,17 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
                 .Should().Be(Path.Combine(runtimeHome, ".config"));
             foreach (var variable in sandboxHomeVariables)
                 Directory.Exists(Environment.GetEnvironmentVariable(variable)!).Should().BeTrue();
+
+            executor.RegisterTrustedWorkspace(prepared.WorkspacePath);
+            var command = new SandboxCommand(
+                "echo ok",
+                prepared.WorkspacePath,
+                null,
+                new SandboxFsPolicy([prepared.WorkspacePath], [], []),
+                5000);
+            executor.BuildMountPlan(command).Should().ContainSingle(mount =>
+                mount.Source == runtimeHome && !mount.ReadOnly);
+            executor.BuildChildEnvironment(command)["HOME"].Should().Be(runtimeHome);
         }
         finally
         {
@@ -302,14 +317,15 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
         visitedDirectoryCount.Should().BeLessThan(directoryCount);
     }
 
-    private PodLocalWorkspaceManager Manager() =>
+    private PodLocalWorkspaceManager Manager(ISandboxExecutor? sandboxExecutor = null) =>
         new(
             Options.Create(new AgentHostOptions
             {
                 ExecutionScratchRoot = Path.Combine(_root, "scratch"),
                 ExecutionScratchMinimumFreeBytes = 0,
             }),
-            NullLogger<PodLocalWorkspaceManager>.Instance);
+            NullLogger<PodLocalWorkspaceManager>.Instance,
+            sandboxExecutor);
 
     private PodLocalWorkspaceSpec Spec(
         string repository,

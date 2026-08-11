@@ -16,10 +16,12 @@ namespace Agentweaver.SandboxExec;
 public sealed class KataBwrapExecutor : ISandboxExecutor
 {
     private static readonly string[] SystemReadOnlyRoots = ["/usr", "/etc", "/opt"];
-    private static readonly string[] PodPrivateReadWriteRoots = ["/home/appuser", "/tmp", "/var/tmp"];
+    private static readonly string[] PodPrivateReadWriteRoots = ["/tmp", "/var/tmp"];
     private readonly ILogger? _logger;
     private readonly IReadOnlyList<string> _protectedRoots;
     private readonly ConcurrentDictionary<string, IReadOnlyList<MountSpec>> _trustedWorkspaces =
+        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _runtimeHomes =
         new(StringComparer.Ordinal);
 
     public bool IsRealIsolation => true;
@@ -153,6 +155,44 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         }
     }
 
+    /// <summary>
+    /// Registers the exact run-scoped HOME created by the platform for a workspace. The mapping is
+    /// immutable and is the only source used for HOME/XDG environment values and mounts.
+    /// </summary>
+    public void RegisterRuntimeHome(string workingDirectory, string runtimeHome)
+    {
+        var workspace = ValidateMountSource(workingDirectory);
+        var home = ValidateMountSource(runtimeHome);
+        if (!Directory.Exists(home))
+        {
+            throw new SandboxViolationException(
+                home, workspace, "registered runtime HOME must be a directory");
+        }
+        if (IsSamePath(home, workspace)
+            || IsDescendant(home, workspace)
+            || IsDescendant(workspace, home))
+        {
+            throw new SandboxViolationException(
+                home, workspace, "registered runtime HOME must be disjoint from the run workspace");
+        }
+
+        foreach (var path in RuntimeHomeDirectories(home))
+        {
+            if (!Directory.Exists(path))
+            {
+                throw new SandboxViolationException(
+                    path, home, "registered runtime HOME is missing an authoritative XDG directory");
+            }
+        }
+
+        if (!_runtimeHomes.TryAdd(workspace, home)
+            && !IsSamePath(_runtimeHomes[workspace], home))
+        {
+            throw new SandboxViolationException(
+                home, workspace, "registered runtime HOME changed after registration");
+        }
+    }
+
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command,
         CancellationToken ct = default)
@@ -246,6 +286,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             throw new PlatformNotSupportedException("Kata bubblewrap isolation requires Linux.");
 
         var mounts = BuildMountPlan(command);
+        var environment = BuildChildEnvironment(command);
         var psi = new ProcessStartInfo
         {
             FileName = "bwrap",
@@ -286,12 +327,6 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         }
 
         Add(psi, "--clearenv");
-        var environment = DefaultEnvironment();
-        if (command.Environment is not null)
-        {
-            foreach (var pair in command.Environment)
-                environment[pair.Key] = pair.Value;
-        }
         foreach (var pair in environment)
             Add(psi, "--setenv", pair.Key, pair.Value);
 
@@ -306,29 +341,10 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
     internal IReadOnlyList<MountSpec> BuildMountPlan(SandboxCommand command)
     {
         var mounts = new List<MountSpec>();
-        var workingDirectory = ValidateMountSource(command.WorkingDirectory);
-        if (_protectedRoots.Any(root => IsSamePath(workingDirectory, root)))
-        {
-            throw new SandboxViolationException(
-                workingDirectory,
-                string.Join(", ", _protectedRoots),
-                "mounting a protected shared root is not permitted");
-        }
-        var trustedWorkspace = _trustedWorkspaces.Keys
-            .Where(root => IsSamePath(workingDirectory, root) || IsDescendant(workingDirectory, root))
-            .OrderByDescending(root => root.Length)
-            .FirstOrDefault();
-        var isUnderProtectedRoot = _protectedRoots.Any(root =>
-            IsSamePath(workingDirectory, root) || IsDescendant(workingDirectory, root));
-        if (trustedWorkspace is null && isUnderProtectedRoot)
-        {
-            throw new SandboxViolationException(
-                workingDirectory,
-                string.Join(", ", _protectedRoots),
-                "workspace under a protected shared mount was not registered before model execution");
-        }
+        var (trustedWorkspace, runtimeHome) = ResolveExecutionRegistration(command.WorkingDirectory);
 
-        AddMount(mounts, trustedWorkspace ?? workingDirectory, readOnly: false);
+        AddMount(mounts, trustedWorkspace, readOnly: false);
+        AddMount(mounts, runtimeHome, readOnly: false);
 
         foreach (var path in command.FilesystemPolicy.ReadWritePaths)
             AddMount(mounts, path, readOnly: false);
@@ -338,13 +354,66 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         foreach (var path in PodPrivateReadWriteRoots.Where(Directory.Exists))
             AddMount(mounts, path, readOnly: false);
 
-        if (trustedWorkspace is not null)
-        {
-            foreach (var mount in _trustedWorkspaces[trustedWorkspace])
-                AddMount(mounts, mount.Source, mount.ReadOnly);
-        }
+        foreach (var mount in _trustedWorkspaces[trustedWorkspace])
+            AddMount(mounts, mount.Source, mount.ReadOnly);
 
         return CollapseMounts(mounts);
+    }
+
+    internal IReadOnlyDictionary<string, string> BuildChildEnvironment(SandboxCommand command)
+    {
+        var (_, runtimeHome) = ResolveExecutionRegistration(command.WorkingDirectory);
+        var environment = DefaultEnvironment(runtimeHome);
+        if (command.Environment is not null)
+        {
+            foreach (var pair in command.Environment)
+                environment[pair.Key] = pair.Value;
+        }
+
+        ApplyAuthoritativeRuntimeHome(environment, runtimeHome);
+        return environment;
+    }
+
+    private (string Workspace, string RuntimeHome) ResolveExecutionRegistration(
+        string workingDirectory)
+    {
+        var fullWorkingDirectory = ValidateMountSource(workingDirectory);
+        if (_protectedRoots.Any(root =>
+                IsSamePath(fullWorkingDirectory, root)
+                || IsDescendant(root, fullWorkingDirectory)))
+        {
+            throw new SandboxViolationException(
+                fullWorkingDirectory,
+                string.Join(", ", _protectedRoots),
+                "mounting a protected shared root or its ancestor is not permitted");
+        }
+
+        var trustedWorkspace = _trustedWorkspaces.Keys
+            .Where(root =>
+                IsSamePath(fullWorkingDirectory, root)
+                || IsDescendant(fullWorkingDirectory, root))
+            .OrderByDescending(root => root.Length)
+            .FirstOrDefault();
+        if (trustedWorkspace is null)
+        {
+            var reason = _protectedRoots.Any(root => IsDescendant(fullWorkingDirectory, root))
+                ? "workspace under a protected shared mount was not registered before model execution"
+                : "workspace was not registered before model execution";
+            throw new SandboxViolationException(
+                fullWorkingDirectory,
+                string.Join(", ", _protectedRoots),
+                reason);
+        }
+
+        if (!_runtimeHomes.TryGetValue(trustedWorkspace, out var runtimeHome))
+        {
+            throw new SandboxViolationException(
+                trustedWorkspace,
+                trustedWorkspace,
+                "runtime HOME was not registered before model execution");
+        }
+
+        return (trustedWorkspace, runtimeHome);
     }
 
     private void AddMount(List<MountSpec> mounts, string path, bool readOnly)
@@ -493,11 +562,14 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         return result;
     }
 
-    private static Dictionary<string, string> DefaultEnvironment() =>
+    private static Dictionary<string, string> DefaultEnvironment(string runtimeHome) =>
         new(StringComparer.Ordinal)
         {
             ["PATH"] = "/usr/local/bin:/usr/bin:/bin",
-            ["HOME"] = "/home/appuser",
+            ["HOME"] = runtimeHome,
+            ["XDG_CACHE_HOME"] = Path.Combine(runtimeHome, ".cache"),
+            ["XDG_DATA_HOME"] = Path.Combine(runtimeHome, ".local", "share"),
+            ["XDG_CONFIG_HOME"] = Path.Combine(runtimeHome, ".config"),
             ["USER"] = "appuser",
             ["LOGNAME"] = "appuser",
             ["LANG"] = "C.UTF-8",
@@ -512,6 +584,23 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             ["GIT_CONFIG_KEY_0"] = "core.hooksPath",
             ["GIT_CONFIG_VALUE_0"] = "/dev/null",
         };
+
+    private static void ApplyAuthoritativeRuntimeHome(
+        IDictionary<string, string> environment,
+        string runtimeHome)
+    {
+        environment["HOME"] = runtimeHome;
+        environment["XDG_CACHE_HOME"] = Path.Combine(runtimeHome, ".cache");
+        environment["XDG_DATA_HOME"] = Path.Combine(runtimeHome, ".local", "share");
+        environment["XDG_CONFIG_HOME"] = Path.Combine(runtimeHome, ".config");
+    }
+
+    private static IEnumerable<string> RuntimeHomeDirectories(string runtimeHome)
+    {
+        yield return Path.Combine(runtimeHome, ".cache");
+        yield return Path.Combine(runtimeHome, ".local", "share");
+        yield return Path.Combine(runtimeHome, ".config");
+    }
 
     private static IReadOnlyList<string> ResolveProtectedRoots()
     {

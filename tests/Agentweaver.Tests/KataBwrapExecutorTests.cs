@@ -12,14 +12,17 @@ public sealed class KataBwrapExecutorTests : IDisposable
     private readonly string _workspace;
     private readonly string _runA;
     private readonly string _runB;
+    private readonly string _runtimeHome;
 
     public KataBwrapExecutorTests()
     {
         _workspace = Path.Combine(_root, "workspace");
         _runA = Path.Combine(_workspace, "worktrees", "run-a");
         _runB = Path.Combine(_workspace, "worktrees", "run-b");
+        _runtimeHome = Path.Combine(_root, "runtime-home", "run-a");
         Directory.CreateDirectory(_runA);
         Directory.CreateDirectory(_runB);
+        CreateRuntimeHome(_runtimeHome);
     }
 
     [Fact]
@@ -33,7 +36,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         File.WriteAllText(Path.Combine(worktreeGit, "commondir"), "../..");
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
         var mounts = executor.BuildMountPlan(Command(_runA));
 
         mounts.Select(mount => mount.Source).Should().Contain(Path.GetFullPath(_runA));
@@ -115,7 +118,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         File.WriteAllText(Path.Combine(worktreeGit, "commondir"), "../..");
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
         File.WriteAllText(dotGit, $"gitdir: {_runB}");
 
         var mounts = executor.BuildMountPlan(Command(_runA));
@@ -130,7 +133,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         var subdirectory = Path.Combine(_runA, "app");
         Directory.CreateDirectory(subdirectory);
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
 
         var mounts = executor.BuildMountPlan(Command(subdirectory));
 
@@ -139,12 +142,124 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    public void MountPlan_ContainsOnlyExplicitlyRegisteredRuntimeHome()
+    {
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+        var command = Command(_runA) with
+        {
+            Environment = new Dictionary<string, string>
+            {
+                ["HOME"] = _runB,
+                ["XDG_CACHE_HOME"] = Path.Combine(_runB, ".cache"),
+            },
+        };
+
+        var mounts = executor.BuildMountPlan(command);
+
+        mounts.Should().ContainSingle(mount =>
+            mount.Source == Path.GetFullPath(_runtimeHome) && !mount.ReadOnly);
+        mounts.Select(mount => mount.Source).Should().NotContain(Path.GetFullPath(_runB));
+        mounts.Select(mount => mount.Source).Should().NotContain("/home/appuser");
+    }
+
+    [Fact]
+    public void ShellChildProcess_UsesRegisteredRuntimeHomeAndXdg()
+    {
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+        var command = Command(_runA) with
+        {
+            Environment = new Dictionary<string, string>
+            {
+                ["HOME"] = _runB,
+                ["XDG_CACHE_HOME"] = _runB,
+                ["XDG_DATA_HOME"] = _runB,
+                ["XDG_CONFIG_HOME"] = _runB,
+            },
+        };
+
+        var environment = OperatingSystem.IsLinux()
+            ? ReadSetEnvironment(executor.BuildProcessStartInfo(command).ArgumentList)
+            : executor.BuildChildEnvironment(command);
+
+        AssertRuntimeHomeEnvironment(environment);
+    }
+
+    [Fact]
+    public void PreviewChildProcess_UsesRegisteredRuntimeHomeAndXdg()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        var subdirectory = Path.Combine(_runA, "app");
+        Directory.CreateDirectory(subdirectory);
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+
+        using var process = executor.CreateProcess(
+            "echo preview",
+            subdirectory,
+            new Dictionary<string, string>
+            {
+                ["HOME"] = _runB,
+                ["XDG_CACHE_HOME"] = _runB,
+                ["XDG_DATA_HOME"] = _runB,
+                ["XDG_CONFIG_HOME"] = _runB,
+            },
+            networkEnabled: true);
+        var environment = ReadSetEnvironment(process.StartInfo.ArgumentList);
+
+        AssertRuntimeHomeEnvironment(environment);
+        process.StartInfo.ArgumentList.Should().ContainInOrder(
+            "--bind",
+            Path.GetFullPath(_runtimeHome),
+            Path.GetFullPath(_runtimeHome));
+    }
+
+    [Fact]
+    public void MountPlan_RejectsTrustedWorkspaceWithoutRegisteredRuntimeHome()
+    {
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        executor.RegisterTrustedWorkspace(_runA);
+
+        var act = () => executor.BuildMountPlan(Command(_runA));
+
+        act.Should().Throw<SandboxViolationException>()
+            .WithMessage("*runtime HOME was not registered*");
+    }
+
+    [Fact]
+    public void RegisterRuntimeHome_RejectsInvalidOrChangedRegistration()
+    {
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        var incompleteHome = Path.Combine(_root, "runtime-home", "incomplete");
+        Directory.CreateDirectory(incompleteHome);
+
+        var incomplete = () => executor.RegisterRuntimeHome(_runA, incompleteHome);
+        var overlapping = () => executor.RegisterRuntimeHome(_runA, _runA);
+
+        incomplete.Should().Throw<SandboxViolationException>()
+            .WithMessage("*missing an authoritative XDG directory*");
+        overlapping.Should().Throw<SandboxViolationException>()
+            .WithMessage("*disjoint from the run workspace*");
+
+        executor.RegisterRuntimeHome(_runA, _runtimeHome);
+        var otherHome = Path.Combine(_root, "runtime-home", "other");
+        CreateRuntimeHome(otherHome);
+        var changed = () => executor.RegisterRuntimeHome(_runA, otherHome);
+
+        changed.Should().Throw<SandboxViolationException>()
+            .WithMessage("*changed after registration*");
+    }
+
+    [Fact]
     public void StandaloneRepositoryGitDirectory_IsReadOnly()
     {
         var dotGit = Path.Combine(_runA, ".git");
         Directory.CreateDirectory(dotGit);
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
 
         var mounts = executor.BuildMountPlan(Command(_runA));
 
@@ -164,7 +279,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         var originalConfig = await File.ReadAllTextAsync(configPath);
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
         var result = await executor.ExecuteAsync(new SandboxCommand(
             "ln .git/config config-link && printf poisoned > config-link",
             _runA,
@@ -185,7 +300,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
             return;
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
         var arguments = executor.BuildProcessStartInfo(Command(_runA)).ArgumentList.ToArray();
 
         arguments.Should().ContainInOrder("--tmpfs", "/proc");
@@ -205,7 +320,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         Directory.CreateSymbolicLink(Path.Combine(_runA, "sibling-link"), _runB);
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
         var result = await executor.ExecuteAsync(new SandboxCommand(
             "cat \"$VICTIM\"; printf compromised > \"$VICTIM\"; cat sibling-link/secret.txt",
             _runA,
@@ -237,7 +352,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         Run("git", "-C", repository, "worktree", "add", "-b", "run-a", _runA, "HEAD");
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
-        executor.RegisterTrustedWorkspace(_runA);
+        RegisterRun(executor);
         var result = await executor.ExecuteAsync(new SandboxCommand(
             "printf after >> tracked.txt && git status --short && git diff -- tracked.txt",
             _runA,
@@ -269,6 +384,42 @@ public sealed class KataBwrapExecutorTests : IDisposable
             null,
             new SandboxFsPolicy([workingDirectory], [], []),
             5000);
+
+    private void RegisterRun(KataBwrapExecutor executor)
+    {
+        executor.RegisterTrustedWorkspace(_runA);
+        executor.RegisterRuntimeHome(_runA, _runtimeHome);
+    }
+
+    private void AssertRuntimeHomeEnvironment(IReadOnlyDictionary<string, string> environment)
+    {
+        environment["HOME"].Should().Be(Path.GetFullPath(_runtimeHome));
+        environment["XDG_CACHE_HOME"].Should().Be(Path.Combine(_runtimeHome, ".cache"));
+        environment["XDG_DATA_HOME"].Should().Be(Path.Combine(_runtimeHome, ".local", "share"));
+        environment["XDG_CONFIG_HOME"].Should().Be(Path.Combine(_runtimeHome, ".config"));
+    }
+
+    private static Dictionary<string, string> ReadSetEnvironment(
+        ICollection<string> arguments)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var items = arguments.ToArray();
+        for (var index = 0; index + 2 < items.Length; index++)
+        {
+            if (items[index] != "--setenv")
+                continue;
+            values[items[index + 1]] = items[index + 2];
+            index += 2;
+        }
+        return values;
+    }
+
+    private static void CreateRuntimeHome(string home)
+    {
+        Directory.CreateDirectory(Path.Combine(home, ".cache"));
+        Directory.CreateDirectory(Path.Combine(home, ".local", "share"));
+        Directory.CreateDirectory(Path.Combine(home, ".config"));
+    }
 
     private static string Run(string fileName, params string[] arguments)
     {
