@@ -22,6 +22,8 @@ export const CACHE_SCHEMA = 2;
 export const DEFAULT_PROJECTS = ['.', 'apps/web', 'docs', 'scripts/ui-harness'];
 const LOCAL_MARKER = '.agentweaver-deps.json';
 const CACHE_MARKER = 'cache.json';
+const GENERATION_SCHEMA = 2;
+const INITIAL_GENERATION = '0';
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_STALE_LOCK_MS = 30 * 60 * 1000;
 const POLL_INTERVAL_MS = 250;
@@ -36,7 +38,11 @@ function atomicWriteJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  renameSync(temporaryPath, filePath);
+  try {
+    renameSync(temporaryPath, filePath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
 }
 
 function atomicCreateJson(filePath, value) {
@@ -147,28 +153,31 @@ export function computeCacheIdentity({
   installConfigHash = '',
   npmArgsHash = '',
   lifecycleEnvironmentHash = '',
-  invalidationNonce = '',
+  invalidationGeneration = INITIAL_GENERATION,
+  repositoryCacheIdentity = '',
 }) {
-  const baseKey = sha256(
-    JSON.stringify({
-      schema: CACHE_SCHEMA,
-      packageRootIdentity,
-      packageJson: sha256(packageJsonBytes),
-      lockfile: sha256(lockfileBytes),
-      nodeVersion,
-      npmVersion,
-      platform,
-      arch,
-      libc,
-      installConfigHash,
-      npmArgsHash,
-      lifecycleEnvironmentHash,
-    }),
-  );
-  const key = invalidationNonce
-    ? sha256(JSON.stringify({ baseKey, invalidationNonce }))
+  const identity = {
+    schema: CACHE_SCHEMA,
+    packageRootIdentity,
+    packageJson: sha256(packageJsonBytes),
+    lockfile: sha256(lockfileBytes),
+    nodeVersion,
+    npmVersion,
+    platform,
+    arch,
+    libc,
+    installConfigHash,
+    npmArgsHash,
+    lifecycleEnvironmentHash,
+  };
+  if (repositoryCacheIdentity) {
+    identity.repositoryCacheIdentity = repositoryCacheIdentity;
+  }
+  const baseKey = sha256(JSON.stringify(identity));
+  const key = invalidationGeneration !== INITIAL_GENERATION
+    ? sha256(JSON.stringify({ baseKey, invalidationGeneration }))
     : baseKey;
-  return { baseKey, key };
+  return { baseKey, key, invalidationGeneration };
 }
 
 function processIsAlive(pid) {
@@ -321,6 +330,21 @@ function canonicalWorktree(repoRoot) {
   return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
 }
 
+function repositoryIdentityForRepo(repoRoot, override) {
+  if (override) {
+    return override;
+  }
+  if (!existsSync(path.join(repoRoot, '.git'))) {
+    return canonicalWorktree(repoRoot);
+  }
+  const commonDir = resolveCommonDir(
+    repoRoot,
+    gitValue(repoRoot, ['rev-parse', '--git-common-dir']),
+  );
+  const canonical = realpathSync.native(commonDir);
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
 export function acquireValidationLock(repoRoot, {
   cacheRoot,
   timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
@@ -337,19 +361,135 @@ export function acquireValidationLock(repoRoot, {
 export function acquireCacheUse(cacheRoot, {
   timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
   staleAfterMs = DEFAULT_STALE_LOCK_MS,
+  onAcquired,
 } = {}) {
   const releaseGate = acquireLock(
     path.join(cacheRoot, 'maintenance.lock'),
     { timeoutMs, staleAfterMs },
   );
+  let releaseUse;
   try {
-    return acquireLock(
+    releaseUse = acquireLock(
       path.join(cacheRoot, 'active', randomUUID()),
       { timeoutMs, staleAfterMs },
     );
+    return onAcquired ? onAcquired(releaseUse) : releaseUse;
+  } catch (error) {
+    releaseUse?.();
+    throw error;
   } finally {
     releaseGate();
   }
+}
+
+function generationStatePath(
+  cacheRoot,
+  repositoryIdentity,
+  packageRootIdentity,
+) {
+  return path.join(
+    cacheRoot,
+    'generations',
+    `${sha256(JSON.stringify({ repositoryIdentity, packageRootIdentity }))}.json`,
+  );
+}
+
+function validateGenerationState(
+  state,
+  repositoryIdentity,
+  packageRootIdentity,
+  statePath,
+) {
+  if (
+    state?.schema !== GENERATION_SCHEMA
+    || state.repositoryIdentity !== repositoryIdentity
+    || state.packageRootIdentity !== packageRootIdentity
+    || typeof state.generation !== 'string'
+    || state.generation.length === 0
+  ) {
+    throw new Error(`invalid dependency invalidation generation at ${statePath}`);
+  }
+  return state;
+}
+
+function readOrCreateGenerationLocked(
+  cacheRoot,
+  repositoryIdentity,
+  packageRootIdentity,
+) {
+  const statePath = generationStatePath(
+    cacheRoot,
+    repositoryIdentity,
+    packageRootIdentity,
+  );
+  if (existsSync(statePath)) {
+    return validateGenerationState(
+      readJson(statePath),
+      repositoryIdentity,
+      packageRootIdentity,
+      statePath,
+    );
+  }
+  const state = {
+    schema: GENERATION_SCHEMA,
+    repositoryIdentity,
+    packageRootIdentity,
+    generation: INITIAL_GENERATION,
+    updatedAt: new Date().toISOString(),
+  };
+  if (!atomicCreateJson(statePath, state)) {
+    return validateGenerationState(
+      readJson(statePath),
+      repositoryIdentity,
+      packageRootIdentity,
+      statePath,
+    );
+  }
+  return state;
+}
+
+function rotateGenerationLocked(
+  cacheRoot,
+  repositoryIdentity,
+  packageRootIdentity,
+) {
+  const current = readOrCreateGenerationLocked(
+    cacheRoot,
+    repositoryIdentity,
+    packageRootIdentity,
+  );
+  const next = {
+    ...current,
+    generation: randomUUID(),
+    updatedAt: new Date().toISOString(),
+  };
+  atomicWriteJson(
+    generationStatePath(cacheRoot, repositoryIdentity, packageRootIdentity),
+    next,
+  );
+  return { current, next };
+}
+
+export function acquireProjectCacheUse(cacheRoot, packageRootIdentity, {
+  repositoryIdentity = cacheRoot,
+  timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
+  staleAfterMs = DEFAULT_STALE_LOCK_MS,
+} = {}) {
+  return acquireCacheUse(cacheRoot, {
+    timeoutMs,
+    staleAfterMs,
+    onAcquired(release) {
+      const generationState = readOrCreateGenerationLocked(
+        cacheRoot,
+        repositoryIdentity,
+        packageRootIdentity,
+      );
+      return {
+        generation: generationState.generation,
+        release,
+      };
+    },
+  });
 }
 
 export function acquireMaintenanceLock(cacheRoot, {
@@ -496,14 +636,26 @@ export function runtimeInfo(repoRoot, environment = process.env) {
 }
 
 function projectInputs(repoRoot, project) {
-  const projectPath = path.resolve(repoRoot, project);
+  const canonicalRepoRoot = realpathSync.native(path.resolve(repoRoot));
+  const projectPath = realpathSync.native(path.resolve(repoRoot, project));
+  const relativeProjectPath = path.relative(canonicalRepoRoot, projectPath);
+  if (
+    relativeProjectPath.startsWith('..')
+    || path.isAbsolute(relativeProjectPath)
+  ) {
+    throw new Error(`dependency project must be within the repository: ${project}`);
+  }
   const packageJsonPath = path.join(projectPath, 'package.json');
   const lockfilePath = path.join(projectPath, 'package-lock.json');
   const packageJsonBytes = readFileSync(packageJsonPath);
   const lockfileBytes = readFileSync(lockfilePath);
   return {
     projectPath,
-    packageRootIdentity: project.replaceAll('\\', '/') || '.',
+    packageRootIdentity: (
+      process.platform === 'win32'
+        ? relativeProjectPath.toLowerCase()
+        : relativeProjectPath
+    ).replaceAll('\\', '/') || '.',
     packageJsonBytes,
     lockfileBytes,
     packageJson: JSON.parse(packageJsonBytes),
@@ -569,12 +721,23 @@ export function verifyProjectResolution(projectPath, packageJson) {
   }
 }
 
-function validateLocalTree(projectPath, packageJson, expectedKey) {
+function validateLocalTree(
+  projectPath,
+  packageJson,
+  expectedKey,
+  expectedGeneration,
+) {
   try {
     const nodeModulesPath = path.join(projectPath, 'node_modules');
     const marker = readJson(path.join(nodeModulesPath, LOCAL_MARKER));
     if (marker.schema !== CACHE_SCHEMA || marker.key !== expectedKey) {
       return { valid: false, reason: 'local dependency marker does not match the fingerprint' };
+    }
+    if (
+      (marker.invalidationGeneration ?? INITIAL_GENERATION)
+      !== expectedGeneration
+    ) {
+      return { valid: false, reason: 'local dependency marker has a stale generation' };
     }
     if (hiddenLockHash(nodeModulesPath) !== marker.hiddenLockHash) {
       return { valid: false, reason: 'local npm hidden lockfile changed' };
@@ -613,14 +776,19 @@ function installFromDownloadCache(
   return runNpmCi(projectPath, npmArgs, cachePath, environment);
 }
 
-function cacheNamespaceState(cachePath, expectedKey) {
+function cacheNamespaceState(cachePath, expectedKey, expectedGeneration) {
   const markerPath = path.join(cachePath, CACHE_MARKER);
   if (!existsSync(markerPath)) {
     return { valid: true, populated: false, reason: null };
   }
   try {
     const marker = readJson(markerPath);
-    if (marker.schema !== CACHE_SCHEMA || marker.key !== expectedKey) {
+    if (
+      marker.schema !== CACHE_SCHEMA
+      || marker.key !== expectedKey
+      || (marker.invalidationGeneration ?? INITIAL_GENERATION)
+        !== expectedGeneration
+    ) {
       return { valid: false, populated: true, reason: 'download cache marker is corrupt' };
     }
     return { valid: true, populated: true, reason: null };
@@ -676,6 +844,7 @@ function ensureProjectUnlocked({
   runNpmCi,
   runtime,
   environment,
+  repositoryIdentity,
 }) {
   const startedAt = performance.now();
   const inputs = projectInputs(repoRoot, project);
@@ -698,110 +867,170 @@ function ensureProjectUnlocked({
     return fallback(inputs.projectPath, npmArgs, reason, runNpmCi, environment);
   }
 
-  const resolvedCacheRoot = cacheRootForRepo(
+  const configuredCacheRoot = cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR;
+  const resolvedCacheRoot = cacheRootForRepo(repoRoot, configuredCacheRoot);
+  const resolvedRepositoryIdentity = repositoryIdentityForRepo(
     repoRoot,
-    cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
+    repositoryIdentity,
   );
-  const identity = computeCacheIdentity({
-    ...inputs,
-    ...resolvedRuntime,
-    npmArgsHash: sha256(JSON.stringify(npmArgs)),
-  });
-  const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
-  const localValidation = validateLocalTree(
-    inputs.projectPath,
-    inputs.packageJson,
-    identity.key,
-  );
-  if (localValidation.valid) {
-    const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
-    console.log(`[deps] ${project} local dependency tree is current in ${elapsedSeconds}s`);
-    return { mode: 'local', key: identity.key, elapsedSeconds };
-  }
-
-  let cacheState = cacheNamespaceState(cachePath, identity.key);
-  if (!cacheState.valid) {
-    quarantineCacheNamespace(
+  const repositoryCacheIdentity = configuredCacheRoot
+    ? resolvedRepositoryIdentity
+    : '';
+  const sharedAttempt = () => {
+    const lease = acquireProjectCacheUse(
       resolvedCacheRoot,
-      cachePath,
-      cacheState.reason,
-      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
-    );
-  }
-
-  const installWithLease = () => {
-    const releaseCacheUse = acquireCacheUse(
-      resolvedCacheRoot,
-      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+      inputs.packageRootIdentity,
+      {
+        repositoryIdentity: resolvedRepositoryIdentity,
+        timeoutMs: lockTimeoutMs,
+        staleAfterMs: staleLockMs,
+      },
     );
     try {
-      const result = installFromDownloadCache(
-        inputs.projectPath,
-        npmArgs,
-        cachePath,
-        runNpmCi,
-        environment,
-      );
-      verifyProjectResolution(inputs.projectPath, inputs.packageJson);
-      atomicCreateJson(path.join(cachePath, CACHE_MARKER), {
-        schema: CACHE_SCHEMA,
-        key: identity.key,
-        packageRootIdentity: inputs.packageRootIdentity,
-        populatedAt: new Date().toISOString(),
+      const identity = computeCacheIdentity({
+        ...inputs,
+        ...resolvedRuntime,
+        npmArgsHash: sha256(JSON.stringify(npmArgs)),
+        invalidationGeneration: lease.generation,
+        repositoryCacheIdentity,
       });
-      cacheState = cacheNamespaceState(cachePath, identity.key);
-      if (!cacheState.valid) {
-        throw new Error(cacheState.reason);
+      const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
+      const localValidation = validateLocalTree(
+        inputs.projectPath,
+        inputs.packageJson,
+        identity.key,
+        lease.generation,
+      );
+      if (localValidation.valid) {
+        const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+        console.log(`[deps] ${project} local dependency tree is current in ${elapsedSeconds}s`);
+        return {
+          kind: 'complete',
+          result: {
+            mode: 'local',
+            key: identity.key,
+            generation: lease.generation,
+            elapsedSeconds,
+          },
+        };
       }
-      return result;
+
+      const cacheState = cacheNamespaceState(
+        cachePath,
+        identity.key,
+        lease.generation,
+      );
+      if (!cacheState.valid) {
+        return {
+          kind: 'quarantine',
+          cachePath,
+          reason: cacheState.reason,
+        };
+      }
+      try {
+        const installResult = installFromDownloadCache(
+          inputs.projectPath,
+          npmArgs,
+          cachePath,
+          runNpmCi,
+          environment,
+        );
+        verifyProjectResolution(inputs.projectPath, inputs.packageJson);
+        atomicCreateJson(path.join(cachePath, CACHE_MARKER), {
+          schema: CACHE_SCHEMA,
+          key: identity.key,
+          packageRootIdentity: inputs.packageRootIdentity,
+          invalidationGeneration: lease.generation,
+          populatedAt: new Date().toISOString(),
+        });
+        const installedCacheState = cacheNamespaceState(
+          cachePath,
+          identity.key,
+          lease.generation,
+        );
+        if (!installedCacheState.valid) {
+          throw new Error(installedCacheState.reason);
+        }
+        atomicWriteJson(path.join(inputs.projectPath, 'node_modules', LOCAL_MARKER), {
+          schema: CACHE_SCHEMA,
+          key: identity.key,
+          invalidationGeneration: lease.generation,
+          hiddenLockHash: hiddenLockHash(path.join(inputs.projectPath, 'node_modules')),
+          installedAt: new Date().toISOString(),
+        });
+        const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+        console.log(
+          `[deps] ${project} installed with shared npm cache ${identity.key.slice(0, 12)} `
+          + `in ${elapsedSeconds}s`,
+        );
+        return {
+          kind: 'complete',
+          result: {
+            mode: 'shared-cache',
+            key: identity.key,
+            generation: lease.generation,
+            elapsedSeconds,
+            installSeconds: installResult.elapsedSeconds,
+          },
+        };
+      } catch (error) {
+        return { kind: 'install-error', cachePath, error };
+      }
     } finally {
-      releaseCacheUse();
+      lease.release();
     }
   };
 
-  let installResult;
-  try {
-    installResult = installWithLease();
-  } catch (firstError) {
+  let outcome = sharedAttempt();
+  if (outcome.kind === 'quarantine') {
     quarantineCacheNamespace(
       resolvedCacheRoot,
-      cachePath,
-      `npm ci failed: ${firstError?.message ?? firstError}`,
+      outcome.cachePath,
+      outcome.reason,
       { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
     );
-    try {
-      installResult = installWithLease();
-    } catch (retryError) {
-      quarantineCacheNamespace(
-        resolvedCacheRoot,
-        cachePath,
-        `cold npm ci retry failed: ${retryError?.message ?? retryError}`,
-        { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
-      );
-      throw new AggregateError(
-        [firstError, retryError],
-        `npm ci failed after quarantining the shared cache for ${project}`,
-      );
-    }
+    outcome = sharedAttempt();
+  }
+  if (outcome.kind === 'complete') {
+    return outcome.result;
+  }
+  if (outcome.kind !== 'install-error') {
+    throw new Error(`shared cache remained invalid after quarantine for ${project}`);
   }
 
-  atomicWriteJson(path.join(inputs.projectPath, 'node_modules', LOCAL_MARKER), {
-    schema: CACHE_SCHEMA,
-    key: identity.key,
-    hiddenLockHash: hiddenLockHash(path.join(inputs.projectPath, 'node_modules')),
-    installedAt: new Date().toISOString(),
-  });
-  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
-  console.log(
-    `[deps] ${project} installed with shared npm cache ${identity.key.slice(0, 12)} `
-    + `in ${elapsedSeconds}s`,
+  const firstError = outcome.error;
+  quarantineCacheNamespace(
+    resolvedCacheRoot,
+    outcome.cachePath,
+    `npm ci failed: ${firstError?.message ?? firstError}`,
+    { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
   );
-  return {
-    mode: 'shared-cache',
-    key: identity.key,
-    elapsedSeconds,
-    installSeconds: installResult.elapsedSeconds,
-  };
+  const retryOutcome = sharedAttempt();
+  if (retryOutcome.kind === 'complete') {
+    return retryOutcome.result;
+  }
+  if (retryOutcome.kind === 'quarantine') {
+    quarantineCacheNamespace(
+      resolvedCacheRoot,
+      retryOutcome.cachePath,
+      retryOutcome.reason,
+      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+    );
+    throw new AggregateError(
+      [firstError, new Error(retryOutcome.reason)],
+      `npm ci failed after quarantining the shared cache for ${project}`,
+    );
+  }
+  quarantineCacheNamespace(
+    resolvedCacheRoot,
+    retryOutcome.cachePath,
+    `cold npm ci retry failed: ${retryOutcome.error?.message ?? retryOutcome.error}`,
+    { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+  );
+  throw new AggregateError(
+    [firstError, retryOutcome.error],
+    `npm ci failed after quarantining the shared cache for ${project}`,
+  );
 }
 
 export function ensureProject({
@@ -816,6 +1045,7 @@ export function ensureProject({
   runNpmCi = defaultNpmInstall,
   runtime,
   environment = process.env,
+  repositoryIdentity,
   validationLockHeld = false,
 }) {
   let release;
@@ -839,6 +1069,7 @@ export function ensureProject({
       runNpmCi,
       runtime,
       environment,
+      repositoryIdentity,
     });
   } finally {
     release?.();
@@ -851,15 +1082,20 @@ function identityForProject({
   runtime,
   environment,
   npmArgs = [],
+  invalidationGeneration = INITIAL_GENERATION,
+  repositoryCacheIdentity = '',
 }) {
   const inputs = projectInputs(repoRoot, project);
   const resolvedRuntime = runtime ?? runtimeInfo(inputs.projectPath, environment);
   return {
     inputs,
+    runtime: resolvedRuntime,
     identity: computeCacheIdentity({
       ...inputs,
       ...resolvedRuntime,
       npmArgsHash: sha256(JSON.stringify(npmArgs)),
+      invalidationGeneration,
+      repositoryCacheIdentity,
     }),
   };
 }
@@ -871,6 +1107,7 @@ export function invalidateProject({
   runtime,
   environment = process.env,
   npmArgs = [],
+  repositoryIdentity,
   validationLockHeld = false,
 }) {
   let releaseValidation;
@@ -878,24 +1115,58 @@ export function invalidateProject({
     releaseValidation = acquireValidationLock(repoRoot, { cacheRoot });
   }
   try {
-    const { inputs, identity } = identityForProject({
+    const configuredCacheRoot = cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR;
+    const resolvedCacheRoot = cacheRootForRepo(repoRoot, configuredCacheRoot);
+    const resolvedRepositoryIdentity = repositoryIdentityForRepo(
+      repoRoot,
+      repositoryIdentity,
+    );
+    const repositoryCacheIdentity = configuredCacheRoot
+      ? resolvedRepositoryIdentity
+      : '';
+    const {
+      inputs,
+      runtime: resolvedRuntime,
+      identity: baseIdentity,
+    } = identityForProject({
       repoRoot,
       project,
       runtime,
       environment,
       npmArgs,
+      repositoryCacheIdentity,
     });
-    const resolvedCacheRoot = cacheRootForRepo(
-      repoRoot,
-      cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
-    );
-    quarantineCacheNamespace(
-      resolvedCacheRoot,
-      path.join(resolvedCacheRoot, 'downloads', identity.key),
-      'explicit invalidation',
-    );
+    const releaseMaintenance = acquireMaintenanceLock(resolvedCacheRoot);
+    let previousIdentity;
+    let nextGeneration;
+    try {
+      const rotated = rotateGenerationLocked(
+        resolvedCacheRoot,
+        resolvedRepositoryIdentity,
+        inputs.packageRootIdentity,
+      );
+      previousIdentity = computeCacheIdentity({
+        ...inputs,
+        ...resolvedRuntime,
+        npmArgsHash: sha256(JSON.stringify(npmArgs)),
+        invalidationGeneration: rotated.current.generation,
+        repositoryCacheIdentity,
+      });
+      nextGeneration = rotated.next.generation;
+      quarantineCacheNamespaceLocked(
+        resolvedCacheRoot,
+        path.join(resolvedCacheRoot, 'downloads', previousIdentity.key),
+        'explicit invalidation',
+      );
+    } finally {
+      releaseMaintenance();
+    }
     removeNodeModules(path.join(inputs.projectPath, 'node_modules'));
     console.log(`[deps] invalidated ${project} dependency state`);
+    return {
+      previousKey: previousIdentity?.key ?? baseIdentity.key,
+      generation: nextGeneration,
+    };
   } finally {
     releaseValidation?.();
   }
@@ -908,6 +1179,7 @@ export function verifyProjectCache({
   runtime,
   environment = process.env,
   npmArgs = [],
+  repositoryIdentity,
   validationLockHeld = false,
 }) {
   let releaseValidation;
@@ -915,25 +1187,46 @@ export function verifyProjectCache({
     releaseValidation = acquireValidationLock(repoRoot, { cacheRoot });
   }
   try {
-    const { identity } = identityForProject({
+    const configuredCacheRoot = cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR;
+    const resolvedCacheRoot = cacheRootForRepo(repoRoot, configuredCacheRoot);
+    const resolvedRepositoryIdentity = repositoryIdentityForRepo(
+      repoRoot,
+      repositoryIdentity,
+    );
+    const repositoryCacheIdentity = configuredCacheRoot
+      ? resolvedRepositoryIdentity
+      : '';
+    const { inputs } = identityForProject({
       repoRoot,
       project,
       runtime,
       environment,
       npmArgs,
+      repositoryCacheIdentity,
     });
-    const resolvedCacheRoot = cacheRootForRepo(
-      repoRoot,
-      cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
-    );
-    const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
-    if (!existsSync(cachePath)) {
-      console.log(`[deps] no shared npm cache exists for ${project}`);
-      return;
-    }
     const releaseMaintenance = acquireMaintenanceLock(resolvedCacheRoot);
     let verifyError;
+    let cachePath;
     try {
+      const generation = readOrCreateGenerationLocked(
+        resolvedCacheRoot,
+        resolvedRepositoryIdentity,
+        inputs.packageRootIdentity,
+      ).generation;
+      const { identity } = identityForProject({
+        repoRoot,
+        project,
+        runtime,
+        environment,
+        npmArgs,
+        invalidationGeneration: generation,
+        repositoryCacheIdentity,
+      });
+      cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
+      if (!existsSync(cachePath)) {
+        console.log(`[deps] no shared npm cache exists for ${project}`);
+        return;
+      }
       const invocation = npmInvocation(['cache', 'verify', '--cache', cachePath], environment);
       run(invocation.command, invocation.args, {
         cwd: path.resolve(repoRoot, project),
@@ -942,11 +1235,13 @@ export function verifyProjectCache({
       });
     } catch (error) {
       verifyError = error;
-      quarantineCacheNamespaceLocked(
-        resolvedCacheRoot,
-        cachePath,
-        `npm cache verify failed: ${error?.message ?? error}`,
-      );
+      if (cachePath) {
+        quarantineCacheNamespaceLocked(
+          resolvedCacheRoot,
+          cachePath,
+          `npm cache verify failed: ${error?.message ?? error}`,
+        );
+      }
     } finally {
       releaseMaintenance();
     }
