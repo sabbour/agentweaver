@@ -16,28 +16,64 @@ export function readVersionMirrors(repoRoot, { readFile = fs.readFileSync } = {}
   const packageJson = JSON.parse(readFile(path.join(repoRoot, "package.json"), "utf8"));
   const lockJson = JSON.parse(readFile(path.join(repoRoot, "package-lock.json"), "utf8"));
   const packageVersion = packageJson.version;
-  const lockVersion = lockJson.packages?.[""]?.version;
+  const lockTopLevelVersion = lockJson.version;
+  const lockRootPackageVersion = lockJson.packages?.[""]?.version;
 
   for (const [name, value] of Object.entries({
     VERSION: version,
     "package.json": packageVersion,
-    "package-lock.json": lockVersion,
+    "package-lock.json.version": lockTopLevelVersion,
+    'package-lock.json.packages[""].version': lockRootPackageVersion,
   })) {
     if (!SEMVER.test(value ?? "")) {
       throw new Error(`${name} contains invalid semver: '${value ?? "missing"}'`);
     }
   }
 
-  return { version, packageVersion, lockVersion };
+  return {
+    version,
+    packageVersion,
+    lockTopLevelVersion,
+    lockRootPackageVersion,
+    lockVersion: lockRootPackageVersion,
+  };
 }
 
 export function assertVersionMirrors(repoRoot, options) {
   const mirrors = readVersionMirrors(repoRoot, options);
-  if (mirrors.version !== mirrors.packageVersion || mirrors.version !== mirrors.lockVersion) {
-    throw new Error(`Version mirrors disagree: VERSION=${mirrors.version}, package.json=${mirrors.packageVersion}, package-lock.json=${mirrors.lockVersion}`);
+  if (
+    mirrors.version !== mirrors.packageVersion
+    || mirrors.version !== mirrors.lockTopLevelVersion
+    || mirrors.version !== mirrors.lockRootPackageVersion
+  ) {
+    throw new Error(
+      `Version mirrors disagree: VERSION=${mirrors.version}, package.json=${mirrors.packageVersion}, `
+      + `package-lock.json.version=${mirrors.lockTopLevelVersion}, `
+      + `package-lock.json.packages[""].version=${mirrors.lockRootPackageVersion}`,
+    );
   }
 
   return mirrors.version;
+}
+
+export function synchronizePackageLockVersion(
+  repoRoot,
+  version,
+  { readFile = fs.readFileSync, writeFile = fs.writeFileSync } = {},
+) {
+  if (!SEMVER.test(version ?? "")) {
+    throw new Error(`Cannot synchronize package-lock.json to invalid semver: '${version ?? "missing"}'`);
+  }
+
+  const lockPath = path.join(repoRoot, "package-lock.json");
+  const lockJson = JSON.parse(readFile(lockPath, "utf8"));
+  if (!lockJson.packages?.[""]) {
+    throw new Error("package-lock.json is missing the root package entry");
+  }
+
+  lockJson.version = version;
+  lockJson.packages[""].version = version;
+  writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`);
 }
 
 export function extractChangelogSection(content, version) {
@@ -149,20 +185,20 @@ export function getUnexpectedIgnoredFiles(stdout) {
     /^\.security\//,
     /^\.worktrees\//,
     /^\.impeccable\/$/,
-    /^npm-debug\.log/,
+    /^npm-debug\.log(?:\..*)?$/,
     /\.(user|suo|userprefs)$/,
     // Local env / dev-only config, at the repo root or under a package (e.g. apps/web/.env).
     /^(?:.+\/)?\.env(\.local)?$/,
-    /^(?:.+\/)?appsettings\.Development\.json$/,
+    /^(?:.+\/)?appsettings\.development\.json$/,
     // Standard wholly-ignored dependency/build/output directory roots (git collapses these
     // to a single trailing-slash entry). Optional leading path prefix covers nested
     // packages such as packages/Agentweaver.Domain/obj/ or scripts/api-harness/node_modules/.
     /^(?:.+\/)?node_modules\/$/,
     /^(?:.+\/)?dist\/$/,
-    /^(?:.+\/)?bin\/(?:Debug\/|Release\/)?$/,
+    /^(?:.+\/)?bin\/(?:debug\/|release\/)?$/,
     /^(?:.+\/)?obj\/$/,
     /^(?:.+\/)?\.vite\/$/,
-    /^(?:.+\/)?[Tt]est[Rr]esults\/$/,
+    /^(?:.+\/)?testresults\/$/,
     /^(?:.+\/)?playwright-report\/$/,
     /^(?:.+\/)?test-results\/$/,
     /^(?:.+\/)?public\/specs\/$/,
@@ -180,5 +216,8 @@ export function getUnexpectedIgnoredFiles(stdout) {
     .map(line => line.trim())
     .filter(line => line.startsWith("!! "))
     .map(line => line.slice(3))
-    .filter(file => !allowedPatterns.some(pattern => pattern.test(file)));
+    .filter(file => {
+      const normalizedFile = file.replaceAll("\\", "/").toLowerCase();
+      return !allowedPatterns.some(pattern => pattern.test(normalizedFile));
+    });
 }

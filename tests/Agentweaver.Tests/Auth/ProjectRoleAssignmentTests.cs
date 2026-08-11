@@ -161,7 +161,7 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
         (await viewer.GetAsync($"/api/projects/{projectId}/memory")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await viewer.PostAsJsonAsync($"/api/projects/{projectId}/agents/smith/memory", new
         {
-            type = "note",
+            type = "learning",
             content = "should fail",
         })).StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
@@ -181,7 +181,7 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
 
         (await contributor.PostAsJsonAsync($"/api/projects/{projectId}/agents/smith/memory", new
         {
-            type = "note",
+            type = "learning",
             content = "allowed",
         })).StatusCode.Should().Be(HttpStatusCode.Created);
     }

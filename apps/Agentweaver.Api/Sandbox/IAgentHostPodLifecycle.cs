@@ -74,4 +74,5 @@ public sealed record AgentHostLaunchContext(
     Agentweaver.Domain.AgentHostPurpose Purpose = Agentweaver.Domain.AgentHostPurpose.Default,
     string? ScratchRoot = null,
     string? CommitAuthorName = null,
-    string? CommitAuthorEmail = null);
+    string? CommitAuthorEmail = null,
+    string? CallerBearerToken = null);

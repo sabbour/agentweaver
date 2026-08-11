@@ -1,5 +1,7 @@
+#!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createApiFromSession } from './lib/api.mjs';
 import { writeSeedScript } from './lib/auth.mjs';
 import { loadBeatPlan, formatNarrationFile } from './lib/beats.mjs';
@@ -13,6 +15,53 @@ import {
 } from './lib/ffmpeg.mjs';
 import { analyzeTake } from './lib/take-analyzer.mjs';
 import { assembleScenarioVideo, renderApprovedDirection } from './lib/compositor.mjs';
+import {
+  captureRecordingPlan,
+  closeRecordingSession,
+  openRecordingSession,
+  parseRecordingCommandOptions,
+  prepareCaptureScripts,
+  refreshRecordingAuthentication,
+  recordingStatus,
+} from './lib/recording-session.mjs';
+
+const RECORDING_COMMANDS = new Set(['signin', 'open', 'start', 'prepare', 'capture', 'status', 'close']);
+
+export function recordingHelp() {
+  return `Agentweaver demo recording
+
+Usage:
+  npm run demo:record -- <command> [options]
+
+Recording session commands:
+  signin   Refresh protected auth from the literal Microsoft Edge Default work profile.
+  open     Refresh Default-profile sign-in, then start or restore the recording session.
+  start    Refresh Default-profile sign-in, open the session, and optionally prepare a capture plan.
+  prepare  Validate a capture plan and create playwright-cli scripts.
+  capture  Refresh Default-profile sign-in, then capture one beat or every beat.
+  status   Check the Edge profile, protected auth, and recording session.
+  close    Close the named persistent recording session.
+  help     Show this help.
+
+Common options:
+  --session <name>       Persistent session name. Default: agentweaver-demo
+  --base-url <url>       Agentweaver HTTPS URL.
+  --auth-root <path>     Git-ignored protected auth directory.
+
+Plan options:
+  --plan <path>          Capture JSON plan.
+  --beat-plan <path>     Optional Markdown beat plan to join and validate.
+  --beat <id>            Prepare or capture one beat.
+  --all                  Capture every beat.
+  --out-dir <path>       Generated script directory.
+
+Examples:
+  npm run demo:record -- signin
+  npm run demo:record -- start --plan scripts\\demo-recording\\plans\\blueprint-demo.capture.json
+  npm run demo:record -- capture --plan scripts\\demo-recording\\plans\\blueprint-demo.capture.json --beat 1.1
+  npm run demo:record -- status
+`;
+}
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -221,42 +270,97 @@ async function renderDirection(options) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-const { command, options } = parseArgs(process.argv.slice(2));
+async function printPrepared(result) {
+  process.stdout.write(`Prepared ${result.scripts.length} capture script(s).\n`);
+  for (const item of result.scripts) process.stdout.write(`  Beat ${item.beatId}: ${item.scriptPath}\n`);
+}
 
-switch (command) {
-  case 'list-projects':
-    await listProjects(options);
-    break;
-  case 'delete-projects':
-    await deleteProjectsByPattern(options);
-    break;
-  case 'generate-narration':
-    await generateNarration(options);
-    break;
-  case 'synthesize':
-    await synthesize(options);
-    break;
-  case 'seed-script':
-    await seedScript(options);
-    break;
-  case 'trim-static':
-    await trimStatic(options);
-    break;
-  case 'synthesize-beats':
-    await synthesizeBeats(options);
-    break;
-  case 'sync-beat':
-    await syncBeat(options);
-    break;
-  case 'assemble-final':
-    await assembleFinal(options);
-    break;
-  case 'analyze-take':
-    await analyzeCapturedTake(options);
-    break;
-  case 'render-direction':
-    await renderDirection(options);
-    break;
-  default:
-    throw new Error(`Unknown command: ${command}`);
+export async function runRecordingCommand(command, argv, {
+  refreshAuthentication = refreshRecordingAuthentication,
+} = {}) {
+  const options = parseRecordingCommandOptions(command, argv);
+  if (command === 'signin') {
+    await refreshAuthentication(options);
+  } else if (command === 'open') {
+    await openRecordingSession(options);
+  } else if (command === 'start') {
+    await openRecordingSession(options);
+    if (options.plan) await printPrepared(await prepareCaptureScripts(options));
+  } else if (command === 'prepare') {
+    await printPrepared(await prepareCaptureScripts(options));
+  } else if (command === 'capture') {
+    await printPrepared(await captureRecordingPlan(options));
+  } else if (command === 'status') {
+    const status = await recordingStatus(options);
+    process.stdout.write([
+      `Microsoft Edge Default profile: ${status.edgeDefaultProfile ? 'found' : 'missing'}`,
+      `Protected auth directory: ${status.authIgnored ? 'Git-ignored' : 'not Git-ignored'}`,
+      `Recording authentication: ${status.authReady ? 'ready' : 'missing'}`,
+      `Session "${options.session}": ${status.sessionOpen ? 'open' : 'closed'}`,
+      `Session authentication: ${status.sessionAuthenticated ? 'verified' : 'not verified'}`,
+      '',
+    ].join('\n'));
+  } else if (command === 'close') {
+    closeRecordingSession(options.session);
+    process.stdout.write(`Recording session "${options.session}" is closed.\n`);
+  }
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  const [command, ...rest] = argv;
+  if (!command || command === 'help' || command === '--help' || command === '-h') {
+    process.stdout.write(recordingHelp());
+    return;
+  }
+  if (RECORDING_COMMANDS.has(command)) {
+    await runRecordingCommand(command, rest);
+    return;
+  }
+
+  const parsed = parseArgs(argv);
+  const options = parsed.options;
+  switch (parsed.command) {
+    case 'list-projects':
+      await listProjects(options);
+      break;
+    case 'delete-projects':
+      await deleteProjectsByPattern(options);
+      break;
+    case 'generate-narration':
+      await generateNarration(options);
+      break;
+    case 'synthesize':
+      await synthesize(options);
+      break;
+    case 'seed-script':
+      await seedScript(options);
+      break;
+    case 'trim-static':
+      await trimStatic(options);
+      break;
+    case 'synthesize-beats':
+      await synthesizeBeats(options);
+      break;
+    case 'sync-beat':
+      await syncBeat(options);
+      break;
+    case 'assemble-final':
+      await assembleFinal(options);
+      break;
+    case 'analyze-take':
+      await analyzeCapturedTake(options);
+      break;
+    case 'render-direction':
+      await renderDirection(options);
+      break;
+    default:
+      throw new Error(`Unknown command: ${parsed.command}. Run "npm run demo:record -- help".`);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 2;
+  });
 }

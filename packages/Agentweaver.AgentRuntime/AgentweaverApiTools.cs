@@ -50,18 +50,16 @@ internal static class AgentweaverApiTools
     /// <param name="apiBaseUrl">The Agentweaver API base URL (e.g. <c>http://localhost:5000</c>).</param>
     /// <param name="apiKey">Bearer token for API authentication; may be null for unauthenticated local dev.</param>
     /// <param name="httpClientOverride">Optional pre-configured HttpClient (for testing). If null a new client is created from <paramref name="apiBaseUrl"/>/<paramref name="apiKey"/>.</param>
-    /// <param name="runId">
-    /// Unused as of issue #334 (kept for source/binary compatibility with existing call sites).
-    /// <c>start_preview</c> is now built exclusively by <see cref="PreviewPublishTool.Build"/>,
-    /// registered via <c>PreviewRunnerToolProvider</c> so it is never gated behind
-    /// <paramref name="projectId"/>/<paramref name="agentName"/> being non-empty.
-    /// </param>
+    /// <param name="runId">Run identity sent with writes performed by in-run agents.</param>
+    /// <param name="runCapabilityToken">Run-scoped capability validated by the API.</param>
     internal static IEnumerable<AIFunction> Build(
         string projectId, string agentName, string apiBaseUrl, string? apiKey,
         HttpClient? httpClientOverride = null,
-        string? runId = null)
+        string? runId = null,
+        string? runCapabilityToken = null)
     {
         var http = httpClientOverride ?? CreateHttpClient(apiBaseUrl, apiKey);
+        ApplyRunAuthorshipHeaders(http, runId, runCapabilityToken);
 
         yield return AIFunctionFactory.Create(
             async (
@@ -231,6 +229,7 @@ internal static class AgentweaverApiTools
                     path = $"api/projects/{projectId}/agents/{Uri.EscapeDataString(agent)}/memory"
                         + (qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty);
                 }
+
                 else
                 {
                     var qs = new List<string>();
@@ -423,6 +422,21 @@ internal static class AgentweaverApiTools
         var body = string.Empty;
         try { body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); } catch { }
         return $"{toolName} failed: HTTP {(int)response.StatusCode} — {body}";
+    }
+
+    private static void ApplyRunAuthorshipHeaders(
+        HttpClient http,
+        string? runId,
+        string? runCapabilityToken)
+    {
+        http.DefaultRequestHeaders.Remove(RunAuthorshipHeaders.RunId);
+        http.DefaultRequestHeaders.Remove(RunAuthorshipHeaders.RunToken);
+
+        if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(runCapabilityToken))
+            return;
+
+        http.DefaultRequestHeaders.TryAddWithoutValidation(RunAuthorshipHeaders.RunId, runId);
+        http.DefaultRequestHeaders.TryAddWithoutValidation(RunAuthorshipHeaders.RunToken, runCapabilityToken);
     }
 
     /// <summary>

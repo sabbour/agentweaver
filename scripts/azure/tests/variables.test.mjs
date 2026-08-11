@@ -129,6 +129,7 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.ACR_NAME, DEFAULTS.ACR_NAME);
   assert.equal(vars.LOCATION, DEFAULTS.LOCATION);
   assert.equal(vars.NODE_VM_SIZE, DEFAULTS.NODE_VM_SIZE);
+  assert.equal(vars.MONITORING_LOCATION, DEFAULTS.LOCATION);
   assert.equal(vars.PG_SERVER_NAME, DEFAULTS.PG_SERVER_NAME);
   assert.equal(vars.PG_LOCATION, DEFAULTS.LOCATION);
   assert.equal(vars.PG_HA_MODE, DEFAULTS.PG_HA_MODE);
@@ -199,6 +200,7 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
       ACR_NAME: "customacr",
       LOCATION: "eastus",
       NODE_VM_SIZE: "Standard_D8s_v6",
+      MONITORING_LOCATION: "northeurope",
       PG_SERVER_NAME: "custom-pg",
       PG_LOCATION: "eastus2",
       PG_HA_MODE: "Disabled",
@@ -223,6 +225,7 @@ test("resolveVariables: env overrides beat defaults for every field", async () =
   assert.equal(vars.ACR_LOGIN_SERVER, "customacr.azurecr.io");
   assert.equal(vars.LOCATION, "eastus");
   assert.equal(vars.NODE_VM_SIZE, "Standard_D8s_v6");
+  assert.equal(vars.MONITORING_LOCATION, "northeurope");
   assert.equal(vars.PG_SERVER_NAME, "custom-pg");
   assert.equal(vars.PG_LOCATION, "eastus2");
   assert.equal(vars.PG_HA_MODE, "Disabled");

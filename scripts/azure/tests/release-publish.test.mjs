@@ -2,15 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { isWorkingTreeClean, parseArgs, validateMainSha, run } from "../release-publish.mjs";
 
-const mirrors = new Map([["/repo/VERSION", "0.9.70\n"], ["/repo/package.json", '{"version":"0.9.70"}'], ["/repo/package-lock.json", '{"packages":{"":{"version":"0.9.70"}}}'], ["/repo/CHANGELOG.md", "## 0.9.70\n\n- Prepared release note\n"]]);
+const mirrors = new Map([["/repo/VERSION", "0.9.70\n"], ["/repo/package.json", '{"version":"0.9.70"}'], ["/repo/package-lock.json", '{"version":"0.9.70","packages":{"":{"version":"0.9.70"}}}'], ["/repo/CHANGELOG.md", "## 0.9.70\n\n- Prepared release note\n"]]);
 const readMirror = (file) => mirrors.get(file.replaceAll("\\", "/"));
 const log = { info() {}, section() {}, field() {}, ok() {}, skip() {}, warn() {}, error() {}, debug() {}, command() {} };
-function fakeExec({ wrongMain = false, tag = false, untracked = false, unexpectedIgnored = false } = {}) {
+function fakeExec({
+  wrongMain = false,
+  tag = false,
+  untracked = false,
+  ignoredStatus = "",
+  unexpectedIgnored = false,
+} = {}) {
   const calls = []; return { calls, setDryRun() {}, async run(cmd, args) { calls.push({ cmd, args }); return { code: 0 }; }, async capture(cmd, args) {
     calls.push({ cmd, args });
     if (args[0] === "diff") return { code: 0, stdout: "" };
     if (args[0] === "status" && args.includes("--untracked-files=all")) return { code: 0, stdout: untracked ? "?? poisoned-source.js\n" : "" };
-    if (args[0] === "status" && args.includes("--ignored=matching")) return { code: 0, stdout: unexpectedIgnored ? "!! malicious.js\n" : "" };
+    if (args[0] === "status" && args.includes("--ignored=matching")) return { code: 0, stdout: unexpectedIgnored ? "!! malicious.js\n" : ignoredStatus };
     if (args[0] === "rev-parse" && args[1] === "HEAD") return { code: 0, stdout: "abc" };
     if (args[0] === "rev-parse" && args[1] === "origin/main") return { code: 0, stdout: wrongMain ? "def" : "abc" };
     if (args[0] === "rev-parse") return { code: tag ? 0 : 1, stdout: "" };
@@ -31,6 +37,20 @@ test("publish rejects unexpected ignored files when checking working tree cleanl
   const exec = fakeExec({ unexpectedIgnored: true });
   assert.equal(await isWorkingTreeClean({ cwd: "/repo", capture: exec.capture }), false);
   assert.ok(exec.calls.some((call) => call.cmd === "git" && call.args.join(" ") === "status --porcelain --ignored=matching"));
+});
+test("publish accepts standard built-checkout and harness outputs through the shared policy", async () => {
+  const ignoredStatus = [
+    "!! NODE_MODULES\\",
+    "!! apps\\web\\DIST\\",
+    "!! packages\\Agentweaver.Domain\\OBJ\\",
+    "!! packages\\Agentweaver.AgentRuntime\\BIN\\Release\\",
+    "!! scripts\\API-HARNESS\\findings\\run.json",
+  ].join("\r\n");
+  assert.equal(await isWorkingTreeClean({ cwd: "C:\\repo", capture: fakeExec({ ignoredStatus }).capture }), true);
+});
+test("publish still rejects ignored source paths after Windows normalization", async () => {
+  const ignoredStatus = "!! SRC\\Backdoor.TS\r\n";
+  assert.equal(await isWorkingTreeClean({ cwd: "C:\\repo", capture: fakeExec({ ignoredStatus }).capture }), false);
 });
 test("publish refuses untracked files before creating a release", async () => {
   await assert.rejects(
