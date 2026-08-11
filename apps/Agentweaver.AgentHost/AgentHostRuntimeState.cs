@@ -88,6 +88,13 @@ internal sealed class AgentHostRuntimeState
     public string? GitHubAccessToken { get; private set; }
 
     /// <summary>
+    /// The authenticated platform caller token forwarded only for operator-assistant MCP requests.
+    /// This is distinct from <see cref="GitHubAccessToken"/>: in Entra deployments the former is the
+    /// Entra API access token while the latter is the linked GitHub token used by Copilot.
+    /// </summary>
+    public string? CallerBearerToken { get; private set; }
+
+    /// <summary>
     /// Seeds the runtime state from env-injected options (non-warm pod launched with a RunId).
     /// Marks the state configured so a later /configure is rejected (409 "Already configured via env").
     /// </summary>
@@ -100,6 +107,7 @@ internal sealed class AgentHostRuntimeState
         PreviewRunnerCredential = string.Empty; // not available on env-var launch path
         KvUserSecretName = options.KvUserSecretName;
         GitHubAccessToken = null; // not available on env-var launch path
+        CallerBearerToken = null; // operator-assistant-only warm-pod input
         Purpose = AgentHostPurpose.Default;
         WorkspaceMode = ExecutionWorkspaceMode.Shared;
         SharedWorkingDirectory = options.WorkingDirectory;
@@ -145,6 +153,9 @@ internal sealed class AgentHostRuntimeState
         GitHubAccessToken = string.IsNullOrWhiteSpace(configuration.GitHubAccessToken)
             ? null
             : configuration.GitHubAccessToken;
+        CallerBearerToken = string.IsNullOrWhiteSpace(configuration.CallerBearerToken)
+            ? null
+            : configuration.CallerBearerToken;
         Purpose = configuration.Purpose;
         WorkspaceMode = configuration.WorkspaceMode;
         SharedWorkingDirectory = configuration.SharedWorkingDirectory;
@@ -196,4 +207,5 @@ internal sealed record AgentHostRunConfiguration(
     string? CommitAuthorName = null,
     string? CommitAuthorEmail = null,
     string? ProjectId = null,
-    string? AgentName = null);
+    string? AgentName = null,
+    string? CallerBearerToken = null);

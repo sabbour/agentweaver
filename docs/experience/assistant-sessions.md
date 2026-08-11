@@ -34,6 +34,10 @@ Type a message and send it. The assistant can, among other things:
 
 It's calling the same MCP tools an external client would use — see [Reference — MCP tools](/reference/mcp-tools) for the full catalog. Tool calls the assistant makes appear inline in the conversation so you can see what it actually did, not just what it says it did.
 
+### Authentication
+
+The assistant inherits the current browser session on every message. With Microsoft Entra sign-in, Agentweaver keeps two credentials separate: the Entra token authorizes MCP and platform API calls, while the active linked GitHub token is used for GitHub and Copilot access. Refreshing the browser session therefore takes effect on the next assistant message; the token is never stored in the conversation transcript.
+
 ### Suggested prompts
 
 Before you've sent a first message, the empty state shows a handful of suggested-prompt chips — realistic starting points like "List my projects and each one's most recent run status" or "Start a quick smoke-test run". Clicking one fills the composer with that text so you can review or edit it before sending; it does not send automatically. These are meant to help first-time users and anyone doing a quick smoke test get going without having to think of a prompt from scratch.
