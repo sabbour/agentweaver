@@ -199,6 +199,10 @@ internal sealed class AgentHostStartupService : IHostedService
             workingDirectory = prepared.WorkspacePath;
             repositoryPath = prepared.WorkspacePath;
         }
+        else
+        {
+            _workspaceManager.ConfigureRuntimeHome(runId, workingDirectory);
+        }
         _runtimeState.SetEffectiveWorkingDirectory(workingDirectory);
 
         // Prepend the sandbox tool manifest (baked into the image) to the per-run system prompt

@@ -134,8 +134,7 @@ internal sealed class PodLocalWorkspaceManager
                     spec.BaseCommitSha)
                 .ConfigureAwait(false);
 
-            var runtimeHome = ConfigureSandboxHome(spec.RunId);
-            _kataExecutor?.RegisterRuntimeHome(workspacePath, runtimeHome);
+            ConfigureRuntimeHome(spec.RunId, workspacePath);
             var prepared = new PreparedWorkspace(
                 spec.RunId,
                 workspacePath,
@@ -493,8 +492,22 @@ internal sealed class PodLocalWorkspaceManager
         }
     }
 
-    private string ConfigureSandboxHome(string runId)
+    /// <summary>
+    /// Creates the deterministic run HOME and binds it immutably to the resolved workspace.
+    /// Shared and pod-local workspace modes use this same registration path.
+    /// </summary>
+    public string ConfigureRuntimeHome(string runId, string workingDirectory)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        var workspace = Path.GetFullPath(workingDirectory);
+        if (!Directory.Exists(workspace))
+        {
+            throw new AgentHostConfigurationException(
+                "workspace_path_missing",
+                "The effective AgentHost workspace does not exist.");
+        }
+
         var home = Path.Combine(
             Path.GetFullPath(_options.ExecutionScratchRoot),
             "runtime-home",
@@ -505,6 +518,7 @@ internal sealed class PodLocalWorkspaceManager
         foreach (var path in new[] { home, cache, data, config })
             Directory.CreateDirectory(path);
 
+        _kataExecutor?.RegisterRuntimeHome(workspace, home);
         Environment.SetEnvironmentVariable("HOME", home);
         Environment.SetEnvironmentVariable("XDG_CACHE_HOME", cache);
         Environment.SetEnvironmentVariable("XDG_DATA_HOME", data);

@@ -397,9 +397,10 @@ that an implementation turn intentionally created inside an otherwise ignored pa
 
 ##### One HOME/XDG cache contract for every toolchain
 
-Each pod-local run gets a HOME outside the checkout at
-`<execution-scratch>/runtime-home/<run-hash>`. `PodLocalWorkspaceManager` creates the directory and
-its XDG children, then registers that exact path with `KataBwrapExecutor` for the run workspace:
+Every non-operator AgentHost run gets a HOME outside the checkout at
+`<execution-scratch>/runtime-home/<run-hash>`. After resolving the final Shared or pod-local
+working directory, `PodLocalWorkspaceManager` creates the HOME and its XDG children, then
+registers that exact path with `KataBwrapExecutor` for the run workspace:
 
 | Variable | Registered value |
 | --- | --- |
