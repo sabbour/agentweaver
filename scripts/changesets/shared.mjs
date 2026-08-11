@@ -40,6 +40,26 @@ export function assertVersionMirrors(repoRoot, options) {
   return mirrors.version;
 }
 
+export function synchronizePackageLockVersion(
+  repoRoot,
+  version,
+  { readFile = fs.readFileSync, writeFile = fs.writeFileSync } = {},
+) {
+  if (!SEMVER.test(version ?? "")) {
+    throw new Error(`Cannot synchronize package-lock.json to invalid semver: '${version ?? "missing"}'`);
+  }
+
+  const lockPath = path.join(repoRoot, "package-lock.json");
+  const lockJson = JSON.parse(readFile(lockPath, "utf8"));
+  if (!lockJson.packages?.[""]) {
+    throw new Error("package-lock.json is missing the root package entry");
+  }
+
+  lockJson.version = version;
+  lockJson.packages[""].version = version;
+  writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`);
+}
+
 export function extractChangelogSection(content, version) {
   const heading = new RegExp(`^##\\s+(?:\\[?v?${version.replace(/\./g, "\\.")}\\]?)(?:\\s|$).*?$`, "m");
   const match = heading.exec(content);
