@@ -188,6 +188,25 @@ public sealed class KubernetesSandboxExecutorClaimTests
         }
     }
 
+    private sealed class ConflictFirstClaimHandler : DelegatingHandler
+    {
+        public int ClaimCreateRequests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (IsClaimPost(request) && ++ClaimCreateRequests == 1)
+            {
+                var response = ConflictResponse();
+                response.RequestMessage = request;
+                return Task.FromResult(response);
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
     // The exact transient chain from issue #230: HttpRequestException → IOException → SocketException 104.
     private static Exception ConnectionReset() =>
         new HttpRequestException(
@@ -329,6 +348,84 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("kvUserSecretName").GetString().Should()
             .StartWith("ghtok-user--",
                 "the pod must fetch ONLY the run owner's KV secret (base32-encoded user id)");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_operator_configure_carries_platform_caller_token_separately()
+    {
+        const string runId = "run-claim-operator-caller";
+        const string callerBearerToken = "entra-platform-bearer-token";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            accessTokenProvider: new StubGitHubAccessTokenProvider("linked-github-token"));
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                CallerBearerToken: callerBearerToken));
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        var body = doc.RootElement;
+        body.GetProperty("callerBearerToken").GetString().Should().Be(callerBearerToken);
+        body.GetProperty("gitHubAccessToken").GetString().Should().Be("linked-github-token");
+        body.GetProperty("callerBearerToken").GetString().Should().NotBe(
+            body.GetProperty("gitHubAccessToken").GetString(),
+            "the Entra platform credential and linked GitHub/Copilot credential have different trust purposes");
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_operator_recreates_existing_claim_before_sending_current_token()
+    {
+        const string runId = "run-claim-operator-refresh";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-2"}}}""");
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-2$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-2"},"status":{"podIP":"10.0.0.8"}}""");
+
+        var conflictFirst = new ConflictFirstClaimHandler();
+        var configureHandler = new RecordingConfigureHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflictFirst, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            turnTokenRegistry: turnTokens,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler));
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                CallerBearerToken: "current-entra-token"));
+
+        conflictFirst.ClaimCreateRequests.Should().Be(2,
+            "an existing one-shot-configured operator pod must be replaced before a refreshed bearer is delivered");
+        fake.Requests.Should().Contain(request =>
+            request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("callerBearerToken").GetString().Should().Be("current-entra-token");
+        turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty();
     }
 
     // Issue #523: a Build & Test gate can launch its AgentHost pod for the first time (a fresh,
