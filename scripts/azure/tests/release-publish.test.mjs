@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { isWorkingTreeClean, parseArgs, validateMainSha, run } from "../release-publish.mjs";
 
-const mirrors = new Map([["/repo/VERSION", "0.9.70\n"], ["/repo/package.json", '{"version":"0.9.70"}'], ["/repo/package-lock.json", '{"packages":{"":{"version":"0.9.70"}}}'], ["/repo/CHANGELOG.md", "## 0.9.70\n\n- Prepared release note\n"]]);
+const mirrors = new Map([["/repo/VERSION", "0.9.70\n"], ["/repo/package.json", '{"version":"0.9.70"}'], ["/repo/package-lock.json", '{"version":"0.9.70","packages":{"":{"version":"0.9.70"}}}'], ["/repo/CHANGELOG.md", "## 0.9.70\n\n- Prepared release note\n"]]);
 const readMirror = (file) => mirrors.get(file.replaceAll("\\", "/"));
 const log = { info() {}, section() {}, field() {}, ok() {}, skip() {}, warn() {}, error() {}, debug() {}, command() {} };
 function fakeExec({

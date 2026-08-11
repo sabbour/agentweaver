@@ -35,8 +35,10 @@ prepared exact main SHA
 
 `VERSION` remains the product version. The root private `agentweaver` package is
 Changesets' single-package adapter; `package.json.version` and
-`package-lock.json.packages[""].version` must always equal `VERSION`. Run
-`npm run version:check` to verify this invariant.
+both root lockfile mirrors — `package-lock.json.version` and
+`package-lock.json.packages[""].version` — must always equal `VERSION`. The validator
+checks each lockfile field independently so a missing or stale mirror cannot be masked
+by the other. Run `npm run version:check` to verify this invariant.
 
 At `0.x`, use a `patch` changeset for compatible fixes and a `minor` changeset
 for features or breaking changes. `major` is reserved for the deliberate
