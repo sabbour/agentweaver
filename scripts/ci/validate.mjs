@@ -1,10 +1,16 @@
-import { globSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { globSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ensureProject, npmInvocation } from './shared-deps.mjs';
+import {
+  acquireValidationLock,
+  ensureProject,
+  npmInvocation,
+} from './shared-deps.mjs';
 
 const ALL_AREAS = ['node', 'harness', 'web', 'docs', 'dotnet'];
+const VALIDATION_PROFILE_VERSION = 2;
 
 function run(command, args, cwd) {
   const label = `${command} ${args.join(' ')}`;
@@ -71,6 +77,61 @@ function gitLines(repoRoot, args) {
     throw new Error(result.stderr.trim() || `git ${args.join(' ')} failed`);
   }
   return result.stdout.split(/\r?\n/u).filter(Boolean);
+}
+
+function gitOutput(repoRoot, args) {
+  const result = spawnSync('git', args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    shell: false,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || `git ${args.join(' ')} failed`);
+  }
+  return result.stdout;
+}
+
+function commandVersion(command, args, repoRoot, shell = false) {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    shell,
+  });
+  return result.status === 0 ? result.stdout.trim() : 'unavailable';
+}
+
+export function validationIdentity(repoRoot, profile, areas) {
+  const untracked = gitLines(
+    repoRoot,
+    ['ls-files', '--others', '--exclude-standard'],
+  ).sort();
+  const dirtyHash = createHash('sha256');
+  dirtyHash.update(gitOutput(repoRoot, ['diff', '--binary', 'HEAD']));
+  for (const filePath of untracked) {
+    dirtyHash.update(filePath);
+    dirtyHash.update(readFileSync(path.join(repoRoot, filePath)));
+  }
+  const npm = npmInvocation(['--version']);
+  const identity = {
+    version: VALIDATION_PROFILE_VERSION,
+    commit: gitOutput(repoRoot, ['rev-parse', 'HEAD']).trim(),
+    tree: gitOutput(repoRoot, ['rev-parse', 'HEAD^{tree}']).trim(),
+    dirty: dirtyHash.digest('hex'),
+    profile,
+    areas: [...areas].sort(),
+    node: process.version,
+    npm: commandVersion(npm.command, npm.args, repoRoot, npm.shell),
+    dotnet: areas.includes('dotnet')
+      ? commandVersion('dotnet', ['--version'], repoRoot)
+      : null,
+    platform: process.platform,
+    arch: process.arch,
+  };
+  return {
+    ...identity,
+    key: createHash('sha256').update(JSON.stringify(identity)).digest('hex'),
+  };
 }
 
 export function areasForPaths(paths) {
@@ -144,6 +205,7 @@ function ensureDependencies(repoRoot, project, isolated) {
     repoRoot,
     project,
     isolated,
+    validationLockHeld: true,
   });
 }
 
@@ -176,6 +238,46 @@ function runDocs(repoRoot, isolated) {
   runNpm(['--prefix', 'docs', 'run', 'build'], repoRoot);
 }
 
+function pathIsWithin(parent, child) {
+  const normalizedParent = process.platform === 'win32' ? parent.toLowerCase() : parent;
+  const normalizedChild = process.platform === 'win32' ? child.toLowerCase() : child;
+  const relative = path.relative(normalizedParent, normalizedChild);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+export function foreignDotnetOutputRoots(repoRoot) {
+  const roots = new Set();
+  const assetsFiles = globSync('**/obj/project.assets.json', {
+    cwd: repoRoot,
+    exclude: ['**/node_modules/**'],
+  });
+  for (const assetsFile of assetsFiles) {
+    try {
+      const assets = JSON.parse(readFileSync(path.join(repoRoot, assetsFile), 'utf8'));
+      const restoredProjectPath = assets.project?.restore?.projectPath;
+      if (
+        typeof restoredProjectPath === 'string'
+        &&
+        path.isAbsolute(restoredProjectPath)
+        && !pathIsWithin(path.resolve(repoRoot), path.resolve(restoredProjectPath))
+      ) {
+        roots.add(path.dirname(path.dirname(path.join(repoRoot, assetsFile))));
+      }
+    } catch {
+      // A malformed assets file is handled by the next restore.
+    }
+  }
+  return [...roots];
+}
+
+function cleanForeignDotnetOutputs(repoRoot) {
+  for (const projectRoot of foreignDotnetOutputRoots(repoRoot)) {
+    console.warn(`[validate] removing foreign MSBuild outputs under ${projectRoot}`);
+    rmSync(path.join(projectRoot, 'obj'), { recursive: true, force: true });
+    rmSync(path.join(projectRoot, 'bin'), { recursive: true, force: true });
+  }
+}
+
 function runDotnet(repoRoot, profile, filter) {
   if (profile === 'layer' && !filter) {
     throw new Error(
@@ -183,11 +285,12 @@ function runDotnet(repoRoot, profile, filter) {
       + 'Use a FullyQualifiedName filter for the changed component, or use --profile full at the stack top.',
     );
   }
-  const args = [
-    'test',
-    'tests/Agentweaver.Tests/Agentweaver.Tests.csproj',
-    '-p:CopilotSkipCliDownload=true',
-  ];
+  const project = 'tests/Agentweaver.Tests/Agentweaver.Tests.csproj';
+  const property = '-p:CopilotSkipCliDownload=true';
+  cleanForeignDotnetOutputs(repoRoot);
+  run('dotnet', ['restore', project, '--locked-mode', property], repoRoot);
+  run('dotnet', ['build', project, '--no-restore', property], repoRoot);
+  const args = ['test', project, '--no-build', '--no-restore', property];
   if (filter) {
     args.push('--filter', filter);
   }
@@ -215,27 +318,36 @@ function main() {
     return;
   }
 
-  const startedAt = performance.now();
-  console.log(`[validate] profile=${options.profile} areas=${areas.join(',')}`);
-  if (areas.includes('node')) {
-    runNodeTests(repoRoot);
+  const identity = validationIdentity(repoRoot, options.profile, areas);
+  console.log(
+    `[validate] profile=${options.profile} areas=${areas.join(',')} `
+    + `identity=${identity.key.slice(0, 12)} commit=${identity.commit.slice(0, 12)}`,
+  );
+  const releaseValidation = acquireValidationLock(repoRoot);
+  try {
+    const startedAt = performance.now();
+    if (areas.includes('node')) {
+      runNodeTests(repoRoot);
+    }
+    if (areas.includes('harness')) {
+      runHarness(repoRoot, options.isolatedDeps);
+    }
+    if (areas.includes('web') || areas.includes('web-test')) {
+      runWeb(repoRoot, options.isolatedDeps, areas.includes('web-test') ? 'test' : 'both');
+    } else if (areas.includes('web-lint')) {
+      runWeb(repoRoot, options.isolatedDeps, 'lint');
+    }
+    if (areas.includes('docs')) {
+      runDocs(repoRoot, options.isolatedDeps);
+    }
+    if (areas.includes('dotnet')) {
+      runDotnet(repoRoot, options.profile, options.dotnetFilter);
+    }
+    const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+    console.log(`[validate] profile ${options.profile} completed in ${elapsedSeconds}s`);
+  } finally {
+    releaseValidation();
   }
-  if (areas.includes('harness')) {
-    runHarness(repoRoot, options.isolatedDeps);
-  }
-  if (areas.includes('web') || areas.includes('web-test')) {
-    runWeb(repoRoot, options.isolatedDeps, areas.includes('web-test') ? 'test' : 'both');
-  } else if (areas.includes('web-lint')) {
-    runWeb(repoRoot, options.isolatedDeps, 'lint');
-  }
-  if (areas.includes('docs')) {
-    runDocs(repoRoot, options.isolatedDeps);
-  }
-  if (areas.includes('dotnet')) {
-    runDotnet(repoRoot, options.profile, options.dotnetFilter);
-  }
-  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
-  console.log(`[validate] profile ${options.profile} completed in ${elapsedSeconds}s`);
 }
 
 const isMain = process.argv[1]

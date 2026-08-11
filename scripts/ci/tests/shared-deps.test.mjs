@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -11,15 +12,20 @@ import { hostname } from 'node:os';
 import test from 'node:test';
 import {
   CACHE_SCHEMA,
+  acquireCacheUse,
   acquireLock,
+  acquireMaintenanceLock,
+  acquireValidationLock,
   analyzeProject,
   computeCacheIdentity,
   ensureProject,
-  materializeDependencyTree,
   resolveCommonDir,
-  validateCacheEntry,
+  verifyProjectResolution,
 } from '../shared-deps.mjs';
-import { areasForPaths } from '../validate.mjs';
+import {
+  areasForPaths,
+  foreignDotnetOutputRoots,
+} from '../validate.mjs';
 
 const scratchRoot = path.resolve('scripts/ci/tests/.scratch-shared-deps');
 
@@ -36,13 +42,17 @@ function runtime(overrides = {}) {
     npmVersion: '11.1.0',
     platform: 'win32',
     arch: 'x64',
+    libc: 'none',
     installConfigHash: 'default-config',
+    lifecycleEnvironmentHash: 'default-environment',
+    hasCredentials: false,
     ...overrides,
   };
 }
 
 function identity(overrides = {}) {
   return computeCacheIdentity({
+    packageRootIdentity: 'apps/web',
     packageJsonBytes: Buffer.from('{"name":"fixture"}'),
     lockfileBytes: Buffer.from('{"lockfileVersion":3}'),
     ...runtime(),
@@ -50,30 +60,44 @@ function identity(overrides = {}) {
   });
 }
 
-function writeProject(repoRoot, { workspaces = false, linked = false } = {}) {
+function writeProject(repoRoot, {
+  project = '.',
+  workspaces = false,
+  linked = false,
+  lockVersion = '1.0.0',
+} = {}) {
+  const projectPath = path.resolve(repoRoot, project);
+  mkdirSync(projectPath, { recursive: true });
   const packageJson = {
     name: 'fixture',
     private: true,
+    dependencies: { example: lockVersion },
     ...(workspaces ? { workspaces: ['packages/*'] } : {}),
   };
   const packageLock = {
     name: 'fixture',
     lockfileVersion: 3,
     packages: {
-      '': { name: 'fixture' },
+      '': { name: 'fixture', dependencies: { example: lockVersion } },
+      'node_modules/example': { version: lockVersion },
       ...(linked
         ? { 'node_modules/local-package': { resolved: 'packages/local-package', link: true } }
         : {}),
     },
   };
-  writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify(packageJson));
-  writeFileSync(path.join(repoRoot, 'package-lock.json'), JSON.stringify(packageLock));
+  writeFileSync(path.join(projectPath, 'package.json'), JSON.stringify(packageJson));
+  writeFileSync(path.join(projectPath, 'package-lock.json'), JSON.stringify(packageLock));
+  return projectPath;
 }
 
-function writeFakeInstall(projectPath) {
+function writeFakeInstall(projectPath, _npmArgs, cachePath) {
   const packagePath = path.join(projectPath, 'node_modules', 'example');
   mkdirSync(packagePath, { recursive: true });
-  writeFileSync(path.join(packagePath, 'package.json'), '{"name":"example","version":"1.0.0"}');
+  writeFileSync(
+    path.join(packagePath, 'package.json'),
+    '{"name":"example","version":"1.0.0","main":"index.js"}',
+  );
+  writeFileSync(path.join(packagePath, 'index.js'), 'module.exports = "example";');
   writeFileSync(path.join(projectPath, 'node_modules', '.package-lock.json'), JSON.stringify({
     lockfileVersion: 3,
     packages: {
@@ -81,6 +105,10 @@ function writeFakeInstall(projectPath) {
       'node_modules/example': { version: '1.0.0' },
     },
   }));
+  if (cachePath) {
+    mkdirSync(cachePath, { recursive: true });
+    writeFileSync(path.join(cachePath, '_fake-content'), 'cached');
+  }
   return { elapsedSeconds: '0.01' };
 }
 
@@ -88,83 +116,111 @@ test.after(() => {
   rmSync(scratchRoot, { recursive: true, force: true });
 });
 
-test('cache key includes lockfile, Node/npm, OS, architecture, and invalidation nonce', () => {
+test('cache key includes package root, manifests, toolchain, platform, flags, and environment', () => {
   const baseline = identity();
+  assert.notEqual(baseline.key, identity({ packageRootIdentity: 'docs' }).key);
+  assert.notEqual(baseline.key, identity({ packageJsonBytes: Buffer.from('changed') }).key);
   assert.notEqual(baseline.key, identity({ lockfileBytes: Buffer.from('changed') }).key);
   assert.notEqual(baseline.key, identity({ nodeVersion: 'v25.0.0' }).key);
   assert.notEqual(baseline.key, identity({ npmVersion: '12.0.0' }).key);
   assert.notEqual(baseline.key, identity({ platform: 'linux' }).key);
   assert.notEqual(baseline.key, identity({ arch: 'arm64' }).key);
+  assert.notEqual(baseline.key, identity({ libc: 'musl-1.2' }).key);
   assert.notEqual(baseline.key, identity({ installConfigHash: 'different-config' }).key);
   assert.notEqual(baseline.key, identity({ npmArgsHash: 'different-args' }).key);
+  assert.notEqual(
+    baseline.key,
+    identity({ lifecycleEnvironmentHash: 'different-environment' }).key,
+  );
   assert.notEqual(baseline.key, identity({ invalidationNonce: 'new-generation' }).key);
 });
 
 test('lock acquisition excludes a concurrent owner until release', () => {
   const root = resetScratch('locking');
   const lockPath = path.join(root, 'cache.lock');
-  const releaseFirst = acquireLock(lockPath, { timeoutMs: 2000 });
+  const releaseFirst = acquireLock(lockPath, {
+    timeoutMs: 2000,
+    processStartTokenFn: () => 'same-process',
+  });
   assert.throws(
-    () => acquireLock(lockPath, { timeoutMs: 25, pollIntervalMs: 5 }),
+    () => acquireLock(lockPath, {
+      timeoutMs: 25,
+      pollIntervalMs: 5,
+      processStartTokenFn: () => 'same-process',
+    }),
     /timed out waiting/u,
   );
   releaseFirst();
-  const releaseSecond = acquireLock(lockPath, { timeoutMs: 100 });
+  const releaseSecond = acquireLock(lockPath, {
+    timeoutMs: 100,
+    processStartTokenFn: () => 'same-process',
+  });
   releaseSecond();
 });
 
-test('dead stale locks are recovered', () => {
+test('dead locks and reused PIDs are recovered only after ownership verification', async () => {
   const root = resetScratch('stale-lock');
-  const lockPath = path.join(root, 'cache.lock');
-  mkdirSync(lockPath);
-  writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+  const deadLock = path.join(root, 'dead.lock');
+  mkdirSync(deadLock);
+  writeFileSync(path.join(deadLock, 'owner.json'), JSON.stringify({
     token: 'abandoned',
     pid: 2147483647,
     hostname: hostname(),
+    processStartToken: 'old-process',
     startedAt: new Date(Date.now() - 60_000).toISOString(),
   }));
-
-  const release = acquireLock(lockPath, {
+  const releaseDead = acquireLock(deadLock, {
     timeoutMs: 1000,
     staleAfterMs: 1,
     pollIntervalMs: 10,
+    processStartTokenFn: () => null,
   });
+  releaseDead();
+
+  const reusedLock = path.join(root, 'reused.lock');
+  mkdirSync(reusedLock);
+  writeFileSync(path.join(reusedLock, 'owner.json'), JSON.stringify({
+    token: 'reused',
+    pid: process.pid,
+    hostname: hostname(),
+    processStartToken: 'old-process',
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+  }));
+  const releaseReused = acquireLock(reusedLock, {
+    timeoutMs: 1000,
+    staleAfterMs: 1,
+    pollIntervalMs: 10,
+    processStartTokenFn: () => 'current-process',
+  });
+  releaseReused();
+});
+
+test('one canonical worktree validation mutex prevents overlapping validation', () => {
+  const repoRoot = resetScratch('validation-mutex');
+  const cacheRoot = path.join(repoRoot, '.cache');
+  const release = acquireValidationLock(repoRoot, { cacheRoot, timeoutMs: 100 });
+  assert.throws(
+    () => acquireValidationLock(repoRoot, { cacheRoot, timeoutMs: 25 }),
+    /timed out waiting/u,
+  );
   release();
 });
 
-test('cache validation detects incomplete package trees and marker corruption', () => {
-  const root = resetScratch('corruption');
-  const key = 'cache-key';
-  const nodeModules = path.join(root, 'node_modules');
-  const packagePath = path.join(nodeModules, 'example');
-  mkdirSync(packagePath, { recursive: true });
-  writeFileSync(path.join(packagePath, 'package.json'), '{"name":"example"}');
-  const hiddenLock = JSON.stringify({
-    lockfileVersion: 3,
-    packages: {
-      '': {},
-      'node_modules/example': { version: '1.0.0' },
-    },
-  });
-  writeFileSync(path.join(nodeModules, '.package-lock.json'), hiddenLock);
-  const digest = createHash('sha256').update(hiddenLock).digest('hex');
-  writeFileSync(path.join(root, 'ready.json'), JSON.stringify({
-    schema: CACHE_SCHEMA,
-    key,
-    hiddenLockHash: digest,
-    packageCount: 1,
-  }));
+test('npm cache users run concurrently but exclude maintenance operations', () => {
+  const cacheRoot = resetScratch('cache-maintenance');
+  const releaseUse = acquireCacheUse(cacheRoot, { timeoutMs: 100 });
+  assert.throws(
+    () => acquireMaintenanceLock(cacheRoot, { timeoutMs: 25, pollIntervalMs: 5 }),
+    /timed out waiting for active npm cache users/u,
+  );
+  releaseUse();
 
-  assert.equal(validateCacheEntry(root, key).valid, true);
-  rmSync(path.join(packagePath, 'package.json'));
-  assert.match(validateCacheEntry(root, key).reason, /incomplete/u);
-  writeFileSync(path.join(root, 'ready.json'), JSON.stringify({
-    schema: CACHE_SCHEMA + 1,
-    key,
-    hiddenLockHash: digest,
-    packageCount: 1,
-  }));
-  assert.match(validateCacheEntry(root, key).reason, /completion marker/u);
+  const releaseMaintenance = acquireMaintenanceLock(cacheRoot, { timeoutMs: 100 });
+  assert.throws(
+    () => acquireCacheUse(cacheRoot, { timeoutMs: 25 }),
+    /timed out waiting for dependency lock/u,
+  );
+  releaseMaintenance();
 });
 
 test('workspace and lockfile links force isolated installation', () => {
@@ -175,125 +231,189 @@ test('workspace and lockfile links force isolated installation', () => {
   );
 });
 
-test('workspace fallback installs into the current worktree without materializing a cache', () => {
+test('workspace fallback installs only into the current worktree', () => {
   const repoRoot = resetScratch('workspace-fallback');
   writeProject(repoRoot, { workspaces: true, linked: true });
-  let materialized = false;
+  let sharedCachePath;
   const result = ensureProject({
     repoRoot,
-    project: '.',
     cacheRoot: path.join(repoRoot, '.cache'),
     runtime: runtime(),
     environment: {},
-    materialize() {
-      materialized = true;
-    },
-    runNpmCi(projectPath) {
-      const localPackage = path.join(projectPath, 'node_modules', 'local-package');
-      mkdirSync(localPackage, { recursive: true });
-      writeFileSync(path.join(localPackage, 'package.json'), '{"name":"local-package"}');
-      return { elapsedSeconds: '0.01' };
+    runNpmCi(projectPath, npmArgs, cachePath) {
+      sharedCachePath = cachePath;
+      return writeFakeInstall(projectPath, npmArgs, cachePath);
     },
   });
-
   assert.equal(result.mode, 'isolated');
-  assert.equal(materialized, false);
-  assert.equal(
-    JSON.parse(readFileSync(path.join(repoRoot, 'node_modules/local-package/package.json'))).name,
-    'local-package',
-  );
+  assert.equal(sharedCachePath, null);
+  assert.equal(existsSync(path.join(repoRoot, 'node_modules/example/package.json')), true);
 });
 
-test('completed cache entries are reused without another npm install', () => {
-  const repoRoot = resetScratch('cache-hit');
-  const cacheRoot = path.join(repoRoot, '.cache');
+test('authenticated npm configuration uses isolated fallback', () => {
+  const repoRoot = resetScratch('credential-fallback');
   writeProject(repoRoot);
-  let installs = 0;
-  let materializations = 0;
-  const options = {
+  let sharedCachePath;
+  const result = ensureProject({
     repoRoot,
-    project: '.',
+    cacheRoot: path.join(repoRoot, '.cache'),
+    runtime: runtime({ hasCredentials: true }),
+    environment: { NPM_TOKEN: 'not-written-anywhere' },
+    runNpmCi(projectPath, npmArgs, cachePath) {
+      sharedCachePath = cachePath;
+      return writeFakeInstall(projectPath, npmArgs, cachePath);
+    },
+  });
+  assert.equal(result.mode, 'isolated');
+  assert.equal(sharedCachePath, null);
+});
+
+test('shared npm cache is reused while node_modules stays physical and worktree-local', () => {
+  const root = resetScratch('shared-download-cache');
+  const cacheRoot = path.join(root, '.cache');
+  const firstWorktree = path.join(root, 'first');
+  const secondWorktree = path.join(root, 'second');
+  writeProject(firstWorktree);
+  writeProject(secondWorktree);
+  const cachePaths = [];
+  let installs = 0;
+  const options = (repoRoot) => ({
+    repoRoot,
     cacheRoot,
     runtime: runtime(),
     environment: {},
-    runNpmCi(projectPath) {
+    runNpmCi(projectPath, npmArgs, cachePath) {
       installs += 1;
-      return writeFakeInstall(projectPath);
+      cachePaths.push(cachePath);
+      return writeFakeInstall(projectPath, npmArgs, cachePath);
     },
-    materialize() {
-      materializations += 1;
-    },
-  };
+  });
 
-  assert.equal(ensureProject(options).mode, 'shared');
-  assert.equal(ensureProject(options).mode, 'shared');
-  assert.equal(installs, 1);
-  assert.equal(materializations, 2);
+  assert.equal(ensureProject(options(firstWorktree)).mode, 'shared-cache');
+  assert.equal(ensureProject(options(secondWorktree)).mode, 'shared-cache');
+  assert.equal(ensureProject(options(firstWorktree)).mode, 'local');
+  assert.equal(installs, 2);
+  assert.equal(cachePaths[0], cachePaths[1]);
+  assert.equal(
+    realpathSync.native(path.join(firstWorktree, 'node_modules')).startsWith(firstWorktree),
+    true,
+  );
+  assert.equal(
+    realpathSync.native(path.join(secondWorktree, 'node_modules')).startsWith(secondWorktree),
+    true,
+  );
 });
 
-test('materialization failures fall back to a fresh isolated npm ci', () => {
-  const repoRoot = resetScratch('attach-fallback');
+test('lockfile changes invalidate only the current worktree dependency tree', () => {
+  const repoRoot = resetScratch('lockfile-change');
+  const cacheRoot = path.join(repoRoot, '.cache');
   writeProject(repoRoot);
-  let installs = 0;
-  const result = ensureProject({
+  const cachePaths = [];
+  const options = {
     repoRoot,
-    project: '.',
-    cacheRoot: path.join(repoRoot, '.cache'),
+    cacheRoot,
     runtime: runtime(),
     environment: {},
-    runNpmCi(projectPath) {
-      installs += 1;
-      return writeFakeInstall(projectPath);
+    runNpmCi(projectPath, npmArgs, cachePath) {
+      cachePaths.push(cachePath);
+      return writeFakeInstall(projectPath, npmArgs, cachePath);
     },
-    materialize() {
-      throw new Error('links unavailable');
-    },
-  });
+  };
+  ensureProject(options);
+  writeProject(repoRoot, { lockVersion: '2.0.0' });
+  ensureProject(options);
+  assert.equal(cachePaths.length, 2);
+  assert.notEqual(cachePaths[0], cachePaths[1]);
+});
 
-  assert.equal(result.mode, 'isolated');
+test('corrupt cache markers are quarantined before one clean install', () => {
+  const repoRoot = resetScratch('corruption');
+  const cacheRoot = path.join(repoRoot, '.cache');
+  writeProject(repoRoot);
+  let installs = 0;
+  let cachePath;
+  const options = {
+    repoRoot,
+    cacheRoot,
+    runtime: runtime(),
+    environment: {},
+    runNpmCi(projectPath, npmArgs, currentCachePath) {
+      installs += 1;
+      cachePath = currentCachePath;
+      return writeFakeInstall(projectPath, npmArgs, currentCachePath);
+    },
+  };
+  ensureProject(options);
+  rmSync(path.join(repoRoot, 'node_modules'), { recursive: true, force: true });
+  writeFileSync(path.join(cachePath, 'cache.json'), '{broken');
+  ensureProject(options);
   assert.equal(installs, 2);
   assert.equal(
-    JSON.parse(readFileSync(path.join(repoRoot, 'node_modules/example/package.json'))).name,
-    'example',
+    existsSync(path.join(cacheRoot, 'quarantine')),
+    true,
   );
 });
 
-test('materialized dependency trees are private writable copies', () => {
-  const root = resetScratch('private-copy');
-  const entryPath = path.join(root, 'entry');
-  const cachedPackage = path.join(entryPath, 'node_modules', 'example');
-  const localNodeModules = path.join(root, 'worktree', 'node_modules');
-  mkdirSync(cachedPackage, { recursive: true });
-  writeFileSync(path.join(cachedPackage, 'package.json'), '{"name":"example","value":"cache"}');
-  const hiddenLock = JSON.stringify({
-    lockfileVersion: 3,
-    packages: {
-      '': {},
-      'node_modules/example': { version: '1.0.0' },
-    },
-  });
-  writeFileSync(path.join(entryPath, 'node_modules', '.package-lock.json'), hiddenLock);
-  writeFileSync(path.join(entryPath, 'ready.json'), JSON.stringify({
-    schema: CACHE_SCHEMA,
-    key: 'private-key',
-    hiddenLockHash: createHash('sha256').update(hiddenLock).digest('hex'),
-    packageCount: 1,
-  }));
-  mkdirSync(path.dirname(localNodeModules), { recursive: true });
-
-  materializeDependencyTree(entryPath, localNodeModules, 'private-key');
-  writeFileSync(
-    path.join(localNodeModules, 'example', 'package.json'),
-    '{"name":"example","value":"worktree"}',
+test('a failed cached install is quarantined, retried cold once, then fails closed', () => {
+  const repoRoot = resetScratch('retry-cold');
+  const cacheRoot = path.join(repoRoot, '.cache');
+  writeProject(repoRoot);
+  let attempts = 0;
+  assert.throws(
+    () => ensureProject({
+      repoRoot,
+      cacheRoot,
+      runtime: runtime(),
+      environment: {},
+      runNpmCi() {
+        attempts += 1;
+        throw new Error(`install failure ${attempts}`);
+      },
+    }),
+    /failed after quarantining/u,
   );
-
-  assert.equal(
-    JSON.parse(readFileSync(path.join(cachedPackage, 'package.json'))).value,
-    'cache',
-  );
+  assert.equal(attempts, 2);
 });
 
-test('Windows git common-dir paths normalize without depending on the worktree git file', () => {
+test('100-cycle four-worktree soak has no cross-worktree writes or resolution', () => {
+  const root = resetScratch('four-worktree-soak');
+  const cacheRoot = path.join(root, '.cache');
+  const worktrees = Array.from({ length: 4 }, (_, index) => path.join(root, `worktree-${index}`));
+  let installs = 0;
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    for (const worktree of worktrees) {
+      writeProject(worktree);
+      const options = {
+        repoRoot: worktree,
+        cacheRoot,
+        runtime: runtime(),
+        environment: {},
+        validationLockHeld: true,
+        runNpmCi(projectPath, npmArgs, cachePath) {
+          installs += 1;
+          return writeFakeInstall(projectPath, npmArgs, cachePath);
+        },
+      };
+      for (let cycle = 0; cycle < 25; cycle += 1) {
+        ensureProject(options);
+        verifyProjectResolution(worktree, JSON.parse(
+          readFileSync(path.join(worktree, 'package.json'), 'utf8'),
+        ));
+      }
+    }
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal(installs, 4);
+  writeFileSync(path.join(worktrees[0], 'node_modules/example/local-only'), 'changed');
+  for (const worktree of worktrees.slice(1)) {
+    assert.equal(existsSync(path.join(worktree, 'node_modules/example/local-only')), false);
+  }
+});
+
+test('Windows git common-dir paths normalize without following worktree git files', () => {
   assert.equal(
     resolveCommonDir(
       'C:\\repo\\.worktrees\\feature',
@@ -310,6 +430,22 @@ test('Windows git common-dir paths normalize without depending on the worktree g
     ),
     'C:\\repo\\.git',
   );
+});
+
+test('foreign MSBuild assets identify only the affected worktree project output', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const repoRoot = resetScratch('foreign-dotnet-output');
+  const projectRoot = path.join(repoRoot, 'packages', 'Example');
+  mkdirSync(path.join(projectRoot, 'obj'), { recursive: true });
+  writeFileSync(path.join(projectRoot, 'obj', 'project.assets.json'), JSON.stringify({
+    project: {
+      restore: {
+        projectPath: 'C:\\another-worktree\\packages\\Example\\Example.csproj',
+      },
+    },
+  }));
+  assert.deepEqual(foreignDotnetOutputRoots(repoRoot), [projectRoot]);
 });
 
 test('validation path classification keeps layer and stack policy deterministic', () => {

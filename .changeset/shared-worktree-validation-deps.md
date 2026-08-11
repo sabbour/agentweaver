@@ -2,4 +2,4 @@
 "agentweaver": patch
 ---
 
-Add lockfile-keyed dependency reuse and timed layer/full validation profiles for concurrent worktrees, with isolated npm and worktree-local .NET build fallbacks.
+Add safe npm download-cache reuse and timed layer/full validation profiles for concurrent worktrees, with physical local dependency trees and worktree-local .NET outputs.

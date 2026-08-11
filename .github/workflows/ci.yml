@@ -7,7 +7,7 @@ name: CI
 # keeping the suites off a single shared runner keeps the signal reliable.
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
-#   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
+#   - node scripts/ci/validate.mjs --profile ci --area dotnet
 #   - node scripts/ci/validate.mjs --profile ci --area node,harness
 #   - node scripts/ci/validate.mjs --profile ci --area web
 #   - node scripts/ci/validate.mjs --profile ci --area docs
@@ -108,20 +108,23 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', 'global.json') }}
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', 'nuget.config', 'Directory.*', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
           restore-keys: |
-            nuget-${{ runner.os }}-
+            nuget-${{ runner.os }}-${{ runner.arch }}-
 
-      # CopilotSkipCliDownload=true keeps the GitHub.Copilot.SDK MSBuild target
-      # from trying to fetch a platform copilot CLI binary during build. It is
-      # required on ARM64/Windows dev machines and harmless on an x64 runner --
-      # kept here for parity with the documented local command.
-      - name: Run .NET tests
-        run: dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
+      # Restore is locked, build runs once, and tests reuse that exact output.
+      # bin/obj remain private to this checkout.
+      - name: Run .NET validation
+        run: node scripts/ci/validate.mjs --profile ci --area dotnet
 
   node-toolchain-tests:
     name: Node toolchain tests

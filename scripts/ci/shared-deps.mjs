@@ -1,30 +1,32 @@
 import {
-  constants,
-  cpSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
-  readlinkSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { hostname } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const CACHE_SCHEMA = 1;
-export const DEFAULT_PROJECTS = ['.', 'apps/web', 'docs'];
-const LOCAL_MARKER = '.agentweaver-shared-deps.json';
+export const CACHE_SCHEMA = 2;
+export const DEFAULT_PROJECTS = ['.', 'apps/web', 'docs', 'scripts/ui-harness'];
+const LOCAL_MARKER = '.agentweaver-deps.json';
+const CACHE_MARKER = 'cache.json';
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_STALE_LOCK_MS = 30 * 60 * 1000;
 const POLL_INTERVAL_MS = 250;
+const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org/';
+let cachedCurrentProcessStartToken;
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -35,6 +37,23 @@ function atomicWriteJson(filePath, value) {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
   renameSync(temporaryPath, filePath);
+}
+
+function atomicCreateJson(filePath, value) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  try {
+    linkSync(temporaryPath, filePath);
+    return true;
+  } catch (error) {
+    if (error?.code !== 'EEXIST') {
+      throw error;
+    }
+    return false;
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
 }
 
 function sleep(milliseconds) {
@@ -117,27 +136,33 @@ export function analyzeProject(packageJson, lockfile) {
 }
 
 export function computeCacheIdentity({
+  packageRootIdentity,
   packageJsonBytes,
   lockfileBytes,
   nodeVersion,
   npmVersion,
   platform,
   arch,
+  libc = 'none',
   installConfigHash = '',
   npmArgsHash = '',
+  lifecycleEnvironmentHash = '',
   invalidationNonce = '',
 }) {
   const baseKey = sha256(
     JSON.stringify({
       schema: CACHE_SCHEMA,
+      packageRootIdentity,
       packageJson: sha256(packageJsonBytes),
       lockfile: sha256(lockfileBytes),
       nodeVersion,
       npmVersion,
       platform,
       arch,
+      libc,
       installConfigHash,
       npmArgsHash,
+      lifecycleEnvironmentHash,
     }),
   );
   const key = invalidationNonce
@@ -158,18 +183,60 @@ function processIsAlive(pid) {
   }
 }
 
+export function processStartToken(pid, platform = process.platform) {
+  if (pid === process.pid && cachedCurrentProcessStartToken !== undefined) {
+    return cachedCurrentProcessStartToken;
+  }
+  if (!processIsAlive(pid)) {
+    return null;
+  }
+  let token = null;
+  if (platform === 'linux') {
+    try {
+      const fields = readFileSync(`/proc/${pid}/stat`, 'utf8').trim().split(' ');
+      token = `linux:${fields[21]}`;
+    } catch {
+      token = null;
+    }
+  } else if (platform === 'win32') {
+    const result = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    token = result.status === 0 ? `win32:${result.stdout.trim()}` : null;
+  }
+  if (pid === process.pid) {
+    cachedCurrentProcessStartToken = token;
+  }
+  return token;
+}
+
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8'));
 }
 
-function lockIsStale(lockPath, staleAfterMs) {
+function lockIsStale(lockPath, staleAfterMs, processStartTokenFn) {
   try {
     const owner = readJson(path.join(lockPath, 'owner.json'));
     const age = Date.now() - Date.parse(owner.startedAt);
-    if (owner.hostname === hostname() && !processIsAlive(owner.pid)) {
+    if (owner.hostname !== hostname()) {
+      return age > staleAfterMs;
+    }
+    if (!processIsAlive(owner.pid)) {
       return age > 1000;
     }
-    return age > staleAfterMs;
+    const currentStartToken = processStartTokenFn(owner.pid);
+    if (owner.processStartToken && currentStartToken) {
+      return owner.processStartToken !== currentStartToken && age > 1000;
+    }
+    // Without a start-time identity, a live PID cannot be recovered safely.
+    return false;
   } catch {
     return Date.now() - statSync(lockPath).mtimeMs > staleAfterMs;
   }
@@ -181,6 +248,7 @@ export function acquireLock(
     timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
     staleAfterMs = DEFAULT_STALE_LOCK_MS,
     pollIntervalMs = POLL_INTERVAL_MS,
+    processStartTokenFn = processStartToken,
   } = {},
 ) {
   mkdirSync(path.dirname(lockPath), { recursive: true });
@@ -194,6 +262,7 @@ export function acquireLock(
         token,
         pid: process.pid,
         hostname: hostname(),
+        processStartToken: processStartTokenFn(process.pid),
         startedAt: new Date().toISOString(),
       });
       return () => {
@@ -203,7 +272,7 @@ export function acquireLock(
             rmSync(lockPath, { recursive: true, force: true });
           }
         } catch {
-          // A recovered/replaced lock is owned by another process.
+          // A recovered or replaced lock is owned by another process.
         }
       };
     } catch (error) {
@@ -212,7 +281,7 @@ export function acquireLock(
       }
     }
 
-    if (lockIsStale(lockPath, staleAfterMs)) {
+    if (lockIsStale(lockPath, staleAfterMs, processStartTokenFn)) {
       const abandonedPath = `${lockPath}.stale-${Date.now()}-${randomUUID()}`;
       try {
         renameSync(lockPath, abandonedPath);
@@ -226,221 +295,169 @@ export function acquireLock(
     }
 
     if (Date.now() - startedAt >= timeoutMs) {
-      throw new Error(`timed out waiting for dependency cache lock ${lockPath}`);
+      throw new Error(`timed out waiting for dependency lock ${lockPath}`);
     }
     sleep(pollIntervalMs);
   }
-}
-
-function packagePathsFromHiddenLock(hiddenLock) {
-  return Object.entries(hiddenLock.packages ?? {})
-    .filter(([entryPath, metadata]) => (
-      entryPath.startsWith('node_modules/')
-      && entryPath !== 'node_modules/.bin'
-      && metadata?.link !== true
-    ))
-    .map(([entryPath]) => entryPath);
-}
-
-export function validateCacheEntry(entryPath, expectedKey) {
-  try {
-    const entryMetadata = lstatSync(entryPath);
-    const nodeModulesPath = path.join(entryPath, 'node_modules');
-    const nodeModulesMetadata = lstatSync(nodeModulesPath);
-    if (
-      entryMetadata.isSymbolicLink()
-      || nodeModulesMetadata.isSymbolicLink()
-      || !entryMetadata.isDirectory()
-      || !nodeModulesMetadata.isDirectory()
-    ) {
-      return { valid: false, reason: 'cache entry contains an unsafe directory link' };
-    }
-
-    const marker = readJson(path.join(entryPath, 'ready.json'));
-    if (marker.schema !== CACHE_SCHEMA || marker.key !== expectedKey) {
-      return { valid: false, reason: 'completion marker does not match the cache key' };
-    }
-
-    const hiddenLockPath = path.join(nodeModulesPath, '.package-lock.json');
-    const hiddenLockBytes = readFileSync(hiddenLockPath);
-    if (sha256(hiddenLockBytes) !== marker.hiddenLockHash) {
-      return { valid: false, reason: 'npm hidden lockfile is missing or changed' };
-    }
-
-    const hiddenLock = JSON.parse(hiddenLockBytes);
-    const packagePaths = packagePathsFromHiddenLock(hiddenLock);
-    if (packagePaths.length !== marker.packageCount) {
-      return { valid: false, reason: 'installed package inventory count changed' };
-    }
-    for (const packagePath of packagePaths) {
-      const installedPackagePath = path.join(entryPath, packagePath);
-      const installedPackageMetadata = lstatSync(installedPackagePath);
-      if (
-        installedPackageMetadata.isSymbolicLink()
-        || !installedPackageMetadata.isDirectory()
-        || !existsSync(path.join(installedPackagePath, 'package.json'))
-      ) {
-        return { valid: false, reason: `installed package is incomplete: ${packagePath}` };
-      }
-    }
-    return { valid: true, reason: null };
-  } catch (error) {
-    return { valid: false, reason: error?.message ?? String(error) };
-  }
-}
-
-function assertSafeDependencyLinks(nodeModulesPath) {
-  const root = path.resolve(nodeModulesPath);
-  const pending = [root];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const entryPath = path.join(current, entry.name);
-      const metadata = lstatSync(entryPath);
-      if (metadata.isSymbolicLink()) {
-        const target = readlinkSync(entryPath);
-        const resolvedTarget = path.resolve(path.dirname(entryPath), target);
-        const relativeTarget = path.relative(root, resolvedTarget);
-        if (
-          path.isAbsolute(target)
-          || relativeTarget === '..'
-          || relativeTarget.startsWith(`..${path.sep}`)
-        ) {
-          throw new Error(`dependency link escapes node_modules: ${entryPath} -> ${target}`);
-        }
-      } else if (metadata.isDirectory()) {
-        pending.push(entryPath);
-      }
-    }
-  }
-}
-
-function removeNodeModules(nodeModulesPath) {
-  let metadata;
-  try {
-    metadata = lstatSync(nodeModulesPath);
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return;
-    }
-    throw error;
-  }
-  if (!metadata) {
-    return;
-  }
-  if (metadata.isSymbolicLink()) {
-    unlinkSync(nodeModulesPath);
-    return;
-  }
-  rmSync(nodeModulesPath, { recursive: true, force: true });
-}
-
-function removePathWithoutFollowingLinks(targetPath) {
-  try {
-    const metadata = lstatSync(targetPath);
-    if (metadata.isSymbolicLink()) {
-      unlinkSync(targetPath);
-    } else {
-      rmSync(targetPath, { recursive: true, force: true });
-    }
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-}
-
-function validateLocalTree(entryPath, nodeModulesPath, expectedKey) {
-  try {
-    const metadata = lstatSync(nodeModulesPath);
-    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      return false;
-    }
-    const localMarker = readJson(path.join(nodeModulesPath, LOCAL_MARKER));
-    const cacheMarker = readJson(path.join(entryPath, 'ready.json'));
-    if (
-      localMarker.schema !== CACHE_SCHEMA
-      || localMarker.key !== expectedKey
-      || cacheMarker.key !== expectedKey
-    ) {
-      return false;
-    }
-    const hiddenLockBytes = readFileSync(path.join(nodeModulesPath, '.package-lock.json'));
-    if (sha256(hiddenLockBytes) !== cacheMarker.hiddenLockHash) {
-      return false;
-    }
-    const hiddenLock = JSON.parse(hiddenLockBytes);
-    const packagePaths = packagePathsFromHiddenLock(hiddenLock);
-    if (packagePaths.length !== cacheMarker.packageCount) {
-      return false;
-    }
-    return packagePaths.every((packagePath) => (
-      existsSync(path.join(path.dirname(nodeModulesPath), packagePath, 'package.json'))
-    ));
-  } catch {
-    return false;
-  }
-}
-
-export function materializeDependencyTree(entryPath, nodeModulesPath, expectedKey) {
-  if (validateLocalTree(entryPath, nodeModulesPath, expectedKey)) {
-    return;
-  }
-  removeNodeModules(nodeModulesPath);
-  const temporaryPath = `${nodeModulesPath}.cache-tmp-${process.pid}-${randomUUID()}`;
-  removePathWithoutFollowingLinks(temporaryPath);
-  try {
-    cpSync(
-      path.join(entryPath, 'node_modules'),
-      temporaryPath,
-      {
-        recursive: true,
-        dereference: false,
-        verbatimSymlinks: true,
-        mode: constants.COPYFILE_FICLONE,
-      },
-    );
-    atomicWriteJson(path.join(temporaryPath, LOCAL_MARKER), {
-      schema: CACHE_SCHEMA,
-      key: expectedKey,
-      materializedAt: new Date().toISOString(),
-    });
-    renameSync(temporaryPath, nodeModulesPath);
-  } catch (error) {
-    removePathWithoutFollowingLinks(temporaryPath);
-    throw error;
-  }
-}
-
-function installIsolated(projectPath, npmArgs, runNpmCi) {
-  removeNodeModules(path.join(projectPath, 'node_modules'));
-  return runNpmCi(projectPath, npmArgs);
-}
-
-function defaultNpmInstall(projectPath, npmArgs) {
-  const invocation = npmInvocation(['ci', ...npmArgs]);
-  return run(invocation.command, invocation.args, {
-    cwd: projectPath,
-    shell: invocation.shell,
-  });
 }
 
 function gitValue(repoRoot, args) {
   return run('git', args, { cwd: repoRoot, capture: true }).stdout;
 }
 
-export function runtimeInfo(repoRoot) {
-  const invocation = npmInvocation(['--version']);
+function cacheRootForRepo(repoRoot, override) {
+  if (override) {
+    return path.resolve(repoRoot, override);
+  }
+  const commonDir = resolveCommonDir(
+    repoRoot,
+    gitValue(repoRoot, ['rev-parse', '--git-common-dir']),
+  );
+  return path.join(commonDir, 'agentweaver-cache', `npm-v${CACHE_SCHEMA}`);
+}
+
+function canonicalWorktree(repoRoot) {
+  const canonical = realpathSync.native(repoRoot);
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
+export function acquireValidationLock(repoRoot, {
+  cacheRoot,
+  timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
+  staleAfterMs = DEFAULT_STALE_LOCK_MS,
+} = {}) {
+  const resolvedCacheRoot = cacheRootForRepo(repoRoot, cacheRoot);
+  const worktreeKey = sha256(canonicalWorktree(repoRoot));
+  return acquireLock(
+    path.join(resolvedCacheRoot, 'validation-locks', worktreeKey),
+    { timeoutMs, staleAfterMs },
+  );
+}
+
+export function acquireCacheUse(cacheRoot, {
+  timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
+  staleAfterMs = DEFAULT_STALE_LOCK_MS,
+} = {}) {
+  const releaseGate = acquireLock(
+    path.join(cacheRoot, 'maintenance.lock'),
+    { timeoutMs, staleAfterMs },
+  );
+  try {
+    return acquireLock(
+      path.join(cacheRoot, 'active', randomUUID()),
+      { timeoutMs, staleAfterMs },
+    );
+  } finally {
+    releaseGate();
+  }
+}
+
+export function acquireMaintenanceLock(cacheRoot, {
+  timeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
+  staleAfterMs = DEFAULT_STALE_LOCK_MS,
+  pollIntervalMs = POLL_INTERVAL_MS,
+} = {}) {
+  const startedAt = Date.now();
+  const releaseMaintenance = acquireLock(
+    path.join(cacheRoot, 'maintenance.lock'),
+    { timeoutMs, staleAfterMs, pollIntervalMs },
+  );
+  const activeRoot = path.join(cacheRoot, 'active');
+  try {
+    while (existsSync(activeRoot)) {
+      const active = [];
+      for (const entry of readdirSync(activeRoot)) {
+        const leasePath = path.join(activeRoot, entry);
+        if (lockIsStale(leasePath, staleAfterMs, processStartToken)) {
+          const abandonedPath = `${leasePath}.stale-${Date.now()}-${randomUUID()}`;
+          try {
+            renameSync(leasePath, abandonedPath);
+            rmSync(abandonedPath, { recursive: true, force: true });
+            continue;
+          } catch (error) {
+            if (!['ENOENT', 'EACCES', 'EPERM'].includes(error?.code)) {
+              throw error;
+            }
+          }
+        }
+        active.push(leasePath);
+      }
+      if (active.length === 0) {
+        break;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(`timed out waiting for active npm cache users under ${activeRoot}`);
+      }
+      sleep(pollIntervalMs);
+    }
+    return releaseMaintenance;
+  } catch (error) {
+    releaseMaintenance();
+    throw error;
+  }
+}
+
+function safeRegistry(registry) {
+  try {
+    const url = new URL(registry ?? DEFAULT_NPM_REGISTRY);
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch {
+    return String(registry ?? DEFAULT_NPM_REGISTRY);
+  }
+}
+
+function lifecycleEnvironment(environment) {
+  return {
+    CI: environment.CI === 'true',
+    NODE_ENV: environment.NODE_ENV ?? null,
+    NODE_OPTIONS: environment.NODE_OPTIONS ?? null,
+  };
+}
+
+function hasNpmCredentials(environment, npmConfig) {
+  const credentialEnvironment = [
+    'NPM_TOKEN',
+    'NODE_AUTH_TOKEN',
+    'NPM_CONFIG__AUTH',
+    'NPM_CONFIG__AUTHTOKEN',
+    'npm_config__auth',
+    'npm_config__authToken',
+  ];
+  if (credentialEnvironment.some((name) => Boolean(environment[name]))) {
+    return true;
+  }
+  return Object.keys(npmConfig).some((name) => (
+    /(?:^|:)_(?:auth|authToken)$/iu.test(name)
+    || /(?:password|token)$/iu.test(name)
+  ));
+}
+
+function runtimeLibc() {
+  if (process.platform !== 'linux') {
+    return 'none';
+  }
+  const header = process.report?.getReport?.().header;
+  return header?.glibcVersionRuntime
+    ? `glibc-${header.glibcVersionRuntime}`
+    : `linux-${process.env.npm_config_libc ?? 'unknown'}`;
+}
+
+export function runtimeInfo(repoRoot, environment = process.env) {
+  const invocation = npmInvocation(['--version'], environment);
   const npmVersion = run(invocation.command, invocation.args, {
     cwd: repoRoot,
     capture: true,
     shell: invocation.shell,
+    env: environment,
   }).stdout;
-  const configInvocation = npmInvocation(['config', 'list', '--json']);
+  const configInvocation = npmInvocation(['config', 'list', '--json'], environment);
   const npmConfig = JSON.parse(run(configInvocation.command, configInvocation.args, {
     cwd: repoRoot,
     capture: true,
     shell: configInvocation.shell,
+    env: environment,
   }).stdout);
   const installConfig = Object.fromEntries(
     [
@@ -465,43 +482,28 @@ export function runtimeInfo(repoRoot) {
       'strict-peer-deps',
     ].map((name) => [name, npmConfig[name] ?? null]),
   );
+  installConfig.registry = safeRegistry(npmConfig.registry);
   return {
     nodeVersion: process.version,
     npmVersion,
     platform: process.platform,
     arch: process.arch,
-    installConfigHash: sha256(JSON.stringify({
-      ...installConfig,
-      NODE_ENV: process.env.NODE_ENV ?? null,
-    })),
+    libc: runtimeLibc(),
+    installConfigHash: sha256(JSON.stringify(installConfig)),
+    lifecycleEnvironmentHash: sha256(JSON.stringify(lifecycleEnvironment(environment))),
+    hasCredentials: hasNpmCredentials(environment, npmConfig),
   };
 }
 
-function cacheRootForRepo(repoRoot, override) {
-  if (override) {
-    return path.resolve(repoRoot, override);
-  }
-  const commonDir = resolveCommonDir(
-    repoRoot,
-    gitValue(repoRoot, ['rev-parse', '--git-common-dir']),
-  );
-  return path.join(commonDir, 'agentweaver-cache', `npm-v${CACHE_SCHEMA}`);
-}
-
-function invalidationNonce(cacheRoot, baseKey) {
-  try {
-    return readJson(path.join(cacheRoot, 'invalidations', `${baseKey}.json`)).nonce ?? '';
-  } catch {
-    return '';
-  }
-}
-
-function projectInputs(projectPath) {
+function projectInputs(repoRoot, project) {
+  const projectPath = path.resolve(repoRoot, project);
   const packageJsonPath = path.join(projectPath, 'package.json');
   const lockfilePath = path.join(projectPath, 'package-lock.json');
   const packageJsonBytes = readFileSync(packageJsonPath);
   const lockfileBytes = readFileSync(lockfilePath);
   return {
+    projectPath,
+    packageRootIdentity: project.replaceAll('\\', '/') || '.',
     packageJsonBytes,
     lockfileBytes,
     packageJson: JSON.parse(packageJsonBytes),
@@ -509,12 +511,297 @@ function projectInputs(projectPath) {
   };
 }
 
-function fallback(projectPath, npmArgs, reason, runNpmCi) {
-  console.warn(`[deps] shared dependency reuse unavailable for ${projectPath}: ${reason}`);
+function removeNodeModules(nodeModulesPath) {
+  try {
+    const metadata = lstatSync(nodeModulesPath);
+    if (metadata.isSymbolicLink()) {
+      rmSync(nodeModulesPath, { force: true });
+    } else {
+      rmSync(nodeModulesPath, { recursive: true, force: true });
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
+function hiddenLockHash(nodeModulesPath) {
+  return sha256(readFileSync(path.join(nodeModulesPath, '.package-lock.json')));
+}
+
+function isWithin(parent, child) {
+  const normalizedParent = process.platform === 'win32' ? parent.toLowerCase() : parent;
+  const normalizedChild = process.platform === 'win32' ? child.toLowerCase() : child;
+  const relative = path.relative(normalizedParent, normalizedChild);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+export function verifyProjectResolution(projectPath, packageJson) {
+  const nodeModulesPath = path.join(projectPath, 'node_modules');
+  const nodeModulesMetadata = lstatSync(nodeModulesPath);
+  if (nodeModulesMetadata.isSymbolicLink() || !nodeModulesMetadata.isDirectory()) {
+    throw new Error(`node_modules is not a physical directory under ${projectPath}`);
+  }
+  const canonicalNodeModules = realpathSync.native(nodeModulesPath);
+  const requiredPackages = Object.keys({
+    ...packageJson.dependencies,
+    ...packageJson.devDependencies,
+  });
+  for (const packageName of requiredPackages) {
+    const packagePath = path.join(nodeModulesPath, ...packageName.split('/'), 'package.json');
+    if (!existsSync(packagePath)) {
+      throw new Error(`required dependency is missing: ${packageName}`);
+    }
+    if (!isWithin(canonicalNodeModules, realpathSync.native(packagePath))) {
+      throw new Error(`dependency resolves outside this package root: ${packageName}`);
+    }
+  }
+
+  const resolvable = ['vite', 'vitepress', '@changesets/cli', 'playwright']
+    .filter((name) => requiredPackages.includes(name));
+  const requireFromProject = createRequire(path.join(projectPath, 'package.json'));
+  for (const packageName of resolvable) {
+    const resolved = realpathSync.native(requireFromProject.resolve(packageName));
+    if (!isWithin(canonicalNodeModules, resolved)) {
+      throw new Error(`require.resolve escaped this package root: ${packageName}`);
+    }
+  }
+}
+
+function validateLocalTree(projectPath, packageJson, expectedKey) {
+  try {
+    const nodeModulesPath = path.join(projectPath, 'node_modules');
+    const marker = readJson(path.join(nodeModulesPath, LOCAL_MARKER));
+    if (marker.schema !== CACHE_SCHEMA || marker.key !== expectedKey) {
+      return { valid: false, reason: 'local dependency marker does not match the fingerprint' };
+    }
+    if (hiddenLockHash(nodeModulesPath) !== marker.hiddenLockHash) {
+      return { valid: false, reason: 'local npm hidden lockfile changed' };
+    }
+    verifyProjectResolution(projectPath, packageJson);
+    return { valid: true, reason: null };
+  } catch (error) {
+    return { valid: false, reason: error?.message ?? String(error) };
+  }
+}
+
+function defaultNpmInstall(projectPath, npmArgs, cachePath, environment) {
+  const cacheArgs = cachePath ? ['--cache', cachePath] : [];
+  const invocation = npmInvocation(['ci', ...cacheArgs, ...npmArgs], environment);
+  return run(invocation.command, invocation.args, {
+    cwd: projectPath,
+    env: environment,
+    shell: invocation.shell,
+  });
+}
+
+function installIsolated(projectPath, npmArgs, runNpmCi, environment) {
+  removeNodeModules(path.join(projectPath, 'node_modules'));
+  return runNpmCi(projectPath, npmArgs, null, environment);
+}
+
+function installFromDownloadCache(
+  projectPath,
+  npmArgs,
+  cachePath,
+  runNpmCi,
+  environment,
+) {
+  removeNodeModules(path.join(projectPath, 'node_modules'));
+  mkdirSync(cachePath, { recursive: true });
+  return runNpmCi(projectPath, npmArgs, cachePath, environment);
+}
+
+function cacheNamespaceState(cachePath, expectedKey) {
+  const markerPath = path.join(cachePath, CACHE_MARKER);
+  if (!existsSync(markerPath)) {
+    return { valid: true, populated: false, reason: null };
+  }
+  try {
+    const marker = readJson(markerPath);
+    if (marker.schema !== CACHE_SCHEMA || marker.key !== expectedKey) {
+      return { valid: false, populated: true, reason: 'download cache marker is corrupt' };
+    }
+    return { valid: true, populated: true, reason: null };
+  } catch (error) {
+    return { valid: false, populated: true, reason: error?.message ?? String(error) };
+  }
+}
+
+function quarantineCacheNamespaceLocked(cacheRoot, cachePath, reason) {
+  if (!existsSync(cachePath)) {
+    return null;
+  }
+  const quarantinePath = path.join(
+    cacheRoot,
+    'quarantine',
+    `${path.basename(cachePath)}-${Date.now()}-${randomUUID()}`,
+  );
+  mkdirSync(path.dirname(quarantinePath), { recursive: true });
+  renameSync(cachePath, quarantinePath);
+  atomicWriteJson(path.join(quarantinePath, 'quarantine.json'), {
+    reason,
+    quarantinedAt: new Date().toISOString(),
+  });
+  return quarantinePath;
+}
+
+function quarantineCacheNamespace(cacheRoot, cachePath, reason, lockOptions = {}) {
+  const release = acquireMaintenanceLock(cacheRoot, lockOptions);
+  try {
+    return quarantineCacheNamespaceLocked(cacheRoot, cachePath, reason);
+  } finally {
+    release();
+  }
+}
+
+function fallback(projectPath, npmArgs, reason, runNpmCi, environment) {
+  console.warn(`[deps] shared npm download cache unavailable for ${projectPath}: ${reason}`);
   console.warn('[deps] falling back to an isolated npm ci');
-  const result = installIsolated(projectPath, npmArgs, runNpmCi);
+  const result = installIsolated(projectPath, npmArgs, runNpmCi, environment);
   console.log(`[deps] isolated install completed in ${result.elapsedSeconds ?? '0.00'}s`);
-  return { mode: 'isolated', reason };
+  return { mode: 'isolated', reason, elapsedSeconds: result.elapsedSeconds };
+}
+
+function ensureProjectUnlocked({
+  repoRoot,
+  project,
+  cacheRoot,
+  isolated,
+  requireShared,
+  npmArgs,
+  lockTimeoutMs,
+  staleLockMs,
+  runNpmCi,
+  runtime,
+  environment,
+}) {
+  const startedAt = performance.now();
+  const inputs = projectInputs(repoRoot, project);
+  const resolvedRuntime = runtime ?? runtimeInfo(inputs.projectPath, environment);
+  const analysis = analyzeProject(inputs.packageJson, inputs.lockfile);
+  const forcedIsolated = isolated
+    || environment.CI === 'true'
+    || environment.AGENTWEAVER_DISABLE_SHARED_DEPS === '1';
+  const credentialed = resolvedRuntime.hasCredentials === true;
+
+  if (forcedIsolated || credentialed || !analysis.reusable) {
+    const reason = forcedIsolated
+      ? 'shared reuse was disabled for this environment'
+      : credentialed
+        ? 'authenticated npm configuration is excluded from shared cache namespaces'
+        : analysis.reason;
+    if (requireShared) {
+      throw new Error(reason);
+    }
+    return fallback(inputs.projectPath, npmArgs, reason, runNpmCi, environment);
+  }
+
+  const resolvedCacheRoot = cacheRootForRepo(
+    repoRoot,
+    cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
+  );
+  const identity = computeCacheIdentity({
+    ...inputs,
+    ...resolvedRuntime,
+    npmArgsHash: sha256(JSON.stringify(npmArgs)),
+  });
+  const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
+  const localValidation = validateLocalTree(
+    inputs.projectPath,
+    inputs.packageJson,
+    identity.key,
+  );
+  if (localValidation.valid) {
+    const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+    console.log(`[deps] ${project} local dependency tree is current in ${elapsedSeconds}s`);
+    return { mode: 'local', key: identity.key, elapsedSeconds };
+  }
+
+  let cacheState = cacheNamespaceState(cachePath, identity.key);
+  if (!cacheState.valid) {
+    quarantineCacheNamespace(
+      resolvedCacheRoot,
+      cachePath,
+      cacheState.reason,
+      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+    );
+  }
+
+  const installWithLease = () => {
+    const releaseCacheUse = acquireCacheUse(
+      resolvedCacheRoot,
+      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+    );
+    try {
+      const result = installFromDownloadCache(
+        inputs.projectPath,
+        npmArgs,
+        cachePath,
+        runNpmCi,
+        environment,
+      );
+      verifyProjectResolution(inputs.projectPath, inputs.packageJson);
+      atomicCreateJson(path.join(cachePath, CACHE_MARKER), {
+        schema: CACHE_SCHEMA,
+        key: identity.key,
+        packageRootIdentity: inputs.packageRootIdentity,
+        populatedAt: new Date().toISOString(),
+      });
+      cacheState = cacheNamespaceState(cachePath, identity.key);
+      if (!cacheState.valid) {
+        throw new Error(cacheState.reason);
+      }
+      return result;
+    } finally {
+      releaseCacheUse();
+    }
+  };
+
+  let installResult;
+  try {
+    installResult = installWithLease();
+  } catch (firstError) {
+    quarantineCacheNamespace(
+      resolvedCacheRoot,
+      cachePath,
+      `npm ci failed: ${firstError?.message ?? firstError}`,
+      { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+    );
+    try {
+      installResult = installWithLease();
+    } catch (retryError) {
+      quarantineCacheNamespace(
+        resolvedCacheRoot,
+        cachePath,
+        `cold npm ci retry failed: ${retryError?.message ?? retryError}`,
+        { timeoutMs: lockTimeoutMs, staleAfterMs: staleLockMs },
+      );
+      throw new AggregateError(
+        [firstError, retryError],
+        `npm ci failed after quarantining the shared cache for ${project}`,
+      );
+    }
+  }
+
+  atomicWriteJson(path.join(inputs.projectPath, 'node_modules', LOCAL_MARKER), {
+    schema: CACHE_SCHEMA,
+    key: identity.key,
+    hiddenLockHash: hiddenLockHash(path.join(inputs.projectPath, 'node_modules')),
+    installedAt: new Date().toISOString(),
+  });
+  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+  console.log(
+    `[deps] ${project} installed with shared npm cache ${identity.key.slice(0, 12)} `
+    + `in ${elapsedSeconds}s`,
+  );
+  return {
+    mode: 'shared-cache',
+    key: identity.key,
+    elapsedSeconds,
+    installSeconds: installResult.elapsedSeconds,
+  };
 }
 
 export function ensureProject({
@@ -527,134 +814,54 @@ export function ensureProject({
   lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
   staleLockMs = DEFAULT_STALE_LOCK_MS,
   runNpmCi = defaultNpmInstall,
-  materialize = materializeDependencyTree,
   runtime,
   environment = process.env,
+  validationLockHeld = false,
 }) {
-  const startedAt = performance.now();
-  const projectPath = path.resolve(repoRoot, project);
-  const resolvedRuntime = runtime ?? runtimeInfo(projectPath);
-  const nodeModulesPath = path.join(projectPath, 'node_modules');
-  const inputs = projectInputs(projectPath);
-  const analysis = analyzeProject(inputs.packageJson, inputs.lockfile);
-  const forcedIsolated = isolated
-    || environment.CI === 'true'
-    || environment.AGENTWEAVER_DISABLE_SHARED_DEPS === '1';
-
-  if (forcedIsolated) {
-    const reason = 'shared reuse was disabled for this environment';
-    if (requireShared) {
-      throw new Error(reason);
-    }
-    console.log(`[deps] running isolated npm ci for ${project}`);
-    const result = installIsolated(projectPath, npmArgs, runNpmCi);
-    console.log(`[deps] isolated install completed in ${result.elapsedSeconds ?? '0.00'}s`);
-    return { mode: 'isolated', reason };
+  let release;
+  if (!validationLockHeld) {
+    release = acquireValidationLock(repoRoot, {
+      cacheRoot,
+      timeoutMs: lockTimeoutMs,
+      staleAfterMs: staleLockMs,
+    });
   }
-
-  if (!analysis.reusable) {
-    if (requireShared) {
-      throw new Error(analysis.reason);
-    }
-    return fallback(projectPath, npmArgs, analysis.reason, runNpmCi);
-  }
-
-  const resolvedCacheRoot = cacheRootForRepo(
-    repoRoot,
-    cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
-  );
-  mkdirSync(resolvedCacheRoot, { recursive: true });
-  const initialIdentity = computeCacheIdentity({
-    ...inputs,
-    ...resolvedRuntime,
-    npmArgsHash: sha256(JSON.stringify(npmArgs)),
-  });
-  const nonce = invalidationNonce(resolvedCacheRoot, initialIdentity.baseKey);
-  const identity = computeCacheIdentity({
-    ...inputs,
-    ...resolvedRuntime,
-    npmArgsHash: sha256(JSON.stringify(npmArgs)),
-    invalidationNonce: nonce,
-  });
-  const entryPath = path.join(resolvedCacheRoot, 'entries', identity.key);
-  const lockPath = path.join(resolvedCacheRoot, 'locks', identity.key);
-
-  let validation = validateCacheEntry(entryPath, identity.key);
-  if (!validation.valid) {
-    let release;
-    try {
-      release = acquireLock(lockPath, {
-        timeoutMs: lockTimeoutMs,
-        staleAfterMs: staleLockMs,
-      });
-      validation = validateCacheEntry(entryPath, identity.key);
-      if (!validation.valid) {
-        removeNodeModules(nodeModulesPath);
-        removePathWithoutFollowingLinks(entryPath);
-        const entriesPath = path.dirname(entryPath);
-        mkdirSync(entriesPath, { recursive: true });
-        for (const entry of readdirSync(entriesPath)) {
-          if (entry.startsWith(`${identity.key}.tmp-`)) {
-            removePathWithoutFollowingLinks(path.join(entriesPath, entry));
-          }
-        }
-
-        console.log(`[deps] populating shared cache for ${project} (${identity.key.slice(0, 12)})`);
-        const installResult = installIsolated(projectPath, npmArgs, runNpmCi);
-        assertSafeDependencyLinks(nodeModulesPath);
-        rmSync(path.join(nodeModulesPath, '.vite'), { recursive: true, force: true });
-        rmSync(path.join(nodeModulesPath, '.vitepress'), { recursive: true, force: true });
-
-        const temporaryEntry = `${entryPath}.tmp-${process.pid}-${randomUUID()}`;
-        mkdirSync(temporaryEntry, { recursive: true });
-        renameSync(nodeModulesPath, path.join(temporaryEntry, 'node_modules'));
-        const hiddenLockPath = path.join(temporaryEntry, 'node_modules', '.package-lock.json');
-        const hiddenLockBytes = readFileSync(hiddenLockPath);
-        const hiddenLock = JSON.parse(hiddenLockBytes);
-        atomicWriteJson(path.join(temporaryEntry, 'ready.json'), {
-          schema: CACHE_SCHEMA,
-          key: identity.key,
-          baseKey: identity.baseKey,
-          createdAt: new Date().toISOString(),
-          nodeVersion: resolvedRuntime.nodeVersion,
-          npmVersion: resolvedRuntime.npmVersion,
-          platform: resolvedRuntime.platform,
-          arch: resolvedRuntime.arch,
-          installConfigHash: resolvedRuntime.installConfigHash,
-          hiddenLockHash: sha256(hiddenLockBytes),
-          packageCount: packagePathsFromHiddenLock(hiddenLock).length,
-          installSeconds: Number(installResult.elapsedSeconds ?? 0),
-        });
-        renameSync(temporaryEntry, entryPath);
-      }
-    } catch (error) {
-      if (requireShared) {
-        throw error;
-      }
-      return fallback(projectPath, npmArgs, error?.message ?? String(error), runNpmCi);
-    } finally {
-      release?.();
-    }
-  }
-
   try {
-    materialize(entryPath, nodeModulesPath, identity.key);
-  } catch (error) {
-    if (requireShared) {
-      throw error;
-    }
-    return fallback(
-      projectPath,
+    return ensureProjectUnlocked({
+      repoRoot,
+      project,
+      cacheRoot,
+      isolated,
+      requireShared,
       npmArgs,
-      `could not materialize the shared dependency tree: ${error?.message ?? error}`,
+      lockTimeoutMs,
+      staleLockMs,
       runNpmCi,
-    );
+      runtime,
+      environment,
+    });
+  } finally {
+    release?.();
   }
-  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
-  console.log(
-    `[deps] ${project} materialized from shared cache ${identity.key.slice(0, 12)} in ${elapsedSeconds}s`,
-  );
-  return { mode: 'shared', key: identity.key, elapsedSeconds };
+}
+
+function identityForProject({
+  repoRoot,
+  project,
+  runtime,
+  environment,
+  npmArgs = [],
+}) {
+  const inputs = projectInputs(repoRoot, project);
+  const resolvedRuntime = runtime ?? runtimeInfo(inputs.projectPath, environment);
+  return {
+    inputs,
+    identity: computeCacheIdentity({
+      ...inputs,
+      ...resolvedRuntime,
+      npmArgsHash: sha256(JSON.stringify(npmArgs)),
+    }),
+  };
 }
 
 export function invalidateProject({
@@ -663,29 +870,92 @@ export function invalidateProject({
   cacheRoot,
   runtime,
   environment = process.env,
+  npmArgs = [],
+  validationLockHeld = false,
 }) {
-  const projectPath = path.resolve(repoRoot, project);
-  const resolvedRuntime = runtime ?? runtimeInfo(projectPath);
-  const inputs = projectInputs(projectPath);
-  const resolvedCacheRoot = cacheRootForRepo(
-    repoRoot,
-    cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
-  );
-  const identity = computeCacheIdentity({
-    ...inputs,
-    ...resolvedRuntime,
-    npmArgsHash: sha256(JSON.stringify([])),
-  });
-  const invalidationPath = path.join(
-    resolvedCacheRoot,
-    'invalidations',
-    `${identity.baseKey}.json`,
-  );
-  atomicWriteJson(invalidationPath, {
-    nonce: randomUUID(),
-    invalidatedAt: new Date().toISOString(),
-  });
-  console.log(`[deps] invalidated future materializations for ${project}`);
+  let releaseValidation;
+  if (!validationLockHeld) {
+    releaseValidation = acquireValidationLock(repoRoot, { cacheRoot });
+  }
+  try {
+    const { inputs, identity } = identityForProject({
+      repoRoot,
+      project,
+      runtime,
+      environment,
+      npmArgs,
+    });
+    const resolvedCacheRoot = cacheRootForRepo(
+      repoRoot,
+      cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
+    );
+    quarantineCacheNamespace(
+      resolvedCacheRoot,
+      path.join(resolvedCacheRoot, 'downloads', identity.key),
+      'explicit invalidation',
+    );
+    removeNodeModules(path.join(inputs.projectPath, 'node_modules'));
+    console.log(`[deps] invalidated ${project} dependency state`);
+  } finally {
+    releaseValidation?.();
+  }
+}
+
+export function verifyProjectCache({
+  repoRoot,
+  project,
+  cacheRoot,
+  runtime,
+  environment = process.env,
+  npmArgs = [],
+  validationLockHeld = false,
+}) {
+  let releaseValidation;
+  if (!validationLockHeld) {
+    releaseValidation = acquireValidationLock(repoRoot, { cacheRoot });
+  }
+  try {
+    const { identity } = identityForProject({
+      repoRoot,
+      project,
+      runtime,
+      environment,
+      npmArgs,
+    });
+    const resolvedCacheRoot = cacheRootForRepo(
+      repoRoot,
+      cacheRoot ?? environment.AGENTWEAVER_DEPS_CACHE_DIR,
+    );
+    const cachePath = path.join(resolvedCacheRoot, 'downloads', identity.key);
+    if (!existsSync(cachePath)) {
+      console.log(`[deps] no shared npm cache exists for ${project}`);
+      return;
+    }
+    const releaseMaintenance = acquireMaintenanceLock(resolvedCacheRoot);
+    let verifyError;
+    try {
+      const invocation = npmInvocation(['cache', 'verify', '--cache', cachePath], environment);
+      run(invocation.command, invocation.args, {
+        cwd: path.resolve(repoRoot, project),
+        env: environment,
+        shell: invocation.shell,
+      });
+    } catch (error) {
+      verifyError = error;
+      quarantineCacheNamespaceLocked(
+        resolvedCacheRoot,
+        cachePath,
+        `npm cache verify failed: ${error?.message ?? error}`,
+      );
+    } finally {
+      releaseMaintenance();
+    }
+    if (verifyError) {
+      throw verifyError;
+    }
+  } finally {
+    releaseValidation?.();
+  }
 }
 
 function parseArgs(argv) {
@@ -699,7 +969,7 @@ function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === 'ensure' || argument === 'invalidate') {
+    if (['ensure', 'invalidate', 'verify'].includes(argument)) {
       options.command = argument;
     } else if (argument === '--project') {
       options.projects.push(argv[++index]);
@@ -709,6 +979,8 @@ function parseArgs(argv) {
       options.requireShared = true;
     } else if (argument === '--cache-root') {
       options.cacheRoot = argv[++index];
+    } else if (argument === '--npm-arg') {
+      options.npmArgs.push(argv[++index]);
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
@@ -723,23 +995,39 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   const scriptPath = fileURLToPath(import.meta.url);
   const repoRoot = path.resolve(path.dirname(scriptPath), '..', '..');
-  for (const project of options.projects) {
-    if (options.command === 'invalidate') {
-      invalidateProject({
-        repoRoot,
-        project,
-        cacheRoot: options.cacheRoot,
-      });
-    } else {
-      ensureProject({
-        repoRoot,
-        project,
-        cacheRoot: options.cacheRoot,
-        isolated: options.isolated,
-        requireShared: options.requireShared,
-        npmArgs: options.npmArgs,
-      });
+  const releaseValidation = acquireValidationLock(repoRoot, { cacheRoot: options.cacheRoot });
+  try {
+    for (const project of options.projects) {
+      if (options.command === 'invalidate') {
+        invalidateProject({
+          repoRoot,
+          project,
+          cacheRoot: options.cacheRoot,
+          npmArgs: options.npmArgs,
+          validationLockHeld: true,
+        });
+      } else if (options.command === 'verify') {
+        verifyProjectCache({
+          repoRoot,
+          project,
+          cacheRoot: options.cacheRoot,
+          npmArgs: options.npmArgs,
+          validationLockHeld: true,
+        });
+      } else {
+        ensureProject({
+          repoRoot,
+          project,
+          cacheRoot: options.cacheRoot,
+          isolated: options.isolated,
+          requireShared: options.requireShared,
+          npmArgs: options.npmArgs,
+          validationLockHeld: true,
+        });
+      }
     }
+  } finally {
+    releaseValidation();
   }
 }
 
