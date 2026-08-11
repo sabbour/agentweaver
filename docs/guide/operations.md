@@ -141,6 +141,32 @@ Logs include `RunId`, pod name, reason, recovery action, and bounded attempt cou
 values are never logged. These reasons distinguish pod lifecycle churn from credential
 failure so operators should not treat either path as a generic retryable AgentHost error.
 
+## Diagnosing agent turn infrastructure failures
+
+Agent turns executed through AgentHost use structured terminal reasons. When the pod or
+A2A stream aborts without a typed terminal, Agentweaver emits
+`agent_turn_internal_error` with `retryable: true`. In the collective Build & Test
+stage, the corresponding assembly reason is prefixed as
+`build_test_infra_agent_turn_internal_error`.
+
+This fallback does not hide more specific outcomes. Caller cancellation remains
+cancellation, and typed timeouts or failures retain their original error code and
+retryability. A retryable terminal means the workflow may safely consider a bounded
+retry or redispatch; it never converts the interrupted turn into a success.
+
+To investigate:
+
+1. Inspect the persisted run events with `GET /api/runs/{id}/events` and record the
+   `errorCode`, `retryable`, message, and diagnostic fields.
+2. Correlate the run id with worker and AgentHost logs to determine whether the pod,
+   transport, or turn failed.
+3. Retry or redispatch through the normal run/coordinator controls only after confirming
+   that the task is still valid.
+
+Diagnostics in the run event are deliberately bounded, flattened to one line, and
+credential-redacted. They are safe context for triage, not a replacement for
+restricted server-side logs.
+
 ## Related scripts
 
 | Command | Purpose |

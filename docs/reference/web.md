@@ -281,11 +281,23 @@ The team memory page (`/projects/:projectId/memories`) surfaces the durable know
 
 Two tabs:
 
-**Decisions** — finalized decisions recorded by agents (via `submit_decision` / `decision_create`) alongside proposed Decision Inbox entries pending review. Each entry shows title, type badge (architectural, scope, process, technical), agent badge, and creation time. Proposed entries can be merged, promoted, or rejected.
+**Decisions** — finalized decisions alongside proposed Decision Inbox entries pending
+review. Each entry shows title, type badge (architectural, scope, process, technical),
+agent badge, and creation time. Proposed entries expose merge, promote, and reject
+actions, but the API accepts those authority-changing operations only from a project
+owner or verified Coordinator run.
 
 **Agent Memory** — project memory entries (via `record_memory`). Each entry shows importance badge (high/medium/low), type, and content. You can create new entries and edit existing ones.
 
 Both tabs fetch live from the API; data is cached for the session tab switch.
+
+The underlying decision and memory responses also carry `sourceKind`,
+`sourceIdentity`, `sourceRunId`, `trustState`, `approvedBy`, and `approvedAt`. The
+current Team Memory cards do not render those fields, so use the API or MCP memory
+tools when auditing provenance or approving an upgrade. A record can therefore appear
+in the list while remaining inactive for prompt compilation: `legacy` records are
+excluded until approved, and `pending` memory cannot cross to another agent. Only
+active, `approved` architectural and scope decisions compile as team boundaries.
 
 ### Casting wizard
 

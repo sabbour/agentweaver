@@ -104,7 +104,13 @@ Agents build on prior work through four memory layers compiled into every agent'
 3. **Learnings and patterns** — top high-importance entries from prior runs
 4. **Open session** — current run context
 
-Agents submit entries to a **Decision Inbox** typed as learning, pattern, update, architectural, or scope. After each run, a Scribe pass merges the inbox into the shared decisions ledger.
+Agents submit entries to a **Decision Inbox** typed as learning, pattern, update, architectural, or scope.
+Every memory and decision carries provenance and trust metadata. The Scribe only
+auto-merges low-risk `learning`, `pattern`, and `update` entries attributed to that
+completed run. Architectural and scope proposals stay pending unless a project owner
+or a verified Coordinator run accepts them (including the Coordinator's own
+finalization backstop). Existing memory and decision records migrated as `legacy` are
+excluded from prompt compilation until explicitly approved.
 
 → [Agent Teams & Blueprints — Memory](./teams#team-memory)
 

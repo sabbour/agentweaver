@@ -168,6 +168,26 @@ Each agent run passes a **Responsible AI (RAI)** check before its output proceed
 | **Declined** | You rejected the changes |
 | **Merge Failed** | The merge step failed (e.g., a conflict on the target branch) |
 
+### Agent turn infrastructure failures
+
+If a remoted agent turn aborts before it reports a typed terminal failure, the run
+timeline reports `agent_turn_internal_error`. This is an execution-infrastructure
+failure, not a model request for changes. The terminal is marked `retryable: true`
+because the surrounding workflow may retry or redispatch the turn; it does not mean
+that the interrupted turn completed successfully.
+
+Agentweaver does not replace more specific outcomes with this fallback:
+
+- a cancellation requested by the caller remains a cancellation;
+- an existing typed timeout or failure keeps its own error code and retryability;
+- an unstructured or missing terminal is normalized to one
+  `agent_turn_internal_error` rather than leaking a transport-specific reason.
+
+The terminal may include a bounded diagnostic for troubleshooting. Credentials are
+redacted and multiline output is flattened before it reaches the run event. See the
+[Operations Guide](./operations#diagnosing-agent-turn-infrastructure-failures) for
+operator guidance.
+
 ## Runs list
 
 The project page shows all runs in reverse chronological order. Each row shows:
