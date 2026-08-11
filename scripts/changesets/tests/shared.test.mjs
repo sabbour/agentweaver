@@ -8,6 +8,7 @@ import {
   isReleaseRelevant,
   parseChangesetFragment,
   releaseBranchVersion,
+  synchronizePackageLockVersion,
   validateReleasePreparation,
   validateReleasePreparationFiles,
   validateSyncBranch,
@@ -25,6 +26,35 @@ test("version mirrors require VERSION, package.json, and lockfile to match", () 
   assert.equal(assertVersionMirrors("/repo", { readFile }), "0.9.70");
   files.set("/repo/package-lock.json", '{"packages":{"":{"version":"0.9.69"}}}');
   assert.throws(() => assertVersionMirrors("/repo", { readFile }), /Version mirrors disagree/);
+});
+
+test("package-lock synchronization updates both root version mirrors", () => {
+  let written;
+  const readFile = () => JSON.stringify({
+    name: "agentweaver",
+    version: "0.16.2",
+    lockfileVersion: 3,
+    packages: {
+      "": {
+        name: "agentweaver",
+        version: "0.16.2",
+      },
+    },
+  });
+  const writeFile = (_file, content) => {
+    written = content;
+  };
+
+  synchronizePackageLockVersion("/repo", "0.17.0", { readFile, writeFile });
+
+  const lock = JSON.parse(written);
+  assert.equal(lock.version, "0.17.0");
+  assert.equal(lock.packages[""].version, "0.17.0");
+  assert.match(written, /\n$/);
+  assert.throws(
+    () => synchronizePackageLockVersion("/repo", "next", { readFile, writeFile }),
+    /invalid semver/,
+  );
 });
 
 test("extractChangelogSection returns only the requested version section", () => {
