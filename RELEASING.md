@@ -35,8 +35,10 @@ prepared exact main SHA
 
 `VERSION` remains the product version. The root private `agentweaver` package is
 Changesets' single-package adapter; `package.json.version` and
-`package-lock.json.packages[""].version` must always equal `VERSION`. Run
-`npm run version:check` to verify this invariant.
+both root lockfile mirrors — `package-lock.json.version` and
+`package-lock.json.packages[""].version` — must always equal `VERSION`. The validator
+checks each lockfile field independently so a missing or stale mirror cannot be masked
+by the other. Run `npm run version:check` to verify this invariant.
 
 At `0.x`, use a `patch` changeset for compatible fixes and a `minor` changeset
 for features or breaking changes. `major` is reserved for the deliberate
@@ -73,7 +75,10 @@ from its exact matching section; do not run another changelog generator.
 ## Publishing and deploying
 
 From a clean checkout at the exact resulting `origin/main` SHA (including no
-untracked or unexpected git-ignored files):
+untracked or unexpected git-ignored files). Publication uses the same ignored-file
+policy as preparation: normal dependency, build, test, and harness outputs are
+allowed, while stray ignored files outside those recognized locations still block
+the release:
 
 ```bash
 # Repository identity only: tag + GitHub Release, no Azure deployment

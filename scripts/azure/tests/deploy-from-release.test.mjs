@@ -9,7 +9,7 @@ import {
 const mirrors = new Map([
   ["/repo/VERSION", "1.2.3\n"],
   ["/repo/package.json", '{"version":"1.2.3"}'],
-  ["/repo/package-lock.json", '{"packages":{"":{"version":"1.2.3"}}}'],
+  ["/repo/package-lock.json", '{"version":"1.2.3","packages":{"":{"version":"1.2.3"}}}'],
   ["/repo/CHANGELOG.md", "## 1.2.3\n\n- Release note\n"],
 ]);
 const readFile = (file) => mirrors.get(file.replaceAll("\\", "/"));

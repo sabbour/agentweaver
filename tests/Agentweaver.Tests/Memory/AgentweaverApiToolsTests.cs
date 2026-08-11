@@ -340,6 +340,33 @@ public sealed class AgentweaverApiToolsTests
 
         tools.Select(t => t.Name).Should().Contain("backlog_get_task");
     }
+
+    [Fact]
+    public async Task WriteTools_SendRunScopedAuthorshipCapability()
+    {
+        var handler = new FakeHttpHandler(HttpStatusCode.Created, """{"id":1}""");
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
+        var tool = AgentweaverApiTools.Build(
+                ProjectId,
+                AgentName,
+                "http://localhost",
+                apiKey: null,
+                httpClientOverride: http,
+                runId: "run-477",
+                runCapabilityToken: "turn-token-477")
+            .Single(t => t.Name == "record_memory");
+
+        await InvokeAsync(tool, new()
+        {
+            ["type"] = "learning",
+            ["importance"] = "high",
+            ["content"] = "verified provenance",
+        });
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.GetValues(RunAuthorshipHeaders.RunId).Should().ContainSingle("run-477");
+        handler.LastRequest.Headers.GetValues(RunAuthorshipHeaders.RunToken).Should().ContainSingle("turn-token-477");
+    }
 }
 
 /// <summary>Fake HttpMessageHandler that throws a fixed exception on every send, simulating a
@@ -360,6 +387,7 @@ internal sealed class FakeHttpHandler : HttpMessageHandler
 {
     private readonly HttpStatusCode _statusCode;
     private readonly string _body;
+    public HttpRequestMessage? LastRequest { get; private set; }
 
     public FakeHttpHandler(HttpStatusCode statusCode, string body)
     {
@@ -370,6 +398,7 @@ internal sealed class FakeHttpHandler : HttpMessageHandler
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        LastRequest = request;
         return Task.FromResult(new HttpResponseMessage(_statusCode)
         {
             Content = new StringContent(_body, System.Text.Encoding.UTF8, "application/json"),

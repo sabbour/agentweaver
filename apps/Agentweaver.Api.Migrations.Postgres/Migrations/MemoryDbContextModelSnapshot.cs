@@ -388,6 +388,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("text");
+
                     b.Property<string>("Content")
                         .IsRequired()
                         .HasColumnType("text");
@@ -406,8 +412,26 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("SessionId")
                         .HasColumnType("text");
 
+                    b.Property<string>("SourceIdentity")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy");
+
+                    b.Property<string>("SourceRunId")
+                        .HasColumnType("text");
+
                     b.Property<string>("Tags")
                         .HasColumnType("text");
+
+                    b.Property<string>("TrustState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy");
 
                     b.Property<string>("Type")
                         .IsRequired()
@@ -423,6 +447,29 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("ProjectId", "Type");
 
                     b.ToTable("AgentMemory");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.RunAuthorshipCapability", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("run_id");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<byte[]>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("RunId");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("run_authorship_capabilities", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.AuthModeEpochRecord", b =>
@@ -783,6 +830,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("text");
+
                     b.Property<string>("Content")
                         .IsRequired()
                         .HasColumnType("text");
@@ -795,6 +848,18 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("Rationale")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceIdentity")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy");
+
+                    b.Property<string>("SourceRunId")
                         .HasColumnType("text");
 
                     b.Property<string>("Status")
@@ -810,6 +875,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<string>("TrustState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy");
 
                     b.Property<string>("Type")
                         .IsRequired()
@@ -863,6 +934,18 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.Property<string>("Slug")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceIdentity")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("legacy");
+
+                    b.Property<string>("SourceRunId")
                         .HasColumnType("text");
 
                     b.Property<string>("Status")

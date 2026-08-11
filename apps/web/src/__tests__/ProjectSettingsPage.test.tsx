@@ -177,9 +177,13 @@ describe('ProjectSettingsPage', () => {
     )).toBeDefined();
   });
 
-  it('shows a coming-soon message for automatic webhook creation', async () => {
-    const { ApiError } = await import('../api/client');
-    vi.mocked(apiClient.autoCreateProjectWebhook).mockRejectedValue(new ApiError(501, 'Automatic GitHub webhook creation is not implemented yet.'));
+  it('creates the GitHub webhook automatically', async () => {
+    vi.mocked(apiClient.autoCreateProjectWebhook).mockResolvedValue({
+      hook_id: 42,
+      created: true,
+      repository: 'octocat/demo',
+      payload_url: 'https://api.example.test/api/projects/proj-1/webhooks/github',
+    });
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
@@ -187,7 +191,25 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Create webhook automatically' }));
 
     await waitFor(() => expect(apiClient.autoCreateProjectWebhook).toHaveBeenCalledWith('proj-1'));
-    expect(await screen.findByText('Automatic webhook creation is coming soon. Use the manual setup steps below for now.')).toBeDefined();
+    expect(await screen.findByText('GitHub webhook created for octocat/demo.')).toBeDefined();
+  });
+
+  it('reports when an existing GitHub webhook was refreshed', async () => {
+    vi.mocked(apiClient.autoCreateProjectWebhook).mockResolvedValue({
+      hook_id: 42,
+      created: false,
+      repository: 'octocat/demo',
+      payload_url: 'https://api.example.test/api/projects/proj-1/webhooks/github',
+    });
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create webhook automatically' }));
+
+    expect(await screen.findByText(
+      'GitHub webhook for octocat/demo was already configured and has been updated.',
+    )).toBeDefined();
   });
 
   it('uses the browser origin for public URLs when API_URL is the same-origin sentinel', () => {

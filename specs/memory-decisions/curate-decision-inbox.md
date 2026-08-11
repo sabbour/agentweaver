@@ -32,9 +32,13 @@ Agents and coordinators can propose learnings or decisions. The inbox is the gov
 - [ ] Promoting an entry creates or updates accepted project knowledge.
 - [ ] Rejecting an entry removes it from pending work while preserving the record.
 - [ ] Accepted decisions become available to future project context.
+- [ ] Agent submissions are attributed to a verified run identity rather than a client-asserted agent name.
+- [ ] Only a project owner or verified Coordinator can promote non-negotiable architectural or scope boundaries.
+- [ ] Accepted decision text is supplied to models as escaped, explicitly untrusted data.
 
 ## Notable edge cases
 
 - Duplicate or repeated proposals do not create confusing authoritative duplicates.
 - Already-processed inbox entries cannot be merged or rejected as pending.
 - Rejected entries remain visible when explicitly requested.
+- Legacy decisions with unknown provenance remain inactive for prompt compilation until reviewed and approved.

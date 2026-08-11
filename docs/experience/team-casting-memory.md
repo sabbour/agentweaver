@@ -11,7 +11,7 @@ Related docs: [System overview](../deep-dive/00-system-overview.md), [Projects](
 The experience has two loops that reinforce each other:
 
 1. **Casting loop**: the user chooses a scenario, roles, goal, or project analysis path; Agentweaver proposes named agents with charters; the user confirms; the roster becomes the team.
-2. **Memory loop**: agents and coordinators record learnings and proposals; the decision inbox holds candidates; accepted entries become team decisions; exports mirror the state to `.squad/` and `.agentweaver/context/` files.
+2. **Memory loop**: agents and coordinators record learnings and proposals; the decision inbox holds candidates; authorized acceptance turns entries into team decisions; exports mirror the state to `.squad/` and `.agentweaver/context/` files.
 
 ![The experience in one picture: Project, Agents page, Cast a team, Catalog scenarios and roles, Proposal, Review names, roles, charters, warnings, Team roster, Agent work sessions, Agent memory, Decision inbox, Decision ledger, Rejected inbox entry, …](../diagrams/experience-team-casting-memory-fig1.png)
 
@@ -31,7 +31,7 @@ The user-facing promise is simple: cast a team once, refer to agents by stable n
 - **Casting**: the proposal-and-confirmation flow that turns scenarios, goals, analysis, or selected roles into named agents. MCP uses `team_cast`, with catalog support from `catalog_list_scenarios` and `catalog_list_roles`.
 - **Universe**: the single naming namespace for a team. Names are persistent identifiers, and the system chooses the universe deterministically from policy, history, optional override, and seed.
 - **Memory**: reusable context recorded with `memory_record`, retrieved with `memory_list` and `memory_get`, and searched across agents with `memory_search`.
-- **Decision inbox**: the review buffer for proposed knowledge. Agents submit with `decision_inbox_submit` or `squad_decide`; reviewers list, merge, or reject with `decision_inbox_list`, `decision_inbox_merge`, and `decision_inbox_reject`.
+- **Decision inbox**: the review buffer for proposed knowledge. Agents submit with `decision_inbox_submit` or `squad_decide`; project owners and verified Coordinator runs merge or reject with `decision_inbox_merge` and `decision_inbox_reject`.
 - **Decision ledger**: the accepted project-wide record managed with `decision_create`, `decision_list`, and `decision_update`.
 - **Session**: the current work focus managed with `session_start`, `session_current`, and `session_update`.
 
@@ -221,6 +221,19 @@ Memory entries can capture learnings, patterns, updates, and core context. Impor
 
 The UX rule is: memory helps the team work better next time, but it does not override accepted decisions.
 
+Each memory also has provenance (`human`, `run`, or `legacy`) and a trust state:
+
+- `pending` — a new record. It may be selected for its named agent, but not shared
+  cross-agent.
+- `approved` — eligible for the normal selection rules, including cross-agent use when
+  tagged `cross-team`.
+- `legacy` — migrated from before provenance tracking. It is listed for review but
+  excluded from all prompt compilation until approved.
+
+Only a project owner or verified Coordinator run can promote memory to `approved`.
+Memory and decision text is serialized as explicitly untrusted JSON data when compiled;
+approval controls eligibility, not whether stored text becomes executable instructions.
+
 ### Recording memory
 
 `memory_record` is the MCP path for adding memory. A tool or agent provides project ID, agent name, type, content, and optional importance, tags, and related session ID. In the UI, the user creates memory from **Create memory entry**; the default agent name is **Coordinator** and the default type is **learning**.
@@ -254,7 +267,10 @@ Accepted decisions are higher priority than ordinary memory. Architectural and s
 
 Pending proposals appear under **Proposed — awaiting Coordinator** with the caption **Review pending proposals and merge, promote, or reject them.** Each proposal shows title, **Proposed** badge, type, agent name, created time, content, optional rationale, and **Merge**, **Promote**, **Reject** actions. Through MCP, the inbox model is `decision_inbox_submit`, `squad_decide`, `decision_inbox_list`, `decision_inbox_merge`, and `decision_inbox_reject`.
 
-The web UI also exposes **Promote** as a visible acceptance action. In MCP, accepted inbox entries flow through `decision_inbox_merge`, and coordinator-authored decisions can be created directly with `decision_create`.
+The web UI also exposes **Promote** as a visible acceptance action. The server accepts
+merge, promote, and reject only from a project owner or a verified Coordinator run. In
+MCP, accepted inbox entries flow through `decision_inbox_merge`, and a verified
+Coordinator can create an approved decision directly with `decision_create`.
 
 ### Submit: proposals enter the inbox
 
@@ -269,6 +285,9 @@ Agents use `decision_inbox_submit` or `squad_decide` when they discover somethin
 `decision_inbox_merge` accepts a pending entry. The entry becomes a canonical decision, the source inbox item is marked merged, and the audit link is retained.
 
 Merging is the key authority transition. Before merge, the item is a proposal. After merge, it is part of the decision ledger and can shape future context.
+
+The resulting decision records who approved it and receives trust state `approved`.
+Only active, approved architectural and scope decisions become prompt boundaries.
 
 ### Reject: audit without authority
 
@@ -297,6 +316,11 @@ Agentweaver memory is database-backed for filtering, status transitions, and tra
 ### Database authority, file transparency
 
 The structured store is authoritative for API and MCP reads and writes. Files are the inspectable, git-friendly mirror.
+
+Existing memory and decision rows created before provenance tracking are migrated as
+`legacy`. They can still be listed, inspected, and audited, but they are inactive for
+prompt compilation. A project owner or verified Coordinator must explicitly approve
+the relevant memory or decision before it can participate in future context.
 
 ## Sessions: the team's current work
 
@@ -332,8 +356,8 @@ The web UI is optimized for review, confidence, and visible control. MCP is opti
 | Retire member | **Remove** action | `team_member_retire` |
 | Browse decisions | **Team Memory** > **Decisions** | `decision_list` |
 | Review inbox | **Proposed — awaiting Coordinator** | `decision_inbox_list` |
-| Accept proposal | **Merge** / **Promote** | `decision_inbox_merge`, `decision_create` |
-| Reject proposal | **Reject** | `decision_inbox_reject` |
+| Accept proposal (owner/verified Coordinator) | **Merge** / **Promote** | `decision_inbox_merge`, `decision_create` |
+| Reject proposal (owner/verified Coordinator) | **Reject** | `decision_inbox_reject` |
 | Browse memory | **Team Memory** > **Agent Memory** | `memory_list`, `memory_search`, `memory_get` |
 | Record memory | **Create memory entry** | `memory_record` |
 | Work session | Current run context | `session_start`, `session_current`, `session_update` |
@@ -405,6 +429,11 @@ Use **Add member** when the team needs one more specialist. Use **Remove** when 
 
 Use **Agent Memory** to create or update a helpful learning. Use **Decisions** to review **Proposed — awaiting Coordinator**, then **Merge**, **Promote**, or **Reject**. MCP uses `memory_record`, `memory_search`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, and `decision_list`.
 
+After upgrading from a version without provenance tracking, use the memory and decision
+lists to locate `trustState: "legacy"` records. Review them individually, then use the
+memory promotion or decision approval action as a project owner or verified Coordinator.
+Do not assume that a record is active merely because it still appears in the list.
+
 ### Keep file context current
 
 Run `memory_export` when `.squad/` and `.agentweaver/context/` should reflect structured memory. Run `memory_import` when pending inbox markdown files should enter the review flow.
@@ -412,8 +441,8 @@ Run `memory_export` when `.squad/` and `.agentweaver/context/` should reflect st
 ## Design principles for this experience
 
 - **Review before authority**: agents can propose, but accepted decisions govern.
+- **Fail closed on unknown provenance**: legacy records remain visible but do not compile until approved.
 - **Identity before role**: names persist while roles and charters can change.
 - **One coherent roster**: one universe keeps the team memorable and deterministic.
 - **Memory helps; decisions bind**: memory informs future work, while the decision ledger sets boundaries.
 - **Files are a product surface**: structured state gives reliability, and readable files give transparency.
-

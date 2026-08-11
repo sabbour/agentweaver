@@ -23,6 +23,7 @@ function injectRuntimeConfigScript() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), injectRuntimeConfigScript()],
+  cacheDir: '.vite',
   build: {
     chunkSizeWarningLimit: 5000,
   },

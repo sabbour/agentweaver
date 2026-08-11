@@ -42,6 +42,8 @@ Runnable outputs are most useful when reviewers can open them live. Software del
 
 For direct agent runs or custom workflows without that gate, ask the agent to build and start the app inside its sandbox, use or discover a non-conflicting port such as 8080, 3000, or 5000, verify it responds, call `start_preview(port=PORT)`, and include the preview URL in its completion message. On non-Kubernetes backends, the agent should provide local run instructions instead.
 
+The supervised preview process accepts either a worktree-relative working directory or the canonical absolute path of the worktree (or one of its subdirectories). Paths outside the run worktree, traversal escapes, and symlink or junction escapes remain blocked by the sandbox policy.
+
 ## The OutcomeSpec confirmation
 
 Before any agent work starts, the coordinator:
@@ -165,6 +167,30 @@ Each agent run passes a **Responsible AI (RAI)** check before its output proceed
 | **Failed** | Unrecoverable error |
 | **Declined** | You rejected the changes |
 | **Merge Failed** | The merge step failed (e.g., a conflict on the target branch) |
+
+### Agent turn infrastructure failures
+
+The run timeline reports `agent_turn_internal_error` when Agentweaver must supply a
+structured fallback: the pod bridge's turn throws without first emitting a structured
+`run.failed`, the worker receives an unstructured `run.failed`, or the A2A stream ends
+on an unsupported or unset event. This is an execution-infrastructure failure, not a
+model request for changes. The fallback is marked `retryable: true` because the
+surrounding workflow may retry or redispatch the turn; it does not mean that the
+interrupted turn completed successfully.
+
+Agentweaver does not replace more specific outcomes with this fallback:
+
+- a cancellation requested by the caller remains a cancellation;
+- an existing typed timeout or failure keeps its own error code and retryability;
+- other A2A exceptions become `a2a_transport_failure`, with retryability determined by
+  the transport failure;
+- a clean A2A stream end without `agent.turn.end` becomes the retryable
+  `agent_host_turn_incomplete`.
+
+The terminal may include a bounded diagnostic for troubleshooting. Credentials are
+redacted and multiline output is flattened before it reaches the run event. See the
+[Operations Guide](./operations#diagnosing-agent-turn-infrastructure-failures) for
+operator guidance.
 
 ## Runs list
 
