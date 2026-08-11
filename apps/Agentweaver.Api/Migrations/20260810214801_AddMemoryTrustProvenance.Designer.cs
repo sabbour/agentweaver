@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260810214801_AddMemoryTrustProvenance")]
+    partial class AddMemoryTrustProvenance
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
@@ -750,29 +753,6 @@ namespace Agentweaver.Api.Migrations
                         .HasDatabaseName("IX_project_github_identity_overrides_user_login");
 
                     b.ToTable("project_github_identity_overrides", (string)null);
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Memory.RunAuthorshipCapability", b =>
-                {
-                    b.Property<string>("RunId")
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT")
-                        .HasColumnName("run_id");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("expires_at");
-
-                    b.Property<byte[]>("TokenHash")
-                        .IsRequired()
-                        .HasColumnType("BLOB")
-                        .HasColumnName("token_hash");
-
-                    b.HasKey("RunId");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.ToTable("run_authorship_capabilities", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.SessionContext", b =>

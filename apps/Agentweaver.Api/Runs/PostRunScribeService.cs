@@ -52,7 +52,9 @@ public sealed class PostRunScribeService(
                 .ToListAsync(ct).ConfigureAwait(false);
 
             var runCandidates = relevantPending
-                .Where(e => e.CreatedAt >= runStarted)
+                .Where(e => e.CreatedAt >= runStarted
+                         && e.SourceKind == MemorySourceKinds.Run
+                         && string.Equals(e.SourceRunId, run.Id.ToString(), StringComparison.Ordinal))
                 .ToList();
 
             var toMerge = runCandidates
@@ -72,6 +74,12 @@ public sealed class PostRunScribeService(
                     Title = entry.Title,
                     Content = entry.Content,
                     Rationale = entry.Rationale,
+                    SourceKind = entry.SourceKind,
+                    SourceIdentity = entry.SourceIdentity,
+                    SourceRunId = entry.SourceRunId,
+                    TrustState = MemoryTrustStates.Approved,
+                    ApprovedBy = $"scribe:{run.Id}",
+                    ApprovedAt = now,
                     CreatedAt = now,
                     UpdatedAt = now,
                 };
