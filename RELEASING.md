@@ -11,7 +11,7 @@ Repository release identity and Azure deployment are separate operations.
 | `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
 | `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag and GitHub Release from the exact protected-`main` SHA. No Azure work. |
-| `npm run azure:deploy-from-release -- vX.Y.Z` | Existing published semver tag | Build/retag and deploy that exact release to the configured environment. |
+| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source ghcr]` | Existing published semver tag | Build (or, with `--image-source ghcr`, import already-published) and deploy that exact release to the configured environment. |
 | `npm run azure:release` | Prepared `vX.Y.Z` | First-shipment convenience command: publish, then deploy the same release. |
 | `npm run azure:verify` | Running environment | Read-only health verification. |
 
@@ -73,7 +73,10 @@ from its exact matching section; do not run another changelog generator.
 ## Publishing and deploying
 
 From a clean checkout at the exact resulting `origin/main` SHA (including no
-untracked or unexpected git-ignored files):
+untracked or unexpected git-ignored files). Publication uses the same ignored-file
+policy as preparation: normal dependency, build, test, and harness outputs are
+allowed, while stray ignored files outside those recognized locations still block
+the release:
 
 ```bash
 # Repository identity only: tag + GitHub Release, no Azure deployment
@@ -103,6 +106,26 @@ requires a clean checkout whose `HEAD` equals the annotated tag, verifies that
 the GitHub Release and prepared metadata exist, and then builds/deploys/verifies
 the release without publishing anything new.
 
+By default, `azure:deploy-from-release` rebuilds the release images from source
+into ACR (`--image-source acr-build`). To reuse the images that
+`.github/workflows/publish-images.yml` already published for this exact tag
+instead of rebuilding them, add `--image-source ghcr`:
+
+```bash
+npm run azure:deploy-from-release -- vX.Y.Z --image-source ghcr
+```
+
+The GHCR ref is always the release tag itself, and the GHCR owner/repository
+is derived automatically from the repo's GitHub origin remote — there is no
+separate `--ghcr-ref` flag here (unlike `azure:provision-infra`) because a
+release deployment only ever pulls the tag it is deploying. Pass
+`--ghcr-token <token>` (or set `GHCR_TOKEN`) if the package is private. This
+is the fastest way to redeploy an already-published release to an existing
+environment: it skips rebuilding four container images and only imports,
+retags, and redeploys them. It never touches cluster, ACR, Postgres,
+identity, or monitoring infrastructure — use `azure:provision-infra` if any
+of that needs to change.
+
 Before deleting the release branch, create a short-lived branch from current
 `dev` and forward-port the preparation commit:
 
@@ -128,7 +151,8 @@ Release images are published from the `release: published` event, i.e. as a
 consequence of `npm run release:publish`, so the tag, the GitHub Release, and the
 `vX.Y.Z` images all describe the same exact `main` SHA. Publishing images is
 independent of deployment: `azure:deploy-from-release` still builds/retags and ships
-into the configured Azure environment.
+into the configured Azure environment by default, or add `--image-source ghcr`
+to import these already-published images instead of rebuilding them.
 
 ## Local and infrastructure deployment
 

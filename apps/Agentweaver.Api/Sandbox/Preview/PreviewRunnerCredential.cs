@@ -22,6 +22,7 @@ namespace Agentweaver.Api.Sandbox.Preview;
 public static class PreviewRunnerCredential
 {
     private const string KeyPrefix = "preview-runner-cred--";
+    private const int MaxSanitizedRunIdLength = 87;
 
     /// <summary>
     /// Deterministic, replica-safe secret-store key for <paramref name="runId"/>'s preview-runner
@@ -62,8 +63,9 @@ public static class PreviewRunnerCredential
         var hash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..12].ToLowerInvariant();
         var head = sb.ToString();
-        if (head.Length > 96)
-            head = head[..96];
+        // Leave room for this key's prefix, hash, and KeyVaultSecretStore's "ghtok-" prefix.
+        if (head.Length > MaxSanitizedRunIdLength)
+            head = head[..MaxSanitizedRunIdLength];
         return head + "-" + hash;
     }
 }

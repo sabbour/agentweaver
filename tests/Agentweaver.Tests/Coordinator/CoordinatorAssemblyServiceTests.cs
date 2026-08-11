@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Http;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Endpoints;
@@ -2448,6 +2449,64 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunBuildTestAsync_RefreshedConfigureCredential_RecreatesPodOnceThenStopsOnPersistentAuth()
+    {
+        var repoPath = CreateGitRepository();
+        var worktreesBase = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-auth-{Guid.NewGuid():N}");
+        var lifecycle = new ConfigureRecoveryPodLifecycle();
+
+        try
+        {
+            var worktreeManager = new WorktreeManager(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Worktrees:BasePath"] = worktreesBase,
+                    })
+                    .Build(),
+                NullLogger<WorktreeManager>.Instance);
+            var pipeline = new CollectiveAssemblyPipeline(
+                worktreeManager,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                NullLoggerFactory.Instance,
+                lifecycle,
+                Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }));
+
+            var act = () => pipeline.RunBuildTestAsync(
+                new CollectiveBuildTestRequest(
+                    RunId.New().ToString(),
+                    ProjectId: null,
+                    repoPath,
+                    "main",
+                    "tree",
+                    "diff",
+                    "alice"),
+                CancellationToken.None);
+
+            var ex = await act.Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
+            ex.Which.Reason.Should().Be("agenthost_configure_copilot_unauthorized");
+            ex.Which.Retryable.Should().BeFalse(
+                "the bounded credential recovery must not mask persistent authorization failure");
+            lifecycle.LaunchCalls.Should().Be(2,
+                "Build & Test retries only after a credential was actually rotated");
+            lifecycle.ReleaseCalls.Should().Be(1,
+                "the one-time-configured failed pod must be released before the retry");
+        }
+        finally
+        {
+            TryDeleteDirectory(repoPath);
+            TryDeleteDirectory(worktreesBase);
+        }
+    }
+
+    [Fact]
     public async Task RunBuildTestAsync_total_timeout_releases_retained_claim()
     {
         var repoPath = CreateGitRepository();
@@ -2531,6 +2590,28 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyFailed);
         (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
             .Should().Be(RunStatus.InProgress);
+    }
+
+    [Fact]
+    public async Task BuildTestAgentTurnInternalError_DoesNotLeakUnsupportedEventReason()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await InvokeParkBuildTestInfrastructureFailureAsync(
+            Context(coordinatorRunId),
+            workPlanId,
+            new CollectiveBuildTestInfrastructureException(
+                "agent_turn_internal_error",
+                "Agent turn ended unexpectedly before the pod reported a structured terminal failure.",
+                retryable: true));
+
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.AssemblyStatusReason.Should().Be("build_test_infra_agent_turn_internal_error");
+        state.AssemblyStatusReason.Should().NotContain("a2a_protocol_event_unsupported");
     }
 
     [Fact]
@@ -2993,9 +3074,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         await SeedCoordinatorRunAsync(coordinatorRunId);
         await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
-        await SeedInboxEntryAsync(projectKey, "use-event-sourcing", "architectural", "Adopt event sourcing");
-        await SeedInboxEntryAsync(projectKey, "exclude-billing", "scope", "Billing is out of scope");
-        await SeedInboxEntryAsync(projectKey, "cache-gotcha", "learning", "Cache invalidation gotcha");
+        await SeedInboxEntryAsync(projectKey, coordinatorRunId, "use-event-sourcing", "architectural", "Adopt event sourcing");
+        await SeedInboxEntryAsync(projectKey, coordinatorRunId, "exclude-billing", "scope", "Billing is out of scope");
+        await SeedInboxEntryAsync(projectKey, coordinatorRunId, "cache-gotcha", "learning", "Cache invalidation gotcha");
+        await SeedInboxEntryAsync(
+            projectKey, coordinatorRunId, "legacy-forged-coordinator", "architectural",
+            "Unverified coordinator boundary", verifiedRun: false);
         _streamStore.Create(coordinatorRunId, "alice");
 
         var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", projectId);
@@ -3023,6 +3107,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // The learning entry is the per-run Scribe's responsibility, not the coordinator backstop.
         var learning = await db.DecisionInbox.SingleAsync(e => e.Slug == "cache-gotcha");
         learning.Status.Should().Be("pending");
+        var unverified = await db.DecisionInbox.SingleAsync(e => e.Slug == "legacy-forged-coordinator");
+        unverified.Status.Should().Be("pending",
+            "a client-supplied coordinator name without verified run provenance must not auto-promote");
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -3370,7 +3457,13 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _reviewGate.IsArmed(coordinatorRunId).Should().BeTrue("the pipeline should arm the review gate");
     }
 
-    private async Task SeedInboxEntryAsync(string projectId, string slug, string type, string title)
+    private async Task SeedInboxEntryAsync(
+        string projectId,
+        string coordinatorRunId,
+        string slug,
+        string type,
+        string title,
+        bool verifiedRun = true)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -3383,6 +3476,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Title = title,
             Content = $"Content for {slug}",
             Status = "pending",
+            SourceKind = verifiedRun ? MemorySourceKinds.Run : MemorySourceKinds.Legacy,
+            SourceIdentity = verifiedRun ? $"run:{coordinatorRunId}" : null,
+            SourceRunId = verifiedRun ? coordinatorRunId : null,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
@@ -3800,6 +3896,40 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             return "";
+        }
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            LaunchAgentHostPodAsync(runId, ct);
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            ReleaseCalls++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ConfigureRecoveryPodLifecycle : IAgentHostPodLifecycle
+    {
+        public int LaunchCalls { get; private set; }
+        public int ReleaseCalls { get; private set; }
+
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            LaunchCalls++;
+            return LaunchCalls == 1
+                ? Task.FromException<string>(new AgentHostConfigureException(
+                    "agenthost_configure_copilot_token_refreshed",
+                    "credential rotated",
+                    StatusCodes.Status401Unauthorized,
+                    retryable: true,
+                    recoveryAction: "recreate_pod_with_refreshed_credential"))
+                : Task.FromException<string>(new AgentHostConfigureException(
+                    "agenthost_configure_copilot_unauthorized",
+                    "persistent authorization failure",
+                    StatusCodes.Status401Unauthorized));
         }
 
         public Task<string> LaunchAgentHostPodAsync(

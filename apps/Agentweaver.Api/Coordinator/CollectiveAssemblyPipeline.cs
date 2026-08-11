@@ -31,6 +31,8 @@ namespace Agentweaver.Api.Coordinator;
 /// </summary>
 public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 {
+    private const int MaxAgentHostConfigureAttempts = 2;
+
     private readonly WorktreeManager _worktreeManager;
     private readonly RepositoryMergeLock _mergeLock;
     private readonly RunWorkflowFactory _workflowFactory;
@@ -187,71 +189,101 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                         retryable: false);
                 }
 
-                try
+                for (var launchAttempt = 1; ; launchAttempt++)
                 {
-                    var commitSha = _worktreeManager.GetBranchTipCommitSha(
-                        request.RepositoryPath,
-                        request.IntegrationBranch);
-                    if (!PodLocalExecutionWorkspace.IsGitObjectId(commitSha))
+                    try
+                    {
+                        var commitSha = _worktreeManager.GetBranchTipCommitSha(
+                            request.RepositoryPath,
+                            request.IntegrationBranch);
+                        if (!PodLocalExecutionWorkspace.IsGitObjectId(commitSha))
+                        {
+                            throw new CollectiveBuildTestInfrastructureException(
+                                "assembly_integration_commit_unresolved",
+                                $"Could not resolve immutable commit SHA for integration ref '{request.IntegrationBranch}'.",
+                                retryable: false);
+                        }
+
+                        await _podLifecycle.LaunchAgentHostPodAsync(
+                            request.CoordinatorRunId,
+                            new AgentHostLaunchContext(
+                                SharedWorkingDirectory: detachedWorktree.WorktreePath,
+                                SourceRepositoryPath: request.RepositoryPath,
+                                SourceRef: request.IntegrationBranch,
+                                BaseCommitSha: commitSha,
+                                ExpectedTreeHash: request.AggregateTreeHash,
+                                WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot),
+                            gateCt).ConfigureAwait(false);
+                        break;
+                    }
+                    catch (AgentHostConfigureException ex) when (
+                        ex.Retryable && launchAttempt < MaxAgentHostConfigureAttempts)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Collective Build/Test: recovering AgentHost configure failure for coordinator run {RunId}; " +
+                            "reason={Reason}, recoveryAction={RecoveryAction}, attempt={Attempt}/{MaxAttempts}.",
+                            request.CoordinatorRunId,
+                            ex.Reason,
+                            ex.RecoveryAction,
+                            launchAttempt,
+                            MaxAgentHostConfigureAttempts);
+                        try
+                        {
+                            await _podLifecycle.ReleaseAgentHostPodAsync(
+                                request.CoordinatorRunId, CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch (Exception cleanupEx)
+                        {
+                            _logger.LogWarning(
+                                cleanupEx,
+                                "Collective Build/Test: cleanup before bounded AgentHost configure recovery failed " +
+                                "for coordinator run {RunId}; the relaunch will still reconcile the deterministic claim.",
+                                request.CoordinatorRunId);
+                        }
+                    }
+                    catch (AgentHostPodReconcilerErrorException ex)
                     {
                         throw new CollectiveBuildTestInfrastructureException(
-                            "assembly_integration_commit_unresolved",
-                            $"Could not resolve immutable commit SHA for integration ref '{request.IntegrationBranch}'.",
-                            retryable: false);
+                            "agenthost_reconciler_error",
+                            ex.Message,
+                            retryable: false,
+                            ex);
                     }
-
-                    await _podLifecycle.LaunchAgentHostPodAsync(
-                        request.CoordinatorRunId,
-                        new AgentHostLaunchContext(
-                            SharedWorkingDirectory: detachedWorktree.WorktreePath,
-                            SourceRepositoryPath: request.RepositoryPath,
-                            SourceRef: request.IntegrationBranch,
-                            BaseCommitSha: commitSha,
-                            ExpectedTreeHash: request.AggregateTreeHash,
-                            WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
-                            Purpose: AgentHostPurpose.AssemblyBuildTest,
-                            ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot),
-                        gateCt).ConfigureAwait(false);
-                }
-                catch (AgentHostPodReconcilerErrorException ex)
-                {
-                    throw new CollectiveBuildTestInfrastructureException(
-                        "agenthost_reconciler_error",
-                        ex.Message,
-                        retryable: false,
-                        ex);
-                }
-                catch (AgentHostConfigureException ex)
-                {
-                    throw new CollectiveBuildTestInfrastructureException(
-                        ex.Reason,
-                        ex.Message,
-                        retryable: ex.StatusCode == StatusCodes.Status507InsufficientStorage,
-                        ex);
-                }
-                catch (CollectiveBuildTestInfrastructureException)
-                {
-                    throw;
-                }
-                catch (InvalidOperationException ex) when (
-                    ex.Message.Contains("submitting user", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new CollectiveBuildTestInfrastructureException(
-                        "agenthost_config_missing_submitting_user",
-                        ex.Message,
-                        retryable: false,
-                        ex);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogWarning(ex,
-                        "Collective Build/Test: AgentHost pod launch failed for coordinator run {RunId}: {Message}",
-                        request.CoordinatorRunId, ex.Message);
-                    throw new CollectiveBuildTestInfrastructureException(
-                        "agenthost_launch_failed",
-                        $"AgentHost pod launch failed for Build & Test: {ex.Message}",
-                        retryable: true,
-                        ex);
+                    catch (AgentHostConfigureException ex)
+                    {
+                        throw new CollectiveBuildTestInfrastructureException(
+                            ex.Reason,
+                            ex.Message,
+                            retryable: ex.StatusCode == StatusCodes.Status507InsufficientStorage,
+                            ex);
+                    }
+                    catch (CollectiveBuildTestInfrastructureException)
+                    {
+                        throw;
+                    }
+                    catch (InvalidOperationException ex) when (
+                        ex.Message.Contains("submitting user", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new CollectiveBuildTestInfrastructureException(
+                            "agenthost_config_missing_submitting_user",
+                            ex.Message,
+                            retryable: false,
+                            ex);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex,
+                            "Collective Build/Test: AgentHost pod launch failed for coordinator run {RunId}: {Message}",
+                            request.CoordinatorRunId, ex.Message);
+                        throw new CollectiveBuildTestInfrastructureException(
+                            "agenthost_launch_failed",
+                            $"AgentHost pod launch failed for Build & Test: {ex.Message}",
+                            retryable: true,
+                            ex);
+                    }
                 }
             }
 

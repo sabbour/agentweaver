@@ -220,6 +220,7 @@ npm run azure:provision-infra -- \
   --cluster-name agentweaver-aks \
   --acr-name agentweaverregistry \
   --location westus2 \
+  --monitoring-location westus2 \
   --node-vm-size Standard_D4s_v6 \
   --keyvault-name agentweaver-kv \
   --postgres-server-name agentweaver-pg-staging \
@@ -231,6 +232,15 @@ npm run azure:provision-infra -- \
 ```
 
 Optional: pass `--node-vm-size <sku>` or set `NODE_VM_SIZE` to override the default `Standard_D4s_v6` for new AKS system/app/kata pools when your subscription or region requires a different allowed SKU. Existing clusters are unaffected: the value is only used during `az aks create` / `az aks nodepool add`, and the installer idempotently skips those calls when the cluster or pool already exists. You can also pass `--postgres-server-name <name>` or set `PG_SERVER_NAME` to override the default `agentweaver-pg` and route around the rare Azure-global Flexible Server name collision. Pass `--postgres-ha-mode <ZoneRedundant|Disabled>` or set `PG_HA_MODE` to override the default `ZoneRedundant`, which is useful in regions/environments where zone-redundant HA is unavailable (for example early-access/canary regions such as `eastus2euap`).
+
+Log Analytics and Application Insights prefer the AKS region by default. If
+that region does not support one of those resource types, provisioning queries
+Azure's provider metadata and selects a nearby region that supports every
+missing monitoring resource, logging the substitution before creation.
+Existing monitoring resources are never moved. Set
+`MONITORING_LOCATION` / `--monitoring-location <region>` to choose a different
+preferred region explicitly; Azure still validates it and reports any
+fallback loudly.
 
 If AKS must stay in one region but PostgreSQL must be provisioned in another, pass
 `--postgres-location <region>` (or set `PG_LOCATION`). When `PG_LOCATION`
@@ -274,6 +284,7 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
   "CLUSTER_NAME": "agentweaver-aks",
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
+  "MONITORING_LOCATION": "westus2",
   "NODE_VM_SIZE": "Standard_D4s_v6",
   "KEYVAULT_NAME": "agentweaver-kv",
   "PG_SERVER_NAME": "agentweaver-pg-staging",
@@ -352,7 +363,7 @@ uncommitted local state.
 [AKS deployment runbook](docs/guide/deployment-aks.md) for more detail):
 
 - `npm run release:publish` — create the tag and GitHub Release only.
-- `npm run azure:deploy-from-release -- vX.Y.Z` — deploy an existing published release.
+- `npm run azure:deploy-from-release -- vX.Y.Z` — deploy an existing published release. By default this rebuilds images from source into ACR; add `--image-source ghcr` to import the images `.github/workflows/publish-images.yml` already published for that tag instead (the GHCR ref is always the release tag, and the owner/repository is derived from the GitHub origin remote — pass `--ghcr-token`/`GHCR_TOKEN` for private packages). This is the lightweight, images-only way to deploy a version bump: it never touches cluster/ACR/Postgres/identity infrastructure.
 - `npm run azure:release` — publish and perform the first deployment as one resumable orchestration.
 - `npm run azure:verify` — runs the post-deploy health verification checks on their own.
 

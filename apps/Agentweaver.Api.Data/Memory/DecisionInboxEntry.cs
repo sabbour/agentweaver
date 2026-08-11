@@ -14,6 +14,9 @@ public sealed class DecisionInboxEntry
     public string? Rationale { get; set; }
     public required string Status { get; set; }      // pending | merged | rejected
     public int? DecisionId { get; set; }             // FK -> Decision.Id (set on merge)
+    public string SourceKind { get; set; } = MemorySourceKinds.Legacy;
+    public string? SourceIdentity { get; set; }
+    public string? SourceRunId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? MergedAt { get; set; }

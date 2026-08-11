@@ -269,6 +269,35 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
         memory.GetProperty("sessionId").GetString().Should().Be("sess-1");
     }
 
+    [Theory]
+    [InlineData("instruction", "high")]
+    [InlineData("learning", "critical")]
+    public async Task Test_Memory_Record_RejectsUnsupportedTypeOrImportance(
+        string type,
+        string importance)
+    {
+        var projectId = await CreateProjectAsync();
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/agents/smith/memory", new
+        {
+            type,
+            importance,
+            content = "invalid classification",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Test_InboxSubmit_RejectsUnsupportedType()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var response = await SubmitInboxAsync(projectId, type: "non-negotiable");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     [Fact]
     public async Task Test_Memory_Record_DoesNotSynchronouslyExportWorkspaceSnapshot()
     {
@@ -680,6 +709,11 @@ public sealed class MemoryEndpointsTests : IClassFixture<ProjectsWebApplicationF
             Status = status,
             Title = title,
             Content = content,
+            SourceKind = MemorySourceKinds.Human,
+            SourceIdentity = "test-owner",
+            TrustState = MemoryTrustStates.Approved,
+            ApprovedBy = "test-owner",
+            ApprovedAt = now,
             CreatedAt = now,
             UpdatedAt = now,
         };

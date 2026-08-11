@@ -46,9 +46,23 @@ test("deploy-from-release requires one vX.Y.Z tag", () => {
     tag: "v1.2.3",
     dryRun: false,
     help: false,
+    imageSource: "acr-build",
+    ghcrToken: undefined,
   });
   assert.throws(() => parseArgs([]), /Usage/);
   assert.throws(() => parseArgs(["1.2.3"]), /Usage/);
+});
+
+test("deploy-from-release accepts --image-source ghcr and --ghcr-token", () => {
+  assert.deepEqual(parseArgs(["v1.2.3", "--image-source", "ghcr", "--ghcr-token", "tok"]), {
+    tag: "v1.2.3",
+    dryRun: false,
+    help: false,
+    imageSource: "ghcr",
+    ghcrToken: "tok",
+  });
+  assert.deepEqual(parseArgs(["v1.2.3", "--image-source=ghcr"]).imageSource, "ghcr");
+  assert.throws(() => parseArgs(["v1.2.3", "--image-source", "bogus"]), /--image-source must be one of/);
 });
 
 test("published release validation requires an annotated tag", async () => {
@@ -136,4 +150,81 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
 
   assert.equal(result.ok, true);
   assert.deepEqual(order, ["build", "deploy", "provenance", "warm-pool", "health"]);
+});
+
+test("deploy-from-release --image-source ghcr wires GHCR_REF/OWNER/REPOSITORY/TOKEN into cfg", async () => {
+  let capturedCfg;
+  const steps = {
+    buildImages: { run: async (cfg) => { capturedCfg = cfg; return {}; } },
+    deployStep: { run: async () => ({}) },
+    verifyProvenance: { run: async () => ({ results: [{ status: "ok" }] }) },
+    verifyStep: { run: async () => ({ ok: true, pass: 1, fail: 0 }) },
+  };
+  const exec = fakeExec();
+  exec.capture = async (cmd, args) => {
+    if (cmd === "git" && args[0] === "tag") {
+      return { code: 0, stdout: "v1.2.3\nv1.2.2\n" };
+    }
+    if (cmd === "kubectl") {
+      return { code: 1, stdout: "", json: null };
+    }
+    return { code: 0, stdout: "" };
+  };
+
+  const result = await run({
+    argv: ["v1.2.3", "--image-source", "ghcr", "--ghcr-token", "tok"],
+    repoRoot: "/repo",
+    exec,
+    log,
+    readFile,
+    validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
+    resolveVariables: async ({ env }) => ({
+      IMAGE_TAG: env.IMAGE_TAG,
+      AGENTHOST_IMAGE_TAG: env.AGENTHOST_IMAGE_TAG,
+      ACR_NAME: "acr",
+      ACR_LOGIN_SERVER: "acr.azurecr.io",
+      NAMESPACE: "agentweaver",
+    }),
+    resolveGitHubRepository: async () => ({ owner: "sabbour", repo: "agentweaver" }),
+    steps,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(capturedCfg.IMAGE_SOURCE, "ghcr");
+  assert.equal(capturedCfg.GHCR_REF, "v1.2.3");
+  assert.equal(capturedCfg.GHCR_OWNER, "sabbour");
+  assert.equal(capturedCfg.GHCR_REPOSITORY, "agentweaver");
+  assert.equal(capturedCfg.GHCR_TOKEN, "tok");
+});
+
+test("deploy-from-release --image-source ghcr fails closed without a GitHub origin remote", async () => {
+  const exec = fakeExec();
+  exec.capture = async (cmd, args) => {
+    if (cmd === "git" && args[0] === "tag") {
+      return { code: 0, stdout: "v1.2.3\nv1.2.2\n" };
+    }
+    return { code: 0, stdout: "" };
+  };
+
+  await assert.rejects(
+    run({
+      argv: ["v1.2.3", "--image-source", "ghcr"],
+      repoRoot: "/repo",
+      exec,
+      log,
+      readFile,
+      validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
+      resolveVariables: async ({ env }) => ({
+        IMAGE_TAG: env.IMAGE_TAG,
+        AGENTHOST_IMAGE_TAG: env.AGENTHOST_IMAGE_TAG,
+        ACR_NAME: "acr",
+        NAMESPACE: "agentweaver",
+      }),
+      resolveGitHubRepository: async () => null,
+      steps: {
+        buildImages: { run: async () => ({}) },
+      },
+    }),
+    /GitHub origin remote/,
+  );
 });

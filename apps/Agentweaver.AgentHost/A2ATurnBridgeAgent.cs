@@ -246,20 +246,30 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             // WITHOUT emitting one, the worker is left with a bare, context-free "Received: None"
             // that it can only classify as a2a_protocol_event_unsupported. We guarantee a structured
             // terminal below so pod-side failures always carry a real errorCode.
-            var sawTerminalFailure = false;
+            var sawStructuredTerminalFailure = false;
 
             await foreach (var runEvent in channel.Reader
                 .ReadAllAsync(cancellationToken)
                 .ConfigureAwait(false))
             {
+                var outboundEvent = runEvent;
                 if (string.Equals(runEvent.Type, EventTypes.RunFailed, StringComparison.Ordinal))
                 {
-                    sawTerminalFailure = true;
+                    if (StructuredRunFailureTerminal.TryRead(runEvent) is null)
+                    {
+                        outboundEvent = StructuredRunFailureTerminal.NormalizeUnstructuredFailure(runEvent);
+                        _logger.LogWarning(
+                            "A2ATurnBridgeAgent: normalized an unstructured run.failed event to " +
+                            "{ErrorCode}; the original recognized diagnostic fields were retained safely.",
+                            StructuredRunFailureTerminal.InternalErrorCode);
+                    }
+
+                    sawStructuredTerminalFailure = true;
                 }
 
                 yield return new AgentResponseUpdate(
                     ChatRole.Assistant,
-                    new List<AIContent> { RunEventDataPartCodec.EncodeRunEvent(runEvent) });
+                    new List<AIContent> { RunEventDataPartCodec.EncodeRunEvent(outboundEvent) });
             }
 
             // Surface the accumulated assistant text and propagate any turn exception.
@@ -277,12 +287,18 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
 
             if (turnFailure is not null)
             {
+                if (turnFailure.SourceException is OperationCanceledException &&
+                    cancellationToken.IsCancellationRequested)
+                {
+                    turnFailure.Throw();
+                }
+
                 // #267 root-cause guard: the pod turn threw without a structured RunFailed reaching
                 // the worker. Emit a synthetic structured terminal so the worker recovers a real
                 // errorCode instead of the misleading, context-free a2a_protocol_event_unsupported.
                 // The exception is still propagated (rethrown) so the stream terminates abnormally,
                 // exactly as before — only the diagnosis carried to the worker is improved.
-                if (!sawTerminalFailure)
+                if (!sawStructuredTerminalFailure)
                 {
                     _logger.LogWarning(
                         turnFailure.SourceException,
@@ -294,15 +310,11 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
                         ChatRole.Assistant,
                         new List<AIContent>
                         {
-                            RunEventDataPartCodec.EncodeRunEvent(new RunEvent(
-                                0,
-                                EventTypes.RunFailed,
-                                new
-                                {
-                                    message = turnFailure.SourceException.Message,
-                                    errorCode = "agent_turn_internal_error",
-                                    retryable = true,
-                                })),
+                            RunEventDataPartCodec.EncodeRunEvent(
+                                StructuredRunFailureTerminal.CreateInternalError(
+                                    "Agent turn aborted before reporting a structured terminal failure.",
+                                    $"{turnFailure.SourceException.GetType().Name}: " +
+                                    turnFailure.SourceException.Message)),
                         });
                 }
 

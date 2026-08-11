@@ -6,6 +6,7 @@ import {
   assertVersionMirrors,
   extractChangelogSection,
   releaseBranchVersion,
+  synchronizePackageLockVersion,
   validateReleasePreparation,
   getUnexpectedIgnoredFiles,
 } from "./shared.mjs";
@@ -40,7 +41,8 @@ if (releaseBranchVersion(branch) !== expected) {
 
 assertVersionMirrors(root);
 
-// Changesets owns package and lockfile updates; this wrapper owns VERSION.
+// Changesets owns package/changelog generation. Normalize the root npm lock
+// mirrors afterward because Changesets can leave them stale for a private package.
 execFileSync(process.execPath, [changesetsCli, "version"], {
   cwd: root,
   stdio: "inherit",
@@ -48,6 +50,7 @@ execFileSync(process.execPath, [changesetsCli, "version"], {
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 validateReleasePreparation(expected, branch, packageJson.version);
+synchronizePackageLockVersion(root, packageJson.version);
 fs.writeFileSync(path.join(root, "VERSION"), `${expected}\n`);
 
 assertVersionMirrors(root);

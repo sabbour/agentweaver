@@ -24,6 +24,7 @@ public static class DecisionPromotion
         MemoryDbContext db,
         DecisionInboxEntry entry,
         DateTimeOffset now,
+        string approvedBy,
         CancellationToken ct = default)
     {
         entry.Status = "merged";
@@ -39,6 +40,12 @@ public static class DecisionPromotion
             Title = entry.Title,
             Content = entry.Content,
             Rationale = entry.Rationale,
+            SourceKind = entry.SourceKind,
+            SourceIdentity = entry.SourceIdentity,
+            SourceRunId = entry.SourceRunId,
+            TrustState = MemoryTrustStates.Approved,
+            ApprovedBy = approvedBy,
+            ApprovedAt = now,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -51,19 +58,27 @@ public static class DecisionPromotion
 
     /// <summary>
     /// Backstop used by the Coordinator finalization pass: promotes every still-pending
-    /// architectural/scope inbox entry for <paramref name="projectId"/> into an active decision.
+    /// architectural/scope inbox entry for <paramref name="projectId"/> authored by the verified
+    /// <paramref name="coordinatorRunId"/> into an active decision.
     /// Transactional and idempotent (only pending entries are touched). Returns the number promoted.
     /// </summary>
     public static async Task<int> PromotePendingCoordinatorDecisionsAsync(
-        MemoryDbContext db, string projectId, CancellationToken ct = default)
+        MemoryDbContext db,
+        string projectId,
+        string coordinatorRunId,
+        CancellationToken ct = default)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
 
         // EF Core/SQLite cannot translate array.Contains in WHERE — filter the type set in memory.
         var pending = (await db.DecisionInbox
-            .Where(e => e.ProjectId == projectId && e.Status == "pending")
+            .Where(e => e.ProjectId == projectId
+                     && e.Status == "pending"
+                     && e.SourceKind == MemorySourceKinds.Run
+                     && e.SourceRunId == coordinatorRunId)
             .ToListAsync(ct).ConfigureAwait(false))
-            .Where(e => CoordinatorReviewTypes.Contains(e.Type))
+            .Where(e => CoordinatorReviewTypes.Contains(e.Type)
+                     && string.Equals(e.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (pending.Count == 0)
@@ -74,7 +89,8 @@ public static class DecisionPromotion
 
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in pending)
-            await PromoteEntry(db, entry, now, ct).ConfigureAwait(false);
+            await PromoteEntry(db, entry, now, entry.SourceIdentity ?? $"run:{entry.SourceRunId}", ct)
+                .ConfigureAwait(false);
 
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return pending.Count;
