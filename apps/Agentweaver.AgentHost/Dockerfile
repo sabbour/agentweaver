@@ -65,10 +65,11 @@ ARG GIT_SHA=unknown
 # Downloads below are verified against independently-recorded sha256/sha1
 # checksums instead of trusting the mutable download URL alone (no
 # curl|bash execution of unpinned upstream scripts).
-ARG NODE_VERSION=24.18.0
-ARG NODE_SHA256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8
+ARG NODE_VERSION=24.19.0
+ARG NODE_SHA256=f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4
 ARG YQ_VERSION=4.53.3
 ARG YQ_SHA256=fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4
+ARG NPM_VERSION=12.0.2
 ARG NODEMON_VERSION=3.1.14
 ARG TYPESCRIPT_VERSION=7.0.2
 ARG TS_NODE_VERSION=10.9.2
@@ -175,7 +176,7 @@ RUN curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/nod
     && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
     && rm -f /tmp/node.tar.gz \
-    && npm install -g npm@latest \
+    && npm install -g npm@${NPM_VERSION} \
     && npm install -g \
         nodemon@${NODEMON_VERSION} \
         typescript@${TYPESCRIPT_VERSION} \
