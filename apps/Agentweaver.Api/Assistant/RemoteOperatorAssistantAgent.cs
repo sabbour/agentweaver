@@ -81,7 +81,8 @@ public sealed class RemoteOperatorAssistantAgent(
                 runId,
                 new AgentHostLaunchContext(
                     SharedWorkingDirectory: null,
-                    Purpose: AgentHostPurpose.OperatorAssistant),
+                    Purpose: AgentHostPurpose.OperatorAssistant,
+                    CallerBearerToken: request.CallerBearerToken),
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
