@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.18.0
+
+### Minor Changes
+
+- adbd83f: Make preview approval timeouts configurable per project with a 30-minute default, keep
+  pending approvals persistently visible, and allow owners to retry expired approvals
+  without restarting the run or executing the preview process twice.
+- d47df1c: Add a UI-harness pointer drag command with stable workflow-editor node and handle targets, safe element-relative coordinates, configurable movement steps, and failure evidence so canvas repositioning and drag-to-connect regressions can be reproduced.
+
+### Patch Changes
+
+- 615266f: Allow Entra project members to open and operate project runs according to their Agentweaver project role, even when the run records a linked GitHub login as its submitting identity.
+- a476cc9: Fix switching a project between linked GitHub accounts so the selected identity remains active for request and background operations instead of reverting to the default account.
+- 0d6aa2c: Confine Kata AgentHost shell and preview child processes to run-scoped mount namespaces, preventing absolute, obfuscated, traversal, and symlink paths from reaching sibling projects on the shared workspace volume.
+- a0bfd98: Allow one workflow to keep a recurring schedule and a GitHub event trigger at the same time, with
+  independent editing, API round-trips, and runtime dispatch for both. The event editor now also makes
+  GitHub Issues actions explicit, so label-driven workflows can select `labeled` instead of silently
+  remaining scoped to issue creation.
+- bbb6dac: Keep live-preview sandboxes available coherently by applying claim TTL renewal, reaper deferral, autoscaler eviction protection, active-use keepalive, and final cleanup through one idempotent run lifecycle.
+- 85f76da: Rotate persisted per-package dependency-cache generations during explicit invalidation.
+- 7db4f17: Make workflow schedules discoverable and editable inside the visual workflow editor without overwriting unsaved workflow changes.
+- cac2e20: Add safe npm download-cache reuse and timed layer/full validation profiles for concurrent worktrees, with physical local dependency trees and worktree-local .NET outputs.
+- 47f6405: Keep each UI harness scenario on one persistent browser page across separate CLI actions, with crash recovery, isolated concurrent sessions, and explicit cleanup on finish.
+- 857910e: Align workflow node authoring across the API and visual editor: add Open pull request and Publish actions to the picker, preserve them through YAML edits, and enforce the shared node-type contract in frontend and server tests.
+
 ## 0.17.0
 
 ### Minor Changes

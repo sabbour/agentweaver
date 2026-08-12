@@ -18,6 +18,15 @@ public interface IBlueprintGenerator
         string? userId = null,
         string? targetRepository = null,
         string? modelId = null);
+
+    Task<string> GenerateRawForProjectAsync(
+        string description,
+        CancellationToken ct,
+        string? userId = null,
+        string? targetRepository = null,
+        string? modelId = null,
+        string? projectId = null) =>
+        GenerateRawAsync(description, ct, userId, targetRepository, modelId);
 }
 
 public enum BlueprintGenerationFailureKind

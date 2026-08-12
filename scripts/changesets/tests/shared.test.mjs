@@ -19,13 +19,40 @@ test("version mirrors require VERSION, package.json, and lockfile to match", () 
   const files = new Map([
     ["/repo/VERSION", "0.9.70\n"],
     ["/repo/package.json", '{"version":"0.9.70"}'],
-    ["/repo/package-lock.json", '{"packages":{"":{"version":"0.9.70"}}}'],
+    ["/repo/package-lock.json", '{"version":"0.9.70","packages":{"":{"version":"0.9.70"}}}'],
   ]);
   const readFile = (file) => files.get(file.replaceAll("\\", "/"));
 
   assert.equal(assertVersionMirrors("/repo", { readFile }), "0.9.70");
-  files.set("/repo/package-lock.json", '{"packages":{"":{"version":"0.9.69"}}}');
-  assert.throws(() => assertVersionMirrors("/repo", { readFile }), /Version mirrors disagree/);
+});
+
+test("version mirrors reject stale and missing package-lock versions independently", () => {
+  const files = new Map([
+    ["/repo/VERSION", "0.9.70\n"],
+    ["/repo/package.json", '{"version":"0.9.70"}'],
+  ]);
+  const readFile = (file) => files.get(file.replaceAll("\\", "/"));
+  const assertLockRejected = (lock, expected) => {
+    files.set("/repo/package-lock.json", JSON.stringify(lock));
+    assert.throws(() => assertVersionMirrors("/repo", { readFile }), expected);
+  };
+
+  assertLockRejected(
+    { version: "0.9.69", packages: { "": { version: "0.9.70" } } },
+    /package-lock\.json\.version=0\.9\.69/,
+  );
+  assertLockRejected(
+    { packages: { "": { version: "0.9.70" } } },
+    /package-lock\.json\.version contains invalid semver: 'missing'/,
+  );
+  assertLockRejected(
+    { version: "0.9.70", packages: { "": { version: "0.9.69" } } },
+    /package-lock\.json\.packages\[""\]\.version=0\.9\.69/,
+  );
+  assertLockRejected(
+    { version: "0.9.70", packages: { "": {} } },
+    /package-lock\.json\.packages\[""\]\.version contains invalid semver: 'missing'/,
+  );
 });
 
 test("package-lock synchronization updates both root version mirrors", () => {

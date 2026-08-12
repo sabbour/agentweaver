@@ -26,6 +26,8 @@ export function adaptUiEvidence(raw = {}) {
       action: step.action ?? null,
       objectiveFacts: {
         url: step.url ?? null,
+        target: step.target ?? null,
+        outcome: step.outcome ?? null,
         consoleCount: Array.isArray(step.console) ? step.console.length : 0,
         networkCount: Array.isArray(step.network) ? step.network.length : 0,
         assertions: step.assertions ?? [],
@@ -37,6 +39,7 @@ export function adaptUiEvidence(raw = {}) {
         untrusted('network', step.network ?? []),
         untrusted('cross-reference', step.crossReference ?? null),
         untrusted('persona-thought', step.intent ?? null),
+        untrusted('action-error', step.error ?? null),
       ],
       frustrationSignals: Array.isArray(step.frustrationSignals) ? step.frustrationSignals : [],
     })),

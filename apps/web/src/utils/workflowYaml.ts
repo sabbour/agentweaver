@@ -1,4 +1,5 @@
 import { Document, isMap, isSeq, parseDocument } from 'yaml';
+import workflowNodeTypeContract from '../contracts/workflowNodeTypes.json';
 /**
  * workflowYaml — client-side YAML ↔ execution-graph conversion for the visual
  * workflow editor (Feature 015, US8 / FR-050).
@@ -12,41 +13,29 @@ import { Document, isMap, isSeq, parseDocument } from 'yaml';
  * All authoritative validation/persistence remains server-side; this is only a
  * view-and-edit convenience layer over the canonical YAML text.
  */
+interface WorkflowNodeTypeContractEntry {
+  yamlType: string;
+  apiType: string;
+  label: string;
+  authorable: boolean;
+}
+
+const WORKFLOW_NODE_TYPE_CONTRACT =
+  workflowNodeTypeContract satisfies WorkflowNodeTypeContractEntry[];
+
 /** The canonical node `type` strings the runtime loader accepts (WorkflowDefinitionLoader.TryParseNodeType). */
-export const WORKFLOW_NODE_TYPES = [
-  'prompt',
-  'peer_review',
-  'build_test',
-  'check',
-  'fan_out',
-  'fan_in',
-  'coordinator_composed',
-  'serial',
-  'merge',
-  'scribe',
-  'terminal',
-] as const;
+export const WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPE_CONTRACT.map((entry) => entry.yamlType);
 
 export type WorkflowNodeTypeName = (typeof WORKFLOW_NODE_TYPES)[number];
 
-export const AUTHORABLE_WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPES.filter(
-  (t) => t !== 'merge' && t !== 'scribe',
-);
+export const AUTHORABLE_WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPE_CONTRACT
+  .filter((entry) => entry.authorable)
+  .map((entry) => entry.yamlType);
 
 /** Human-friendly labels for the node-type picker. */
-export const NODE_TYPE_LABELS: Record<string, string> = {
-  prompt: 'Prompt (agent turn)',
-  peer_review: 'Peer review',
-  build_test: 'Build & Test',
-  check: 'Check / gate',
-  fan_out: 'Fan-out',
-  fan_in: 'Fan-in',
-  coordinator_composed: 'Coordinator-composed',
-  serial: 'Serial',
-  merge: 'Merge',
-  scribe: 'Scribe',
-  terminal: 'Terminal',
-};
+export const NODE_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  WORKFLOW_NODE_TYPE_CONTRACT.map((entry) => [entry.yamlType, entry.label]),
+);
 
 export interface WfNode {
   id: string;
@@ -117,6 +106,13 @@ export interface WorkflowEventTrigger {
   event: WorkflowEventType;
   eventName: string;
   conditions: WorkflowEventCondition[];
+}
+
+export interface WorkflowScheduleTrigger {
+  interval: 'daily' | 'weekly' | 'monthly';
+  timeOfDay: string;
+  dayOfWeek?: string;
+  dayOfMonth?: number;
 }
 
 export const WORKFLOW_EVENT_PREDICATES_BY_EVENT: Record<WorkflowEventType, WorkflowEventPredicateType[]> = {
@@ -242,12 +238,12 @@ export function setHeaderField(text: string, field: string, value: string): stri
 /** Set or remove a schedule trigger while preserving the rest of the workflow document. */
 export function setScheduleTrigger(
   text: string,
-  trigger: { interval: 'daily' | 'weekly' | 'monthly'; timeOfDay: string; dayOfWeek?: string; dayOfMonth?: number } | null,
+  trigger: WorkflowScheduleTrigger | null,
 ): string {
   return withDoc(text, (doc) => {
     if (!isMap(doc.contents)) return;
     if (trigger === null) {
-      doc.contents.delete('trigger');
+      writeTriggers(doc, readTriggers(doc).filter((entry) => entry.type !== 'schedule'));
       return;
     }
     const value: Record<string, string | number> = {
@@ -257,8 +253,68 @@ export function setScheduleTrigger(
     };
     if (trigger.interval === 'weekly' && trigger.dayOfWeek) value.day_of_week = trigger.dayOfWeek;
     if (trigger.interval === 'monthly' && trigger.dayOfMonth) value.day_of_month = trigger.dayOfMonth;
-    doc.contents.set('trigger', value);
+    writeTriggers(doc, upsertTrigger(readTriggers(doc), value));
   });
+}
+
+function readTriggers(doc: Document): Array<Record<string, unknown>> {
+  const root = doc.toJS();
+  if (!isRecord(root)) return [];
+  if (Array.isArray(root.triggers)) {
+    return root.triggers.filter((entry): entry is Record<string, unknown> => isRecord(entry));
+  }
+  return isRecord(root.trigger) ? [root.trigger] : [];
+}
+
+function writeTriggers(doc: Document, triggers: Array<Record<string, unknown>>): void {
+  if (!isMap(doc.contents)) return;
+  doc.contents.delete('trigger');
+  doc.contents.delete('triggers');
+  if (triggers.length === 1) {
+    doc.contents.set('trigger', triggers[0]);
+  } else if (triggers.length > 1) {
+    doc.contents.set('triggers', triggers);
+  }
+}
+
+function upsertTrigger(
+  triggers: Array<Record<string, unknown>>,
+  replacement: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const index = triggers.findIndex((entry) => entry.type === replacement.type);
+  if (index < 0) return [...triggers, replacement];
+  return triggers.map((entry, entryIndex) => entryIndex === index ? replacement : entry);
+}
+
+/** Read the schedule trigger from either the legacy singular or multi-trigger YAML shape. */
+export function getScheduleTrigger(text: string): WorkflowScheduleTrigger | null {
+  try {
+    const js = parseDocument(text).toJS();
+    if (!isRecord(js)) return null;
+    const trigger = Array.isArray(js.triggers)
+      ? js.triggers.find((entry): entry is Record<string, unknown> => isRecord(entry) && entry.type === 'schedule') ?? null
+      : isRecord(js.trigger) ? js.trigger : null;
+    if (!trigger || trigger.type !== 'schedule') return null;
+
+    const interval = trigger.interval;
+    if (interval !== 'daily' && interval !== 'weekly' && interval !== 'monthly') return null;
+    const timeOfDay = asString(trigger.time_of_day);
+    if (!timeOfDay) return null;
+
+    const dayOfMonth = Number(trigger.day_of_month);
+    return {
+      interval,
+      timeOfDay,
+      dayOfWeek: asString(trigger.day_of_week),
+      dayOfMonth: Number.isInteger(dayOfMonth) && dayOfMonth > 0 ? dayOfMonth : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function scheduleTriggerLabel(trigger: WorkflowScheduleTrigger): string {
+  return `${trigger.interval} · ${trigger.timeOfDay} UTC`;
 }
 
 function normalizeEventName(event: WorkflowEventType): string {
@@ -390,7 +446,9 @@ export function getEventTrigger(text: string): WorkflowEventTrigger | null {
     return null;
   }
 
-  const trigger = isRecord(js.trigger) ? js.trigger : null;
+  const trigger = Array.isArray(js.triggers)
+    ? js.triggers.find((entry): entry is Record<string, unknown> => isRecord(entry) && entry.type === 'event') ?? null
+    : isRecord(js.trigger) ? js.trigger : null;
   if (!trigger || trigger.type !== 'event') return null;
   const event = parseEventName(trigger.event_name);
   if (!event) return null;
@@ -412,7 +470,7 @@ export function setEventTrigger(text: string, trigger: WorkflowEventTrigger | nu
   return withDoc(text, (doc) => {
     if (!isMap(doc.contents)) return;
     if (trigger === null) {
-      doc.contents.delete('trigger');
+      writeTriggers(doc, readTriggers(doc).filter((entry) => entry.type !== 'event'));
       return;
     }
 
@@ -437,7 +495,7 @@ export function setEventTrigger(text: string, trigger: WorkflowEventTrigger | nu
       event_name: eventName,
     };
     if (serializedConditions.length > 0) value.if = serializedConditions;
-    doc.contents.set('trigger', value);
+    writeTriggers(doc, upsertTrigger(readTriggers(doc), value));
   });
 }
 

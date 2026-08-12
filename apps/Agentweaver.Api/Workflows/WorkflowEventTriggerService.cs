@@ -65,9 +65,13 @@ public sealed class WorkflowEventTriggerService
         {
             ct.ThrowIfCancellationRequested();
             var def = result.Definition;
-            if (def?.Trigger is not { Type: WorkflowTriggerType.Event } trigger) continue;
-            if (!string.Equals(trigger.EventName, eventName, StringComparison.OrdinalIgnoreCase)) continue;
-            if (!WorkflowTriggerPredicateEvaluator.EvaluateAll(trigger.If, eventName, payload)) continue;
+            if (def is null) continue;
+            var matches = def.Triggers
+                .Where(trigger => trigger.Type == WorkflowTriggerType.Event)
+                .Any(trigger =>
+                    string.Equals(trigger.EventName, eventName, StringComparison.OrdinalIgnoreCase) &&
+                    WorkflowTriggerPredicateEvaluator.EvaluateAll(trigger.If, eventName, payload));
+            if (!matches) continue;
 
             var idempotencyKey = string.IsNullOrWhiteSpace(dedupeKey)
                 ? $"workflow-event-trigger:{def.Id}:{eventName}:{now:yyyyMMddHHmmssfff}:{Guid.NewGuid():N}"

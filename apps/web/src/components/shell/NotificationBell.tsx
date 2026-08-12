@@ -76,6 +76,8 @@ export function NotificationBell() {
   const navigate = useNavigate();
   const { notifications, unreadCount, muted, toggleMuted, markAllSeen, dismissNotification } = useNotifications();
   const [open, setOpen] = useState(false);
+  const pendingApprovalCount = notifications.filter((notification) => notification.type === 'tool_approval').length;
+  const badgeCount = Math.max(unreadCount, pendingApprovalCount);
 
   const goTo = (path: string) => {
     setOpen(false);
@@ -96,17 +98,22 @@ export function NotificationBell() {
           <Button
             appearance="subtle"
             icon={<Alert24Regular />}
-            aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+            aria-label={pendingApprovalCount > 0
+              ? `Notifications, ${pendingApprovalCount} pending tool approval${pendingApprovalCount === 1 ? '' : 's'}`
+              : unreadCount > 0
+                ? `Notifications, ${unreadCount} unread`
+                : 'Notifications'}
             data-testid="notification-bell"
             className={styles.trigger}
           >
-            {unreadCount > 0 && (
+            {badgeCount > 0 && (
               <CounterBadge
-                count={unreadCount}
+                count={badgeCount}
                 size="small"
                 color="danger"
                 className={styles.badge}
                 data-testid="notification-bell-badge"
+                aria-label={`${badgeCount} action${badgeCount === 1 ? '' : 's'} need attention`}
               />
             )}
           </Button>

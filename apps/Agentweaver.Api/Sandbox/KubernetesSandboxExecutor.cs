@@ -191,6 +191,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Resolves the run owner's GitHub token so the API can pass it in /configure, avoiding the need
     // for the kata VM pod to call Azure AD or Key Vault (blocked by Cilium FQDN policies).
     private readonly IGitHubTokenStore? _tokenStore;
+    private readonly IGitHubTokenScopeProvider? _tokenScopeProvider;
     // Refresh-aware token accessor (issue #523): a Build & Test gate can launch its AgentHost pod for
     // the FIRST time (a fresh pod, not yet /configure'd for this run) many minutes after the run's
     // earlier subtask stages — long enough for the submitting user's Copilot-entitled OAuth access
@@ -215,10 +216,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Source of the per-run AutoApproveTools flag propagated to the warm pod via /configure (bug
     // #221). Null in unit tests → the flag defaults false (same null-skip convention as above).
     private readonly IRunOptionsStore? _runOptions;
-    // Preview lifecycle probe. When a run has an ACTIVE live preview (issue #542), releasing its
-    // AgentHost pod at subtask-turn end would 404 the preview URL before a human reviewer can open it.
-    // Non-null → ReleaseAgentHostPodAsync defers the claim delete while a preview is alive. Null in
-    // unit tests / non-preview deployments → normal unconditional release (same null-skip convention).
+    // First-class preview lifecycle reconciler. ReleaseAgentHostPodAsync derives durable
+    // Previewable/PreviewActive state and applies all retention or cleanup effects before deciding
+    // whether to delete the claim.
     private readonly Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? _previewService;
 
     public bool IsRealIsolation => true;
@@ -243,6 +243,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IRunOptionsStore? runOptions = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
+        IGitHubTokenScopeProvider? tokenScopeProvider = null,
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
     {
         _client = client;
@@ -254,6 +255,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _submittingUserResolver = submittingUserResolver;
         _httpClientFactory = httpClientFactory;
         _tokenStore = tokenStore;
+        _tokenScopeProvider = tokenScopeProvider;
         _secretStore = secretStore;
         _runEventStream = runEventStream;
         _runOptions = runOptions;
@@ -399,13 +401,21 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             "KubernetesSandboxExecutor: resolved submitting user for run {RunId}; will configure pod via /configure.",
             runId);
 
+        var (configProjectId, configAgentName) = _submittingUserResolver is not null
+            ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
+            : (null, null);
+
         // ghtok-user--{base32(userId)} — the SAME mapping the API uses when persisting the token to KV.
         // With Entra sign-in the user's credentials live under the ACTIVE linked GitHub identity's
         // scope (user-link:{oid}:{login}), so resolve the effective scope rather than assuming the
         // legacy per-user scope, which is never written in that mode.
-        var effectiveScope = _tokenStore is IEffectiveGitHubTokenScopeResolver scopeResolver
-            ? await scopeResolver.ResolveEffectiveScopeAsync(submittingUser!, ct).ConfigureAwait(false)
-            : GitHubTokenScope.ForUser(submittingUser!);
+        var effectiveScope = _tokenScopeProvider is not null
+            ? await _tokenScopeProvider
+                .ResolveAsync(submittingUser!, configProjectId, ct)
+                .ConfigureAwait(false)
+            : _tokenStore is IEffectiveGitHubTokenScopeResolver scopeResolver
+                ? await scopeResolver.ResolveEffectiveScopeAsync(submittingUser!, ct).ConfigureAwait(false)
+                : GitHubTokenScope.ForUser(submittingUser!);
         var kvUserSecretName = KeyVaultSecretStore.SanitizeKey(effectiveScope.Key);
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
@@ -548,9 +558,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // immutable source refs; AgentHost creates their effective root inside execution-scratch.
             if (claimCreated)
             {
-                var (configProjectId, configAgentName) = _submittingUserResolver is not null
-                    ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
-                    : (null, null);
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
                     podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
                     effectiveScope,
@@ -607,23 +614,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // demo viewer can open it. Defer the claim delete while the preview is alive; the preview's own
         // idle/max expiry + the reaper will eventually reap the pod, so this cannot leak.
         if (_previewService is not null &&
-            await _previewService.HasActivePreviewAsync(runId, ct).ConfigureAwait(false))
+            await _previewService.ReconcilePreviewLifecycleAsync(runId, ct).ConfigureAwait(false)
+                == Agentweaver.Api.Sandbox.Preview.PreviewLifecycleState.PreviewActive)
         {
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: deferring AgentHost pod release for run {RunId} (claim " +
                 "{Claim}) — a live preview is still active; the preview idle/max expiry will reap it.",
                 runId, claimName);
-            // #560: the claim's cluster-side ttlSecondsAfterFinished (set at creation, default 600s)
-            // would otherwise let the sandbox controller reap the pod ~TimeoutSeconds after this
-            // terminal turn finishes — independently of the deferral above, which only stops the
-            // API-side delete. Renew the claim TTL to cover the preview's hard-max lifetime so the
-            // controller keeps the pod alive exactly as long as the preview may live. Best-effort.
-            await _previewService.RenewBackingClaimTtlAsync(runId, ct).ConfigureAwait(false);
-            // #574: the TTL renewal above only covers the sandbox controller's TTL reap. The kata node
-            // pool's cluster-autoscaler can still drain the node and kill this pod during a scale-down
-            // (the pod is safe-to-evict=true by default). Pin the pod against scale-down while the
-            // preview is live; StopPreviewAsync resets it on teardown. Best-effort.
-            await _previewService.SetBackingPodSafeToEvictAsync(runId, false, ct).ConfigureAwait(false);
             return;
         }
 

@@ -2,6 +2,7 @@ import {
   apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import {
+  Badge,
   Button,
   Dropdown,
   Field,
@@ -26,7 +27,9 @@ import {
   AddRegular,
   ArrowJoinRegular,
   ArrowSplitRegular,
+  ArrowUploadRegular,
   BeakerRegular,
+  BranchRegular,
   CheckmarkCircleRegular,
   CodeRegular,
   DeleteRegular,
@@ -43,23 +46,28 @@ import {
   WarningRegular,
 } from '@fluentui/react-icons';
 import { EmptyState, PageHeader } from './ui';
+import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
 import { DAG_NODE_SEP,
   layoutDag,
   workflowNodeSizeHint } from '../utils/dagLayout';
 import { addEdge,
   addNode,
   AUTHORABLE_WORKFLOW_NODE_TYPES,
+  getEventTrigger,
+  getScheduleTrigger,
   NODE_TYPE_LABELS,
   parseWorkflowYaml,
   readWorkflowId,
   removeEdgeAt,
   removeNode,
   renameNode,
+  scheduleTriggerLabel,
   setBranchTarget,
   setEdgeFieldAt,
   setHeaderField,
   setNodeField,
   setNodeStringArrayField,
+  setScheduleTrigger,
   } from '../utils/workflowYaml';
 import { ActiveEdgeContext,
   ExecutionModalContext,
@@ -103,6 +111,8 @@ const TYPE_ROLE: Record<string, string> = {
   prompt: 'agent',
   peer_review: 'review',
   build_test: 'review',
+  open_pull_request: 'action',
+  publish: 'agent',
   check: 'rai',
   fan_out: 'subtask',
   fan_in: 'assembly',
@@ -117,6 +127,8 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
   prompt: 'agent',
   peer_review: 'gate',
   build_test: 'gate',
+  open_pull_request: 'action',
+  publish: 'action',
   check: 'gate',
   fan_out: 'action',
   fan_in: 'action',
@@ -128,7 +140,7 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
 };
 
 // Node types whose `agent` field is meaningful (FR-045 type-aware authoring).
-const AGENT_TYPES = new Set(['prompt', 'peer_review', 'build_test', 'coordinator_composed']);
+const AGENT_TYPES = new Set(['prompt', 'peer_review', 'build_test', 'coordinator_composed', 'publish']);
 const READONLY_NODE_TYPES = new Set(['merge', 'scribe']);
 
 const SPECIAL_GATES = [
@@ -183,7 +195,7 @@ const DEFAULT_BRANCHES: Record<string, string[]> = Object.fromEntries(
 );
 
 // Groups the "Add node" palette buckets primitives into (FR-050 authoring UX, #558).
-type NodePaletteGroup = 'gates' | 'steps' | 'flow';
+type NodePaletteGroup = 'gates' | 'steps' | 'actions' | 'flow';
 
 // Per-primitive palette metadata: a scannable icon + a one-line, plain-language
 // description + the group header it sits under. `build_test` is deliberately absent:
@@ -194,6 +206,8 @@ const NODE_TYPE_META: Record<string, { Icon: ComponentType; description: string;
   prompt: { Icon: SparkleRegular, description: 'A single agent turn that produces work.', group: 'steps' },
   peer_review: { Icon: PeopleTeamRegular, description: "Another agent reviews the previous step's output.", group: 'gates' },
   check: { Icon: CheckmarkCircleRegular, description: 'Generic verdict gate that branches on an outcome.', group: 'gates' },
+  open_pull_request: { Icon: BranchRegular, description: 'Open a pull request on the connected GitHub repository.', group: 'actions' },
+  publish: { Icon: ArrowUploadRegular, description: 'Package or deliver approved output with an agent turn.', group: 'actions' },
   fan_out: { Icon: ArrowSplitRegular, description: 'Split work into parallel subtasks.', group: 'flow' },
   fan_in: { Icon: ArrowJoinRegular, description: 'Gather parallel subtask results back together.', group: 'flow' },
   coordinator_composed: { Icon: FlowchartRegular, description: 'Delegate to a nested coordinator sub-workflow.', group: 'flow' },
@@ -221,12 +235,41 @@ const useStyles = makeStyles({
     gridTemplateColumns: '1fr 1fr',
     gap: tokens.spacingHorizontalM,
     flexGrow: 1,
+    '@media (max-width: 760px)': { gridTemplateColumns: '1fr' },
   },
-  identityWide: { gridColumn: '1 / -1' },
+  identityWide: {
+    gridColumn: '1 / -1',
+    '@media (max-width: 760px)': { gridColumn: 'auto' },
+  },
+  scheduleRow: {
+    gridColumn: '1 / -1',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    '@media (max-width: 760px)': {
+      gridColumn: 'auto',
+      alignItems: 'stretch',
+      flexDirection: 'column',
+    },
+  },
+  scheduleSummary: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
   split: {
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     minHeight: '560px',
+    '@media (max-width: 900px)': {
+      flexDirection: 'column',
+      minHeight: 0,
+    },
   },
   canvasPane: {
     flexBasis: '60%',
@@ -235,6 +278,7 @@ const useStyles = makeStyles({
     position: 'relative',
     backgroundColor: tokens.colorNeutralBackground2,
     borderRadius: tokens.borderRadiusMedium,
+    '@media (max-width: 900px)': { minHeight: '420px' },
   },
   sidePane: {
     display: 'flex',
@@ -246,6 +290,10 @@ const useStyles = makeStyles({
     padding: tokens.spacingHorizontalL,
     backgroundColor: tokens.colorNeutralBackground1,
     borderRadius: tokens.borderRadiusMedium,
+    '@media (max-width: 900px)': {
+      flexBasis: 'auto',
+      maxHeight: 'none',
+    },
   },
   paneHeader: {
     display: 'flex',
@@ -369,6 +417,8 @@ function buildGraph(
         nodeType: gnt,
         isPlanned: true,
         connectable: true,
+        interactionTestId: `workflow-node-${n.id}`,
+        handleTestIdPrefix: `workflow-node-${n.id}-handle`,
       } as WorkflowNodeData,
     };
   });
@@ -449,6 +499,7 @@ export function VisualWorkflowEditor({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeIndex, setSelectedEdgeIndex] = useState<number | null>(null);
   const [rightMode, setRightMode] = useState<'inspector' | 'yaml'>('inspector');
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<{ message: string; line: number | null } | null>(null);
@@ -562,6 +613,8 @@ export function VisualWorkflowEditor({
   const selectableTargets = model?.nodes.filter((n) => n.id !== selectedNode?.id) ?? [];
 
   const warnings = useMemo(() => (model ? unroutedVerdicts(model) : []), [model]);
+  const scheduleTrigger = useMemo(() => getScheduleTrigger(yamlText), [yamlText]);
+  const eventTrigger = useMemo(() => getEventTrigger(yamlText), [yamlText]);
 
   const handleRenameNode = useCallback((oldId: string, newId: string) => {
     if (!newId || newId === oldId) return;
@@ -601,6 +654,18 @@ export function VisualWorkflowEditor({
     setSelectedEdgeIndex(null);
     setYamlText((t) => removeEdgeAt(t, idx));
   }, [selectedEdgeIndex]);
+
+  const handleScheduleSave = useCallback((trigger: NonNullable<ReturnType<typeof getScheduleTrigger>>) => {
+    setYamlText((text) => setScheduleTrigger(text, trigger));
+    setSaveError(null);
+    setScheduleOpen(false);
+  }, []);
+
+  const handleScheduleRemove = useCallback(() => {
+    setYamlText((text) => setScheduleTrigger(text, null));
+    setSaveError(null);
+    setScheduleOpen(false);
+  }, []);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -683,6 +748,25 @@ export function VisualWorkflowEditor({
             rows={2}
           />
         </Field>
+        <div className={styles.scheduleRow}>
+          <div className={styles.scheduleSummary}>
+            <Text weight="semibold">Schedule trigger</Text>
+            {scheduleTrigger ? (
+              <Badge appearance="tint" color="informative">
+                {scheduleTriggerLabel(scheduleTrigger)}
+              </Badge>
+            ) : (
+              <Text size={200}>{eventTrigger ? 'No schedule configured' : 'Manual only'}</Text>
+            )}
+          </div>
+          <Button
+            appearance="secondary"
+            disabled={Boolean(parseError)}
+            onClick={() => setScheduleOpen(true)}
+          >
+            {scheduleTrigger ? 'Edit schedule trigger' : 'Add schedule trigger'}
+          </Button>
+        </div>
       </div>
 
       {parseError && (
@@ -708,7 +792,7 @@ export function VisualWorkflowEditor({
       )}
 
       <div className={styles.split}>
-        <div className={styles.canvasPane}>
+        <div className={styles.canvasPane} data-testid="workflow-canvas">
           <div className={styles.canvasToolbar} role="toolbar" aria-label="Workflow canvas actions">
             <Menu>
               <MenuTrigger disableButtonEnhancement>
@@ -725,6 +809,11 @@ export function VisualWorkflowEditor({
                   <MenuGroup>
                     <MenuGroupHeader>Agent steps</MenuGroupHeader>
                     {renderPrimitiveItems('steps')}
+                  </MenuGroup>
+                  <MenuDivider />
+                  <MenuGroup>
+                    <MenuGroupHeader>Actions</MenuGroupHeader>
+                    {renderPrimitiveItems('actions')}
                   </MenuGroup>
                   <MenuDivider />
                   <MenuGroup>
@@ -835,7 +924,7 @@ export function VisualWorkflowEditor({
                   />
                 </Field>
               )}
-              {selectedNode.type === 'prompt' && (
+              {(selectedNode.type === 'prompt' || selectedNode.type === 'publish') && (
                 <Field label="Prompt">
                   <Textarea
                     defaultValue={selectedNode.prompt ?? ''}
@@ -960,6 +1049,13 @@ export function VisualWorkflowEditor({
           </Button>
         </div>
       </div>
+      <ScheduleTriggerDialog
+        open={scheduleOpen}
+        trigger={scheduleTrigger}
+        onDismiss={() => setScheduleOpen(false)}
+        onSave={handleScheduleSave}
+        onRemove={handleScheduleRemove}
+      />
     </div>
   );
 }

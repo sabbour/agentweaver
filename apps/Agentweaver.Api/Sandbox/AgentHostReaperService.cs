@@ -38,11 +38,8 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     private readonly KubernetesSandboxOptions _options;
     private readonly ILogger<AgentHostReaperService> _logger;
     private readonly ISecretStore? _secretStore;
-    // Issue #542: consulted before reaping an ORPHANED claim. GetActiveClaimMapAsync only counts
-    // InProgress/Pending/AwaitingReview runs as active, so a completed subtask's claim becomes an
-    // "orphan" the instant its turn ends — the reaper would then reap the pod out from under a still-
-    // live preview, defeating ReleaseAgentHostPodAsync's own deferral. Non-null → defer such claims
-    // while a preview is alive. Null in tests/non-preview deployments → normal reaping.
+    // First-class preview lifecycle reconciler. Before reaping an orphaned claim, it derives durable
+    // Previewable/PreviewActive state and atomically owns all retention or cleanup side effects.
     private readonly Preview.ISandboxPreviewService? _previewService;
 
     public AgentHostReaperService(
@@ -89,22 +86,13 @@ public sealed class AgentHostReaperService : IAgentHostReaper
             // run still has a live preview we must NOT reap the pod — the preview URL would 404. Defer
             // until the preview idle/max-expires (then the preview reaper deletes the route and the next
             // sweep reaps this claim), so the pod cannot leak.
-            if (await HasActivePreviewAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false))
+            if (await ReconcilePreviewLifecycleAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false)
+                == Preview.PreviewLifecycleState.PreviewActive)
             {
                 _logger.LogInformation(
                     "AgentHostReaper: deferring reap of claim {Claim} (run {RunId}) — a live preview is " +
                     "still active; the preview idle/max expiry will release it.",
                     claim.ClaimName, claim.AnnotatedRunId);
-                // #560: the deferral above only stops the API-side reaper delete. The claim's
-                // cluster-side ttlSecondsAfterFinished would still let the sandbox controller reap the
-                // pod once its workload finished. Renew the claim TTL to cover the preview's hard-max
-                // lifetime so the pod survives as long as the preview may live. Best-effort/no-throw.
-                await RenewBackingClaimTtlAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false);
-                // #574: the TTL renewal only covers the controller's TTL reap. The kata node pool's
-                // cluster-autoscaler can still drain the node and kill this pod on scale-down (pods are
-                // safe-to-evict=true by default). Pin the backing pod against scale-down while the
-                // preview is live; the preview teardown resets it. Best-effort/no-throw.
-                await SetBackingPodSafeToEvictAsync(claim.AnnotatedRunId, false, ct).ConfigureAwait(false);
                 continue;
             }
 
@@ -264,69 +252,26 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     }
 
     /// <summary>
-    /// Best-effort probe: does <paramref name="runId"/> still have a live preview? Returns false when
-    /// no preview service is configured, the run id is missing, or the probe throws — the reaper must
-    /// keep working (and eventually reap) even if the preview lookup fails, so a probe failure defaults
-    /// to "no active preview" (leak-safe) rather than pinning the pod forever (issue #542).
+    /// Reconciles every preview-retention side effect before deciding whether to reap. A missing
+    /// service/run id or reconciliation failure defaults to <c>Previewable</c> (leak-safe) rather than
+    /// pinning the pod forever.
     /// </summary>
-    private async Task<bool> HasActivePreviewAsync(string? runId, CancellationToken ct)
+    private async Task<Preview.PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
+        string? runId, CancellationToken ct)
     {
         if (_previewService is null || string.IsNullOrEmpty(runId))
-            return false;
+            return Preview.PreviewLifecycleState.Previewable;
 
         try
         {
-            return await _previewService.HasActivePreviewAsync(runId, ct).ConfigureAwait(false);
+            return await _previewService.ReconcilePreviewLifecycleAsync(runId, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex,
-                "AgentHostReaper: active-preview probe failed for run {RunId}; treating as no active preview", runId);
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// #560: best-effort renewal of the backing SandboxClaim's cluster-side TTL while a preview is
-    /// deferred, so the sandbox controller does not reap the pod out from under the live preview.
-    /// Delegates to the preview service (which owns claim-name resolution + the k8s client). Never
-    /// throws — a renewal failure must not fail the sweep.
-    /// </summary>
-    private async Task RenewBackingClaimTtlAsync(string? runId, CancellationToken ct)
-    {
-        if (_previewService is null || string.IsNullOrEmpty(runId))
-            return;
-
-        try
-        {
-            await _previewService.RenewBackingClaimTtlAsync(runId, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex,
-                "AgentHostReaper: backing-claim TTL renewal failed for run {RunId} (best-effort)", runId);
-        }
-    }
-
-    /// <summary>
-    /// #574: best-effort pin of the backing sandbox pod against cluster-autoscaler scale-down while a
-    /// preview is deferred, so the autoscaler does not drain the kata node and kill the pod out from
-    /// under the live preview. Delegates to the preview service (which owns pod-name resolution + the
-    /// k8s client). Never throws — a pin failure must not fail the sweep.
-    /// </summary>
-    private async Task SetBackingPodSafeToEvictAsync(string? runId, bool safeToEvict, CancellationToken ct)
-    {
-        if (_previewService is null || string.IsNullOrEmpty(runId))
-            return;
-
-        try
-        {
-            await _previewService.SetBackingPodSafeToEvictAsync(runId, safeToEvict, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex,
-                "AgentHostReaper: backing-pod safe-to-evict pin failed for run {RunId} (best-effort)", runId);
+                "AgentHostReaper: preview lifecycle reconciliation failed for run {RunId}; using Previewable",
+                runId);
+            return Preview.PreviewLifecycleState.Previewable;
         }
     }
 

@@ -68,6 +68,7 @@ vi.mock('../api/apiClient', () => ({
     startPortForward: vi.fn(),
     stopPortForward: vi.fn(),
     pingKeepalive: vi.fn().mockResolvedValue(undefined),
+    retryPreviewApproval: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -802,6 +803,50 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     expect(await screen.findByRole('button', { name: 'Preview Sandbox' }, { timeout: 4000 })).toBeTruthy();
+  });
+
+  it('retries an expired preview approval from the Build & Test state', async () => {
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [{ sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} }],
+    };
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'build-test', label: 'Build & Test', role: 'review', kind: 'live', node_type: 'gate', status: 'running' },
+      ],
+      edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
+    });
+    vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      {
+        sequence: 2,
+        type: 'sandbox.preview_failed',
+        payload: {
+          reason: 'approval_timed_out',
+          approval_request_id: 'expired-preview-request',
+          retry_available: true,
+          target_port: 5173,
+        },
+      },
+    ]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const buildRow = await screen.findByRole(
+      'treeitem',
+      { name: /Select Build & Test: Running/i },
+      { timeout: 4000 },
+    );
+    fireEvent.click(buildRow);
+    fireEvent.click(await screen.findByRole(
+      'button',
+      { name: 'Retry expired preview approval' },
+      { timeout: 4000 },
+    ));
+
+    await waitFor(() => expect(apiClient.retryPreviewApproval)
+      .toHaveBeenCalledWith('coord-run-1', 'expired-preview-request'));
   });
 
   it('renders the persistent coordinator composer inline in the Messages surface', async () => {

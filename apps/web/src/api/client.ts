@@ -48,6 +48,7 @@ import type {
   PagedResult,
   Project,
   ProjectAccessOverview,
+  ProjectGitHubIdentity,
   RequestChangesResponse,
   RepositoryOwner,
   ReroleRequest,
@@ -403,6 +404,17 @@ export class AgentweaverApiClient {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
+  updateProjectPreviewSettings(
+    projectId: string,
+    req: import('./types').UpdateProjectPreviewSettingsRequest,
+  ): Promise<import('./types').ProjectPreviewSettingsResponse> {
+    return this.request<import('./types').ProjectPreviewSettingsResponse>(
+      'PUT',
+      `/projects/${encodeURIComponent(projectId)}/preview-settings`,
+      req,
+    );
+  }
+
   rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
     return this.request<import('./types').WebhookSecretRotationResponse>(
       'POST',
@@ -571,6 +583,10 @@ export class AgentweaverApiClient {
     return this.request<ProjectAccessOverview>('GET', `/projects/${encodeURIComponent(projectId)}/access`);
   }
 
+  getProjectGitHubIdentity(projectId: string): Promise<ProjectGitHubIdentity> {
+    return this.request<ProjectGitHubIdentity>('GET', `/projects/${encodeURIComponent(projectId)}/github-identity`);
+  }
+
   createProjectRoleAssignment(projectId: string, req: CreateProjectRoleAssignmentRequest): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/role-assignments`, req);
   }
@@ -580,7 +596,7 @@ export class AgentweaverApiClient {
   }
 
   setProjectGitHubIdentityOverride(projectId: string, githubLogin: string | null): Promise<void> {
-    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github/identity`, {
+    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github-identity`, {
       github_login: githubLogin,
     });
   }
@@ -997,6 +1013,20 @@ export class AgentweaverApiClient {
 
   denyTool(runId: string, requestId: string): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/tool-denials`, { request_id: requestId });
+  }
+
+  retryPreviewApproval(runId: string, requestId: string): Promise<{
+    run_id: string;
+    request_id: string;
+    retry_of_request_id: string;
+    expires_at: string;
+    state: 'pending';
+  }> {
+    return this.request(
+      'POST',
+      `/runs/${encodeURIComponent(runId)}/sandbox/preview-approvals/${encodeURIComponent(requestId)}/retry`,
+      {},
+    );
   }
 
   approveShell(runId: string, commandHash: string): Promise<void> {

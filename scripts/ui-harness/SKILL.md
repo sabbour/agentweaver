@@ -18,7 +18,7 @@ verified solely from its output.
 From the repository root, install the harness dependencies and run its fixture tests:
 
 ```powershell
-npm ci --prefix scripts/ui-harness
+node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness
 npm --prefix scripts/ui-harness test
 ```
 
@@ -42,8 +42,8 @@ headless commands. Treat that file as a credential: never print, commit, log, or
 it to evidence. The harness never automates reauthentication. On `AUTH_EXPIRED`, run
 the headful `login` command again (or pass `--storage-state <local-path>` consistently).
 `init` validates that the selected storage-state file exists and has a usable
-Playwright shape before it creates a scenario session; it does not launch or automate
-the login flow.
+Playwright shape before it creates a scenario session. It starts that session's
+headless browser worker, but it does not launch or automate the login flow.
 
 ## Run a persona flow
 
@@ -60,8 +60,24 @@ a JSON evidence step and requires `--session <sessionId>`:
 node scripts/ui-harness/agent-driver-ui/tools.mjs goto --session <sessionId> --path /
 node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --test-id <test-id>
 node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <sessionId> --text "<text>"
-node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId> --path /<path>
+node scripts/ui-harness/agent-driver-ui/tools.mjs drag --session <sessionId> --from-test-id <source-test-id> --to-test-id <target-test-id>
+node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId>
 ```
+
+All action commands for one session are serialized through the same browser context and
+page, even though each command is a separate CLI process. A `goto` followed by `click`,
+`drag`, and `capture` therefore keeps the current route, DOM state, cookies, local
+storage, and session storage. Pass `--path /<path>` to `capture` only when it should
+navigate first; without `--path`, it captures the page left by the preceding action.
+
+`drag` performs a genuine left-pointer move/down/move/up sequence. Use stable
+`data-testid` targets, not generated React Flow classes. It defaults to the center of
+each element and 12 intermediate move steps. Use `--steps <1-100>` to tune the path,
+and optional element-relative `--from-x`, `--from-y`, `--to-x`, and `--to-y` offsets
+for handles or node repositioning. Offsets must remain inside the selected elements.
+For the visual workflow editor, targets include `workflow-canvas`,
+`workflow-node-<node-id>`, and `workflow-node-<node-id>-handle-source|target`.
+Failed drags release the pointer and append a failed evidence turn before exiting `2`.
 
 `goto` and `capture` wait up to 30 seconds for the authenticated Agentweaver app shell
 after `domcontentloaded`; a transient authentication spinner is allowed to resolve
@@ -109,3 +125,9 @@ subjective UX quality. `driver.pass` is false when no successful evidence exists
 command failed, or captured evidence shows an authentication/loading shell instead of
 the app. The harness exits `3` for `AUTH_EXPIRED` and `2` for other command errors; a
 successful command exits `0`.
+
+Always call `finish`: it closes the session's browser worker, removes private recovery
+artifacts, and archives `result.json` beside the screenshots. If a worker crashes or
+times out while idle, the next action starts a replacement from the last completed
+action's URL and protected browser-storage snapshot. Separate session IDs use separate
+workers and recovery directories; no CDP or remote-debugging endpoint is exposed.

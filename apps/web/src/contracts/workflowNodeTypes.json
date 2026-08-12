@@ -1,0 +1,15 @@
+[
+  { "yamlType": "prompt", "apiType": "prompt", "label": "Prompt (agent turn)", "authorable": true },
+  { "yamlType": "peer_review", "apiType": "peer-review", "label": "Peer review", "authorable": true },
+  { "yamlType": "build_test", "apiType": "build-test", "label": "Build & Test", "authorable": true },
+  { "yamlType": "open_pull_request", "apiType": "open-pull-request", "label": "Open pull request", "authorable": true },
+  { "yamlType": "publish", "apiType": "publish", "label": "Publish", "authorable": true },
+  { "yamlType": "check", "apiType": "check", "label": "Check / gate", "authorable": true },
+  { "yamlType": "fan_out", "apiType": "fan-out", "label": "Fan-out", "authorable": true },
+  { "yamlType": "fan_in", "apiType": "fan-in", "label": "Fan-in", "authorable": true },
+  { "yamlType": "coordinator_composed", "apiType": "coordinator-composed", "label": "Coordinator-composed", "authorable": true },
+  { "yamlType": "serial", "apiType": "serial", "label": "Serial", "authorable": true },
+  { "yamlType": "merge", "apiType": "merge", "label": "Merge", "authorable": false },
+  { "yamlType": "scribe", "apiType": "scribe", "label": "Scribe", "authorable": false },
+  { "yamlType": "terminal", "apiType": "terminal", "label": "Terminal", "authorable": true }
+]

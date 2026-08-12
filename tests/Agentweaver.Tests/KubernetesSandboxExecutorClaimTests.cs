@@ -6,6 +6,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
 using FluentAssertions;
 using k8s;
@@ -53,20 +54,31 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
         IPodNameRegistry? podRegistry = null, IGitHubTokenStore? tokenStore = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
-        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null) =>
+        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
+        IGitHubTokenScopeProvider? tokenScopeProvider = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions, tokenStore: tokenStore,
-            accessTokenProvider: accessTokenProvider, previewService: previewService);
+            accessTokenProvider: accessTokenProvider, previewService: previewService,
+            tokenScopeProvider: tokenScopeProvider);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
         private readonly string? _user;
-        public StubSubmittingUserResolver(string? user) => _user = user;
+        private readonly string? _projectId;
+        public StubSubmittingUserResolver(string? user, string? projectId = null)
+        {
+            _user = user;
+            _projectId = projectId;
+        }
         public Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(_user);
         public Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<string?>(null);
+        public Task<(string? ProjectId, string? AgentName)> GetRunIdentityAsync(
+            string runId,
+            CancellationToken ct = default) =>
+            Task.FromResult<(string?, string?)>((_projectId, null));
     }
 
     // Issue #523: a raw (non-refreshing) IGitHubTokenStore that always reports the same stored
@@ -103,27 +115,36 @@ public sealed class KubernetesSandboxExecutorClaimTests
             _refreshedToken = refreshedToken;
         }
 
+        public GitHubTokenScope? LastScope { get; private set; }
         public GitHubTokenScope? LastValidScope { get; private set; }
         public GitHubTokenScope? LastRejectedScope { get; private set; }
         public string? RejectedToken { get; private set; }
 
-        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult(RecordValidScope(scope));
+        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default)
+        {
+            LastScope = scope;
+            LastValidScope = scope;
+            return Task.FromResult(_validToken);
+        }
 
-        public Task<string?> RefreshAfterUnauthorizedAsync(
-            GitHubTokenScope scope,
-            string? rejectedAccessToken,
-            CancellationToken ct = default)
+        public Task<string?> RefreshAfterUnauthorizedAsync(GitHubTokenScope scope, string? rejectedAccessToken, CancellationToken ct = default)
         {
             LastRejectedScope = scope;
             RejectedToken = rejectedAccessToken;
             return Task.FromResult(_refreshedToken);
         }
+    }
 
-        private string? RecordValidScope(GitHubTokenScope scope)
+    private sealed class RecordingTokenScopeProvider(GitHubTokenScope scope) : IGitHubTokenScopeProvider
+    {
+        public string? UserId { get; private set; }
+        public string? ProjectId { get; private set; }
+        public GitHubTokenScope Resolve(string? userId) => GitHubTokenScope.ForUser(userId!);
+        public Task<GitHubTokenScope> ResolveAsync(string? userId, string? projectId, CancellationToken ct = default)
         {
-            LastValidScope = scope;
-            return _validToken;
+            UserId = userId;
+            ProjectId = projectId;
+            return Task.FromResult(scope);
         }
     }
 
@@ -131,32 +152,13 @@ public sealed class KubernetesSandboxExecutorClaimTests
     {
         private readonly GitHubTokenScope _scope;
         private readonly GitHubTokenEntry _entry;
-
-        public EffectiveScopeGitHubTokenStore(GitHubTokenScope scope, GitHubTokenEntry entry)
-        {
-            _scope = scope;
-            _entry = entry;
-        }
-
-        public Task<GitHubTokenScope> ResolveEffectiveScopeAsync(
-            string userId,
-            CancellationToken ct = default) =>
-            Task.FromResult(_scope);
-
-        public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult(_entry);
-
-        public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult<GitHubToken?>(null);
-
-        public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult<GitHubIdentity?>(null);
-
-        public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public EffectiveScopeGitHubTokenStore(GitHubTokenScope scope, GitHubTokenEntry entry) => (_scope, _entry) = (scope, entry);
+        public Task<GitHubTokenScope> ResolveEffectiveScopeAsync(string userId, CancellationToken ct = default) => Task.FromResult(_scope);
+        public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult(_entry);
+        public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubToken?>(null);
+        public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubIdentity?>(null);
+        public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     // Records the /configure POST so the warm-pool deferred-config contract can be asserted.
@@ -534,6 +536,41 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+public async Task LaunchAgentHostPod_configure_uses_project_selected_linked_identity_scope()
+    {
+        const string runId = "run-claim-project-identity";
+        const string userId = "entra-user";
+        const string projectId = "00000000-0000-0000-0000-000000000712";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
+        var scopeProvider = new RecordingTokenScopeProvider(selectedScope);
+        var accessTokenProvider = new StubGitHubAccessTokenProvider("tok-bob");
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver(userId, projectId),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            accessTokenProvider: accessTokenProvider,
+            tokenScopeProvider: scopeProvider);
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        scopeProvider.UserId.Should().Be(userId);
+        scopeProvider.ProjectId.Should().Be(projectId);
+        accessTokenProvider.LastScope.Should().BeEquivalentTo(selectedScope);
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("tok-bob");
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_configure_uses_active_linked_scope_for_secret_and_refreshed_token()
     {
         const string runId = "run-claim-linked-scope";
@@ -568,6 +605,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         doc.RootElement.GetProperty("kvUserSecretName").GetString().Should()
             .Be(KeyVaultSecretStore.SanitizeKey(effectiveScope.Key));
     }
+
 
     [Fact]
     public async Task LaunchAgentHostPod_configure_unauthorized_refreshes_once_and_requests_pod_recreation()
@@ -986,12 +1024,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         handler.Requests.Should().NotContain(
             r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "an active preview must defer the claim delete so the preview URL stays reachable (#542)");
-        preview.RenewedRunId.Should().Be(runId,
-            "#560: deferring the API-side delete is not enough — the claim's cluster-side TTL must be " +
-            "renewed so the sandbox controller does not reap the pod out from under the live preview");
-        preview.SafeToEvictCalls.Should().ContainSingle().Which.Should().Be((runId, false),
-            "#574: deferring must also pin the backing pod (safe-to-evict=false) so the cluster-autoscaler " +
-            "does not drain the kata node and kill the pod during a scale-down");
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId,
+            "#579: the release path must invoke the single lifecycle transition that owns all preview protections");
     }
 
     [Fact]
@@ -1011,11 +1045,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         handler.Requests.Should().Contain(
             r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "with no active preview the claim must be deleted exactly as before (no pod leak)");
-        preview.RenewedRunId.Should().BeNull(
-            "#560: with no active preview there is nothing to keep alive, so the claim TTL must NOT be " +
-            "renewed (a renewal would extend the pod's cluster-side lifetime unnecessarily)");
-        preview.SafeToEvictCalls.Should().BeEmpty(
-            "#574: with no active preview the pod is not pinned — normal teardown proceeds");
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId,
+            "#579: normal cleanup is also governed by the same lifecycle transition");
     }
 
     [Fact]
@@ -1034,32 +1065,21 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "non-preview deployments (null preview service) must keep the original unconditional release");
     }
 
-    // Minimal ISandboxPreviewService test double: only HasActivePreviewAsync is exercised by the
+    // Minimal ISandboxPreviewService test double: only lifecycle reconciliation is exercised by the
     // release path; every other member throws so an unexpected call is caught loudly.
     private sealed class StubPreviewService : Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService
     {
-        private readonly bool _hasActivePreview;
-        public StubPreviewService(bool hasActivePreview) => _hasActivePreview = hasActivePreview;
+        private readonly PreviewLifecycleState _state;
+        public StubPreviewService(bool hasActivePreview) =>
+            _state = hasActivePreview ? PreviewLifecycleState.PreviewActive : PreviewLifecycleState.Previewable;
 
-        /// <summary>Run id passed to <see cref="RenewBackingClaimTtlAsync"/>, or null if never called (#560).</summary>
-        public string? RenewedRunId { get; private set; }
+        public List<string> ReconciledRunIds { get; } = new();
 
-        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult(_hasActivePreview);
-
-        public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
+        public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
+            string runId, CancellationToken ct = default)
         {
-            RenewedRunId = runId;
-            return Task.CompletedTask;
-        }
-
-        /// <summary>(runId, safeToEvict) tuples passed to <see cref="SetBackingPodSafeToEvictAsync"/> (#574).</summary>
-        public List<(string RunId, bool SafeToEvict)> SafeToEvictCalls { get; } = new();
-
-        public Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
-        {
-            SafeToEvictCalls.Add((runId, safeToEvict));
-            return Task.CompletedTask;
+            ReconciledRunIds.Add(runId);
+            return Task.FromResult(_state);
         }
 
         public bool Enabled => true;

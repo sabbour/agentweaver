@@ -28,6 +28,7 @@ export function computeDriverP0(steps = [], commandFailures = []) {
     });
   }
   for (const step of steps) {
+    if (step.outcome === 'failed') failures.push({ kind: 'action-failed', turn: step.id, evidence: step.error?.message ?? step.action });
     const terminalFailure = readinessFailure(step);
     if (terminalFailure) failures.push(terminalFailure);
     for (const assertion of step.assertions ?? []) {

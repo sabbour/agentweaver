@@ -99,12 +99,14 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_autopilot INTEGER NOT NULL DEFAULT 1;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_auto_approve_tools INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN preview_approval_timeout_minutes INTEGER NOT NULL DEFAULT 30;", ct);
 
         // Per-project default workflow + per-task workflow override (Feature 010, FR-041/FR-042).
         // YAML/predefined workflows are loaded from .agentweaver/workflows/ and referenced here by id.
         // NULL means "use the built-in default" (project) / "use the project default" (task).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_workflow_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_override_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN captured_by_user_id TEXT;", ct);
 
         // Per-project active review policy (Feature 010, FR-027/033). Named review policies are loaded
         // from .agentweaver/review-policies/ and referenced here BY NAME. NULL means "use the built-in
@@ -610,7 +612,8 @@ public sealed class SqliteDb
             created_at              TEXT NOT NULL,
             updated_at              TEXT NOT NULL,
             webhook_secret          TEXT,
-            team_revision           INTEGER NOT NULL DEFAULT 0
+            team_revision           INTEGER NOT NULL DEFAULT 0,
+            preview_approval_timeout_minutes INTEGER NOT NULL DEFAULT 30
         );
 
         CREATE INDEX IF NOT EXISTS idx_projects_state ON projects (state);
@@ -648,6 +651,7 @@ public sealed class SqliteDb
             state         TEXT NOT NULL,            -- 'backlog' | 'ready' | 'claimed'
             order_key     TEXT NOT NULL,
             captured_by   TEXT NOT NULL,
+            captured_by_user_id TEXT,
             created_at    TEXT NOT NULL,
             committed_at  TEXT,
             claimed_at    TEXT,

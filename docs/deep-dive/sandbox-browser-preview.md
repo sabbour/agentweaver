@@ -238,9 +238,9 @@ sequenceDiagram
 3. **The HITL gate** `AgentPreviewGate.RequestApprovalAsync` ([`AgentPreviewGate.cs:108`](#source)) is the
    human-in-the-loop seam. It reuses the same `IToolApprovalGate` primitive as `web_fetch`: it emits a
    `tool.approval_required` card ([`AgentPreviewGate.cs:131`](#source)) and suspends until an operator grants
-   via `POST /api/runs/{runId}/tool-approvals` or the configured approval window times out (15 minutes by
-   default from `Sandbox:Preview:ApprovalTimeoutMinutes` / `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`; `0` or
-   negative values clamp to 1 minute).
+   via `POST /api/runs/{runId}/tool-approvals` or the project-configured approval window times out
+   (30 minutes by default; project owners choose 1–1440 minutes in Sandbox policy settings). The
+   deployment config remains only a fallback for legacy/non-project runs.
 4. **Auto-approve** short-circuits the wait when any of these is on
    ([`AgentPreviewGate.cs:93`](#source)): the global `Sandbox:Preview:AutoApprove` config / env
    `SANDBOX_PREVIEW_AUTO_APPROVE` ([`AgentPreviewGate.cs:176`](#source)), the per-run `AutoApproveTools`
@@ -249,6 +249,11 @@ sequenceDiagram
 5. **On approval** the endpoint runs the **same** `StartPreviewForRunAsync` path
    ([`SandboxEndpoints.cs:238`](#source)) as the operator route — Gateway-direct preview when enabled,
    `kubectl` fallback otherwise — and returns `preview_url`.
+6. **On timeout** the deterministic preview step records the expired request and retains the healthy,
+   still-private PreviewRunner process. An owner can call
+   `POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry`; the API rejects non-expired,
+   superseded, or terminal-run retries, emits a fresh request id, and registers the same process only
+   after approval. Explicit denial still stops the retained process.
 
 > **Design note.** The agent tool is a synchronous HTTP callback that must return a URL, so it uses the
 > per-tool `IToolApprovalGate` (which persists context/decisions and returns a bool) rather than the MAF

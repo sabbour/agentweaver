@@ -27,6 +27,10 @@
     <Content Include="xunit.runner.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\..\apps\web\src\contracts\workflowNodeTypes.json"
+             Link="Contracts\workflowNodeTypes.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

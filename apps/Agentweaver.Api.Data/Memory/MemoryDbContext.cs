@@ -314,6 +314,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.MaxReadyPerHeartbeat).HasColumnName("max_ready_per_heartbeat").HasDefaultValue(3);
             e.Property(p => p.PickupAutopilot).HasColumnName("pickup_autopilot").HasDefaultValue(true);
             e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(true);
+            e.Property(p => p.PreviewApprovalTimeoutMinutes).HasColumnName("preview_approval_timeout_minutes").HasDefaultValue(30);
             e.Property(p => p.DefaultWorkflowId).HasColumnName("default_workflow_id");
             e.Property(p => p.ActiveReviewPolicyName).HasColumnName("active_review_policy_name");
             e.Property(p => p.SandboxProfile).HasColumnName("sandbox_profile");
@@ -396,6 +397,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.State).HasColumnName("state");
             e.Property(t => t.OrderKey).HasColumnName("order_key");
             e.Property(t => t.CapturedBy).HasColumnName("captured_by");
+            e.Property(t => t.CapturedByUserId).HasColumnName("captured_by_user_id");
             e.Property(t => t.CreatedAt).HasColumnName("created_at");
             e.Property(t => t.CommittedAt).HasColumnName("committed_at");
             e.Property(t => t.ClaimedAt).HasColumnName("claimed_at");

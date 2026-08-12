@@ -365,10 +365,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var executor = sandboxPolicy.Direct
             ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
             : _executor;
+        if (executor is KataBwrapExecutor kataExecutor)
+            kataExecutor.RegisterTrustedWorkspace(workingDirectory);
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = ResolveTokenScope(_userId);
+        var scope = await ResolveTokenScopeAsync(_userId, _projectId, ct).ConfigureAwait(false);
         _tokenScope = scope;
         _client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
         try
@@ -704,7 +706,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         if (_inner is null)
         {
-            var scope = ResolveTokenScope(_userId);
+            var scope = await ResolveTokenScopeAsync(_userId, _projectId, cancellationToken).ConfigureAwait(false);
             _tokenScope = scope;
             _client ??= await _factory.CreateClientAsync(scope, _modelId, cancellationToken).ConfigureAwait(false);
             try
@@ -730,7 +732,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         return await _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
     }
 
-    private GitHubTokenScope ResolveTokenScope(string? userId)
+    private async Task<GitHubTokenScope> ResolveTokenScopeAsync(
+        string? userId,
+        string? projectId,
+        CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(userId))
             throw new AgentProviderException(
@@ -742,7 +747,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 "token is resolved. Using the installation token is not permitted.",
                 isRetryable: false);
 
-        var scope = _scopeProvider.Resolve(userId);
+        var scope = await _scopeProvider.ResolveAsync(userId, projectId, ct).ConfigureAwait(false);
         if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,

@@ -424,6 +424,26 @@ public sealed class GitHubWebhookEndpointsTests : IClassFixture<GitHubWebhookWeb
     }
 
     [Fact]
+    public async Task IssuesLabeledTrigger_DoesNotRequireLabelAtIssueCreation()
+    {
+        var (projectId, _, repoFullName) = await SeedProjectAsync(IssueLabelTriggerYaml);
+        var openedBody = IssuesPayload(repoFullName, "opened");
+        var opened = await _client.SendAsync(
+            BuildRequest(projectId, "issues", openedBody, Sign(openedBody), "delivery-opened"));
+
+        opened.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ListBacklogAsync(projectId)).Should().BeEmpty();
+
+        var labeledBody = IssuesPayload(repoFullName, "labeled", "bug", "needs triage");
+        var labeled = await _client.SendAsync(
+            BuildRequest(projectId, "issues", labeledBody, Sign(labeledBody), "delivery-labeled"));
+
+        labeled.StatusCode.Should().Be(HttpStatusCode.OK);
+        var task = (await ListBacklogAsync(projectId)).Should().ContainSingle().Subject;
+        task.WorkflowOverrideId.Should().Be("on-bug-triage");
+    }
+
+    [Fact]
     public async Task IssueComment_PatternMismatch_DoesNotForwardRawCommentBody()
     {
         var (projectId, _, repoFullName) = await SeedProjectAsync(IssueCommentTriggerYaml);

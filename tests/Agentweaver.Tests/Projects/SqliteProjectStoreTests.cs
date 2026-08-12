@@ -46,6 +46,7 @@ public sealed class SqliteProjectStoreTests
         retrieved!.Id.Should().Be(project.Id);
         retrieved.Name.Should().Be("My Project");
         retrieved.State.Should().Be(ProjectState.Active);
+        retrieved.PreviewApprovalTimeoutMinutes.Should().Be(30);
     }
 
     // =========================================================================
@@ -146,6 +147,20 @@ public sealed class SqliteProjectStoreTests
         retrieved!.BlueprintGenerationModel.Should().Be("gpt-5-mini");
         retrieved.WorkflowGenerationModel.Should().BeNull();
         retrieved.OutcomeSpecGenerationModel.Should().Be("claude-sonnet-4.6");
+    }
+
+    [Fact]
+    public async Task UpdatePreviewApprovalTimeoutAsync_PersistsNewValue()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var project = MakeProject();
+        await store.InsertAsync(project);
+
+        await store.UpdatePreviewApprovalTimeoutAsync(project.Id, 90, DateTimeOffset.UtcNow);
+
+        var retrieved = await store.GetAsync(project.Id);
+        retrieved!.PreviewApprovalTimeoutMinutes.Should().Be(90);
     }
 
     // =========================================================================

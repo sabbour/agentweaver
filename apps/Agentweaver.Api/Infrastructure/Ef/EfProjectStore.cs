@@ -118,6 +118,20 @@ public sealed class EfProjectStore : IProjectStore
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
+    public async Task UpdatePreviewApprovalTimeoutAsync(
+        ProjectId id,
+        int timeoutMinutes,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default)
+    {
+        var pid = id.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await db.Projects.Where(p => p.ProjectId == pid)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.PreviewApprovalTimeoutMinutes, timeoutMinutes)
+                .SetProperty(p => p.UpdatedAt, updatedAt), ct);
+    }
+
     public async Task UpdateDefaultWorkflowAsync(ProjectId id, string? workflowId, DateTimeOffset updatedAt, CancellationToken ct = default)
     {
         var pid = id.ToString();
@@ -242,6 +256,7 @@ public sealed class EfProjectStore : IProjectStore
         MaxReadyPerHeartbeat = p.MaxReadyPerHeartbeat,
         PickupAutopilot = p.PickupAutopilot,
         PickupAutoApproveTools = p.PickupAutoApproveTools,
+        PreviewApprovalTimeoutMinutes = p.PreviewApprovalTimeoutMinutes,
         DefaultWorkflowId = p.DefaultWorkflowId,
         ActiveReviewPolicyName = p.ActiveReviewPolicyName,
         SandboxProfile = p.SandboxProfile,
@@ -289,6 +304,7 @@ public sealed class EfProjectStore : IProjectStore
             MaxReadyPerHeartbeat = r.MaxReadyPerHeartbeat,
             PickupAutopilot = r.PickupAutopilot,
             PickupAutoApproveTools = r.PickupAutoApproveTools,
+            PreviewApprovalTimeoutMinutes = r.PreviewApprovalTimeoutMinutes,
             DefaultWorkflowId = r.DefaultWorkflowId,
             ActiveReviewPolicyName = r.ActiveReviewPolicyName,
             SandboxProfile = r.SandboxProfile,

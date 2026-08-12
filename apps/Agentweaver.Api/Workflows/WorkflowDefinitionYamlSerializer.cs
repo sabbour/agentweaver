@@ -59,31 +59,18 @@ public static class WorkflowDefinitionYamlSerializer
             }
         }
 
-        if (definition.Trigger is { } trigger)
+        if (definition.Triggers.Count == 1)
         {
             sb.AppendLine();
             sb.AppendLine("trigger:");
-            Line(sb, "  type", TriggerType(trigger.Type));
-            if (trigger.Type == WorkflowTriggerType.Schedule)
-            {
-                Line(sb, "  interval", ScheduleInterval(trigger.Interval));
-                if (trigger.Interval == WorkflowScheduleInterval.Weekly && trigger.DayOfWeek is { } dow)
-                    Line(sb, "  day_of_week", dow.ToString().ToLowerInvariant());
-                if (trigger.Interval == WorkflowScheduleInterval.Monthly && trigger.DayOfMonth is { } dom)
-                    sb.AppendLine($"  day_of_month: {dom}");
-                if (trigger.TimeOfDay is { } timeOfDay)
-                    Line(sb, "  time_of_day", timeOfDay.ToString("HH:mm"));
-            }
-            else if (trigger.Type == WorkflowTriggerType.Event)
-            {
-                Line(sb, "  event_name", trigger.EventName);
-                if (trigger.If.Count > 0)
-                {
-                    sb.AppendLine("  if:");
-                    foreach (var predicate in trigger.If)
-                        WritePredicate(sb, "    - ", "      ", predicate);
-                }
-            }
+            WriteTrigger(sb, definition.Triggers[0], "  ", listItem: false);
+        }
+        else if (definition.Triggers.Count > 1)
+        {
+            sb.AppendLine();
+            sb.AppendLine("triggers:");
+            foreach (var trigger in definition.Triggers)
+                WriteTrigger(sb, trigger, "    ", listItem: true);
         }
 
         return sb.ToString().TrimEnd() + Environment.NewLine;
@@ -136,6 +123,7 @@ public static class WorkflowDefinitionYamlSerializer
         WorkflowNodeType.PeerReview => "peer_review",
         WorkflowNodeType.BuildTest => "build_test",
         WorkflowNodeType.OpenPullRequest => "open_pull_request",
+        WorkflowNodeType.Publish => "publish",
         WorkflowNodeType.Check => "check",
         WorkflowNodeType.FanOut => "fan_out",
         WorkflowNodeType.FanIn => "fan_in",
@@ -161,6 +149,31 @@ public static class WorkflowDefinitionYamlSerializer
         WorkflowScheduleInterval.Monthly => "monthly",
         _ => null,
     };
+
+    private static void WriteTrigger(StringBuilder sb, WorkflowTrigger trigger, string indent, bool listItem)
+    {
+        Line(sb, listItem ? "  - type" : $"{indent}type", TriggerType(trigger.Type));
+        if (trigger.Type == WorkflowTriggerType.Schedule)
+        {
+            Line(sb, $"{indent}interval", ScheduleInterval(trigger.Interval));
+            if (trigger.Interval == WorkflowScheduleInterval.Weekly && trigger.DayOfWeek is { } dow)
+                Line(sb, $"{indent}day_of_week", dow.ToString().ToLowerInvariant());
+            if (trigger.Interval == WorkflowScheduleInterval.Monthly && trigger.DayOfMonth is { } dom)
+                sb.AppendLine($"{indent}day_of_month: {dom}");
+            if (trigger.TimeOfDay is { } timeOfDay)
+                Line(sb, $"{indent}time_of_day", timeOfDay.ToString("HH:mm"));
+        }
+        else if (trigger.Type == WorkflowTriggerType.Event)
+        {
+            Line(sb, $"{indent}event_name", trigger.EventName);
+            if (trigger.If.Count > 0)
+            {
+                sb.AppendLine($"{indent}if:");
+                foreach (var predicate in trigger.If)
+                    WritePredicate(sb, $"{indent}  - ", $"{indent}    ", predicate);
+            }
+        }
+    }
 
     private static void WritePredicate(StringBuilder sb, string firstKeyPrefix, string nestedIndent, WorkflowTriggerPredicate predicate)
     {

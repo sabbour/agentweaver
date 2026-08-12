@@ -135,7 +135,11 @@ public static class SkillEndpoints
                 return Results.BadRequest(new { error = "description is required." });
             try
             {
-                var draft = await generator.GenerateAsync((body.Description ?? body.Prompt)!, caller.User, ct);
+                var draft = await generator.GenerateAsync(
+                    (body.Description ?? body.Prompt)!,
+                    caller.User,
+                    ct,
+                    projectId: projectId.ToString());
                 return Results.Ok(draft);
             }
             catch (SkillGenerationException ex)

@@ -149,7 +149,7 @@ public sealed class RunRetryTests : IDisposable
     public async Task RegularProjectFailedRun_Retry_CreatesNewRun_CopyingInputs()
     {
         var repo = CreateTempGitRepo();
-        var pid = ProjectId.New();
+        var pid = ProjectId.Parse(await CreateProjectAsync());
         var source = await SeedRunAsync(
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
             agentName: null, origin: RunOrigin.Interactive, projectId: pid,

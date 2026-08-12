@@ -42,6 +42,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
+import { ScheduleTriggerDialog } from '../components/ScheduleTriggerDialog';
 import { BLANK_TEMPLATE, WorkflowEditor } from '../components/WorkflowEditor';
 import { WorkflowDefinitionInlinePanel } from '../components/WorkflowGraphPanel';
 import {
@@ -62,12 +63,13 @@ import {
   PageSection,
   RichList,
 } from '../components/ui';
-import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto } from '../api/types';
+import type { Project, WorkflowDetailDto, WorkflowListResponse, WorkflowSummaryDto, WorkflowTriggerDto } from '../api/types';
 import type {
   WorkflowEventCondition,
   WorkflowEventPredicateType,
   WorkflowEventTrigger,
   WorkflowEventType,
+  WorkflowScheduleTrigger,
 } from '../utils/workflowYaml';
 
 // Spec 010 (FR-039/041) — project Workflows management page, and the reference
@@ -189,6 +191,27 @@ const EVENT_PREDICATE_LABELS: Record<WorkflowEventPredicateType, string> = {
 };
 
 const REVIEW_STATES = ['approved', 'changes_requested', 'commented'] as const;
+const ISSUE_ACTIONS = [
+  { value: '', label: 'Any issue action' },
+  { value: 'opened', label: 'Opened' },
+  { value: 'edited', label: 'Edited' },
+  { value: 'deleted', label: 'Deleted' },
+  { value: 'transferred', label: 'Transferred' },
+  { value: 'pinned', label: 'Pinned' },
+  { value: 'unpinned', label: 'Unpinned' },
+  { value: 'closed', label: 'Closed' },
+  { value: 'reopened', label: 'Reopened' },
+  { value: 'assigned', label: 'Assigned' },
+  { value: 'unassigned', label: 'Unassigned' },
+  { value: 'labeled', label: 'Labeled' },
+  { value: 'unlabeled', label: 'Unlabeled' },
+  { value: 'locked', label: 'Locked' },
+  { value: 'unlocked', label: 'Unlocked' },
+  { value: 'milestoned', label: 'Milestoned' },
+  { value: 'demilestoned', label: 'Demilestoned' },
+  { value: 'typed', label: 'Typed' },
+  { value: 'untyped', label: 'Untyped' },
+] as const;
 
 function defaultEventTrigger(): WorkflowEventTrigger {
   return {
@@ -235,15 +258,20 @@ function conditionValueHint(predicate: WorkflowEventPredicateType): string | und
   }
 }
 
-function triggerBadgeCopy(workflow: WorkflowSummaryDto): string | null {
-  if (workflow.trigger?.type === 'schedule') {
-    return `${workflow.trigger.interval ?? 'scheduled'}${workflow.trigger.time_of_day ? ` · ${workflow.trigger.time_of_day} UTC` : ''}`;
+function workflowTriggers(workflow: WorkflowSummaryDto) {
+  return workflow.triggers ?? (workflow.trigger ? [workflow.trigger] : []);
+}
+
+function workflowTrigger(workflow: WorkflowSummaryDto, type: 'schedule' | 'event') {
+  return workflowTriggers(workflow).find((trigger) => trigger.type === type);
+}
+
+function triggerBadgeCopy(trigger: WorkflowTriggerDto): string {
+  if (trigger.type === 'schedule') {
+    return `${trigger.interval ?? 'scheduled'}${trigger.time_of_day ? ` · ${trigger.time_of_day} UTC` : ''}`;
   }
-  if (workflow.trigger?.type === 'event') {
-    const eventName = workflow.trigger.event_name?.replace(/^github\./, '') ?? 'event';
-    return `event · ${eventName}`;
-  }
-  return null;
+  const eventName = trigger.event_name?.replace(/^github\./, '') ?? 'event';
+  return `event · ${eventName}`;
 }
 
 export function WorkflowsPage() {
@@ -268,10 +296,6 @@ export function WorkflowsPage() {
   const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
   const [duplicatingWorkflowId, setDuplicatingWorkflowId] = useState<string | null>(null);
   const [scheduleWorkflow, setScheduleWorkflow] = useState<WorkflowSummaryDto | null>(null);
-  const [scheduleInterval, setScheduleInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
-  const [scheduleTime, setScheduleTime] = useState('09:00');
-  const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState('monday');
-  const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState('1');
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [eventWorkflow, setEventWorkflow] = useState<WorkflowSummaryDto | null>(null);
   const [eventTrigger, setEventTriggerState] = useState<WorkflowEventTrigger>(defaultEventTrigger);
@@ -397,37 +421,26 @@ export function WorkflowsPage() {
   }, [projectId]);
 
   const handleOpenSchedule = useCallback((wf: WorkflowSummaryDto) => {
-    const trigger = wf.trigger;
     setScheduleWorkflow(wf);
-    setScheduleInterval(trigger?.type === 'schedule' && trigger.interval ? trigger.interval : 'daily');
-    setScheduleTime(trigger?.type === 'schedule' && trigger.time_of_day ? trigger.time_of_day : '09:00');
-    setScheduleDayOfWeek(trigger?.type === 'schedule' && trigger.day_of_week ? trigger.day_of_week : 'monday');
-    setScheduleDayOfMonth(String(trigger?.type === 'schedule' && trigger.day_of_month ? trigger.day_of_month : 1));
   }, []);
 
-  const handleSaveSchedule = useCallback(async (remove = false) => {
+  const handleSaveSchedule = useCallback(async (trigger: WorkflowScheduleTrigger | null) => {
     if (!projectId || !scheduleWorkflow?.id) return;
     setSavingSchedule(true);
     setError(null);
     try {
       const yaml = await apiClient.getWorkflowYaml(projectId, scheduleWorkflow.id);
-      const dayOfMonth = Number(scheduleDayOfMonth);
-      const updatedYaml = setScheduleTrigger(yaml, remove ? null : {
-        interval: scheduleInterval,
-        timeOfDay: scheduleTime,
-        dayOfWeek: scheduleDayOfWeek,
-        dayOfMonth,
-      });
+      const updatedYaml = setScheduleTrigger(yaml, trigger);
       await apiClient.saveWorkflowYaml(projectId, scheduleWorkflow.id, updatedYaml);
       setData(await apiClient.listWorkflows(projectId));
       setScheduleWorkflow(null);
-      setSyncMessage(remove ? 'Schedule trigger removed.' : 'Schedule trigger saved.');
+      setSyncMessage(trigger ? 'Schedule trigger saved.' : 'Schedule trigger removed.');
     } catch (err) {
       setError(formatError(err));
     } finally {
       setSavingSchedule(false);
     }
-  }, [projectId, scheduleWorkflow, scheduleInterval, scheduleTime, scheduleDayOfWeek, scheduleDayOfMonth]);
+  }, [projectId, scheduleWorkflow]);
 
   const handleOpenEvent = useCallback(async (wf: WorkflowSummaryDto) => {
     if (!projectId || !wf.id) return;
@@ -440,7 +453,7 @@ export function WorkflowsPage() {
       setEventTriggerState(parsed ?? {
         ...defaultEventTrigger(),
         event: 'issues',
-        eventName: wf.trigger?.type === 'event' && wf.trigger.event_name ? wf.trigger.event_name : 'github.issues',
+        eventName: workflowTrigger(wf, 'event')?.event_name ?? 'github.issues',
       });
       setEventWorkflow(wf);
     } catch (err) {
@@ -539,6 +552,13 @@ export function WorkflowsPage() {
           ...condition,
           values: condition.values.length > 0 ? condition.values : [''],
         })),
+    }));
+  }, []);
+
+  const updateIssueAction = useCallback((action: string) => {
+    setEventTriggerState((prev) => ({
+      ...prev,
+      eventName: action ? `github.issues.${action}` : 'github.issues',
     }));
   }, []);
 
@@ -652,12 +672,12 @@ export function WorkflowsPage() {
               {wf.id && <Label as="span" className={styles.mono}>{wf.id}</Label>}
               {section === 'active' && <Badge appearance="filled" color="brand">Active</Badge>}
               {wf.is_built_in && <Badge appearance="outline">Built-in</Badge>}
-              {triggerBadgeCopy(wf) && (
-                <Badge appearance="tint" color="informative">
-                  {triggerBadgeCopy(wf)}
+              {workflowTriggers(wf).map((trigger, triggerIndex) => (
+                <Badge key={`${triggerIndex}:${trigger.type}:${trigger.event_name ?? trigger.interval ?? ''}`} appearance="tint" color="informative">
+                  {triggerBadgeCopy(trigger)}
                 </Badge>
-              )}
-              {!wf.is_built_in && !wf.trigger && <Badge appearance="outline">Manual only</Badge>}
+              ))}
+              {!wf.is_built_in && workflowTriggers(wf).length === 0 && <Badge appearance="outline">Manual only</Badge>}
               {section !== 'active' && (
                 <Badge appearance="tint" color={wf.valid ? 'success' : 'danger'}>
                   {wf.valid ? 'Valid' : 'Invalid'}
@@ -726,7 +746,7 @@ export function WorkflowsPage() {
               )}
               {wf.id && !wf.is_built_in && (
                 <Button appearance="subtle" size="small" onClick={() => handleOpenSchedule(wf)}>
-                  {wf.trigger?.type === 'schedule' ? 'Edit schedule' : wf.trigger?.type === 'event' ? 'Replace with schedule' : 'Add schedule'}
+                  {workflowTrigger(wf, 'schedule') ? 'Edit schedule' : 'Add schedule'}
                 </Button>
               )}
               {wf.id && !wf.is_built_in && (
@@ -736,7 +756,7 @@ export function WorkflowsPage() {
                   disabled={loadingEventTrigger}
                   onClick={() => { void handleOpenEvent(wf); }}
                 >
-                  {wf.trigger?.type === 'event' ? 'Edit event' : wf.trigger?.type === 'schedule' ? 'Replace with event' : 'Add event'}
+                  {workflowTrigger(wf, 'event') ? 'Edit event' : 'Add event'}
                 </Button>
               )}
             </>
@@ -898,6 +918,26 @@ export function WorkflowsPage() {
                   </Select>
                 </Field>
 
+                {eventTrigger.event === 'issues' && (
+                  <Field
+                    label="Issue action"
+                    hint="Choose Labeled to run when a label is added. Any issue action also matches labeled deliveries."
+                    style={{ marginTop: tokens.spacingVerticalS }}
+                  >
+                    <Select
+                      value={eventTrigger.eventName.startsWith('github.issues.')
+                        ? eventTrigger.eventName.slice('github.issues.'.length)
+                        : ''}
+                      onChange={(_, d) => updateIssueAction(d.value)}
+                      disabled={savingEventTrigger}
+                    >
+                      {ISSUE_ACTIONS.map((action) => (
+                        <option key={action.value || 'any'} value={action.value}>{action.label}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
+
                 {eventPredicateOptions.length === 0 ? (
                   <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
                     <MessageBarBody>Release triggers currently match on the selected event only.</MessageBarBody>
@@ -1006,16 +1046,11 @@ export function WorkflowsPage() {
                   </>
                 )}
 
-                {eventWorkflow?.trigger?.type === 'schedule' && (
-                  <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}>
-                    <MessageBarBody>Saving an event trigger replaces this workflow’s existing schedule trigger.</MessageBarBody>
-                  </MessageBar>
-                )}
               </>
             )}
           </DialogContent>
           <DialogActions>
-            {eventWorkflow?.trigger?.type === 'event' && (
+            {eventWorkflow && workflowTrigger(eventWorkflow, 'event') && (
               <Button appearance="subtle" disabled={savingEventTrigger || loadingEventTrigger} onClick={() => { void handleSaveEvent(true); }}>
                 Remove event
               </Button>
@@ -1036,45 +1071,26 @@ export function WorkflowsPage() {
     </Dialog>
   );
 
+  const scheduleTriggerDto = scheduleWorkflow ? workflowTrigger(scheduleWorkflow, 'schedule') : undefined;
+  const scheduleTrigger: WorkflowScheduleTrigger | null = scheduleTriggerDto?.interval
+    && scheduleTriggerDto.time_of_day
+    ? {
+      interval: scheduleTriggerDto.interval,
+      timeOfDay: scheduleTriggerDto.time_of_day,
+      dayOfWeek: scheduleTriggerDto.day_of_week ?? undefined,
+      dayOfMonth: scheduleTriggerDto.day_of_month ?? undefined,
+    }
+    : null;
+
   const scheduleDialog = (
-    <Dialog open={scheduleWorkflow !== null} onOpenChange={(_, d) => { if (!savingSchedule && !d.open) setScheduleWorkflow(null); }}>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>Schedule workflow</DialogTitle>
-          <DialogContent>
-            <Field label="Cadence">
-              <Select value={scheduleInterval} onChange={(_, d) => setScheduleInterval(d.value as typeof scheduleInterval)} disabled={savingSchedule}>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-              </Select>
-            </Field>
-            {scheduleInterval === 'weekly' && (
-              <Field label="Day of week" style={{ marginTop: tokens.spacingVerticalS }}>
-                <Select value={scheduleDayOfWeek} onChange={(_, d) => setScheduleDayOfWeek(d.value)} disabled={savingSchedule}>
-                  {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => <option key={day} value={day}>{day}</option>)}
-                </Select>
-              </Field>
-            )}
-            {scheduleInterval === 'monthly' && (
-              <Field label="Day of month (1–28)" style={{ marginTop: tokens.spacingVerticalS }}>
-                <Input type="number" min="1" max="28" value={scheduleDayOfMonth} onChange={(_, d) => setScheduleDayOfMonth(d.value)} disabled={savingSchedule} />
-              </Field>
-            )}
-            <Field label="UTC time" hint="Schedules are evaluated in UTC." style={{ marginTop: tokens.spacingVerticalS }}>
-              <Input type="time" value={scheduleTime} onChange={(_, d) => setScheduleTime(d.value)} disabled={savingSchedule} />
-            </Field>
-          </DialogContent>
-          <DialogActions>
-            {scheduleWorkflow?.trigger?.type === 'schedule' && <Button appearance="subtle" disabled={savingSchedule} onClick={() => { void handleSaveSchedule(true); }}>Remove schedule</Button>}
-            <Button appearance="subtle" disabled={savingSchedule} onClick={() => setScheduleWorkflow(null)}>Cancel</Button>
-            <Button appearance="primary" disabled={savingSchedule || !/^\d{2}:\d{2}$/.test(scheduleTime) || (scheduleInterval === 'monthly' && (Number(scheduleDayOfMonth) < 1 || Number(scheduleDayOfMonth) > 28))} onClick={() => { void handleSaveSchedule(); }}>
-              {savingSchedule ? 'Saving…' : 'Save schedule'}
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+    <ScheduleTriggerDialog
+      open={scheduleWorkflow !== null}
+      trigger={scheduleTrigger}
+      saving={savingSchedule}
+      onDismiss={() => setScheduleWorkflow(null)}
+      onSave={handleSaveSchedule}
+      onRemove={() => handleSaveSchedule(null)}
+    />
   );
 
   // Editor takes over the whole page when open.

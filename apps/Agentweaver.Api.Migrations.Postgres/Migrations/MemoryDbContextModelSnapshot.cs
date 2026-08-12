@@ -541,6 +541,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("captured_by");
 
+                    b.Property<string>("CapturedByUserId")
+                        .HasColumnType("text")
+                        .HasColumnName("captured_by_user_id");
+
                     b.Property<DateTimeOffset?>("ClaimedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("claimed_at");
@@ -1204,6 +1208,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("boolean")
                         .HasDefaultValue(true)
                         .HasColumnName("pickup_autopilot");
+
+                    b.Property<int>("PreviewApprovalTimeoutMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30)
+                        .HasColumnName("preview_approval_timeout_minutes");
 
                     b.Property<string>("SandboxProfile")
                         .HasColumnType("text")
