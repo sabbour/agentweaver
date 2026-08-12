@@ -171,7 +171,7 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
     });
   });
 
-  it('offers RAI, Rubberduck, Human Review and Build & Test in a grouped add-node palette (no duplicate Build & Test), but never Merge/Scribe', async () => {
+  it('offers gates, actions, and primitives in a grouped add-node palette, but never Merge/Scribe', async () => {
     const user = userEvent.setup();
     renderEditor(YAML_WITH_UNROUTED_RAI);
 
@@ -186,11 +186,14 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
       // build_test node-type — with identical labels, which was confusing. The raw
       // primitive is dropped from the palette; the preset is the single entry point.
       expect(screen.getAllByRole('menuitem', { name: /build & test/i })).toHaveLength(1);
+      expect(screen.getByRole('menuitem', { name: /open pull request/i })).toBeDefined();
+      expect(screen.getByRole('menuitem', { name: /^publish/i })).toBeDefined();
     });
 
     // The palette is grouped under scannable headers (#558).
     expect(screen.getByText('Reviewers & gates')).toBeDefined();
     expect(screen.getByText('Agent steps')).toBeDefined();
+    expect(screen.getByText('Actions')).toBeDefined();
     expect(screen.getByText('Flow control')).toBeDefined();
 
     // Representative primitives remain reachable in their groups.
@@ -200,6 +203,9 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
 
     expect(screen.queryByRole('menuitem', { name: /^merge$/i })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: /^scribe$/i })).toBeNull();
+
+    await user.click(screen.getByRole('menuitem', { name: /^publish/i }));
+    expect(await screen.findByRole('textbox', { name: 'Prompt' })).toBeDefined();
   });
 
   it('renders existing merge/scribe tail nodes read-only for backward compatibility', async () => {

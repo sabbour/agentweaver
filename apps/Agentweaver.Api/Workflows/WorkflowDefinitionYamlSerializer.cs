@@ -123,6 +123,7 @@ public static class WorkflowDefinitionYamlSerializer
         WorkflowNodeType.PeerReview => "peer_review",
         WorkflowNodeType.BuildTest => "build_test",
         WorkflowNodeType.OpenPullRequest => "open_pull_request",
+        WorkflowNodeType.Publish => "publish",
         WorkflowNodeType.Check => "check",
         WorkflowNodeType.FanOut => "fan_out",
         WorkflowNodeType.FanIn => "fan_in",

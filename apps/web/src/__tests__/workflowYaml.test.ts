@@ -3,10 +3,13 @@ import {
   AUTHORABLE_WORKFLOW_NODE_TYPES,
   getEventTrigger,
   getScheduleTrigger,
+  NODE_TYPE_LABELS,
   parseWorkflowYaml,
   setBranchTarget,
   setEventTrigger,
+  setNodeField,
   setScheduleTrigger,
+  WORKFLOW_NODE_TYPES,
 } from '../utils/workflowYaml';
 import { describe, expect, it } from 'vitest';
 const baseYaml = `
@@ -45,6 +48,51 @@ edges:
 
     expect(parsed.error).toBeNull();
     expect(parsed.model?.nodes.map((n) => n.type)).toEqual(['merge', 'scribe']);
+  });
+
+  it('keeps the shared authoring contract aligned for pull-request and publish actions', () => {
+    expect(WORKFLOW_NODE_TYPES).toContain('open_pull_request');
+    expect(WORKFLOW_NODE_TYPES).toContain('publish');
+    expect(AUTHORABLE_WORKFLOW_NODE_TYPES).toContain('open_pull_request');
+    expect(AUTHORABLE_WORKFLOW_NODE_TYPES).toContain('publish');
+    expect(NODE_TYPE_LABELS.open_pull_request).toBe('Open pull request');
+    expect(NODE_TYPE_LABELS.publish).toBe('Publish');
+  });
+
+  it('round-trips pull-request and publish nodes without dropping action fields', () => {
+    const actionYaml = `
+id: actions
+name: Actions
+start: open-pr
+nodes:
+  - id: open-pr
+    type: open_pull_request
+    label: Open Pull Request
+    title: "Agentweaver: {outcome_summary}"
+    body: "Run {run_id}"
+    base: dev
+    head: feature/generated
+    draft: true
+  - id: publish
+    type: publish
+    label: Publish
+    agent: content-author
+    prompt: Package the approved content.
+edges:
+  - from: open-pr
+    to: publish
+`;
+
+    const edited = setNodeField(actionYaml, 'publish', 'label', 'Publish output');
+    const parsed = parseWorkflowYaml(edited);
+
+    expect(parsed.model?.nodes.map((node) => node.type)).toEqual(['open_pull_request', 'publish']);
+    expect(edited).toContain('title: "Agentweaver: {outcome_summary}"');
+    expect(edited).toContain('body: "Run {run_id}"');
+    expect(edited).toContain('base: dev');
+    expect(edited).toContain('head: feature/generated');
+    expect(edited).toContain('draft: true');
+    expect(edited).toContain('label: Publish output');
   });
 
   it('adds build_test without a prompt and routes fixed verdict edges', () => {

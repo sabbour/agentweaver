@@ -1362,21 +1362,22 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
 
     /// <summary>
     /// Returns the inline bespoke charter for the workflow's agent turn, if the definition declares
-    /// one. Prefers the start node when it is a prompt node carrying a <c>charter</c>, otherwise the
-    /// first prompt node with a non-empty charter. Returns null when no agent node declares a bespoke
+    /// one. Prefers the start node when it is an agent-backed node carrying a <c>charter</c>, otherwise
+    /// the first agent-backed node with a non-empty charter. Returns null when no agent node declares a bespoke
     /// charter (the common case: catalog roles resolve their charter from <c>.squad/agents</c>).
     /// </summary>
     private static string? ResolveAgentNodeCharter(WorkflowDefinition definition)
     {
-        bool IsPromptWithCharter(WorkflowNode n) =>
-            n.Type == WorkflowNodeType.Prompt && !string.IsNullOrWhiteSpace(n.Charter);
+        bool IsAgentWithCharter(WorkflowNode n) =>
+            n.Type is WorkflowNodeType.Prompt or WorkflowNodeType.Publish
+            && !string.IsNullOrWhiteSpace(n.Charter);
 
         var startNode = definition.Nodes.FirstOrDefault(
             n => string.Equals(n.Id, definition.Start, StringComparison.Ordinal));
-        if (startNode is not null && IsPromptWithCharter(startNode))
+        if (startNode is not null && IsAgentWithCharter(startNode))
             return startNode.Charter!.Trim();
 
-        return definition.Nodes.FirstOrDefault(IsPromptWithCharter)?.Charter?.Trim();
+        return definition.Nodes.FirstOrDefault(IsAgentWithCharter)?.Charter?.Trim();
     }
 
     /// <summary>
