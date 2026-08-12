@@ -14,8 +14,10 @@ public sealed record WorkflowSummaryDto
     [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
     [JsonPropertyName("is_built_in")] public required bool IsBuiltIn { get; init; }
     [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
-    /// <summary>The workflow's automation trigger (issue #53), or null when it only starts on-demand.</summary>
+    /// <summary>Legacy first-trigger alias retained for API compatibility.</summary>
     [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
+    /// <summary>All automation triggers in declaration order.</summary>
+    [JsonPropertyName("triggers")] public IReadOnlyList<WorkflowTriggerDto> Triggers { get; init; } = [];
 }
 
 /// <summary>A workflow's automation trigger in an API response (issue #53).</summary>
@@ -76,7 +78,9 @@ public sealed record WorkflowTriggerCommentMatchesPredicateDto
 
 public sealed record WorkflowTriggerConfigResponse
 {
+    /// <summary>Legacy first-trigger alias retained for API compatibility.</summary>
     [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
+    [JsonPropertyName("triggers")] public IReadOnlyList<WorkflowTriggerDto> Triggers { get; init; } = [];
 }
 
 public sealed record WorkflowTriggerPatchRequest
@@ -149,8 +153,9 @@ public sealed record WorkflowDetailDto
     [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = [];
     [JsonPropertyName("nodes")] public required IReadOnlyList<WorkflowNodeDto> Nodes { get; init; }
     [JsonPropertyName("edges")] public required IReadOnlyList<WorkflowEdgeDto> Edges { get; init; }
-    /// <summary>The workflow's automation trigger (issue #53), or null when it only starts on-demand.</summary>
+    /// <summary>Legacy first-trigger alias retained for API compatibility.</summary>
     [JsonPropertyName("trigger")] public WorkflowTriggerDto? Trigger { get; init; }
+    [JsonPropertyName("triggers")] public IReadOnlyList<WorkflowTriggerDto> Triggers { get; init; } = [];
 }
 
 /// <summary>Request body to save (create or update) a workflow definition by YAML (US7).</summary>
@@ -254,7 +259,8 @@ public static class WorkflowDtoMapper
             Warnings = result.Warnings,
             IsBuiltIn = result.IsBuiltIn,
             IsDefault = def is not null && string.Equals(def.Id, effectiveDefaultId, StringComparison.Ordinal),
-            Trigger = def?.Trigger is null ? null : ToTriggerDto(def.Trigger),
+            Trigger = def?.Triggers.FirstOrDefault() is { } trigger ? ToTriggerDto(trigger) : null,
+            Triggers = def?.Triggers.Select(ToTriggerDto).ToList() ?? [],
         };
     }
 
@@ -279,6 +285,16 @@ public static class WorkflowDtoMapper
         EventName = trigger.EventName,
         If = trigger.If.Count == 0 ? null : trigger.If.Select(ToTriggerPredicateDto).ToList(),
     };
+
+    public static WorkflowTriggerConfigResponse ToTriggerConfigResponse(IReadOnlyList<WorkflowTrigger> triggers)
+    {
+        var legacyTrigger = triggers.FirstOrDefault();
+        return new WorkflowTriggerConfigResponse
+        {
+            Trigger = legacyTrigger is null ? null : ToTriggerDto(legacyTrigger),
+            Triggers = triggers.Select(ToTriggerDto).ToList(),
+        };
+    }
 
     internal static TriggerYamlDto ToTriggerYamlDto(WorkflowTriggerDto trigger) => new()
     {
@@ -481,7 +497,8 @@ public static class WorkflowDtoMapper
                 To = e.To,
                 When = e.When,
             }).ToList(),
-            Trigger = def.Trigger is null ? null : ToTriggerDto(def.Trigger),
+            Trigger = def.Triggers.FirstOrDefault() is { } trigger ? ToTriggerDto(trigger) : null,
+            Triggers = def.Triggers.Select(ToTriggerDto).ToList(),
         };
     }
 }

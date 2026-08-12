@@ -233,6 +233,61 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
     }
 
     [Fact]
+    public async Task PutTriggerConfig_PreservesExistingOtherTriggerType()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow",
+            new { yaml = BlankTemplateYaml });
+
+        var schedule = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger",
+            new { type = "schedule", interval = "weekly", day_of_week = "monday", time_of_day = "09:00" });
+        schedule.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var eventTrigger = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger",
+            new
+            {
+                type = "event",
+                event_name = "github.issues.labeled",
+                @if = new[] { new { hasLabel = new { label = "roadmap-review" } } },
+            });
+        eventTrigger.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var config = await eventTrigger.Content.ReadFromJsonAsync<JsonElement>();
+        config.GetProperty("triggers").GetArrayLength().Should().Be(2);
+        config.GetProperty("trigger").GetProperty("type").GetString().Should().Be("schedule");
+
+        var detail = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/workflows/my-workflow");
+        detail.GetProperty("triggers").GetArrayLength().Should().Be(2);
+
+        var yaml = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/workflows/my-workflow/yaml");
+        yaml.GetProperty("yaml").GetString().Should().Contain("triggers:");
+
+        var ambiguousPatch = await _client.PatchAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger",
+            new { event_name = "github.issues.opened" });
+        ambiguousPatch.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var typedPatch = await _client.PatchAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger",
+            new { type = "event", event_name = "github.issues.opened" });
+        typedPatch.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await typedPatch.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("triggers").GetArrayLength().Should().Be(2);
+
+        var deleteEvent = await _client.DeleteAsync(
+            $"/api/projects/{projectId}/workflows/my-workflow/trigger?type=event");
+        deleteEvent.StatusCode.Should().Be(HttpStatusCode.OK);
+        var afterDelete = await deleteEvent.Content.ReadFromJsonAsync<JsonElement>();
+        afterDelete.GetProperty("triggers").GetArrayLength().Should().Be(1);
+        afterDelete.GetProperty("trigger").GetProperty("type").GetString().Should().Be("schedule");
+    }
+
+    [Fact]
     public async Task DeleteTriggerConfig_ClearsTrigger()
     {
         var (projectId, _) = await CreateProjectAsync();

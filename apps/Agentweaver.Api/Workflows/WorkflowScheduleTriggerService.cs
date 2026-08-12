@@ -25,9 +25,8 @@ namespace Agentweaver.Api.Workflows;
 /// extremely narrow multi-replica race remains theoretically possible — the same known limitation the
 /// existing capture-by-external-id path already has.</para>
 ///
-/// <para>A workflow with no trigger (the default, <see cref="WorkflowDefinition.Trigger"/> is null) is
-/// entirely unaffected — this scheduler only ever reads workflows that declare
-/// <c>trigger: {type: schedule, ...}</c>, so on-demand/manual start behavior is unchanged.</para>
+/// <para>A workflow with no triggers is entirely unaffected, so on-demand/manual start behavior is
+/// unchanged.</para>
 /// </summary>
 public sealed class WorkflowScheduleTriggerService : BackgroundService
 {
@@ -119,36 +118,46 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
         {
             ct.ThrowIfCancellationRequested();
             var def = result.Definition;
-            if (def?.Trigger is not { Type: WorkflowTriggerType.Schedule } trigger)
+            if (def is null)
                 continue;
 
-            if (!WorkflowScheduleEvaluator.TryGetDueOccurrence(trigger, now, out var periodKey, out _))
-                continue;
+            var scheduleOrdinal = 0;
+            foreach (var trigger in def.Triggers.Where(t => t.Type == WorkflowTriggerType.Schedule))
+            {
+                if (!WorkflowScheduleEvaluator.TryGetDueOccurrence(trigger, now, out var periodKey, out _))
+                {
+                    scheduleOrdinal++;
+                    continue;
+                }
 
-            var idempotencyKey = BuildIdempotencyKey(def.Id, periodKey);
-            var alreadyFired = await backlogStore
-                .GetExistingTitlesFromSourceAsync(project.Id, idempotencyKey, ct)
-                .ConfigureAwait(false);
-            if (alreadyFired.Count > 0)
-                continue;   // this occurrence already fired
+                var idempotencyKey = BuildIdempotencyKey(def.Id, periodKey, scheduleOrdinal);
+                scheduleOrdinal++;
+                var alreadyFired = await backlogStore
+                    .GetExistingTitlesFromSourceAsync(project.Id, idempotencyKey, ct)
+                    .ConfigureAwait(false);
+                if (alreadyFired.Count > 0)
+                    continue;
 
-            var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
-                backlogStore,
-                project,
-                def,
-                title: $"Scheduled run: {def.Name}",
-                description: $"Automatically triggered by the '{def.Id}' workflow's schedule trigger (occurrence {periodKey}).",
-                capturedBy: CapturedBy,
-                idempotencyKey: idempotencyKey,
-                now: now,
-                ct: ct).ConfigureAwait(false);
+                var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
+                    backlogStore,
+                    project,
+                    def,
+                    title: $"Scheduled run: {def.Name}",
+                    description: $"Automatically triggered by the '{def.Id}' workflow's schedule trigger (occurrence {periodKey}).",
+                    capturedBy: CapturedBy,
+                    idempotencyKey: idempotencyKey,
+                    now: now,
+                    ct: ct).ConfigureAwait(false);
 
-            _logger.LogInformation(
-                "Workflow schedule trigger: fired workflow {WorkflowId} for project {ProjectId} (task {TaskId}, occurrence {PeriodKey})",
-                def.Id, project.Id, task.Id, periodKey);
+                _logger.LogInformation(
+                    "Workflow schedule trigger: fired workflow {WorkflowId} for project {ProjectId} (task {TaskId}, occurrence {PeriodKey})",
+                    def.Id, project.Id, task.Id, periodKey);
+            }
         }
     }
 
-    internal static string BuildIdempotencyKey(string workflowId, string periodKey) =>
-        $"workflow-schedule-trigger:{workflowId}:{periodKey}";
+    internal static string BuildIdempotencyKey(string workflowId, string periodKey, int scheduleOrdinal = 0) =>
+        scheduleOrdinal == 0
+            ? $"workflow-schedule-trigger:{workflowId}:{periodKey}"
+            : $"workflow-schedule-trigger:{workflowId}:{scheduleOrdinal}:{periodKey}";
 }
