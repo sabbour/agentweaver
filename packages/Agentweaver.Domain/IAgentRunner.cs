@@ -16,4 +16,20 @@ public interface IAgentRunner
     /// (e.g. .agentweaver/settings.yml) from the live repo rather than the worktree checkout.
     /// </param>
     Task<string> ExecuteAsync(string task, string workingDirectory, string repositoryPath, ModelSource modelSource, string runId, string? modelId, ChannelWriter<RunEvent>? stream, CancellationToken ct, string? systemPromptContext = null, string? userId = null);
+
+    Task<string> ExecuteForProjectAsync(
+        string task,
+        string workingDirectory,
+        string repositoryPath,
+        ModelSource modelSource,
+        string runId,
+        string? modelId,
+        ChannelWriter<RunEvent>? stream,
+        CancellationToken ct,
+        string? systemPromptContext = null,
+        string? userId = null,
+        string? projectId = null) =>
+        ExecuteAsync(
+            task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct,
+            systemPromptContext, userId);
 }

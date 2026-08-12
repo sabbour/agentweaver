@@ -11,7 +11,11 @@ namespace Agentweaver.Api.Skills;
 
 public interface ISkillGenerator
 {
-    Task<GeneratedSkillDraft> GenerateAsync(string description, string? userId, CancellationToken ct = default);
+    Task<GeneratedSkillDraft> GenerateAsync(
+        string description,
+        string? userId,
+        CancellationToken ct = default,
+        string? projectId = null);
 }
 
 public sealed class SkillGenerationException : Exception
@@ -40,16 +44,21 @@ public sealed class CopilotSkillGenerator : ISkillGenerator
             .ResolveSkillModel();
     }
 
-    public async Task<GeneratedSkillDraft> GenerateAsync(string description, string? userId, CancellationToken ct = default)
+    public async Task<GeneratedSkillDraft> GenerateAsync(
+        string description,
+        string? userId,
+        CancellationToken ct = default,
+        string? projectId = null)
     {
         if (string.IsNullOrWhiteSpace(description))
             throw new SkillGenerationException("description is required.");
 
-        var raw = await RunModelAsync(BuildPrompt(description), userId, ct).ConfigureAwait(false);
+        var raw = await RunModelAsync(BuildPrompt(description), userId, projectId, ct).ConfigureAwait(false);
         var draft = ParseDraft(raw);
         if (draft is not null) return draft;
 
-        var corrected = await RunModelAsync(BuildCorrectionPrompt(description, raw), userId, ct).ConfigureAwait(false);
+        var corrected = await RunModelAsync(
+            BuildCorrectionPrompt(description, raw), userId, projectId, ct).ConfigureAwait(false);
         draft = ParseDraft(corrected);
         if (draft is not null) return draft;
 
@@ -74,13 +83,17 @@ public sealed class CopilotSkillGenerator : ISkillGenerator
             SkillCatalogService.ComposeSkillMarkdown(parsed.Name!, parsed.Description!, parsed.Instructions));
     }
 
-    private async Task<string> RunModelAsync(string prompt, string? userId, CancellationToken ct)
+    private async Task<string> RunModelAsync(
+        string prompt,
+        string? userId,
+        string? projectId,
+        CancellationToken ct)
     {
         var scratch = Path.Combine(AppPaths.DataDirectory, "skill-scratch", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
         try
         {
-            return await _agentRunner.ExecuteAsync(
+            return await _agentRunner.ExecuteForProjectAsync(
                 task: prompt,
                 workingDirectory: scratch,
                 repositoryPath: scratch,
@@ -89,7 +102,8 @@ public sealed class CopilotSkillGenerator : ISkillGenerator
                 modelId: _defaultModel,
                 stream: null,
                 ct: ct,
-                userId: userId).ConfigureAwait(false);
+                userId: userId,
+                projectId: projectId).ConfigureAwait(false);
         }
         finally
         {

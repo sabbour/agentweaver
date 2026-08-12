@@ -135,7 +135,9 @@ public sealed class OperatorAssistantAgent(
                 "Operator assistant cannot start: no authenticated caller identity is available.",
                 isRetryable: false);
 
-        var scope = scopeProvider.Resolve(request.CallerUser);
+        var scope = await scopeProvider
+            .ResolveAsync(request.CallerUser, request.ProjectId, ct)
+            .ConfigureAwait(false);
         if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,

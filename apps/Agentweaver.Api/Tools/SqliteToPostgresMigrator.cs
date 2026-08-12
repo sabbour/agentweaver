@@ -615,7 +615,7 @@ public sealed class SqliteToPostgresMigrator
         cmd.CommandText =
             """
             SELECT task_id, project_id, title, description, state, order_key,
-                   captured_by, created_at, committed_at, claimed_at, run_id,
+                   captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                    workflow_override_id, archived_at, source_file_path,
                    parent_prd_run_id, promotion_key, promotion_reason
               FROM backlog_tasks;
@@ -632,16 +632,17 @@ public sealed class SqliteToPostgresMigrator
                 State = reader.GetString(4),
                 OrderKey = reader.GetString(5),
                 CapturedBy = reader.GetString(6),
-                CreatedAt = ParseTs(reader.GetString(7)),
-                CommittedAt = reader.IsDBNull(8) ? null : ParseTs(reader.GetString(8)),
-                ClaimedAt = reader.IsDBNull(9) ? null : ParseTs(reader.GetString(9)),
-                RunId = reader.IsDBNull(10) ? null : reader.GetString(10),
-                WorkflowOverrideId = reader.IsDBNull(11) ? null : reader.GetString(11),
-                ArchivedAt = reader.IsDBNull(12) ? null : ParseTs(reader.GetString(12)),
-                SourceFilePath = reader.IsDBNull(13) ? null : reader.GetString(13),
-                ParentPrdRunId = reader.IsDBNull(14) ? null : reader.GetString(14),
-                PromotionKey = reader.IsDBNull(15) ? null : reader.GetString(15),
-                PromotionReason = reader.IsDBNull(16) ? null : reader.GetString(16),
+                CapturedByUserId = reader.IsDBNull(7) ? null : reader.GetString(7),
+                CreatedAt = ParseTs(reader.GetString(8)),
+                CommittedAt = reader.IsDBNull(9) ? null : ParseTs(reader.GetString(9)),
+                ClaimedAt = reader.IsDBNull(10) ? null : ParseTs(reader.GetString(10)),
+                RunId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                WorkflowOverrideId = reader.IsDBNull(12) ? null : reader.GetString(12),
+                ArchivedAt = reader.IsDBNull(13) ? null : ParseTs(reader.GetString(13)),
+                SourceFilePath = reader.IsDBNull(14) ? null : reader.GetString(14),
+                ParentPrdRunId = reader.IsDBNull(15) ? null : reader.GetString(15),
+                PromotionKey = reader.IsDBNull(16) ? null : reader.GetString(16),
+                PromotionReason = reader.IsDBNull(17) ? null : reader.GetString(17),
             });
         }
         return results;

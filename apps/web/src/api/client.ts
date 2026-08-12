@@ -48,6 +48,7 @@ import type {
   PagedResult,
   Project,
   ProjectAccessOverview,
+  ProjectGitHubIdentity,
   RequestChangesResponse,
   RepositoryOwner,
   ReroleRequest,
@@ -582,6 +583,10 @@ export class AgentweaverApiClient {
     return this.request<ProjectAccessOverview>('GET', `/projects/${encodeURIComponent(projectId)}/access`);
   }
 
+  getProjectGitHubIdentity(projectId: string): Promise<ProjectGitHubIdentity> {
+    return this.request<ProjectGitHubIdentity>('GET', `/projects/${encodeURIComponent(projectId)}/github-identity`);
+  }
+
   createProjectRoleAssignment(projectId: string, req: CreateProjectRoleAssignmentRequest): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/role-assignments`, req);
   }
@@ -591,7 +596,7 @@ export class AgentweaverApiClient {
   }
 
   setProjectGitHubIdentityOverride(projectId: string, githubLogin: string | null): Promise<void> {
-    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github/identity`, {
+    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github-identity`, {
       github_login: githubLogin,
     });
   }

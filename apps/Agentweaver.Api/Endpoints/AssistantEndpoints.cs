@@ -2,6 +2,8 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Security;
+using Agentweaver.Domain;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -24,6 +26,8 @@ public static class AssistantEndpoints
             HttpContext httpContext,
             StartAssistantRunRequest request,
             IAssistantRunService assistant,
+            IProjectStore projectStore,
+            IConfiguration configuration,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -32,6 +36,25 @@ public static class AssistantEndpoints
 
             try
             {
+                if (!string.IsNullOrWhiteSpace(request.ProjectId))
+                {
+                    if (!ProjectId.TryParse(request.ProjectId, out var projectId))
+                        return Results.Json(
+                            new { error = "invalid_project_id", message = "The project id is invalid." },
+                            statusCode: StatusCodes.Status400BadRequest);
+
+                    var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+                    if (project is null)
+                        return Results.NotFound();
+
+                    if (await ProjectAuthorization
+                        .RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct)
+                        .ConfigureAwait(false) is { } forbid)
+                    {
+                        return forbid;
+                    }
+                }
+
                 var result = await assistant.StartRunAsync(
                     caller,
                     bearer,

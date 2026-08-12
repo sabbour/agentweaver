@@ -26,7 +26,22 @@ public interface IMarketplaceCatalogClassifier
     /// use, so an inaccurate response can only shrink the catalog, never inject an unreachable skill.
     /// </summary>
     Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
-        string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? submittingUser, CancellationToken ct);
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<string> treePaths,
+        string? submittingUser,
+        CancellationToken ct);
+
+    Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyForProjectAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<string> treePaths,
+        string? submittingUser,
+        CancellationToken ct,
+        ProjectId? projectId = null) =>
+        ClassifyAsync(owner, repo, branch, treePaths, submittingUser, ct);
 }
 
 /// <summary>
@@ -77,8 +92,24 @@ public sealed class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogCla
             .ResolveReplyClassificationModel();
     }
 
-    public async Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
-        string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? submittingUser, CancellationToken ct)
+    public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<string> treePaths,
+        string? submittingUser,
+        CancellationToken ct) =>
+        ClassifyForProjectAsync(
+            owner, repo, branch, treePaths, submittingUser, ct, projectId: null);
+
+    public async Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyForProjectAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<string> treePaths,
+        string? submittingUser,
+        CancellationToken ct,
+        ProjectId? projectId = null)
     {
         if (treePaths.Count == 0 || string.IsNullOrWhiteSpace(submittingUser))
             return null;
@@ -87,7 +118,9 @@ public sealed class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogCla
         {
             // Copilot model turns require the submitting user's Copilot-entitled token. Installation
             // scope is not a Copilot model credential and would yield empty/no-auth turns.
-            var scope = _scopeProvider.Resolve(submittingUser);
+            var scope = await _scopeProvider
+                .ResolveAsync(submittingUser, projectId?.ToString(), ct)
+                .ConfigureAwait(false);
             if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "Marketplace catalog classification requires a user Copilot token scope; installation scope is not permitted.");

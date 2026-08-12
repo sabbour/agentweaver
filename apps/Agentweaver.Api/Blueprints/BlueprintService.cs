@@ -728,8 +728,8 @@ public sealed class BlueprintService
         string raw;
         try
         {
-            raw = await _generator.GenerateRawAsync(
-                description, ct, userId, targetRepository, blueprintGenerationModel).ConfigureAwait(false);
+            raw = await _generator.GenerateRawForProjectAsync(
+                description, ct, userId, targetRepository, blueprintGenerationModel, projectId).ConfigureAwait(false);
         }
         catch (AgentProviderException ex)
         {

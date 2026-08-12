@@ -54,20 +54,31 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
         IPodNameRegistry? podRegistry = null, IGitHubTokenStore? tokenStore = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
-        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null) =>
+        Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
+        IGitHubTokenScopeProvider? tokenScopeProvider = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions, tokenStore: tokenStore,
-            accessTokenProvider: accessTokenProvider, previewService: previewService);
+            accessTokenProvider: accessTokenProvider, previewService: previewService,
+            tokenScopeProvider: tokenScopeProvider);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
         private readonly string? _user;
-        public StubSubmittingUserResolver(string? user) => _user = user;
+        private readonly string? _projectId;
+        public StubSubmittingUserResolver(string? user, string? projectId = null)
+        {
+            _user = user;
+            _projectId = projectId;
+        }
         public Task<string?> GetSubmittingUserAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(_user);
         public Task<string?> GetWorkingDirectoryAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<string?>(null);
+        public Task<(string? ProjectId, string? AgentName)> GetRunIdentityAsync(
+            string runId,
+            CancellationToken ct = default) =>
+            Task.FromResult<(string?, string?)>((_projectId, null));
     }
 
     // Issue #523: a raw (non-refreshing) IGitHubTokenStore that always reports the same stored
@@ -104,27 +115,36 @@ public sealed class KubernetesSandboxExecutorClaimTests
             _refreshedToken = refreshedToken;
         }
 
+        public GitHubTokenScope? LastScope { get; private set; }
         public GitHubTokenScope? LastValidScope { get; private set; }
         public GitHubTokenScope? LastRejectedScope { get; private set; }
         public string? RejectedToken { get; private set; }
 
-        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult(RecordValidScope(scope));
+        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default)
+        {
+            LastScope = scope;
+            LastValidScope = scope;
+            return Task.FromResult(_validToken);
+        }
 
-        public Task<string?> RefreshAfterUnauthorizedAsync(
-            GitHubTokenScope scope,
-            string? rejectedAccessToken,
-            CancellationToken ct = default)
+        public Task<string?> RefreshAfterUnauthorizedAsync(GitHubTokenScope scope, string? rejectedAccessToken, CancellationToken ct = default)
         {
             LastRejectedScope = scope;
             RejectedToken = rejectedAccessToken;
             return Task.FromResult(_refreshedToken);
         }
+    }
 
-        private string? RecordValidScope(GitHubTokenScope scope)
+    private sealed class RecordingTokenScopeProvider(GitHubTokenScope scope) : IGitHubTokenScopeProvider
+    {
+        public string? UserId { get; private set; }
+        public string? ProjectId { get; private set; }
+        public GitHubTokenScope Resolve(string? userId) => GitHubTokenScope.ForUser(userId!);
+        public Task<GitHubTokenScope> ResolveAsync(string? userId, string? projectId, CancellationToken ct = default)
         {
-            LastValidScope = scope;
-            return _validToken;
+            UserId = userId;
+            ProjectId = projectId;
+            return Task.FromResult(scope);
         }
     }
 
@@ -132,32 +152,13 @@ public sealed class KubernetesSandboxExecutorClaimTests
     {
         private readonly GitHubTokenScope _scope;
         private readonly GitHubTokenEntry _entry;
-
-        public EffectiveScopeGitHubTokenStore(GitHubTokenScope scope, GitHubTokenEntry entry)
-        {
-            _scope = scope;
-            _entry = entry;
-        }
-
-        public Task<GitHubTokenScope> ResolveEffectiveScopeAsync(
-            string userId,
-            CancellationToken ct = default) =>
-            Task.FromResult(_scope);
-
-        public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult(_entry);
-
-        public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult<GitHubToken?>(null);
-
-        public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult<GitHubIdentity?>(null);
-
-        public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public EffectiveScopeGitHubTokenStore(GitHubTokenScope scope, GitHubTokenEntry entry) => (_scope, _entry) = (scope, entry);
+        public Task<GitHubTokenScope> ResolveEffectiveScopeAsync(string userId, CancellationToken ct = default) => Task.FromResult(_scope);
+        public Task<GitHubTokenEntry> GetAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult(_entry);
+        public Task<GitHubToken?> GetTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubToken?>(null);
+        public Task SetAsync(GitHubTokenScope scope, GitHubToken token, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.FromResult<GitHubIdentity?>(null);
+        public Task SignOutAsync(GitHubTokenScope scope, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     // Records the /configure POST so the warm-pool deferred-config contract can be asserted.
@@ -535,6 +536,41 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+public async Task LaunchAgentHostPod_configure_uses_project_selected_linked_identity_scope()
+    {
+        const string runId = "run-claim-project-identity";
+        const string userId = "entra-user";
+        const string projectId = "00000000-0000-0000-0000-000000000712";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
+        var scopeProvider = new RecordingTokenScopeProvider(selectedScope);
+        var accessTokenProvider = new StubGitHubAccessTokenProvider("tok-bob");
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver(userId, projectId),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            accessTokenProvider: accessTokenProvider,
+            tokenScopeProvider: scopeProvider);
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        scopeProvider.UserId.Should().Be(userId);
+        scopeProvider.ProjectId.Should().Be(projectId);
+        accessTokenProvider.LastScope.Should().BeEquivalentTo(selectedScope);
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("tok-bob");
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_configure_uses_active_linked_scope_for_secret_and_refreshed_token()
     {
         const string runId = "run-claim-linked-scope";
@@ -569,6 +605,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         doc.RootElement.GetProperty("kvUserSecretName").GetString().Should()
             .Be(KeyVaultSecretStore.SanitizeKey(effectiveScope.Key));
     }
+
 
     [Fact]
     public async Task LaunchAgentHostPod_configure_unauthorized_refreshes_once_and_requests_pod_recreation()

@@ -106,6 +106,7 @@ public sealed class SqliteDb
         // NULL means "use the built-in default" (project) / "use the project default" (task).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_workflow_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_override_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN captured_by_user_id TEXT;", ct);
 
         // Per-project active review policy (Feature 010, FR-027/033). Named review policies are loaded
         // from .agentweaver/review-policies/ and referenced here BY NAME. NULL means "use the built-in
@@ -650,6 +651,7 @@ public sealed class SqliteDb
             state         TEXT NOT NULL,            -- 'backlog' | 'ready' | 'claimed'
             order_key     TEXT NOT NULL,
             captured_by   TEXT NOT NULL,
+            captured_by_user_id TEXT,
             created_at    TEXT NOT NULL,
             committed_at  TEXT,
             claimed_at    TEXT,
