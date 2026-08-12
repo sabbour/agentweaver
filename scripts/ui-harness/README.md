@@ -8,6 +8,10 @@ judge: it captures deterministic browser facts, then sends normalized evidence t
 npm --prefix scripts/ui-harness install
 node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url https://<host>.staging.<domain>
 node scripts/ui-harness/agent-driver-ui/tools.mjs init --persona jordan --base-url https://<host>.staging.<domain>
+node scripts/ui-harness/agent-driver-ui/tools.mjs goto --session <sessionId> --path /
+node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --test-id <test-id>
+node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId>
+node scripts/ui-harness/agent-driver-ui/tools.mjs finish --session <sessionId>
 ```
 
 `login` is the only headful step. Complete the visible GitHub or Microsoft Entra sign-in
@@ -16,6 +20,13 @@ local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry
 with `AUTH_EXPIRED`; the harness never automates reauthentication. Targets are
 restricted to localhost/staging unless both `--allow-prod` and `--confirm-production`
 are explicitly supplied. Storage state is never logged or attached to evidence.
+
+`init` owns one headless browser worker per session. Separate action invocations reuse
+that worker's page, so navigation and browser state survive a documented
+`goto` → `click` → `capture` sequence. Commands are locked per session, different
+sessions remain isolated, and `finish` closes the worker and deletes its private
+recovery state. An abandoned worker is recovered from the last completed action without
+opening a CDP or remote-debugging endpoint.
 
 ## Pointer drag
 
