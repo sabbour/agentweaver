@@ -6,6 +6,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
 using FluentAssertions;
 using k8s;
@@ -986,12 +987,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         handler.Requests.Should().NotContain(
             r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "an active preview must defer the claim delete so the preview URL stays reachable (#542)");
-        preview.RenewedRunId.Should().Be(runId,
-            "#560: deferring the API-side delete is not enough — the claim's cluster-side TTL must be " +
-            "renewed so the sandbox controller does not reap the pod out from under the live preview");
-        preview.SafeToEvictCalls.Should().ContainSingle().Which.Should().Be((runId, false),
-            "#574: deferring must also pin the backing pod (safe-to-evict=false) so the cluster-autoscaler " +
-            "does not drain the kata node and kill the pod during a scale-down");
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId,
+            "#579: the release path must invoke the single lifecycle transition that owns all preview protections");
     }
 
     [Fact]
@@ -1011,11 +1008,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         handler.Requests.Should().Contain(
             r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "with no active preview the claim must be deleted exactly as before (no pod leak)");
-        preview.RenewedRunId.Should().BeNull(
-            "#560: with no active preview there is nothing to keep alive, so the claim TTL must NOT be " +
-            "renewed (a renewal would extend the pod's cluster-side lifetime unnecessarily)");
-        preview.SafeToEvictCalls.Should().BeEmpty(
-            "#574: with no active preview the pod is not pinned — normal teardown proceeds");
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId,
+            "#579: normal cleanup is also governed by the same lifecycle transition");
     }
 
     [Fact]
@@ -1034,32 +1028,21 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "non-preview deployments (null preview service) must keep the original unconditional release");
     }
 
-    // Minimal ISandboxPreviewService test double: only HasActivePreviewAsync is exercised by the
+    // Minimal ISandboxPreviewService test double: only lifecycle reconciliation is exercised by the
     // release path; every other member throws so an unexpected call is caught loudly.
     private sealed class StubPreviewService : Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService
     {
-        private readonly bool _hasActivePreview;
-        public StubPreviewService(bool hasActivePreview) => _hasActivePreview = hasActivePreview;
+        private readonly PreviewLifecycleState _state;
+        public StubPreviewService(bool hasActivePreview) =>
+            _state = hasActivePreview ? PreviewLifecycleState.PreviewActive : PreviewLifecycleState.Previewable;
 
-        /// <summary>Run id passed to <see cref="RenewBackingClaimTtlAsync"/>, or null if never called (#560).</summary>
-        public string? RenewedRunId { get; private set; }
+        public List<string> ReconciledRunIds { get; } = new();
 
-        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult(_hasActivePreview);
-
-        public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
+        public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
+            string runId, CancellationToken ct = default)
         {
-            RenewedRunId = runId;
-            return Task.CompletedTask;
-        }
-
-        /// <summary>(runId, safeToEvict) tuples passed to <see cref="SetBackingPodSafeToEvictAsync"/> (#574).</summary>
-        public List<(string RunId, bool SafeToEvict)> SafeToEvictCalls { get; } = new();
-
-        public Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
-        {
-            SafeToEvictCalls.Add((runId, safeToEvict));
-            return Task.CompletedTask;
+            ReconciledRunIds.Add(runId);
+            return Task.FromResult(_state);
         }
 
         public bool Enabled => true;
