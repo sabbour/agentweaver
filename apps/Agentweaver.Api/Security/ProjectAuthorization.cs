@@ -67,15 +67,20 @@ public static class ProjectAuthorization
         Project project,
         IConfiguration configuration,
         ProjectRole minimumRole,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowInternalService = true)
     {
         var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
+        if (!allowInternalService && IsDedicatedInternalServiceCaller(httpContext, caller))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
         if (AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy)
-            return CanAccess(caller, project.Owner, configuration)
+            return caller.Owns(project.Owner)
+                || (allowInternalService && IsInternalServiceCaller(caller, configuration))
                 ? null
                 : Results.StatusCode(StatusCodes.Status403Forbidden);
 
-        if (IsInternalServiceCaller(caller, configuration))
+        if (allowInternalService && IsInternalServiceCaller(caller, configuration))
             return null;
 
         var authorization = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
@@ -98,6 +103,10 @@ public static class ProjectAuthorization
             _ => Results.StatusCode(StatusCodes.Status403Forbidden),
         };
     }
+
+    private static bool IsDedicatedInternalServiceCaller(HttpContext httpContext, CallerContext caller) =>
+        string.Equals(caller.User, InternalServiceUser, StringComparison.Ordinal)
+        || httpContext.User.HasClaim("agentweaver_internal", "true");
 
     /// <summary>
     /// Parses the route project id, loads the project, and authorizes the caller in one step for
