@@ -1971,15 +1971,25 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             var pending = (await db.DecisionInbox
                 .Where(e => e.ProjectId == projectId
                          && e.Status == "pending"
-                         && e.AgentName == "coordinator")
+                         && e.SourceKind == MemorySourceKinds.Run)
                 .ToListAsync(ct).ConfigureAwait(false))
                 .Where(e => e.CreatedAt >= run.StartedAt
+                         && string.Equals(e.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase)
+                         && (string.Equals(e.SourceRunId, context.CoordinatorRunId, StringComparison.Ordinal)
+                             || e.SourceRunId?.StartsWith(
+                                 context.CoordinatorRunId + "-coordinator-",
+                                 StringComparison.Ordinal) == true)
                          && DecisionPromotion.CoordinatorReviewTypes.Contains(e.Type))
                 .ToList();
 
             var now = DateTimeOffset.UtcNow;
             foreach (var entry in pending)
-                await DecisionPromotion.PromoteEntry(db, entry, now, ct).ConfigureAwait(false);
+                await DecisionPromotion.PromoteEntry(
+                    db,
+                    entry,
+                    now,
+                    entry.SourceIdentity ?? $"run:{context.CoordinatorRunId}",
+                    ct).ConfigureAwait(false);
             await tx.CommitAsync(ct).ConfigureAwait(false);
 
             var promoted = pending.Count;

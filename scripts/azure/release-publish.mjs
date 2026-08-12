@@ -10,7 +10,11 @@ import path from "node:path";
 import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
 import { DEFAULT_REPO_ROOT } from "./variables.mjs";
-import { assertVersionMirrors, extractChangelogSection } from "../changesets/shared.mjs";
+import {
+  assertVersionMirrors,
+  extractChangelogSection,
+  getUnexpectedIgnoredFiles,
+} from "../changesets/shared.mjs";
 
 export const RELEASE_TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
 
@@ -80,30 +84,6 @@ export async function isWorkingTreeClean({ cwd, capture }) {
 
   const unexpectedIgnored = getUnexpectedIgnoredFiles(ignored.stdout);
   return unexpectedIgnored.length === 0;
-}
-
-function getUnexpectedIgnoredFiles(stdout) {
-  const allowedPatterns = [
-    /^\.squad\//,
-    /^\.idea\//,
-    /^\.vscode\//,
-    /^\.vs\//,
-    /^\.security\//,
-    /^\.worktrees\//,
-    /^\.env(\.local)?$/,
-    /^npm-debug\.log/,
-    /^scripts\/azure\/params\..*\.json$/,
-    /^scripts\/azure\/tests\/\.scratch-/,
-    /^scripts\/azure\/steps\/\.rendered\//,
-    /\.(user|suo|userprefs)$/
-  ];
-
-  return stdout
-    .split("\n")
-    .map(line => line.trim())
-    .filter(line => line.startsWith("!! "))
-    .map(line => line.slice(3))
-    .filter(file => !allowedPatterns.some(pattern => pattern.test(file)));
 }
 
 export async function validateMainSha({ cwd, capture }) {

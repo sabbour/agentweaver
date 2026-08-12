@@ -102,7 +102,7 @@ public interface IAssistantRunService
 /// <c>GET /api/runs/{id}/stream</c> and <c>/events</c> endpoints serve the transcript.
 ///
 /// It wires <see cref="IOperatorAssistantAgent"/> (the in-API Copilot loop sourcing its tools from the
-/// AgentweaverMCP server) to run one turn at a time using the caller's GitHub bearer token, threaded
+/// AgentweaverMCP server) to run one turn at a time using the caller's platform bearer token, threaded
 /// through per call — no token is cached or shared across users. An in-memory per-user concurrency
 /// bound and an idle-timeout sweep keep the number of live Copilot/MCP sessions bounded (v1: single
 /// instance; a distributed bound is a fast-follow if the API scales out).

@@ -11,6 +11,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<Decision> Decisions => Set<Decision>();
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
+    public DbSet<RunAuthorshipCapability> RunAuthorshipCapabilities => Set<RunAuthorshipCapability>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
     public DbSet<RunEventRecord> RunEvents => Set<RunEventRecord>();
     public DbSet<OutcomeSpec> OutcomeSpecs => Set<OutcomeSpec>();
@@ -64,6 +65,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     {
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.AgentName });
+        model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
+        model.Entity<Decision>().Property(d => d.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
         model.Entity<Decision>()
             .HasOne<Decision>()
             .WithMany()
@@ -71,6 +74,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .IsRequired(false);
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Status });
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Slug }).IsUnique();
+        model.Entity<DecisionInboxEntry>().Property(e => e.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<DecisionInboxEntry>()
             .HasOne<Decision>()
             .WithMany()
@@ -78,6 +82,20 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .IsRequired(false);
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.AgentName });
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.Type });
+        model.Entity<AgentMemory>().Property(m => m.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
+        model.Entity<AgentMemory>().Property(m => m.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
+        model.Entity<RunAuthorshipCapability>().ToTable("run_authorship_capabilities");
+        model.Entity<RunAuthorshipCapability>().HasKey(capability => capability.RunId);
+        model.Entity<RunAuthorshipCapability>().Property(capability => capability.RunId)
+            .HasColumnName("run_id")
+            .HasMaxLength(128);
+        model.Entity<RunAuthorshipCapability>().Property(capability => capability.TokenHash)
+            .HasColumnName("token_hash")
+            .IsRequired();
+        model.Entity<RunAuthorshipCapability>().Property(capability => capability.ExpiresAt)
+            .HasColumnName("expires_at")
+            .IsRequired();
+        model.Entity<RunAuthorshipCapability>().HasIndex(capability => capability.ExpiresAt);
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.EndedAt });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);

@@ -72,6 +72,37 @@ describe('AgentweaverApiClient keepalive', () => {
     vi.unstubAllGlobals();
   });
 
+  describe('AgentweaverApiClient GitHub webhook provisioning contract', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('posts to the project webhook provisioning endpoint', async () => {
+      const response = {
+        hook_id: 42,
+        created: true,
+        repository: 'octocat/demo',
+        payload_url: 'https://api.example.test/api/projects/project%2F1/webhooks/github',
+      };
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(response),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+      await expect(client.autoCreateProjectWebhook('project/1')).resolves.toEqual(response);
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.example.test/api/projects/project%2F1/webhooks/github/provision',
+        expect.objectContaining({
+          method: 'POST',
+          body: '{}',
+        }),
+      );
+    });
+  });
+
   it('resolves relative API keepalive URLs through the configured API base', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

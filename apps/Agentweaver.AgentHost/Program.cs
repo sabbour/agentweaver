@@ -288,6 +288,21 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     {
         throw;
     }
+    catch (GitHubCopilotUnauthorizedException ex)
+    {
+        var logger = ctx.RequestServices.GetRequiredService<ILogger<AgentHostRuntimeState>>();
+        logger.LogWarning(
+            ex,
+            "AgentHost /configure: GitHub Copilot rejected the run credential for run {RunId}; the API may refresh and recreate this pod once.",
+            configuration.RunId);
+        return Results.Json(
+            new
+            {
+                error = "agenthost_configure_copilot_unauthorized",
+                message = ex.Message,
+            },
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
     catch (Exception ex)
     {
         // Any exception here that is NOT an AgentHostConfigurationException previously escaped this
@@ -537,6 +552,13 @@ internal sealed record ConfigureRequest
     public string? GitHubAccessToken { get; init; }
 
     /// <summary>
+    /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
+    /// separate from <see cref="GitHubAccessToken"/> because Entra deployments use different
+    /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
+    /// </summary>
+    public string? CallerBearerToken { get; init; }
+
+    /// <summary>
     /// The run's shared orchestration worktree path (e.g. <c>/workspace/{worktree}</c>). When present,
     /// the pod runs <c>SetupAsync</c> with this as its working directory — and therefore its file-tool
     /// root — instead of the static <c>AgentHost__WorkingDirectory</c> env default. This keeps every
@@ -619,7 +641,8 @@ internal sealed record ConfigureRequest
         CommitAuthorName,
         CommitAuthorEmail,
         ProjectId,
-        AgentName);
+        AgentName,
+        CallerBearerToken);
 }
 
 internal sealed record PreviewProcessStartRequest

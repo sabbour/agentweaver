@@ -93,7 +93,7 @@ public interface IOperatorAssistantAgent
 ///   2. There is no regex pre-router: the LLM routes via MCP tool descriptions.
 ///
 /// The regex router and the existing facade are intentionally left untouched — this is an additive
-/// spike that proves the MCP tool-adapter path works end to end. Per-call GitHub bearer passthrough
+/// spike that proves the MCP tool-adapter path works end to end. Per-call caller bearer passthrough
 /// is preserved: the caller's token is forwarded to the MCP server on every tools/call.
 /// </summary>
 public sealed class OperatorAssistantAgent(

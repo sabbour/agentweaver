@@ -20,6 +20,7 @@
   "CLUSTER_NAME": "agentweaver-aks",
   "ACR_NAME": "agentweaverregistry",
   "LOCATION": "westus2",
+  // "MONITORING_LOCATION": "eastus2", // Preferred region for new Log Analytics and Application Insights resources. Defaults to LOCATION and auto-falls back when unsupported.
   "NODE_VM_SIZE": "Standard_D4s_v6",
 
   // Optional for `provision-infra` (defaults to a suggested name it will create if missing).

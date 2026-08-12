@@ -42,6 +42,8 @@ Runnable outputs are most useful when reviewers can open them live. Software del
 
 For direct agent runs or custom workflows without that gate, ask the agent to build and start the app inside its sandbox, use or discover a non-conflicting port such as 8080, 3000, or 5000, verify it responds, call `start_preview(port=PORT)`, and include the preview URL in its completion message. On non-Kubernetes backends, the agent should provide local run instructions instead.
 
+The supervised preview process accepts either a worktree-relative working directory or the canonical absolute path of the worktree (or one of its subdirectories). Paths outside the run worktree, traversal escapes, and symlink or junction escapes remain blocked by the sandbox policy.
+
 ## The OutcomeSpec confirmation
 
 Before any agent work starts, the coordinator:

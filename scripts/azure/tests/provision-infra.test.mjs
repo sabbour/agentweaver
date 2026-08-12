@@ -79,6 +79,8 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
     "--image-tag",
     "v1.2.3",
     "--resource-group=my-rg",
+    "--monitoring-location",
+    "northeurope",
     "--node-vm-size",
     "Standard_D8s_v6",
     "--postgres-server-name",
@@ -96,6 +98,7 @@ test("parseArgs: recognizes flags and takes values for valued flags", () => {
   assert.equal(parsed.flags.SKIP_OAUTH_KEY, true);
   assert.equal(parsed.flags.IMAGE_TAG, "v1.2.3");
   assert.equal(parsed.flags.RESOURCE_GROUP, "my-rg");
+  assert.equal(parsed.flags.MONITORING_LOCATION, "northeurope");
   assert.equal(parsed.flags.NODE_VM_SIZE, "Standard_D8s_v6");
   assert.equal(parsed.flags.PG_SERVER_NAME, "custom-pg");
   assert.equal(parsed.flags.PG_LOCATION, "eastus2");
@@ -171,6 +174,7 @@ test("HELP_TEXT: mentions key flags", () => {
   assert.match(HELP_TEXT, /--skip-postgres/);
   assert.match(HELP_TEXT, /--params-file/);
   assert.match(HELP_TEXT, /--node-vm-size <sku>/);
+  assert.match(HELP_TEXT, /--monitoring-location <region>/);
   assert.match(HELP_TEXT, /--postgres-server-name <name>/);
   assert.match(HELP_TEXT, /--postgres-location <region>/);
   assert.match(HELP_TEXT, /--postgres-ha-mode <mode>/);
@@ -240,6 +244,7 @@ test("run: non-interactive path resolves config from flags and env, then delegat
     ACR_NAME: e.ACR_NAME,
     ACR_LOGIN_SERVER: `${e.ACR_NAME}.azurecr.io`,
     LOCATION: e.LOCATION,
+    MONITORING_LOCATION: e.MONITORING_LOCATION,
     NODE_VM_SIZE: e.NODE_VM_SIZE,
     KEYVAULT_NAME: e.KEYVAULT_NAME,
     PG_SERVER_NAME: e.PG_SERVER_NAME,
@@ -257,6 +262,8 @@ test("run: non-interactive path resolves config from flags and env, then delegat
       "my-rg",
       "--node-vm-size",
       "Standard_D8s_v6",
+      "--monitoring-location",
+      "northeurope",
       "--postgres-server-name",
       "custom-pg",
       "--postgres-location",
@@ -285,6 +292,7 @@ test("run: non-interactive path resolves config from flags and env, then delegat
   );
   assert.equal(calls[0].cfg.RESOURCE_GROUP, "my-rg");
   assert.equal(calls[0].cfg.NODE_VM_SIZE, "Standard_D8s_v6");
+  assert.equal(calls[0].cfg.MONITORING_LOCATION, "northeurope");
   assert.equal(calls[0].cfg.PG_SERVER_NAME, "custom-pg");
   assert.equal(calls[0].cfg.PG_LOCATION, "eastus2");
   assert.equal(calls[0].cfg.PG_HA_MODE, "Disabled");
@@ -842,6 +850,7 @@ test("run: loads GITHUB_CLIENT_ID/SECRET from a params-file (JSONC) when no flag
       // GitHub OAuth app credentials
       "GITHUB_CLIENT_ID": "from-params-file",
       "GITHUB_CLIENT_SECRET": "from-params-secret",
+      "MONITORING_LOCATION": "northeurope",
     }`,
   );
   const calls = [];
@@ -872,6 +881,7 @@ test("run: loads GITHUB_CLIENT_ID/SECRET from a params-file (JSONC) when no flag
 
   assert.equal(calls[0].cfg.GITHUB_CLIENT_ID, "from-params-file");
   assert.equal(calls[0].cfg.GITHUB_CLIENT_SECRET, "from-params-secret");
+  assert.equal(calls[0].cfg.MONITORING_LOCATION, "northeurope");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -904,6 +914,7 @@ test("runInteractiveInstaller: collects subscription/RG/location/names/OAuth via
   assert.equal(collected.RESOURCE_GROUP, "existing-rg");
   assert.equal(rgChoicesSeen[0].label, "Create new...", "Create new... must be the first resource-group choice");
   assert.equal(collected.LOCATION, "westus2");
+  assert.equal(collected.MONITORING_LOCATION, "westus2");
   assert.equal(collected.NODE_VM_SIZE, "Standard_D4s_v6");
   assert.equal(collected.PG_LOCATION, "westus2");
   assert.equal(collected.PG_ACCESS_MODE, "private");

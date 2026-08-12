@@ -33,7 +33,9 @@ internal static class MemoryLedgerExporter
         // Only ACTIVE decisions are authoritative "accepted state" (spec #25). Superseded/archived
         // decisions must not be mirrored as live team boundaries.
         var decisions = (await memoryDb.Decisions
-                .Where(d => d.ProjectId == projectId && d.Status == "active")
+                .Where(d => d.ProjectId == projectId
+                         && d.Status == "active"
+                         && d.TrustState == MemoryTrustStates.Approved)
                 .ToListAsync(ct).ConfigureAwait(false))
             .OrderBy(d => d.CreatedAt)
             .ToList();
@@ -43,7 +45,9 @@ internal static class MemoryLedgerExporter
             .ToListAsync(ct).ConfigureAwait(false);
 
         var memories = (await memoryDb.AgentMemory
-                .Where(m => m.ProjectId == projectId)
+                .Where(m => m.ProjectId == projectId
+                         && m.TrustState != MemoryTrustStates.Legacy
+                         && (m.Type != "pattern" || m.TrustState == MemoryTrustStates.Approved))
                 .ToListAsync(ct).ConfigureAwait(false))
             .OrderBy(m => m.CreatedAt)
             .ToList();
@@ -109,12 +113,16 @@ internal static class MemoryLedgerExporter
         CancellationToken ct)
     {
         if (await memoryDb.Decisions
-                .AnyAsync(d => d.ProjectId == projectId && d.Status == "active", ct)
+                .AnyAsync(d => d.ProjectId == projectId
+                            && d.Status == "active"
+                            && d.TrustState == MemoryTrustStates.Approved, ct)
                 .ConfigureAwait(false))
             return true;
 
         return await memoryDb.AgentMemory
-            .AnyAsync(m => m.ProjectId == projectId, ct)
+            .AnyAsync(m => m.ProjectId == projectId
+                        && m.TrustState != MemoryTrustStates.Legacy
+                        && (m.Type != "pattern" || m.TrustState == MemoryTrustStates.Approved), ct)
             .ConfigureAwait(false);
     }
 }

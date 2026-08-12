@@ -369,6 +369,12 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Content")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -387,8 +393,26 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("SessionId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SourceIdentity")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("legacy");
+
+                    b.Property<string>("SourceRunId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Tags")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("legacy");
 
                     b.Property<string>("Type")
                         .IsRequired()
@@ -440,6 +464,12 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Content")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -452,6 +482,18 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Rationale")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceIdentity")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("legacy");
+
+                    b.Property<string>("SourceRunId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Status")
@@ -467,6 +509,12 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("legacy");
 
                     b.Property<string>("Type")
                         .IsRequired()
@@ -518,6 +566,18 @@ namespace Agentweaver.Api.Migrations
 
                     b.Property<string>("Slug")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceIdentity")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("legacy");
+
+                    b.Property<string>("SourceRunId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Status")
@@ -690,6 +750,29 @@ namespace Agentweaver.Api.Migrations
                         .HasDatabaseName("IX_project_github_identity_overrides_user_login");
 
                     b.ToTable("project_github_identity_overrides", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.RunAuthorshipCapability", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expires_at");
+
+                    b.Property<byte[]>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("BLOB")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("RunId");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("run_authorship_capabilities", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.SessionContext", b =>
