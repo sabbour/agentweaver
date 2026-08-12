@@ -40,8 +40,8 @@ public static class SandboxEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+                return denied;
 
             return await StartPreviewForRunAsync(
                 runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger, ct);
@@ -68,7 +68,6 @@ public static class SandboxEndpoints
             ISandboxPreviewService previewService,
             RunStreamStore streamStore,
             IRunStore runStore,
-            IConfiguration configuration,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -80,8 +79,13 @@ public static class SandboxEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwnerOrServiceCaller(httpContext, run, configuration))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(
+                    httpContext,
+                    run,
+                    ProjectRole.Contributor,
+                    ct,
+                    allowInternalService: true) is { } denied)
+                return denied;
 
             var previewContext = LatestPreviewContext(streamStore, runId);
             var outcome = await previewGate.RequestApprovalAsync(
@@ -139,8 +143,8 @@ public static class SandboxEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+                return denied;
             var retryGateKey = $"{runId}:{requestId}";
             var retryGate = PreviewApprovalRetryGates.GetOrAdd(
                 retryGateKey,
@@ -224,8 +228,8 @@ public static class SandboxEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+                return denied;
 
             if (!previewService.Enabled)
                 return Results.Conflict(new { error = "Gateway preview is not enabled." });
@@ -271,8 +275,8 @@ public static class SandboxEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+                return denied;
 
             if (previewService.Enabled)
             {
@@ -308,8 +312,8 @@ public static class SandboxEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+                return denied;
 
             var sessions = previewService.Enabled
                 ? (await previewService.ListForRunAsync(runId, ct)).Select(s => new

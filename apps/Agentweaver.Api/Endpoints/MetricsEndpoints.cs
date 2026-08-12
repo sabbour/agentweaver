@@ -131,7 +131,8 @@ public static class MetricsEndpoints
 
             var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+                return denied;
 
             var agentNameByRunId = new Dictionary<string, string?>(StringComparer.Ordinal)
             {
@@ -168,7 +169,8 @@ public static class MetricsEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+                return denied;
 
             var agentNameByRunId = new Dictionary<string, string?>(StringComparer.Ordinal)
             {

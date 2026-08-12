@@ -1,3 +1,4 @@
+using Agentweaver.Api.Security;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -15,6 +16,7 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
     public const string OwnerUser   = "review-owner-user";
     public const string OtherApiKey = "review-test-other-key-99999";
     public const string OtherUser   = "review-other-user";
+    public const string InternalServiceApiKey = "review-test-internal-service-key";
 
     private readonly string _dbPath;
     private readonly string _worktreesPath;
@@ -63,6 +65,8 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
                 // Second user added via the multi-key list (Auth:Keys[]).
                 ["Auth:Keys:0:Token"]                     = OtherApiKey,
                 ["Auth:Keys:0:User"]                      = OtherUser,
+                ["Auth:Keys:1:Token"]                     = InternalServiceApiKey,
+                ["Auth:Keys:1:User"]                      = ProjectAuthorization.InternalServiceUser,
                 ["Git:Author:Name"]                       = "Test",
                 ["Git:Author:Email"]                      = "test@localhost",
                 ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",
