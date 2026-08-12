@@ -144,6 +144,19 @@ jobs:
           # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
           # proves the namespaces, using exactly the flags the executor uses.
           bwrap --version
+          # Ubuntu 24.04 runners ship kernel.apparmor_restrict_unprivileged_userns=1, which
+          # denies the uid map bwrap needs ("setting up uid map: Permission denied"). This is
+          # runner configuration only: it changes nothing about the production pod, which is
+          # unprivileged, drops ALL capabilities and runs under Kata. Without it the gate can
+          # only ever report "runtime unusable", which is precisely the silent hole this step
+          # exists to close, so a failure to relax it is left to fail the job below.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          # Smoke-test the exact namespace set the executor uses before spending a test run.
+          bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev \
+            -- /bin/true
+          echo "bubblewrap user+pid namespaces are usable on this runner."
           echo "::group::Tests selected by ${KATA_RUNTIME_FILTER}"
           dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
             --no-build --no-restore -p:CopilotSkipCliDownload=true \
