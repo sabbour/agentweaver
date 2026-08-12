@@ -81,7 +81,7 @@ export async function openBrowserSession(opts) {
   if (opts.storageState) contextOptions.storageState = await loadStorageState(opts.storageState);
   const context = await browser.newContext(contextOptions);
   if (opts.storageState) {
-    const seed = await loadSessionStorageSeed(opts.storageState);
+    const seed = opts.sessionStorageSeed ?? await loadSessionStorageSeed(opts.storageState);
     if (seed && seed.origin === base.origin) {
       // Re-hydrate sessionStorage before any page script runs, since Agentweaver's
       // auth token lives there and storageState() cannot capture it (see auth.mjs).
