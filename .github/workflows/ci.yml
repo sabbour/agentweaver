@@ -151,6 +151,11 @@ jobs:
           cache: npm
           cache-dependency-path: scripts/ui-harness/package-lock.json
 
+      - name: Install Chromium for UI harness integration tests
+        run: |
+          node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness --isolated
+          npx --prefix scripts/ui-harness playwright install --with-deps chromium
+
       - name: Run Node toolchain and UI harness tests
         run: node scripts/ci/validate.mjs --profile ci --area node,harness
 
