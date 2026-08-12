@@ -383,7 +383,7 @@ public sealed class PodExecServer : IAsyncDisposable
             }
 
             if (!session.Supervised.Process.HasExited)
-                session.Supervised.Process.Kill(entireProcessTree: true);
+                session.Supervised.Process.Kill();
         }
         catch (Exception ex)
         {

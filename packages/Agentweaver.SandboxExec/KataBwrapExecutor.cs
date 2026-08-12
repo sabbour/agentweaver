@@ -132,7 +132,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 
             if (!process.WaitForExit(5000))
             {
-                process.Kill(entireProcessTree: true);
+                try { process.Kill(); } catch { }
                 reason = "bwrap capability probe timed out.";
                 return false;
             }
@@ -225,11 +225,13 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         {
             try
             {
-                // Reap the sandbox group first: Process.Kill(entireProcessTree) walks
+                // Reap the sandbox group first: .NET's entire-process-tree kill path relies on
                 // /proc/<pid>/task/<pid>/children, which the Kata guest kernel does not provide.
-                TerminateProcessGroup(TryResolveSandboxProcessGroup(process.Id));
+                var fallbackGroup = TryResolveSandboxProcessGroup(process.Id);
+                if (fallbackGroup > 0)
+                    TerminateProcessGroup(fallbackGroup);
                 if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
+                    process.Kill();
             }
             catch { }
             process.Dispose();
@@ -322,6 +324,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         Process? process = null;
         Task<int>? sandboxProcessGroup = null;
         var groupReaped = false;
+        var observedProcessGroupId = 0;
         try
         {
             process = new Process
@@ -336,9 +339,10 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             if (!process.Start())
                 throw new InvalidOperationException("Failed to start bwrap.");
 
-            // Resolved while bwrap is alive: once it exits, the sandbox child is gone and the group
-            // can no longer be discovered, but daemonised grandchildren (build servers, watchers)
-            // would survive without an explicit process-group kill.
+            // Resolve the sandbox process group while bwrap is still alive. The kernel does not
+            // provide /proc/<pid>/task/<pid>/children in Kata, so the host-side Process.Kill tree
+            // helper cannot be trusted: we must kill by process group instead.
+            observedProcessGroupId = TryResolveSandboxProcessGroup(process.Id);
             sandboxProcessGroup = Task.Run(
                 () => WaitForSandboxProcessGroup(process!, TimeSpan.FromSeconds(10)),
                 CancellationToken.None);
@@ -354,7 +358,12 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                var fallbackGroup = observedProcessGroupId > 0
+                    ? observedProcessGroupId
+                    : TryResolveSandboxProcessGroup(process.Id);
+                if (fallbackGroup > 0)
+                    TerminateProcessGroup(fallbackGroup);
+                try { if (!process.HasExited) process.Kill(); } catch { }
                 throw;
             }
 
@@ -364,7 +373,14 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             // is reaped here, before the drain, rather than only in `finally`.
             if (sandboxProcessGroup is not null)
             {
-                try { TerminateProcessGroup(await sandboxProcessGroup.ConfigureAwait(false)); }
+                try
+                {
+                    var resolvedGroup = observedProcessGroupId > 0
+                        ? observedProcessGroupId
+                        : await sandboxProcessGroup.ConfigureAwait(false);
+                    if (resolvedGroup > 0)
+                        TerminateProcessGroup(resolvedGroup);
+                }
                 catch { }
                 groupReaped = true;
             }
@@ -390,14 +406,27 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         }
         finally
         {
-            if (process is not null && !process.HasExited)
-                try { process.Kill(entireProcessTree: true); } catch { }
+            if (process is not null)
+            {
+                var finalGroupId = observedProcessGroupId > 0
+                    ? observedProcessGroupId
+                    : TryResolveSandboxProcessGroup(process.Id);
+                if (finalGroupId > 0)
+                    TerminateProcessGroup(finalGroupId);
+                if (!process.HasExited)
+                    try { process.Kill(); } catch { }
+            }
             // Reap anything the command daemonised inside the sandbox. Without a nested PID
             // namespace nothing else collects those processes, so the run's process group is
             // terminated explicitly. Skipped when the drain path already reaped it.
             if (sandboxProcessGroup is not null && !groupReaped)
             {
-                try { TerminateProcessGroup(sandboxProcessGroup.GetAwaiter().GetResult()); }
+                try
+                {
+                    var leftoverGroup = observedProcessGroupId > 0 ? observedProcessGroupId : sandboxProcessGroup.GetAwaiter().GetResult();
+                    if (leftoverGroup > 0)
+                        TerminateProcessGroup(leftoverGroup);
+                }
                 catch { }
             }
             process?.Dispose();
