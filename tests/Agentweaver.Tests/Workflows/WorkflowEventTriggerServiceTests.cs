@@ -102,6 +102,35 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
             - has_label: { label: "needs triage" }
         """;
 
+    private const string ScheduleAndIssuePredicateYaml = """
+        id: scheduled-and-roadmap-review
+        name: Scheduled and Roadmap Review
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "Triage roadmap issues."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+
+        triggers:
+          - type: schedule
+            interval: weekly
+            day_of_week: monday
+            time_of_day: "09:00"
+          - type: event
+            event_name: github.issues.labeled
+            if:
+              - has_label: { label: "roadmap-review" }
+        """;
+
     private const string PullRequestPredicateYaml = """
         id: on-pr-main-or-release
         name: On PR Main Or Release
@@ -299,6 +328,24 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
 
         missingLabel.Should().BeEmpty();
         matching.Should().BeEquivalentTo(["on-bug-triage"]);
+    }
+
+    [Fact]
+    public async Task FireEvent_WhenWorkflowAlsoHasScheduleTrigger_FiresMatchingEvent()
+    {
+        var project = await SeedProjectAsync(ScheduleAndIssuePredicateYaml);
+
+        var fired = await _service.FireEventAsync(
+            project,
+            "github.issues.labeled",
+            dedupeKey: "delivery-713",
+            IssuePayload("roadmap-review"),
+            CancellationToken.None);
+
+        fired.Should().Equal("scheduled-and-roadmap-review");
+        var task = (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        task.WorkflowOverrideId.Should().Be("scheduled-and-roadmap-review");
+        task.CapturedBy.Should().Be(WorkflowEventTriggerService.CapturedBy);
     }
 
     [Fact]
