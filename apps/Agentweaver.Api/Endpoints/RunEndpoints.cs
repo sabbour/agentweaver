@@ -69,7 +69,8 @@ app.MapGet("/api/runs/{id}", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
 
     // S1: Only serve the diff when the run is in a review-ready or terminal state.
     // Diff is withheld for Failed, InProgress, and Pending runs to prevent leaking
@@ -211,7 +212,8 @@ app.MapPost("/api/runs/{id}/archive", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
 
     var archived = await runStore.ArchiveAsync(runId, DateTimeOffset.UtcNow, ct);
     if (!archived && run.ArchivedAt is null) return Results.NotFound();
@@ -243,9 +245,8 @@ app.MapDelete("/api/runs/{id}", async (
     }
 
     if (run is null) return Results.NotFound();
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    if (!caller.Owns(run.SubmittingUser))
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
 
     // For any non-terminal run: cancel the workflow, clean up worktree, force to terminal.
     if (!EndpointHelpers.IsTerminal(run.Status))
@@ -289,9 +290,8 @@ app.MapPost("/api/runs/{id}/cancel", async (
     }
 
     if (run is null) return Results.NotFound();
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    if (!caller.Owns(run.SubmittingUser))
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
 
     // Already-terminal runs have no live work to cancel: report the current state without acting.
     if (EndpointHelpers.IsTerminal(run.Status))
@@ -349,45 +349,46 @@ app.MapGet("/api/runs/{id}/stream", async (
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     var entry = streamStore.Get(id);
-
-    // Authorize: for in-progress runs the entry carries the owner; for completed runs
-    // (or when the entry has been evicted) fall back to the persistent run record.
-    if (entry is not null)
+    Run? run;
+    try { run = await runStore.GetAsync(runId, ct); }
+    catch (OperationCanceledException) { return; }
+    catch (Exception ex)
     {
-        if (!caller.Owns(entry.Owner))
-        {
-            httpContext.Response.StatusCode = 404;
-            return;
-        }
+        logger.LogError(ex, "Failed to fetch run {RunId} for stream", runId);
+        httpContext.Response.StatusCode = 500;
+        await httpContext.Response.WriteAsJsonAsync(new { error = "Failed to retrieve the run." }, ct);
+        return;
     }
-    else
+
+    if (run is not null)
     {
-        // For sub-streams, authorize against the parent run record.
-        Run? run;
-        try { run = await runStore.GetAsync(runId, ct); }
-            catch (OperationCanceledException) { return; }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to fetch run {RunId} for stream", runId);
-                httpContext.Response.StatusCode = 500;
-                await httpContext.Response.WriteAsJsonAsync(new { error = "Failed to retrieve the run." }, ct);
-                return;
-            }
-
-        if (run is null)
-        {
-            httpContext.Response.StatusCode = 404;
-            return;
-        }
-
-        if (!caller.Owns(run.SubmittingUser))
+        if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
         {
             httpContext.Response.StatusCode = isSubStream
                 ? StatusCodes.Status403Forbidden
                 : StatusCodes.Status404NotFound;
             return;
         }
+    }
+    else
+    {
+        // Legacy in-memory-only streams can predate the durable run row. Preserve their owner check,
+        // but never use the stream entry's identity in place of a persisted project authorization.
+        if (entry is null)
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
 
+        if (!caller.Owns(entry.Owner))
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+    }
+
+    if (entry is null)
+    {
         // If the run is still starting up (Pending/InProgress) the background task may not
         // have registered its stream entry yet. Poll for up to 10s so freshly-created runs
         // stream in real-time without requiring a page refresh.
@@ -404,17 +405,7 @@ app.MapGet("/api/runs/{id}/stream", async (
             }
         }
 
-        if (entry is not null)
-        {
-            // Authorize the entry we found after waiting.
-            if (!caller.Owns(entry.Owner))
-            {
-                httpContext.Response.StatusCode = 404;
-                return;
-            }
-            // Fall through to live streaming below.
-        }
-        else
+        if (entry is null)
         {
             // No live stream entry (e.g. after process restart or eviction).
             // Replay via IRunEventStream.SubscribeAsync so Last-Event-ID drives the cursor,
@@ -528,7 +519,8 @@ app.MapGet("/api/runs/{id}/events", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
 
     var key = runId.ToString();
     using var dbScope = httpContext.RequestServices.CreateScope();
@@ -579,7 +571,8 @@ app.MapGet("/api/runs/{id}/graph", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
 
     // Coordinator runs (ParentRunId == null, driven by the built-in Coordinator agent) return the
     // unified coordinator-variant descriptor built from the work plan, so the same generic renderer
@@ -654,7 +647,8 @@ app.MapGet("/api/runs/{id}/history", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
 
     // History is only available for terminal runs.
     var terminalStatuses = new[] { RunStatus.Merged, RunStatus.Declined, RunStatus.MergeFailed, RunStatus.Failed };
@@ -736,8 +730,8 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
     // Idempotency: return current state when the terminal decision already matches.
@@ -761,7 +755,8 @@ app.MapPost("/api/runs/{id}/review", async (
 
     if (streamingRunForReview is null && await pendingStore.GetAsync(id, ct) is { } pendingForDefer)
     {
-        if (!caller.Owns(pendingForDefer.OwnerUser))
+        if (run.ProjectId is null
+            && !caller.Owns(pendingForDefer.OwnerUser))
             return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         if (!await DeferReviewDecisionAsync(id, decision, scopeFactory, logger, CancellationToken.None)
@@ -820,7 +815,7 @@ app.MapPost("/api/runs/{id}/review", async (
             // This covers: (a) test setups that populate the DB directly; (b) post-restart
             // recovery when no checkpoint exists (WorkflowRestartService re-creates the
             // stream entry but cannot resume the workflow without a checkpoint).
-            // Auth is already validated above (IsOwner). Execute the merge/decline directly
+            // Run access is already validated above. Execute the merge/decline directly
             // using the same infrastructure as MergeExecutor so no guardrails are bypassed.
             logger.LogInformation(
                 "Review decision: {Decision} (direct path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
@@ -833,7 +828,8 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Guardrail 9: IDOR defense-in-depth — verify caller owns the pending request.
-    if (!caller.Owns(pendingEntry.OwnerUser))
+    if (run.ProjectId is null
+        && !caller.Owns(pendingEntry.OwnerUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     if (streamingRunForReview is null)
@@ -942,7 +938,8 @@ app.MapPost("/api/runs/{id}/commit", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
+        return Results.NotFound();
 
     if (run.Status != RunStatus.AwaitingReview)
         return Results.Conflict(new { error = $"Run is in status '{run.Status.ToApiString()}' and cannot be committed." });
@@ -1115,15 +1112,18 @@ app.MapPost("/api/runs/{id}/request-changes", async (
         return Results.Problem("Failed to retrieve the run.", statusCode: 500);
     }
 
-    if (run is null || !EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
+        return Results.NotFound();
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
 
-    // IDOR defense-in-depth: if a pending review request exists, verify the caller owns it.
-    // IsOwner above already verified caller.User == run.SubmittingUser; this check mirrors
-    // the pattern in the /review endpoint (Guardrail 9).
+    // Legacy runs retain the pending request's identity-string defense-in-depth. Project runs use
+    // the persisted run.ProjectId authorization above as the authoritative boundary.
     var pendingEntry = await pendingStore.GetAsync(id, ct);
-    if (pendingEntry is not null && !caller.Owns(pendingEntry.OwnerUser))
+    if (run.ProjectId is null
+        && pendingEntry is not null
+        && !caller.Owns(pendingEntry.OwnerUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     // Validate comment.
@@ -1258,8 +1258,8 @@ app.MapPost("/api/runs/{id}/retry", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run))
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
 
     // Child runs are retried THROUGH their coordinator parent, never independently.
     if (run.ParentRunId is not null)
@@ -1437,7 +1437,8 @@ app.MapGet("/api/runs/{id}/workspace", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
+        return Results.NotFound();
 
     // Worktree is gone for terminal statuses that remove or abandon it.
     // Merged runs are handled separately below by reading from the git commit tree.
@@ -1586,7 +1587,8 @@ app.MapPost("/api/runs/{id}/shell-approvals", async (
 
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
     if (run.Status != RunStatus.InProgress)
         return Results.Conflict(new { error = "Run is not active." });
 
@@ -1610,7 +1612,8 @@ app.MapPost("/api/runs/{id}/shell-denials", async (
 
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
     if (run.Status != RunStatus.InProgress)
         return Results.Conflict(new { error = "Run is not active." });
 
@@ -1639,7 +1642,8 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
 
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
 
     var approvalScope = body.Scope switch {
         "run" => ApprovalScope.Run,
@@ -1664,7 +1668,11 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
     if (targetRun is null)
         return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, targetRun))
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, targetRun, ProjectRole.Contributor, ct) is { } targetDenied)
+        return targetDenied;
+    if (targetRunId != id
+        && targetRun.ProjectId is null
+        && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     // #349: only apply the run-active guard when there is a genuinely backend-tracked PENDING
@@ -1749,7 +1757,8 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
 
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
 
     // Same owning-run resolution as tool-approvals: deny must land on the child subtask run that
     // raised the tool call, not the parent coordinator run the operator is viewing (#196).
@@ -1764,7 +1773,11 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
         : await runStore.GetAsync(RunId.Parse(targetRunId), ct);
     if (targetRun is null)
         return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, targetRun))
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, targetRun, ProjectRole.Contributor, ct) is { } targetDenied)
+        return targetDenied;
+    if (targetRunId != id
+        && targetRun.ProjectId is null
+        && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     // #349: mirror the tool-approvals guard — only reject on run lifecycle when a genuinely
@@ -1844,7 +1857,8 @@ app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
 
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
     if (run.Status != RunStatus.InProgress)
         return Results.Conflict(new { error = "Run is not active." });
 
@@ -1868,7 +1882,8 @@ app.MapPost("/api/runs/{id}/auto-approve", async (
 
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
     if (run.Status != RunStatus.InProgress)
         return Results.Conflict(new { error = "Run is not active." });
 
@@ -1889,7 +1904,8 @@ app.MapPost("/api/runs/{id}/autopilot", async (
 
     var run = await runStore.GetAsync(runId, ct);
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+        return denied;
     if (run.Status != RunStatus.InProgress)
         return Results.Conflict(new { error = "Run is not active." });
 
@@ -1989,7 +2005,8 @@ app.MapGet("/api/runs/{id}/files", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
+        return Results.NotFound();
 
     // Failed runs do not serve artifacts (aligns with diff-withholding policy FR-026 / SC-009).
     if (run.Status is RunStatus.Pending or RunStatus.Failed)
@@ -2064,7 +2081,8 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (!EndpointHelpers.IsOwner(httpContext, run)) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
+        return Results.NotFound();
 
     // Detect whether this is a content request (URL ends with "/content").
     const string contentSuffix = "/content";
