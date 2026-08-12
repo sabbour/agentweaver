@@ -200,6 +200,25 @@ public sealed class SandboxedFileToolsDefenseTests : IDisposable
     }
 
     [Fact]
+    public async Task GitControlFiles_CannotBeMutatedByFileToolsOrPatches()
+    {
+        var (bytes, failure) = await _tools.WriteFileAsync(".git", "gitdir: /workspace/other");
+        bytes.Should().Be(0);
+        failure!.Kind.Should().Be(SandboxFailureKind.Rejected);
+
+        var patch = await _tools.ApplyPatchAsync(
+            """
+            *** Begin Patch
+            *** Add File: nested/.git/config
+            +[core]
+            +hooksPath = /workspace/other/hooks
+            *** End Patch
+            """);
+        patch.Success.Should().BeFalse();
+        patch.Reason.Should().Contain(".git");
+    }
+
+    [Fact]
     public async Task ReadFileAsync_OnDirectory_ReturnsDirectoryHint()
     {
         // "." resolves to the sandbox root, which is a directory — should return a helpful failure

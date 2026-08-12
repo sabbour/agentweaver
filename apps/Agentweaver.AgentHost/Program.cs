@@ -119,9 +119,10 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
 builder.Services.AddAgentHostRuntime();
 
-// The production AgentHost runs inside a per-run Kata VM. Do not nest bubblewrap inside that
-// boundary: the hardened pod cannot mount bwrap's private /proc. This registration intentionally
-// comes after AddAgentRuntime so it overrides only this host's shared factory registration.
+// The production AgentHost runs inside a per-run Kata VM, but the shared /workspace PVC is outside
+// the VM image and is visible to every pod. Add a second, process-level mount namespace that binds
+// only the current run roots. The executor mounts a private procfs for its unshared PID namespace,
+// so CoreCLR works normally without exposing AgentHost or sibling process roots.
 var useKataPassthrough =
     SandboxExecutorFactory.IsInCluster &&
     string.Equals(
@@ -130,11 +131,14 @@ var useKataPassthrough =
         StringComparison.OrdinalIgnoreCase);
 if (useKataPassthrough)
 {
+    if (!KataBwrapExecutor.TryProbeAvailability(out var probeReason))
+        throw new InvalidOperationException(
+            $"AgentHost Kata filesystem isolation is unavailable; refusing to start: {probeReason}");
+
     builder.Services.AddSingleton<ISandboxExecutor>(sp =>
-        new PassthroughExecutor(
-            "AgentHost executes inside a per-run Kata VM; nested bwrap is disabled.",
+        new KataBwrapExecutor(
             sp.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(nameof(PassthroughExecutor))));
+                .CreateLogger(nameof(KataBwrapExecutor))));
 }
 
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────

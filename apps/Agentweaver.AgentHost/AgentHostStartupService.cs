@@ -170,17 +170,8 @@ internal sealed class AgentHostStartupService : IHostedService
         Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH", agentScratchDirectory);
         Environment.SetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR", agentScratchDirectory);
         var workingDirectoryOverride = configuration.SharedWorkingDirectory;
-
-        // Warm pods carry a static AgentHost__WorkingDirectory env (the /workspace mount root). The
-        // per-run worktree path delivered via /configure overrides it so the pod's file-tool root
-        // matches the directory the run's system prompt references — without this override, sibling
-        // agents of one parent write to divergent dirs and later stages cannot find earlier output.
-        var workingDirectory = string.IsNullOrWhiteSpace(workingDirectoryOverride)
-            ? opts.WorkingDirectory
-            : workingDirectoryOverride!;
-        var repositoryPath = string.IsNullOrWhiteSpace(workingDirectoryOverride)
-            ? opts.RepositoryPath
-            : workingDirectoryOverride!;
+        string workingDirectory;
+        string repositoryPath;
 
         if (configuration.WorkspaceMode != ExecutionWorkspaceMode.Shared)
         {
@@ -198,6 +189,17 @@ internal sealed class AgentHostStartupService : IHostedService
                 ct).ConfigureAwait(false);
             workingDirectory = prepared.WorkspacePath;
             repositoryPath = prepared.WorkspacePath;
+        }
+        else
+        {
+            // A shared run should normally carry its exact worktree path. If an older or malformed
+            // caller omits it, stay on pod-private execution scratch rather than exposing the
+            // protected shared /workspace root through the sandbox.
+            workingDirectory = string.IsNullOrWhiteSpace(workingDirectoryOverride)
+                ? _workspaceManager.PrepareFallbackWorkspaceDirectory(runId)
+                : workingDirectoryOverride!;
+            repositoryPath = workingDirectory;
+            _workspaceManager.ConfigureRuntimeHome(runId, workingDirectory);
         }
         _runtimeState.SetEffectiveWorkingDirectory(workingDirectory);
 

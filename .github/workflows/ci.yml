@@ -126,6 +126,16 @@ jobs:
       - name: Run .NET validation
         run: node scripts/ci/validate.mjs --profile ci --area dotnet
 
+      - name: Run Kata Linux runtime regressions
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+            --no-build \
+            --no-restore \
+            -p:CopilotSkipCliDownload=true \
+            --filter "FullyQualifiedName~PrivateProcfs_RunsManagedCoreClrAndHidesHostParentProcess|FullyQualifiedName~KataPreviewStop_SignalsActualSandboxProcessGroupWithTerm|FullyQualifiedName~ConfigureAsync_without_shared_workspace_uses_writable_pod_private_fallback"
+
   node-toolchain-tests:
     name: Node toolchain tests
     needs: changes
