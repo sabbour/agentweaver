@@ -119,6 +119,13 @@ export interface WorkflowEventTrigger {
   conditions: WorkflowEventCondition[];
 }
 
+export interface WorkflowScheduleTrigger {
+  interval: 'daily' | 'weekly' | 'monthly';
+  timeOfDay: string;
+  dayOfWeek?: string;
+  dayOfMonth?: number;
+}
+
 export const WORKFLOW_EVENT_PREDICATES_BY_EVENT: Record<WorkflowEventType, WorkflowEventPredicateType[]> = {
   issues: ['hasLabel', 'isNotLabeledWith'],
   issue_comment: ['commentMatches'],
@@ -242,7 +249,7 @@ export function setHeaderField(text: string, field: string, value: string): stri
 /** Set or remove a schedule trigger while preserving the rest of the workflow document. */
 export function setScheduleTrigger(
   text: string,
-  trigger: { interval: 'daily' | 'weekly' | 'monthly'; timeOfDay: string; dayOfWeek?: string; dayOfMonth?: number } | null,
+  trigger: WorkflowScheduleTrigger | null,
 ): string {
   return withDoc(text, (doc) => {
     if (!isMap(doc.contents)) return;
@@ -288,6 +295,37 @@ function upsertTrigger(
   const index = triggers.findIndex((entry) => entry.type === replacement.type);
   if (index < 0) return [...triggers, replacement];
   return triggers.map((entry, entryIndex) => entryIndex === index ? replacement : entry);
+}
+
+/** Read the schedule trigger from either the legacy singular or multi-trigger YAML shape. */
+export function getScheduleTrigger(text: string): WorkflowScheduleTrigger | null {
+  try {
+    const js = parseDocument(text).toJS();
+    if (!isRecord(js)) return null;
+    const trigger = Array.isArray(js.triggers)
+      ? js.triggers.find((entry): entry is Record<string, unknown> => isRecord(entry) && entry.type === 'schedule') ?? null
+      : isRecord(js.trigger) ? js.trigger : null;
+    if (!trigger || trigger.type !== 'schedule') return null;
+
+    const interval = trigger.interval;
+    if (interval !== 'daily' && interval !== 'weekly' && interval !== 'monthly') return null;
+    const timeOfDay = asString(trigger.time_of_day);
+    if (!timeOfDay) return null;
+
+    const dayOfMonth = Number(trigger.day_of_month);
+    return {
+      interval,
+      timeOfDay,
+      dayOfWeek: asString(trigger.day_of_week),
+      dayOfMonth: Number.isInteger(dayOfMonth) && dayOfMonth > 0 ? dayOfMonth : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function scheduleTriggerLabel(trigger: WorkflowScheduleTrigger): string {
+  return `${trigger.interval} · ${trigger.timeOfDay} UTC`;
 }
 
 function normalizeEventName(event: WorkflowEventType): string {

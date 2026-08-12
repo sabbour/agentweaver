@@ -2,6 +2,7 @@ import {
   addNode,
   AUTHORABLE_WORKFLOW_NODE_TYPES,
   getEventTrigger,
+  getScheduleTrigger,
   parseWorkflowYaml,
   setBranchTarget,
   setEventTrigger,
@@ -170,5 +171,42 @@ trigger:
     expect(scheduleOnly).toContain('trigger:');
     expect(scheduleOnly).toContain('type: schedule');
     expect(scheduleOnly).not.toContain('type: event');
+  });
+
+  it('reads and updates schedule triggers without dropping unknown workflow fields', () => {
+    const yaml = `# workflow comment
+id: scheduled
+name: Scheduled
+custom_field: preserved
+start: done
+triggers:
+  - type: event
+    event_name: github.issues
+  - type: schedule
+    interval: monthly
+    day_of_month: 12
+    time_of_day: "14:45"
+nodes: []
+edges: []
+`;
+
+    expect(getScheduleTrigger(yaml)).toEqual({
+      interval: 'monthly',
+      timeOfDay: '14:45',
+      dayOfWeek: undefined,
+      dayOfMonth: 12,
+    });
+
+    const updated = setScheduleTrigger(baseYaml, {
+      interval: 'weekly',
+      dayOfWeek: 'friday',
+      timeOfDay: '08:15',
+    });
+    expect(getScheduleTrigger(updated)).toEqual({
+      interval: 'weekly',
+      timeOfDay: '08:15',
+      dayOfWeek: 'friday',
+      dayOfMonth: undefined,
+    });
   });
 });
