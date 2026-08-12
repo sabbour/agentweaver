@@ -8,6 +8,9 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class SandboxEndpoints
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim>
+        PreviewApprovalRetryGates = new(StringComparer.Ordinal);
+
     public static void MapSandboxEndpoints(this WebApplication app)
     {
         // POST /api/runs/{runId}/sandbox/port-forward
@@ -54,8 +57,7 @@ public static class SandboxEndpoints
         // The runId is server-bound in the agent's tool closure, so the agent can only ever target
         // its own run. Approval is auto-grantable via SANDBOX_PREVIEW_AUTO_APPROVE / the per-run
         // AutoApproveTools option so an automated demo can run unattended; otherwise the wait window
-        // defaults to 15 minutes and can be tuned via SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES /
-        // Sandbox:Preview:ApprovalTimeoutMinutes. Prod stays human-gated.
+        // defaults to the project's 30-minute setting. Prod stays human-gated.
         // Body: { "target_port": 3000 } (snake_case).
         app.MapPost("/api/runs/{runId}/sandbox/preview", async (
             HttpContext httpContext,
@@ -88,17 +90,121 @@ public static class SandboxEndpoints
                 ct,
                 previewContext.WorkPlanId,
                 previewContext.TreeHash);
-            if (outcome != PreviewApprovalOutcome.Approved)
+            if (outcome.Outcome != PreviewApprovalOutcome.Approved)
             {
-                var reason = outcome == PreviewApprovalOutcome.TimedOut ? "approval_timed_out" : "approval_denied";
-                EmitPreviewFailure(streamStore, runId, request.TargetPort, reason, "Preview approval was denied or timed out.");
+                var timedOut = outcome.Outcome == PreviewApprovalOutcome.TimedOut;
+                var reason = timedOut ? "approval_timed_out" : "approval_denied";
+                EmitPreviewFailure(
+                    streamStore,
+                    runId,
+                    request.TargetPort,
+                    reason,
+                    timedOut
+                        ? "Preview approval expired. Retry approval without restarting the run."
+                        : "Preview approval was denied.",
+                    approvalRequestId: outcome.RequestId,
+                    retryAvailable: timedOut,
+                    expiredAt: outcome.ExpiresAt);
                 return Results.Json(
-                    new { error = "Preview approval was denied or timed out." },
+                    new { error = timedOut ? "Preview approval expired." : "Preview approval was denied." },
                     statusCode: StatusCodes.Status403Forbidden);
             }
 
             return await StartPreviewForRunAsync(
                 runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger, ct);
+        });
+
+        // POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry
+        // Re-arms an expired start_preview request. A new request id is emitted immediately; if the
+        // deterministic PreviewStep already started a process, approval registers that same process
+        // rather than executing the preview command again.
+        app.MapPost("/api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry", async (
+            HttpContext httpContext,
+            string runId,
+            string requestId,
+            AgentPreviewGate previewGate,
+            IToolApprovalGate approvalGate,
+            PortForwardService portForwardService,
+            ISandboxPreviewService previewService,
+            RunStreamStore streamStore,
+            IRunStore runStore,
+            IPreviewRunnerHttpClient previewRunnerClient,
+            Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
+            Agentweaver.Api.Auth.ISecretStore secretStore,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
+        {
+            if (!Agentweaver.Domain.RunId.TryParse(runId, out var parsedRunId))
+                return Results.BadRequest(new { error = "Invalid run id." });
+
+            var run = await runStore.GetAsync(parsedRunId, ct);
+            if (run is null) return Results.NotFound();
+            if (!EndpointHelpers.IsOwner(httpContext, run))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            var retryGateKey = $"{runId}:{requestId}";
+            var retryGate = PreviewApprovalRetryGates.GetOrAdd(
+                retryGateKey,
+                static _ => new SemaphoreSlim(1, 1));
+            await retryGate.WaitAsync(ct).ConfigureAwait(false);
+
+            RetryablePreviewContext retry;
+            PreviewApprovalAttempt attempt;
+            try
+            {
+                var currentRun = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+                if (currentRun is null)
+                    return Results.NotFound();
+                if (EndpointHelpers.IsTerminal(currentRun.Status))
+                    return Results.Conflict(new { error = "Run is terminal; preview approval cannot be retried." });
+                if (approvalGate.GetRequestState(runId, requestId) != ToolApprovalRequestState.Expired)
+                    return Results.Conflict(new { error = "Only an expired preview approval can be retried." });
+
+                var retryCandidate = LatestRetryablePreview(streamStore, runId, requestId);
+                if (retryCandidate is null)
+                    return Results.Conflict(new
+                    {
+                        error = "This preview approval is no longer the latest retryable preview state.",
+                    });
+                retry = retryCandidate;
+
+                attempt = await previewGate.BeginApprovalAsync(
+                    runId,
+                    retry.TargetPort,
+                    CancellationToken.None,
+                    retry.WorkPlanId,
+                    retry.TreeHash,
+                    retryOfRequestId: requestId).ConfigureAwait(false);
+            }
+            finally
+            {
+                retryGate.Release();
+                PreviewApprovalRetryGates.TryRemove(retryGateKey, out _);
+            }
+
+            _ = CompletePreviewRetryAsync(
+                runId,
+                run,
+                retry,
+                attempt,
+                previewService,
+                portForwardService,
+                streamStore,
+                previewRunnerClient,
+                turnTokens,
+                secretStore,
+                runStore,
+                logger);
+
+            return Results.Accepted(
+                $"/api/runs/{runId}/events",
+                new
+                {
+                    run_id = runId,
+                    request_id = attempt.RequestId,
+                    retry_of_request_id = requestId,
+                    expires_at = attempt.ExpiresAt,
+                    state = "pending",
+                });
         });
 
         // POST /api/runs/{runId}/sandbox/preview/{token}/keepalive
@@ -243,13 +349,14 @@ public static class SandboxEndpoints
         PortForwardService portForwardService,
         RunStreamStore streamStore,
         ILogger logger,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? previewRunnerSessionId = null)
     {
         // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
         if (previewService.Enabled)
         {
             var registration = await TryRegisterPreviewAsync(
-                runId, targetPort, run.SubmittingUser, previewService, ct);
+                runId, targetPort, run.SubmittingUser, previewService, ct, previewRunnerSessionId);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
@@ -391,7 +498,11 @@ public static class SandboxEndpoints
         string runId,
         int targetPort,
         string reason,
-        string message)
+        string message,
+        string? previewRunnerSessionId = null,
+        string? approvalRequestId = null,
+        bool retryAvailable = false,
+        DateTimeOffset? expiredAt = null)
     {
         var context = LatestPreviewContext(streamStore, runId);
         streamStore.Get(runId)?.RecordNext(EventTypes.SandboxPreviewFailed, new
@@ -403,9 +514,209 @@ public static class SandboxEndpoints
             target_port = targetPort,
             reason,
             message,
+            preview_runner_session_id = previewRunnerSessionId,
+            approval_request_id = approvalRequestId,
+            retry_available = retryAvailable,
+            expired_at = expiredAt?.ToString("O"),
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
         EmitPreviewWorkflowStep(streamStore, runId, "failed", message);
+    }
+
+    private static async Task CompletePreviewRetryAsync(
+        string runId,
+        Run run,
+        RetryablePreviewContext retry,
+        PreviewApprovalAttempt attempt,
+        ISandboxPreviewService previewService,
+        PortForwardService portForwardService,
+        RunStreamStore streamStore,
+        IPreviewRunnerHttpClient previewRunnerClient,
+        Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
+        Agentweaver.Api.Auth.ISecretStore secretStore,
+        IRunStore runStore,
+        ILogger logger)
+    {
+        try
+        {
+            var result = await attempt.Completion.ConfigureAwait(false);
+            var currentRun = await runStore.GetAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
+            if (currentRun is null || EndpointHelpers.IsTerminal(currentRun.Status))
+            {
+                await TryStopRetainedProcessAsync(
+                    runId,
+                    retry.PreviewRunnerSessionId,
+                    "run_terminal",
+                    previewRunnerClient,
+                    turnTokens,
+                    secretStore,
+                    logger).ConfigureAwait(false);
+                EmitPreviewFailure(
+                    streamStore,
+                    runId,
+                    retry.TargetPort,
+                    "registration_failed",
+                    "The run became terminal before preview approval completed.");
+                return;
+            }
+
+            if (result.Outcome == PreviewApprovalOutcome.Approved)
+            {
+                var registrationResult = await StartPreviewForRunAsync(
+                    runId,
+                    retry.TargetPort,
+                    currentRun,
+                    previewService,
+                    portForwardService,
+                    streamStore,
+                    logger,
+                    CancellationToken.None,
+                    retry.PreviewRunnerSessionId).ConfigureAwait(false);
+                if (registrationResult is not Microsoft.AspNetCore.Http.IStatusCodeHttpResult
+                    { StatusCode: StatusCodes.Status200OK })
+                {
+                    await TryStopRetainedProcessAsync(
+                        runId,
+                        retry.PreviewRunnerSessionId,
+                        "registration_failed",
+                        previewRunnerClient,
+                        turnTokens,
+                        secretStore,
+                        logger).ConfigureAwait(false);
+                }
+                return;
+            }
+
+            var timedOut = result.Outcome == PreviewApprovalOutcome.TimedOut;
+            if (!timedOut && retry.PreviewRunnerSessionId is not null)
+            {
+                await TryStopRetainedProcessAsync(
+                    runId,
+                    retry.PreviewRunnerSessionId,
+                    "preview_approval_denied",
+                    previewRunnerClient,
+                    turnTokens,
+                    secretStore,
+                    logger).ConfigureAwait(false);
+            }
+
+            EmitPreviewFailure(
+                streamStore,
+                runId,
+                retry.TargetPort,
+                timedOut ? "approval_timed_out" : "approval_denied",
+                timedOut
+                    ? "Preview approval expired. Retry approval without restarting the run."
+                    : "Preview approval was denied.",
+                retry.PreviewRunnerSessionId,
+                result.RequestId,
+                retryAvailable: timedOut,
+                expiredAt: result.ExpiresAt);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Preview approval retry failed for run {RunId}", runId);
+            EmitPreviewFailure(
+                streamStore,
+                runId,
+                retry.TargetPort,
+                "registration_failed",
+                "Preview approval retry failed unexpectedly.");
+        }
+    }
+
+    private static async Task TryStopRetainedProcessAsync(
+        string runId,
+        string? previewRunnerSessionId,
+        string reason,
+        IPreviewRunnerHttpClient previewRunnerClient,
+        Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
+        Agentweaver.Api.Auth.ISecretStore secretStore,
+        ILogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(previewRunnerSessionId)) return;
+
+        try
+        {
+            var bearer = turnTokens.TryGetTurnToken(runId);
+            if (string.IsNullOrWhiteSpace(bearer))
+            {
+                var secret = await secretStore.GetSecretAsync(
+                    PreviewRunnerCredential.SecretKey(runId),
+                    CancellationToken.None).ConfigureAwait(false);
+                bearer = secret.Found ? secret.Value : null;
+            }
+
+            await previewRunnerClient.StopProcessAsync(
+                runId,
+                bearer,
+                previewRunnerSessionId,
+                reason,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to stop retained preview process {SessionId} for run {RunId}",
+                previewRunnerSessionId,
+                runId);
+        }
+    }
+
+    private static RetryablePreviewContext? LatestRetryablePreview(
+        RunStreamStore streamStore,
+        string runId,
+        string approvalRequestId)
+    {
+        var events = streamStore.Get(runId)?.GetSnapshotSince(0).Events;
+        if (events is null) return null;
+
+        for (var i = events.Count - 1; i >= 0; i--)
+        {
+            if (events[i].Type == EventTypes.SandboxPreviewPending)
+                return null;
+            if (events[i].Type is EventTypes.SandboxPreviewReady or EventTypes.SandboxPreviewSkippedNotApplicable)
+                return null;
+            if (events[i].Type != EventTypes.SandboxPreviewFailed)
+                continue;
+
+            var node = System.Text.Json.JsonSerializer.SerializeToNode(events[i].Payload)
+                as System.Text.Json.Nodes.JsonObject;
+            if (node is null
+                || !GetBool(node, "retry_available")
+                || !string.Equals(GetString(node, "approval_request_id"), approvalRequestId, StringComparison.Ordinal))
+                return null;
+
+            var targetPort = GetInt(node, "target_port");
+            if (targetPort is null) return null;
+            return new RetryablePreviewContext(
+                targetPort.Value,
+                GetInt(node, "work_plan_id"),
+                GetString(node, "tree_hash"),
+                GetString(node, "preview_runner_session_id"));
+        }
+
+        return null;
+    }
+
+    private static int? GetInt(System.Text.Json.Nodes.JsonObject node, string name) =>
+        node.TryGetPropertyValue(name, out var value) && value is not null
+            ? GetNullableInt(value)
+            : null;
+
+    private static string? GetString(System.Text.Json.Nodes.JsonObject node, string name)
+    {
+        if (!node.TryGetPropertyValue(name, out var value) || value is null) return null;
+        try { return value.GetValue<string>(); }
+        catch { return null; }
+    }
+
+    private static bool GetBool(System.Text.Json.Nodes.JsonObject node, string name)
+    {
+        if (!node.TryGetPropertyValue(name, out var value) || value is null) return false;
+        try { return value.GetValue<bool>(); }
+        catch { return false; }
     }
 
     private static void EmitPreviewWorkflowStep(
@@ -462,6 +773,12 @@ public static class SandboxEndpoints
         || ex.Message.Contains("claim", StringComparison.OrdinalIgnoreCase)
             ? "no_bound_pod"
             : "gateway_failed";
+
+    private sealed record RetryablePreviewContext(
+        int TargetPort,
+        int? WorkPlanId,
+        string? TreeHash,
+        string? PreviewRunnerSessionId);
 }
 
 /// <summary>Request body for starting a port-forward session.</summary>

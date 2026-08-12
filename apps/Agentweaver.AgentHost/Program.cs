@@ -119,9 +119,10 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
 builder.Services.AddAgentHostRuntime();
 
-// The production AgentHost runs inside a per-run Kata VM. Do not nest bubblewrap inside that
-// boundary: the hardened pod cannot mount bwrap's private /proc. This registration intentionally
-// comes after AddAgentRuntime so it overrides only this host's shared factory registration.
+// The production AgentHost runs inside a per-run Kata VM, but the shared /workspace PVC is outside
+// the VM image and is visible to every pod. Add a second, process-level mount namespace that binds
+// only the current run roots. The executor mounts a private procfs for its unshared PID namespace,
+// so CoreCLR works normally without exposing AgentHost or sibling process roots.
 var useKataPassthrough =
     SandboxExecutorFactory.IsInCluster &&
     string.Equals(
@@ -130,11 +131,14 @@ var useKataPassthrough =
         StringComparison.OrdinalIgnoreCase);
 if (useKataPassthrough)
 {
+    if (!KataBwrapExecutor.TryProbeAvailability(out var probeReason))
+        throw new InvalidOperationException(
+            $"AgentHost Kata filesystem isolation is unavailable; refusing to start: {probeReason}");
+
     builder.Services.AddSingleton<ISandboxExecutor>(sp =>
-        new PassthroughExecutor(
-            "AgentHost executes inside a per-run Kata VM; nested bwrap is disabled.",
+        new KataBwrapExecutor(
             sp.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(nameof(PassthroughExecutor))));
+                .CreateLogger(nameof(KataBwrapExecutor))));
 }
 
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────
@@ -287,6 +291,21 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
     {
         throw;
+    }
+    catch (GitHubCopilotUnauthorizedException ex)
+    {
+        var logger = ctx.RequestServices.GetRequiredService<ILogger<AgentHostRuntimeState>>();
+        logger.LogWarning(
+            ex,
+            "AgentHost /configure: GitHub Copilot rejected the run credential for run {RunId}; the API may refresh and recreate this pod once.",
+            configuration.RunId);
+        return Results.Json(
+            new
+            {
+                error = "agenthost_configure_copilot_unauthorized",
+                message = ex.Message,
+            },
+            statusCode: StatusCodes.Status401Unauthorized);
     }
     catch (Exception ex)
     {
@@ -537,6 +556,13 @@ internal sealed record ConfigureRequest
     public string? GitHubAccessToken { get; init; }
 
     /// <summary>
+    /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
+    /// separate from <see cref="GitHubAccessToken"/> because Entra deployments use different
+    /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
+    /// </summary>
+    public string? CallerBearerToken { get; init; }
+
+    /// <summary>
     /// The run's shared orchestration worktree path (e.g. <c>/workspace/{worktree}</c>). When present,
     /// the pod runs <c>SetupAsync</c> with this as its working directory — and therefore its file-tool
     /// root — instead of the static <c>AgentHost__WorkingDirectory</c> env default. This keeps every
@@ -619,7 +645,8 @@ internal sealed record ConfigureRequest
         CommitAuthorName,
         CommitAuthorEmail,
         ProjectId,
-        AgentName);
+        AgentName,
+        CallerBearerToken);
 }
 
 internal sealed record PreviewProcessStartRequest

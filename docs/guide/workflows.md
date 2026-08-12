@@ -85,6 +85,8 @@ The **Actions** group includes **Open pull request**, which creates a pull reque
 
 The **Schedule trigger** section shows whether the workflow is manual-only or scheduled. Choose **Add schedule trigger** or **Edit schedule trigger** to configure a daily, weekly, or monthly UTC schedule. Schedule changes update the editor's current YAML draft and are persisted with the rest of the workflow when you choose **Save**, so unsaved graph or YAML edits are never overwritten by a separate schedule save.
 
+The **Schedule trigger** section shows whether the workflow is manual-only or scheduled. Choose **Add schedule trigger** or **Edit schedule trigger** to configure a daily, weekly, or monthly UTC schedule. Schedule changes update the editor's current YAML draft and are persisted with the rest of the workflow when you choose **Save**, so unsaved graph or YAML edits are never overwritten by a separate schedule save.
+
 For existing project workflows, use **Edit** to open the YAML editor or **Edit visually** to open the graph editor. Built-in workflows are read-only; use **Duplicate to project** to create an editable copy and open it in the visual editor.
 
 ## Running and scheduling workflows
@@ -134,9 +136,11 @@ The visual event-trigger editor is intentionally constrained:
 ## Triggering workflows from GitHub
 
 Each GitHub-connected project can receive repository events through its own webhook. Open the
-project's **Settings → Webhooks** page. Agentweaver now keeps the manual setup visible at all
-times, and also shows a **Create webhook automatically** button. That automatic flow is currently
-stubbed as **coming soon**, so the manual steps below remain the active setup path for now.
+project's **Settings → Webhooks** page. Agentweaver keeps the manual setup visible at all times and
+also shows a **Create webhook automatically** button. The button uses the project's effective
+linked GitHub identity to create or refresh the repository webhook, including a project-specific
+signing secret and the supported event set. The linked identity must be able to administer
+repository webhooks (`repo` or `write:repo_hook` for classic OAuth tokens).
 
 Select **Generate secret** and copy the generated value immediately: it is shown once only. In your
 GitHub repository, go to **Settings → Webhooks → Add webhook** and configure:
@@ -200,11 +204,10 @@ trigger:
 `comment_matches` is boolean-only: it decides fire / no-fire, but Agentweaver does not forward the
 raw comment body into backlog task text or downstream prompts.
 
-The Webhooks settings page always keeps the manual setup path visible. It also includes **Create
-webhook automatically** so the future GitHub-assisted flow can request `write:repo_hook`
-incrementally only when you click it. If the scope request is denied, canceled, or unavailable, the
-page leaves the manual payload URL / secret instructions in place so you never lose the fallback. In
-the current build, the button is still a placeholder and falls back to the same manual instructions.
+The Webhooks settings page always keeps the manual setup path visible. If GitHub rejects automatic
+provisioning because the selected identity lacks repository-hook permission, reconnect that account
+with `repo` or `write:repo_hook` access, or use the displayed payload URL and one-time secret to
+configure the webhook manually.
 
 For example, this project workflow starts whenever an issue is opened:
 

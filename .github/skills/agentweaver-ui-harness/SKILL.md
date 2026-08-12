@@ -18,6 +18,9 @@ Read and follow the detailed CLI contract in `scripts/ui-harness/SKILL.md`. Invo
 actual `node scripts/ui-harness/agent-driver-ui/tools.mjs` commands rather than
 recreating browser steps with another Playwright interface.
 
+Canvas interactions use the documented `drag` command with stable source/target test
+IDs. It drives a genuine pointer down/move/up sequence and records failed attempts.
+
 That contract now includes `list-scenarios` for the reviewed built-in UI catalog. Use
 the separate `harness-scenarios` skill for cross-surface cataloging and persona
 generation.

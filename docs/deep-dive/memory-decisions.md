@@ -12,7 +12,11 @@ Think of the design as a **shared ledger with a drop-box in front of it**:
 4. **Memory stays lower priority than decisions**. Memory helps an agent work; decisions constrain what the whole team is allowed to do.
 5. **Exports mirror the ledger to files** so humans and agents can inspect the current state in `.squad/` and `.agentweaver/context/`.
 
-The key governance idea is separation: agents may propose, but only accepted decisions become authoritative boundaries. That keeps team knowledge cumulative while preserving a deliberate write boundary around project policy.
+The key governance idea is separation: agents may propose, but only accepted decisions
+become authoritative boundaries. Acceptance is provenance-aware: a project owner or a
+verified Coordinator run controls manual promotion, merge, rejection, and active
+decision mutation. That keeps team knowledge cumulative while preserving a deliberate
+write boundary around project policy.
 
 ![Purpose and mental model: Run worker, Coordinator, PostRunScribeService, MCP tools and API endpoints, DecisionInbox pending, Review and merge, Decisions ledger active, AgentMemory core, learning, pattern, update, SessionContext, MemoryContextCompiler, Squad and Agentweaver context files](../diagrams/memory-decisions-fig1.png)
 
@@ -44,9 +48,31 @@ The inbox exists because agents are useful observers but noisy policymakers. A r
 
 ### Agent memory
 
-Agent memory is reusable context associated with a named agent. It stores core context, learnings, patterns, and updates with an importance level and optional tags. A memory tagged `cross-team` can be selected for agents other than the original author.
+Agent memory is reusable context associated with a named agent. It stores core context,
+learnings, patterns, and updates with an importance level and optional tags. Approved
+memory tagged `cross-team` can be selected for agents other than the original author.
 
 Memory answers: "What may help this agent or the wider team do better next time?" It should not override accepted decisions.
+
+### Provenance and trust
+
+Memory and decisions retain server-resolved provenance:
+
+- `sourceKind`: `human`, `run`, or `legacy`;
+- `sourceIdentity`: the authenticated user or verified `run:{id}`;
+- `sourceRunId`: the originating run when applicable;
+- `trustState`: `pending`, `approved`, or `legacy` for memory and decisions;
+- `approvedBy` and `approvedAt`: the approval audit trail.
+
+Agent loopback writes require a short-lived run capability in addition to the internal
+API key. The API resolves the project and agent from that verified run and rejects a
+forged agent name.
+
+New memory starts `pending`. It can inform its named agent, but `cross-team` selection
+requires `approved`. Active architectural and scope decisions also require `approved`
+before compilation. Records that predate provenance tracking migrate as `legacy` and
+remain visible but fail closed: they are excluded from every prompt until explicitly
+approved.
 
 ### Session context
 
@@ -96,6 +122,11 @@ erDiagram
       string agent_name
       string type
       string status
+      string source_kind
+      string source_identity
+      string source_run_id
+      string trust_state
+      string approved_by
       string title
       string content
       string rationale
@@ -109,6 +140,9 @@ erDiagram
       string slug
       string type
       string status
+      string source_kind
+      string source_identity
+      string source_run_id
       string title
       string content
       int decision_id
@@ -123,6 +157,11 @@ erDiagram
       string importance
       string tags
       string content
+      string source_kind
+      string source_identity
+      string source_run_id
+      string trust_state
+      string approved_by
     }
     SESSION_CONTEXT {
       int id
@@ -147,7 +186,8 @@ The project-wide slug constraint is intentionally stronger than "unique per agen
 The inbox is a state machine:
 
 1. A pending entry is created or updated.
-2. A reviewer, coordinator backstop, or post-run Scribe path decides whether it should be accepted.
+2. A project owner, verified Coordinator backstop, or bounded post-run Scribe path
+   decides whether it should be accepted.
 3. Promotion creates an active decision, marks the inbox entry `merged`, records the merge timestamp, and stores the decision id on the inbox entry.
 4. Rejection marks the entry `rejected`; it does not delete it.
 
@@ -174,11 +214,18 @@ Promotion must be transactional in spirit. The system should not create an accep
 
 There are three promotion paths:
 
-- **Manual/API promotion** merges one pending inbox entry.
-- **Post-run Scribe automation** auto-merges lower-risk `learning`, `pattern`, and `update` entries created by the completed run's agent.
-- **Coordinator finalization backstop** promotes run-scoped architectural and scope entries authored by the coordinator.
+- **Manual/API promotion** merges one pending inbox entry after authorization as a
+  project owner or verified Coordinator run.
+- **Post-run Scribe automation** auto-merges lower-risk `learning`, `pattern`, and
+  `update` entries only when they match the completed run's agent, creation window, and
+  verified source run id.
+- **Coordinator finalization backstop** promotes run-scoped architectural and scope
+  entries authored by that same verified Coordinator run.
 
-The policy split is deliberate. Routine learnings can flow quickly into the ledger. Architectural and scope boundaries are higher impact and should remain review-oriented unless the coordinator path has explicitly authored them as part of finalization.
+The policy split is deliberate. Routine, verified run-scoped learnings can flow quickly
+into the ledger. Architectural and scope boundaries are higher impact and remain
+review-oriented unless the verified Coordinator authored them as part of finalization.
+An ordinary agent cannot use Scribe to promote a boundary.
 
 ## Slug de-collision
 
@@ -210,13 +257,17 @@ Memory and decisions are intentionally different:
 | Aspect | Decisions | Agent memory |
 | --- | --- | --- |
 | Authority | Governs the team | Informs an agent |
-| Review model | Inbox promotion, direct creation, supersession | Direct append |
+| Review model | Owner/verified-Coordinator promotion, direct creation, supersession | Direct append; owner/verified-Coordinator approval for cross-agent use |
 | Prompt priority | Highest for architectural/scope decisions | Lower than decisions |
-| Scope | Project-wide when active | Agent-scoped unless tagged `cross-team` |
+| Scope | Project-wide when active and approved | Agent-scoped unless approved and tagged `cross-team` |
 | File mirror | `.squad/decisions.md`, boundaries context | agent histories, shared patterns |
 | Update model | Status changes and supersession | Append new entries; selection is bounded |
 
-The difference matters during context compilation. Accepted architectural and scope decisions are rendered first as boundaries. Agent memory follows. Session context comes last. This ordering lets the team preserve helpful knowledge without letting a local learning override a project boundary.
+The difference matters during context compilation. Active, approved architectural and
+scope decisions are serialized first as boundaries. Non-legacy agent-scoped memory
+follows; cross-team memory must also be approved. Session context comes last. All
+selected strings live inside an explicitly untrusted JSON data envelope, so trust
+controls eligibility without turning stored text into prompt instructions.
 
 ![Memory versus decisions: Active architectural + scope decisions, Agent core_context memories, High-importance learnings and patterns, Cross-team tagged memories, Current open session, Compiled prompt context](../diagrams/memory-decisions-fig3.png)
 
@@ -249,6 +300,9 @@ Exports happen after memory mutations and after post-run Scribe processing. They
 Import scans `.squad/decisions/inbox/*.md`. Each file needs front matter with `agent`, `slug`, `type`, and `title`. The body becomes content. A trailing `**Rationale:**` section is split into rationale. Unparseable files are skipped.
 
 The importer creates missing pending inbox rows by slug and leaves existing slugs alone. It is a union-style import, not a destructive reconciliation. That makes the inbox folder useful as a drop-box for humans or agents without risking deletion of database state.
+
+Import does not bypass review. A file can create a pending proposal, but it cannot
+directly create an approved decision or repair a `legacy` record's trust state.
 
 ## Conflict-free merge model
 
@@ -289,7 +343,18 @@ Unbounded memory would produce noisy prompts and high token usage. The compiler 
 
 ### Cross-team over-sharing
 
-The `cross-team` tag is powerful because it moves memory beyond the original agent. Tags should be normalized with delimiter semantics so searching for `team` does not accidentally match `cross-team`, and vice versa.
+The `cross-team` tag is powerful because it moves memory beyond the original agent. It
+must be combined with `TrustState = approved`; a tag on `pending` or `legacy` memory is
+not sufficient. Tags should be normalized with delimiter semantics so searching for
+`team` does not accidentally match `cross-team`, and vice versa.
+
+### Legacy data treated as current policy
+
+An upgrade can retain historical rows whose authorship cannot be verified. Marking
+those rows approved by default would silently elevate unknown text into future prompts.
+The migration therefore assigns both `SourceKind = legacy` and `TrustState = legacy`.
+The records remain inspectable, but compilation ignores them until an authorized
+approval records `ApprovedBy` and `ApprovedAt`.
 
 ### Backup gap
 
@@ -306,8 +371,12 @@ A correct implementation should preserve these rules:
 - Merged and rejected inbox entries are not reopened by a retry.
 - Rejection never deletes the inbox entry.
 - Promotion creates an active decision and links the source inbox entry.
-- Architectural and scope decisions outrank all other memory in compiled context.
-- Agent memory is scoped to the agent unless explicitly tagged `cross-team`.
+- Manual promotion, rejection, approval, and active-decision mutation require a project
+  owner or verified Coordinator run.
+- Architectural and scope decisions compile only when active and approved.
+- Legacy memory and decisions never compile.
+- Agent memory is scoped to the agent unless approved and explicitly tagged `cross-team`.
+- Stored memory, decision, and session strings are serialized as explicitly untrusted JSON data.
 - Tags are stored and queried as whole tags, not loose substrings.
 - Starting a session closes older open sessions for the same project.
 - Export removes stale pending inbox files before writing current pending entries.
@@ -345,19 +414,23 @@ To rebuild memory and decision governance from these concepts, implement the sys
 3. Implement inbox submission with required-field validation.
 4. Implement slug de-collision: same-agent pending updates; different-agent collisions allocate `slug--agent`, then numbered candidates.
 5. Implement inbox list filters by status, type, and agent, defaulting to pending.
-6. Implement transactional promotion from inbox entry to active decision.
+6. Implement transactional, authorized promotion from inbox entry to an approved active decision.
 7. Implement rejection as a retained status transition.
 8. Implement direct decision creation and decision updates, including supersession links.
-9. Implement agent memory recording with normalized comma-delimited tags.
+9. Implement agent memory recording with verified provenance, `pending` trust, and normalized comma-delimited tags.
 10. Implement memory search with whole-tag matching and agent-specific retrieval.
 11. Implement session start/update/current semantics with one open current session.
-12. Implement a deterministic context compiler: decisions first, then bounded memory, then current session.
+12. Implement a deterministic context compiler: approved decisions first, then eligible
+    bounded memory, then current session, all inside an explicitly untrusted data envelope.
 13. Implement DTO-based export to `.squad/` and `.agentweaver/context/`.
 14. Implement import from `.squad/decisions/inbox/*.md` as a non-destructive union.
 15. Trigger export after memory mutations and after post-run Scribe processing.
-16. Add a post-run Scribe path that auto-merges low-risk run-scoped entries and reports higher-risk entries for review.
-17. Add a coordinator finalization backstop for run-scoped architectural and scope entries authored by the coordinator.
-18. Ensure backup and migration plans include the memory database, not only the operational database.
+16. Add a post-run Scribe path that auto-merges only low-risk entries attributable to
+    the exact completed run and reports higher-risk entries for review.
+17. Add a verified Coordinator finalization backstop for its own run-scoped
+    architectural and scope entries.
+18. Migrate unverifiable existing rows as `legacy` and require explicit approval before compilation.
+19. Ensure backup and migration plans include the memory database, not only the operational database.
 
 ## Common gotchas
 
@@ -366,6 +439,8 @@ To rebuild memory and decision governance from these concepts, implement the sys
 - Same slug does not always mean same proposal. Different agents can choose the same words for different ideas.
 - Same-agent idempotence should stop at merged or rejected entries.
 - Auto-merging should be conservative. Low-risk learnings are not the same as architectural boundaries.
+- A `cross-team` tag is not approval.
+- An active database status is not enough for a legacy decision to compile.
 - Prompt context order is policy: decisions before memory before session.
 - Exported `.agentweaver/context/*` files are generated context artifacts, not the canonical decision store.
 - Import that overwrites existing rows by slug can destroy review history; import should add missing pending items only.

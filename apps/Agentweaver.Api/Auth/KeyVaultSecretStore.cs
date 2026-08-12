@@ -19,10 +19,15 @@ namespace Agentweaver.Api.Auth;
 public sealed class KeyVaultSecretStore : ISecretStore, IAtomicSecretLeaseStore
 {
     private readonly SecretClient _client;
+    private readonly KeyVaultRecoverableSecretWriter _writer;
     private const string LeaseOwnerTag = "agentweaver-lease-owner";
     private const string LeaseExpiresTag = "agentweaver-lease-expires";
 
-    public KeyVaultSecretStore(SecretClient client) => _client = client;
+    public KeyVaultSecretStore(SecretClient client)
+    {
+        _client = client;
+        _writer = new KeyVaultRecoverableSecretWriter(new AzureKeyVaultSecretWriterClient(client));
+    }
 
     // ── Key mapping ─────────────────────────────────────────────────────────
 
@@ -108,8 +113,7 @@ public sealed class KeyVaultSecretStore : ISecretStore, IAtomicSecretLeaseStore
                 throw new SecretPreconditionFailedException();
         }
 
-        var setResponse = await _client.SetSecretAsync(kvKey, value, ct).ConfigureAwait(false);
-        return setResponse.Value.Properties.Version ?? string.Empty;
+        return await _writer.SetSecretAsync(kvKey, value, ct).ConfigureAwait(false);
     }
 
     public async Task<ISecretStoreLease?> TryAcquireLeaseAsync(

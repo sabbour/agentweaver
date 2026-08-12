@@ -190,6 +190,7 @@ export interface Project {
   blueprint_generation_model: string | null;
   workflow_generation_model: string | null;
   outcome_spec_generation_model: string | null;
+  preview_approval_timeout_minutes?: number;
   available: boolean;
   state: ProjectState;
   created_at: string;
@@ -201,6 +202,13 @@ export interface Project {
 
 export interface WebhookSecretRotationResponse {
   secret: string;
+}
+
+export interface GitHubWebhookProvisioningResponse {
+  hook_id: number;
+  created: boolean;
+  repository: string;
+  payload_url: string;
 }
 
 export interface Blueprint {
@@ -271,6 +279,14 @@ export interface UpdateProjectProviderSettingsRequest {
   blueprint_generation_model?: string | null;
   workflow_generation_model?: string | null;
   outcome_spec_generation_model?: string | null;
+}
+
+export interface UpdateProjectPreviewSettingsRequest {
+  approval_timeout_minutes: number;
+}
+
+export interface ProjectPreviewSettingsResponse {
+  approval_timeout_minutes: number;
 }
 
 export interface CreateProjectRunRequest {

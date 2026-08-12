@@ -403,6 +403,17 @@ export class AgentweaverApiClient {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
+  updateProjectPreviewSettings(
+    projectId: string,
+    req: import('./types').UpdateProjectPreviewSettingsRequest,
+  ): Promise<import('./types').ProjectPreviewSettingsResponse> {
+    return this.request<import('./types').ProjectPreviewSettingsResponse>(
+      'PUT',
+      `/projects/${encodeURIComponent(projectId)}/preview-settings`,
+      req,
+    );
+  }
+
   rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
     return this.request<import('./types').WebhookSecretRotationResponse>(
       'POST',
@@ -411,10 +422,12 @@ export class AgentweaverApiClient {
     );
   }
 
-  autoCreateProjectWebhook(projectId: string): Promise<void> {
-    void projectId;
-    // TODO(#641): replace this placeholder with the real server-side GitHub webhook creation endpoint.
-    return Promise.reject(new ApiError(501, 'Automatic GitHub webhook creation is not implemented yet.'));
+  autoCreateProjectWebhook(projectId: string): Promise<import('./types').GitHubWebhookProvisioningResponse> {
+    return this.request<import('./types').GitHubWebhookProvisioningResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/webhooks/github/provision`,
+      {},
+    );
   }
 
   deleteProject(projectId: string): Promise<void> {
@@ -995,6 +1008,20 @@ export class AgentweaverApiClient {
 
   denyTool(runId: string, requestId: string): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/tool-denials`, { request_id: requestId });
+  }
+
+  retryPreviewApproval(runId: string, requestId: string): Promise<{
+    run_id: string;
+    request_id: string;
+    retry_of_request_id: string;
+    expires_at: string;
+    state: 'pending';
+  }> {
+    return this.request(
+      'POST',
+      `/runs/${encodeURIComponent(runId)}/sandbox/preview-approvals/${encodeURIComponent(requestId)}/retry`,
+      {},
+    );
   }
 
   approveShell(runId: string, commandHash: string): Promise<void> {

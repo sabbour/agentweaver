@@ -68,12 +68,34 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
         if (!NeedsRefresh(token))
             return token.AccessToken;
 
-        return await RefreshWithLeaseAsync(scope, token, ct).ConfigureAwait(false);
+        return await RefreshWithLeaseAsync(scope, token, forceRefresh: false, ct: ct).ConfigureAwait(false);
+    }
+
+    public async Task<string?> RefreshAfterUnauthorizedAsync(
+        GitHubTokenScope scope,
+        string? rejectedAccessToken,
+        CancellationToken ct = default)
+    {
+        var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
+        if (token is null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(rejectedAccessToken) &&
+            !string.Equals(token.AccessToken, rejectedAccessToken, StringComparison.Ordinal))
+        {
+            return await GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
+        }
+
+        _logger.LogWarning(
+            "GitHub access token for scope {Scope} was explicitly rejected as unauthorized; attempting one forced refresh.",
+            scope.Key);
+        return await RefreshWithLeaseAsync(scope, token, forceRefresh: true, ct: ct).ConfigureAwait(false);
     }
 
     private async Task<string?> RefreshWithLeaseAsync(
         GitHubTokenScope scope,
         GitHubToken observedToken,
+        bool forceRefresh,
         CancellationToken ct)
     {
         while (true)
@@ -83,7 +105,7 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
                 : await AcquireLocalRefreshLeaseAsync(scope, ct).ConfigureAwait(false);
 
             if (lease is not null)
-                return await RefreshAsLeaseOwnerAsync(scope, observedToken, ct).ConfigureAwait(false);
+                return await RefreshAsLeaseOwnerAsync(scope, observedToken, forceRefresh, ct).ConfigureAwait(false);
 
             var deadline = DateTimeOffset.UtcNow + RefreshLeaseTtl;
             while (DateTimeOffset.UtcNow < deadline)
@@ -92,7 +114,9 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
                 var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
                 if (token is null)
                     return null;
-                if (!SameRefreshMaterial(token, observedToken) || !NeedsRefresh(token))
+                if (!SameRefreshMaterial(token, observedToken))
+                    return token.AccessToken;
+                if (!forceRefresh && !NeedsRefresh(token))
                     return token.AccessToken;
             }
 
@@ -103,20 +127,22 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
     private async Task<string?> RefreshAsLeaseOwnerAsync(
         GitHubTokenScope scope,
         GitHubToken observedToken,
+        bool forceRefresh,
         CancellationToken ct)
     {
         // Re-read after acquiring the lease: another replica may have already rotated the token.
         var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
         if (token is null)
             return null;
-        if (!SameRefreshMaterial(token, observedToken) || !NeedsRefresh(token))
+        if (!SameRefreshMaterial(token, observedToken))
+            return token.AccessToken;
+        if (!forceRefresh && !NeedsRefresh(token))
             return token.AccessToken;
 
         if (string.IsNullOrWhiteSpace(token.RefreshToken))
         {
-            // Expired and nothing to refresh with -> re-authentication required.
             _logger.LogWarning(
-                "GitHub access token for scope {Scope} is expired and has no refresh token; sign-in required.",
+                "GitHub access token for scope {Scope} cannot be refreshed after expiry or explicit rejection; sign-in required.",
                 scope.Key);
             await _tokenStore.SignOutAsync(scope, ct).ConfigureAwait(false);
             return null;

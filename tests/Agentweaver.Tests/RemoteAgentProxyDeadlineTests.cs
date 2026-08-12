@@ -144,13 +144,30 @@ public sealed class RemoteAgentProxyDeadlineTests
         // #267 regression guard: only "Received: None" is understood as the field-presence
         // artifact investigated for this issue, but the classifier itself must keep treating
         // ANY "Only message, task, task update events are supported..." rejection as the same
-        // retryable a2a_protocol_event_unsupported reason — including "Received: <other>" — so a
-        // genuinely new/future unhandled A2A event kind still gets re-armed (per #308) rather than
-        // silently swallowed or misclassified as a generic transport failure.
+        // retryable abnormal-stream signal — including "Received: <other>" — so a genuinely
+        // new/future unhandled A2A event kind receives the canonical structured terminal rather
+        // than being silently swallowed or misclassified as a generic transport failure.
         var exception = new NotSupportedException(
             "Only message, task, task update events are supported from A2A agents. Received: Heartbeat");
 
         RemoteAgentProxy.IsUnsupportedA2aEvent(exception).Should().BeTrue();
+    }
+
+    [Fact]
+    public void StructuredTerminal_SanitizesCredentialsAndBoundsDiagnostic()
+    {
+        var diagnostic =
+            "Authorization: Bearer secret-token apiKey=top-secret \"token\":\"json-secret\" " +
+            new string('x', 3000);
+
+        var terminal = StructuredRunFailureTerminal.CreateInternalError("Turn failed.", diagnostic);
+        var json = System.Text.Json.JsonSerializer.Serialize(terminal.Payload);
+
+        json.Should().Contain("agent_turn_internal_error");
+        json.Should().NotContain("secret-token");
+        json.Should().NotContain("top-secret");
+        json.Should().NotContain("json-secret");
+        json.Length.Should().BeLessThan(2300);
     }
 
     [Theory]

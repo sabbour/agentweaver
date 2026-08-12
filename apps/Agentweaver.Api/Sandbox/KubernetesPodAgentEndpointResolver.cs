@@ -70,84 +70,106 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
     /// <inheritdoc />
     public async Task<Uri?> TryResolveEndpointAsync(string runId, CancellationToken ct)
     {
-        var podName = _podRegistry.TryGet(runId);
-        if (podName is null)
+        const int maxReapedPodRecoveries = 1;
+        for (var recoveryAttempt = 0; ; recoveryAttempt++)
         {
-            // Lazily launch the AgentHost pod for this run. This is the only place the
-            // pod is provisioned in pod-per-run mode — LaunchAgentHostPodAsync creates the
-            // SandboxClaim, waits for it to bind, and registers the pod name + endpoint.
-            if (_podLifecycle is not null)
-            {
-                podName = await EnsurePodLaunchedAsync(runId, ct).ConfigureAwait(false);
-            }
-
+            var podName = _podRegistry.TryGet(runId);
             if (podName is null)
             {
-                _logger.LogWarning(
-                    "KubernetesPodAgentEndpointResolver: no pod registered for run {RunId}; " +
-                    "SandboxClaim may not yet be bound.",
-                    runId);
-                return null;
+                // Lazily launch the AgentHost pod for this run. This is the only place the
+                // pod is provisioned in pod-per-run mode — LaunchAgentHostPodAsync creates the
+                // SandboxClaim, waits for it to bind, and registers the pod name + endpoint.
+                if (_podLifecycle is not null)
+                {
+                    podName = await EnsurePodLaunchedAsync(runId, ct).ConfigureAwait(false);
+                }
+
+                if (podName is null)
+                {
+                    _logger.LogWarning(
+                        "KubernetesPodAgentEndpointResolver: no pod registered for run {RunId}; " +
+                        "SandboxClaim may not yet be bound.",
+                        runId);
+                    return null;
+                }
             }
-        }
 
-        try
-        {
-            var pod = await _k8sClient.CoreV1.ReadNamespacedPodAsync(
-                podName, _namespace, cancellationToken: ct)
-                .ConfigureAwait(false);
-
-            var podIp = pod?.Status?.PodIP;
-            if (string.IsNullOrEmpty(podIp))
+            try
             {
-                _logger.LogWarning(
-                    "KubernetesPodAgentEndpointResolver: pod {PodName} for run {RunId} has no IP yet " +
-                    "(phase={Phase}). Returning null.",
-                    podName, runId, pod?.Status?.Phase);
+                var pod = await _k8sClient.CoreV1.ReadNamespacedPodAsync(
+                    podName, _namespace, cancellationToken: ct)
+                    .ConfigureAwait(false);
+
+                var podIp = pod?.Status?.PodIP;
+                if (string.IsNullOrEmpty(podIp))
+                {
+                    _logger.LogWarning(
+                        "KubernetesPodAgentEndpointResolver: pod {PodName} for run {RunId} has no IP yet " +
+                        "(phase={Phase}). Returning null.",
+                        podName, runId, pod?.Status?.Phase);
+                    throw new WorkflowAgentInfrastructureException(
+                        "agenthost_ip_not_ready",
+                        $"AgentHost pod '{podName}' for run '{runId}' is bound but has no pod IP yet.");
+                }
+
+                var endpoint = new Uri(
+                    AgentHostEndpoint.Build(
+                        _options.RequireMtls, podIp, _options.AgentHostPort, _options.AgentHostA2APath));
+
+                _logger.LogDebug(
+                    "KubernetesPodAgentEndpointResolver: run={RunId}, pod={PodName}, endpoint={Endpoint}",
+                    runId, podName, endpoint);
+
+                return endpoint;
+            }
+            catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                var run = _runStore is not null && RunId.TryParse(runId, out var parsedRunId)
+                    ? await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
+                    : null;
+                if (run is not null && IsTerminal(run.Status))
+                {
+                    _logger.LogInformation(
+                        "KubernetesPodAgentEndpointResolver: AgentHost pod {PodName} for terminal run {RunId} was reaped.",
+                        podName, runId);
+                    return null;
+                }
+
+                _podRegistry.Unregister(runId);
+                _launches.TryRemove(runId, out _);
+                if (_podLifecycle is not null && recoveryAttempt < maxReapedPodRecoveries)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "KubernetesPodAgentEndpointResolver: AgentHost pod {PodName} for non-terminal run {RunId} " +
+                        "was reaped; redispatching once (reason=agenthost_pod_reaped, recoveryAttempt={Attempt}, maxRecoveryAttempts={MaxAttempts}).",
+                        podName,
+                        runId,
+                        recoveryAttempt + 1,
+                        maxReapedPodRecoveries);
+                    continue;
+                }
+
+                var reason = _podLifecycle is null
+                    ? "agenthost_pod_reaped"
+                    : "agenthost_pod_reaped_recovery_exhausted";
                 throw new WorkflowAgentInfrastructureException(
-                    "agenthost_ip_not_ready",
-                    $"AgentHost pod '{podName}' for run '{runId}' is bound but has no pod IP yet.");
+                    reason,
+                    $"AgentHost pod '{podName}' for non-terminal run '{runId}' was reaped; " +
+                    $"redispatch recovery attempts exhausted ({recoveryAttempt}/{maxReapedPodRecoveries}).",
+                    ex,
+                    isRetryable: _podLifecycle is null);
             }
-
-            var endpoint = new Uri(
-                AgentHostEndpoint.Build(
-                    _options.RequireMtls, podIp, _options.AgentHostPort, _options.AgentHostA2APath));
-
-            _logger.LogDebug(
-                "KubernetesPodAgentEndpointResolver: run={RunId}, pod={PodName}, endpoint={Endpoint}",
-                runId, podName, endpoint);
-
-            return endpoint;
-        }
-        catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            var run = _runStore is not null && RunId.TryParse(runId, out var parsedRunId)
-                ? await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
-                : null;
-            if (run is not null && IsTerminal(run.Status))
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogInformation(
-                    "KubernetesPodAgentEndpointResolver: AgentHost pod {PodName} for terminal run {RunId} was reaped.",
-                    podName, runId);
+                if (ex is WorkflowAgentInfrastructureException)
+                    throw;
+
+                _logger.LogError(ex,
+                    "KubernetesPodAgentEndpointResolver: failed to resolve pod IP for run {RunId} (pod={PodName})",
+                    runId, podName);
                 return null;
             }
-
-            _podRegistry.Unregister(runId);
-            throw new WorkflowAgentInfrastructureException(
-                "agenthost_pod_reaped",
-                $"AgentHost pod '{podName}' for non-terminal run '{runId}' was reaped; redispatch is required.",
-                ex,
-                isRetryable: true);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            if (ex is WorkflowAgentInfrastructureException)
-                throw;
-
-            _logger.LogError(ex,
-                "KubernetesPodAgentEndpointResolver: failed to resolve pod IP for run {RunId} (pod={PodName})",
-                runId, podName);
-            return null;
         }
     }
 

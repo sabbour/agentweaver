@@ -1005,6 +1005,10 @@ public sealed class WorktreeManager
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        process.StartInfo.ArgumentList.Add("-c");
+        process.StartInfo.ArgumentList.Add("core.hooksPath=/dev/null");
+        process.StartInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        process.StartInfo.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
         foreach (var arg in args)
             process.StartInfo.ArgumentList.Add(arg);
 
@@ -1277,6 +1281,10 @@ public sealed class WorktreeManager
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            process.StartInfo.ArgumentList.Add("-c");
+            process.StartInfo.ArgumentList.Add("core.hooksPath=/dev/null");
+            process.StartInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+            process.StartInfo.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
             process.StartInfo.ArgumentList.Add("worktree");
             process.StartInfo.ArgumentList.Add("prune");
 

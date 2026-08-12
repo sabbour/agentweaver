@@ -40,6 +40,12 @@ public sealed record Project
     public bool PickupAutoApproveTools { get; init; } = true;
 
     /// <summary>
+    /// How long an agent-requested live preview waits for operator approval. Existing and new
+    /// projects default to 30 minutes. Valid API values are 1 through 1440 minutes.
+    /// </summary>
+    public int PreviewApprovalTimeoutMinutes { get; init; } = 30;
+
+    /// <summary>
     /// The project's default workflow, referenced by workflow id/name (Feature 010, FR-041). Selects
     /// which available YAML/predefined workflow applies to the project's work items absent a per-task
     /// override. Null means "use the built-in default workflow".

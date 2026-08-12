@@ -82,6 +82,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         result.Origin.Should().Be("blank");
         result.State.Should().Be("active");
         result.Available.Should().BeTrue();
+        result.PreviewApprovalTimeoutMinutes.Should().Be(30);
         response.Headers.Location.Should().NotBeNull();
     }
 
@@ -200,6 +201,37 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         result.BlueprintGenerationModel.Should().Be("gpt-5-mini");
         result.WorkflowGenerationModel.Should().Be("gpt-5.3-codex");
         result.OutcomeSpecGenerationModel.Should().Be("claude-sonnet-4.6");
+    }
+
+    [Fact]
+    public async Task PutPreviewSettings_PersistsProjectScopedTimeout()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/preview-settings",
+            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = 45 });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var saved = await response.Content.ReadFromJsonAsync<ProjectPreviewSettingsResponse>();
+        saved!.ApprovalTimeoutMinutes.Should().Be(45);
+
+        var project = await _client.GetFromJsonAsync<ProjectResponse>($"/api/projects/{id}");
+        project!.PreviewApprovalTimeoutMinutes.Should().Be(45);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1441)]
+    public async Task PutPreviewSettings_RejectsOutOfRangeTimeout(int minutes)
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/preview-settings",
+            new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = minutes });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     // =========================================================================

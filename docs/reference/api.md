@@ -100,7 +100,11 @@ Run control state is durable. Shell approvals/denials, tool approval requests, r
 
 ### Memory
 
-Memory is scoped to projects. Decisions and memories feed the `MemoryContextCompiler`, which assembles a hierarchical context block injected into every agent run (boundaries → core context → learnings → session). Export writes to `.squad/decisions.md`, `.squad/agents/{name}/history.md`, `.agentweaver/context/boundaries.md`, and `.agentweaver/context/patterns.md`.
+Memory is scoped to projects. `MemoryContextCompiler` serializes selected decisions, memories, and session fields into a single JSON data envelope marked as untrusted; stored text is never emitted as prompt headings or executable instructions. Cross-team memory and active architectural/scope decisions compile only after approval by a project owner or a run-authenticated Coordinator. Export writes to `.squad/decisions.md`, `.squad/agents/{name}/history.md`, `.agentweaver/context/boundaries.md`, and `.agentweaver/context/patterns.md`.
+
+Memory and decision responses expose `sourceKind`, `sourceIdentity`, `sourceRunId`, and `trustState`; approved records also expose `approvedBy` and `approvedAt`. Existing rows migrate as `sourceKind: "legacy"` and `trustState: "legacy"` and therefore do not compile until explicitly approved. This fail-closed migration avoids treating historical rows with unknown provenance as trusted policy.
+
+Agent loopback writes authenticate with the normal internal API key plus a run-scoped capability. Only a SHA-256 digest of the short-lived capability is stored in the shared database, so validation works across API replicas without persisting the bearer token. The API resolves the project and agent from the verified run and rejects a client-supplied `agent_name` that does not match. Human API callers continue to use project authorization; only project owners and verified Coordinator runs may promote memory, merge/reject inbox entries, or create/update active decisions.
 
 #### Decision Inbox
 
@@ -119,6 +123,7 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/projects/{id}/decisions` | Create a decision directly |
 | `GET` | `/api/projects/{id}/decisions` | List decisions (`?type=`, `?agent=`) |
 | `GET` | `/api/projects/{id}/decisions/{decisionId}` | Get a single decision |
+| `POST` | `/api/projects/{id}/decisions/{decisionId}/approve` | Approve a legacy or pending-trust decision for compilation |
 | `PUT` | `/api/projects/{id}/decisions/{decisionId}` | Update decision status/content |
 
 #### Agent Memory
@@ -128,6 +133,7 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/projects/{id}/agents/{name}/memory` | Add a memory entry for an agent |
 | `GET` | `/api/projects/{id}/agents/{name}/memory` | List agent memories (`?type=`, `?importance=`) |
 | `GET` | `/api/projects/{id}/agents/{name}/memory/{memId}` | Get a single memory entry |
+| `POST` | `/api/projects/{id}/agents/{name}/memory/{memId}/promote` | Approve memory for cross-agent compilation |
 | `GET` | `/api/projects/{id}/memory` | Cross-agent memory search (`?type=`, `?tags=`) |
 
 #### Sessions
@@ -235,6 +241,7 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear all triggers, or one type with `?type=` |
 | `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
 | `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |
+| `POST` | `/api/projects/{projectId}/webhooks/github/provision` | Create or update the connected repository's webhook using the project's effective GitHub identity |
 
 Workflow trigger objects use the existing top-level trigger fields (`type`, `interval`,
 `day_of_week`, `day_of_month`, `time_of_day`, `event_name`) plus an optional `if` predicate array

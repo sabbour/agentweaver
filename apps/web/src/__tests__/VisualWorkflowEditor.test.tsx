@@ -259,6 +259,17 @@ describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
   });
 });
 
+describe('VisualWorkflowEditor — stable drag targets (#557)', () => {
+  it('exposes editor-owned node, handle, and canvas test ids without React Flow class selectors', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    expect(await screen.findByTestId('workflow-canvas')).toBeDefined();
+    expect(await screen.findByTestId('workflow-node-implement')).toBeDefined();
+    expect(await screen.findByTestId('workflow-node-implement-handle-source')).toBeDefined();
+    expect(await screen.findByTestId('workflow-node-rai-check-handle-target')).toBeDefined();
+  });
+});
+
 describe('VisualWorkflowEditor — schedule trigger (#561)', () => {
   it('edits the YAML buffer and persists the schedule with the normal editor save', async () => {
     const user = userEvent.setup();

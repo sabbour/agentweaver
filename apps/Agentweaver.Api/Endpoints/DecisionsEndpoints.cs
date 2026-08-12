@@ -13,6 +13,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
@@ -39,6 +40,8 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -49,6 +52,13 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     if (string.IsNullOrWhiteSpace(request.AgentName) || string.IsNullOrWhiteSpace(request.Slug)
         || string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "agent_name, slug, type, and content are required." });
+    var entryType = request.Type.Trim().ToLowerInvariant();
+    if (!MemoryWritePolicy.IsInboxType(entryType))
+        return Results.BadRequest(new { error = "Unsupported decision inbox type." });
+    var (author, authorFailure) = await RunAuthorship.ResolveAsync(
+        httpContext, id, request.AgentName, runResolver, turnTokens, ct);
+    if (authorFailure is not null) return authorFailure;
+    var submittedAgentName = author!.AgentName;
 
     // De-collision helper: converts an agent name to a safe kebab-case slug segment.
     static string SlugSegment(string name) =>
@@ -62,23 +72,28 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
 
     if (exists is not null)
     {
-        if (exists.AgentName == request.AgentName)
+        var sameAgent = string.Equals(
+            exists.AgentName, submittedAgentName, StringComparison.OrdinalIgnoreCase);
+        if (sameAgent && exists.Status != "pending")
+            return Results.Conflict(new { error = "Entry has already been merged or rejected." });
+
+        if (sameAgent
+            && exists.SourceKind == author.SourceKind
+            && exists.SourceIdentity == author.SourceIdentity)
         {
             // Same agent retrying the same slug — idempotent update in place (retry-safe).
-            if (exists.Status != "pending")
-                return Results.Conflict(new { error = "Entry has already been merged or rejected." });
-
-            exists.Type = request.Type!;
+            exists.Type = entryType;
             exists.Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : request.Slug!;
             exists.Content = request.Content!;
             exists.Rationale = request.Rationale;
+            exists.SourceRunId = author.SourceRunId;
             exists.UpdatedAt = DateTimeOffset.UtcNow;
             await memoryDb.SaveChangesAsync(ct);
             await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
             return Results.Ok(new
             {
                 exists.Id, exists.AgentName, exists.Slug, exists.Type, exists.Title, exists.Content,
-                exists.Rationale, exists.Status,
+                exists.Rationale, exists.Status, exists.SourceKind, exists.SourceIdentity, exists.SourceRunId,
                 decision_id = exists.DecisionId, merged_at = exists.MergedAt,
                 created_at = exists.CreatedAt, updated_at = exists.UpdatedAt,
             });
@@ -91,7 +106,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
         // in two entries sharing that slug. This is acceptable for the inbox's append-only semantics
         // (no data is lost). Adding a unique DB index on (ProjectId, Slug) would eliminate the race
         // but requires a migration; left as a follow-up.
-        var agentSegment = SlugSegment(request.AgentName!);
+        var agentSegment = SlugSegment(submittedAgentName);
         effectiveSlug = $"{request.Slug}--{agentSegment}";
         if (await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == effectiveSlug, ct))
         {
@@ -109,13 +124,16 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     var entry = new DecisionInboxEntry
     {
         ProjectId = id,
-        AgentName = request.AgentName!,
+        AgentName = submittedAgentName,
         Slug = effectiveSlug,
-        Type = request.Type!,
+        Type = entryType,
         Title = !string.IsNullOrWhiteSpace(request.Title) ? request.Title! : effectiveSlug,
         Content = request.Content!,
         Rationale = request.Rationale,
         Status = "pending",
+        SourceKind = author.SourceKind,
+        SourceIdentity = author.SourceIdentity,
+        SourceRunId = author.SourceRunId,
         CreatedAt = now,
         UpdatedAt = now,
     };
@@ -125,7 +143,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     return Results.Created($"/api/projects/{id}/decisions/inbox/{entry.Id}", new
     {
         entry.Id, entry.AgentName, entry.Slug, entry.Type, entry.Title, entry.Content,
-        entry.Rationale, entry.Status,
+        entry.Rationale, entry.Status, entry.SourceKind, entry.SourceIdentity, entry.SourceRunId,
         decision_id = entry.DecisionId, merged_at = entry.MergedAt,
         created_at = entry.CreatedAt, updated_at = entry.UpdatedAt,
     });
@@ -161,6 +179,7 @@ app.MapGet("/api/projects/{id}/decisions/inbox", async (
         .Select(e => new
         {
             e.Id, e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale, e.Status,
+            e.SourceKind, e.SourceIdentity, e.SourceRunId,
             decision_id = e.DecisionId, merged_at = e.MergedAt,
             created_at = e.CreatedAt, updated_at = e.UpdatedAt,
         })
@@ -176,13 +195,17 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
+        httpContext, project, configuration, runResolver, turnTokens, ct);
+    if (approvalFailure is not null) return approvalFailure;
 
     await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
     var entry = await memoryDb.DecisionInbox
@@ -191,7 +214,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
     var now = DateTimeOffset.UtcNow;
-    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, ct);
+    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
     await tx.CommitAsync(ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
@@ -211,13 +234,17 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
+        httpContext, project, configuration, runResolver, turnTokens, ct);
+    if (approvalFailure is not null) return approvalFailure;
 
     await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
     var entry = await memoryDb.DecisionInbox
@@ -226,7 +253,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
     var now = DateTimeOffset.UtcNow;
-    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, ct);
+    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
     await tx.CommitAsync(ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
     return Results.Ok(new
@@ -246,13 +273,17 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    var (_, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
+        httpContext, project, configuration, runResolver, turnTokens, ct);
+    if (approvalFailure is not null) return approvalFailure;
 
     await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
     var entry = await memoryDb.DecisionInbox
@@ -298,6 +329,7 @@ app.MapGet("/api/projects/{id}/decisions", async (
         .Select(d => new
         {
             d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
+            d.SourceKind, d.SourceIdentity, d.SourceRunId, d.TrustState, d.ApprovedBy, d.ApprovedAt,
             superseded_by_id = d.SupersededById,
             created_at = d.CreatedAt, updated_at = d.UpdatedAt,
         })
@@ -326,8 +358,44 @@ app.MapGet("/api/projects/{id}/decisions/{decisionId}", async (
     {
         decision.Id, decision.AgentName, decision.Type, decision.Status,
         decision.Title, decision.Content, decision.Rationale, decision.Tags,
+        decision.SourceKind, decision.SourceIdentity, decision.SourceRunId,
+        decision.TrustState, decision.ApprovedBy, decision.ApprovedAt,
         superseded_by_id = decision.SupersededById,
         created_at = decision.CreatedAt, updated_at = decision.UpdatedAt,
+    });
+});
+
+// POST /api/projects/{id}/decisions/{decisionId}/approve
+app.MapPost("/api/projects/{id}/decisions/{decisionId}/approve", async (
+    string id,
+    int decisionId,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
+        httpContext, project, configuration, runResolver, turnTokens, ct);
+    if (approvalFailure is not null) return approvalFailure;
+
+    var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
+    if (decision is null || decision.ProjectId != id) return Results.NotFound();
+
+    decision.TrustState = MemoryTrustStates.Approved;
+    decision.ApprovedBy = approver!.SourceIdentity;
+    decision.ApprovedAt = DateTimeOffset.UtcNow;
+    decision.UpdatedAt = decision.ApprovedAt.Value;
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new
+    {
+        decision.Id, decision.TrustState, decision.ApprovedBy, decision.ApprovedAt,
     });
 });
 
@@ -339,32 +407,42 @@ app.MapPost("/api/projects/{id}/decisions", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
+        httpContext, project, configuration, runResolver, turnTokens, ct);
+    if (approvalFailure is not null) return approvalFailure;
     if (string.IsNullOrWhiteSpace(request.AgentName) || string.IsNullOrWhiteSpace(request.Type)
         || string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "agent_name, type, title, and content are required." });
+    var decisionType = request.Type.Trim().ToLowerInvariant();
+    if (!MemoryWritePolicy.IsDecisionType(decisionType))
+        return Results.BadRequest(new { error = "type must be architectural, scope, process, or technical." });
 
     var now = DateTimeOffset.UtcNow;
-    var rawTags = request.Tags;
-    var normalizedTags = !string.IsNullOrWhiteSpace(rawTags)
-        ? "," + string.Join(",", rawTags.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0)) + ","
-        : null;
+    var normalizedTags = MemoryWritePolicy.NormalizeTags(request.Tags);
     var decision = new Decision
     {
         ProjectId = id,
-        AgentName = request.AgentName!,
-        Type = request.Type!,
+        AgentName = approver!.SourceKind == MemorySourceKinds.Run ? approver.AgentName : request.AgentName!,
+        Type = decisionType,
         Status = "active",
         Title = request.Title!,
         Content = request.Content!,
         Rationale = request.Rationale,
         Tags = normalizedTags,
+        SourceKind = approver.SourceKind,
+        SourceIdentity = approver.SourceIdentity,
+        SourceRunId = approver.SourceRunId,
+        TrustState = MemoryTrustStates.Approved,
+        ApprovedBy = approver.SourceIdentity,
+        ApprovedAt = now,
         CreatedAt = now,
         UpdatedAt = now,
     };
@@ -375,6 +453,8 @@ app.MapPost("/api/projects/{id}/decisions", async (
     {
         decision.Id, decision.AgentName, decision.Type, decision.Status,
         decision.Title, decision.Content, decision.Rationale, decision.Tags,
+        decision.SourceKind, decision.SourceIdentity, decision.SourceRunId,
+        decision.TrustState, decision.ApprovedBy, decision.ApprovedAt,
         created_at = decision.CreatedAt,
     });
 });
@@ -388,13 +468,17 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
-    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
+        httpContext, project, configuration, runResolver, turnTokens, ct);
+    if (approvalFailure is not null) return approvalFailure;
 
     var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
     if (decision is null || decision.ProjectId != id) return Results.NotFound();
@@ -403,7 +487,10 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     if (request.Rationale is not null) decision.Rationale = request.Rationale;
     if (!string.IsNullOrWhiteSpace(request.Status))
     {
-        decision.Status = request.Status!;
+        var status = request.Status.Trim().ToLowerInvariant();
+        if (status is not ("active" or "superseded" or "archived"))
+            return Results.BadRequest(new { error = "status must be active, superseded, or archived." });
+        decision.Status = status;
     }
     if (request.SupersededById is not null)
     {
@@ -413,6 +500,9 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
         decision.SupersededById = request.SupersededById.Value;
         decision.Status = "superseded";
     }
+    decision.TrustState = MemoryTrustStates.Approved;
+    decision.ApprovedBy = approver!.SourceIdentity;
+    decision.ApprovedAt = DateTimeOffset.UtcNow;
     decision.UpdatedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);

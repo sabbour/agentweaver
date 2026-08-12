@@ -68,7 +68,13 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
           <FluentLink onClick={() => handleCta(notification, toastId)}>{copy.cta}</FluentLink>
         </ToastFooter>
       </Toast>,
-      { toastId, intent: 'info', timeout: 12000 },
+      {
+        toastId,
+        intent: notification.type === 'tool_approval' ? 'warning' : 'info',
+        // Approval requests are safety gates, not transient FYIs. Keep their toast visible until
+        // the operator follows the CTA or dismisses it; the global bell remains the durable backup.
+        timeout: notification.type === 'tool_approval' ? -1 : 12000,
+      },
     );
     playNotificationChime();
   }, [dispatchToast, handleCta]);

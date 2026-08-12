@@ -417,6 +417,8 @@ function buildGraph(
         nodeType: gnt,
         isPlanned: true,
         connectable: true,
+        interactionTestId: `workflow-node-${n.id}`,
+        handleTestIdPrefix: `workflow-node-${n.id}-handle`,
       } as WorkflowNodeData,
     };
   });
@@ -790,7 +792,7 @@ export function VisualWorkflowEditor({
       )}
 
       <div className={styles.split}>
-        <div className={styles.canvasPane}>
+        <div className={styles.canvasPane} data-testid="workflow-canvas">
           <div className={styles.canvasToolbar} role="toolbar" aria-label="Workflow canvas actions">
             <Menu>
               <MenuTrigger disableButtonEnhancement>

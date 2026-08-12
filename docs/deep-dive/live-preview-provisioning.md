@@ -38,6 +38,16 @@ On success, registration creates the same Gateway HTTPRoute / Service chain desc
 
 Keepalive now touches both lifetimes. `SandboxPreviewService.KeepAliveAsync` patches the HTTPRoute idle expiry, then best-effort calls `/preview-runner/processes/{sessionId}/health-check` using the annotated PreviewRunner session so the supervised app process is not reaped while the Gateway route stays alive (`SandboxPreviewService.cs:236`, `:271`).
 
+The sandbox itself has one explicit run-level lifecycle derived from those durable routes:
+`Previewable` when no unexpired route exists and `PreviewActive` while at least one does.
+Entering or reasserting `PreviewActive` renews the backing `SandboxClaim` TTL through the
+preview hard maximum and sets `cluster-autoscaler.kubernetes.io/safe-to-evict=false`.
+Turn-end release, the orphan reaper, preview start, and active-use keepalive all invoke this
+same idempotent transition instead of independently remembering those side effects. When the
+final route stops or expires, reconciliation returns the run to `Previewable`, restores the
+configured normal claim TTL, and sets `safe-to-evict=true`. If several routes exist for one
+run, stopping one keeps the run `PreviewActive` until the last route is gone.
+
 ## Per-run preview-runner credential
 
 AgentHost `/preview-runner/*` endpoints are protected by a per-run credential:
