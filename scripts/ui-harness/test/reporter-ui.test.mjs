@@ -16,6 +16,22 @@ test('only deterministic browser facts fail P0', () => {
   assert.deepEqual(result.failures.map((item) => item.kind), ['required-element-missing', 'console-error', 'user-facing-network-error']);
 });
 
+test('a recorded action failure fails P0 with its evidence', () => {
+  const result = computeDriverP0([{
+    id: 2,
+    action: 'drag',
+    outcome: 'failed',
+    error: { message: 'drag target did not resolve' },
+  }]);
+
+  assert.equal(result.pass, false);
+  assert.deepEqual(result.failures, [{
+    kind: 'action-failed',
+    turn: 2,
+    evidence: 'drag target did not resolve',
+  }]);
+});
+
 test('finish fails closed when capture evidence is only the authentication loading shell', async () => {
   const domSnapshot = JSON.parse(await readFile(path.join(HERE, 'fixtures', 'auth-loading-dom.json'), 'utf8'));
   const result = computeDriverP0([{
