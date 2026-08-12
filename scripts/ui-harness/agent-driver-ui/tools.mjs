@@ -13,6 +13,7 @@ import { adaptUiEvidence } from '../../harness-judge/adapters/ui.mjs';
 import { ensureAuthDirectory, DEFAULT_STORAGE_STATE, loadStorageState, saveSessionStorageSeed } from '../lib/auth.mjs';
 import { attachPageCapture, captureTurn, redact } from '../lib/evidence.mjs';
 import { guardedUrl, keyedLocator, openBrowserSession } from '../lib/browser.mjs';
+import { dragOptionsFromArgs, performPointerDrag } from '../lib/drag.mjs';
 import { DEFAULT_READINESS_TIMEOUT_MS, waitForAppReadiness } from '../lib/readiness.mjs';
 import { computeDriverP0, reportDriverP0 } from '../lib/reporter-ui.mjs';
 
@@ -166,7 +167,9 @@ export async function action(args, { openBrowser = openBrowserSession } = {}) {
   const session = await loadSession(args.session);
   const command = args._[0];
   let runtime;
+  let capture;
   let readiness = null;
+  let target = { testId: args['test-id'], role: args.role, name: args.name };
   try {
     runtime = await openBrowser({
       baseUrl: session.baseUrl,
@@ -175,7 +178,7 @@ export async function action(args, { openBrowser = openBrowserSession } = {}) {
       allowAgentweaverPreviewNavigation: command === 'open-preview',
       ...options(args),
     });
-    const capture = attachPageCapture(runtime.page);
+    capture = attachPageCapture(runtime.page);
     if (command === 'goto') {
       readiness = await navigateForAppEvidence(runtime, args.path ?? '/', readinessOptions(args));
     }
@@ -185,6 +188,25 @@ export async function action(args, { openBrowser = openBrowserSession } = {}) {
     }
     else if (command === 'click') await keyedLocator(runtime.page, { testId: args['test-id'], role: args.role, name: args.name }).click({ timeout: Number(args.timeout ?? 10_000) });
     else if (command === 'type-coordinator') await keyedLocator(runtime.page, { testId: args['test-id'] ?? 'coordinator-composer', role: args.role, name: args.name }).fill(args.text ?? '');
+    else if (command === 'drag') {
+      const fromTestId = args['from-test-id'];
+      const toTestId = args['to-test-id'];
+      if (typeof fromTestId !== 'string' || typeof toTestId !== 'string') {
+        throw new Error('drag requires --from-test-id and --to-test-id');
+      }
+      const dragOptions = dragOptionsFromArgs(args);
+      target = {
+        from: { testId: fromTestId, offset: dragOptions.sourceOffset },
+        to: { testId: toTestId, offset: dragOptions.targetOffset },
+        steps: dragOptions.steps,
+      };
+      await performPointerDrag({
+        page: runtime.page,
+        source: keyedLocator(runtime.page, { testId: fromTestId }),
+        target: keyedLocator(runtime.page, { testId: toTestId }),
+        ...dragOptions,
+      });
+    }
     else if (command === 'resolve-approval') {
       // The adapter is checked independently from any judge/DOM recommendation.
       assertApprovalAllowed({
@@ -201,23 +223,37 @@ export async function action(args, { openBrowser = openBrowserSession } = {}) {
     const eventId = session.steps.length + (session.commandFailures?.length ?? 0) + 1;
     const step = await captureTurn({
       page: runtime.page, capture, directory: path.join(ROOT, 'transcripts-ui', session.id), id: eventId,
-      intent: args.thought ?? null, action: command, target: { testId: args['test-id'], role: args.role, name: args.name }, readiness,
+      intent: args.thought ?? null, action: command, target, outcome: 'succeeded', readiness,
     });
     session.steps.push(step);
     await saveSession(session);
     console.log(JSON.stringify(step, null, 2));
   } catch (error) {
-    session.commandFailures ??= [];
-    session.commandFailures.push(redact({
-      id: session.steps.length + session.commandFailures.length + 1,
-      at: new Date().toISOString(),
-      action: command,
-      target: { testId: args['test-id'], role: args.role, name: args.name },
-      code: error.code ?? 'COMMAND_FAILED',
-      message: String(error.message ?? error),
-      readiness: error.readiness ?? null,
-    }));
-    await saveSession(session);
+    if (command === 'drag' && runtime && capture) {
+      const step = await captureTurn({
+        page: runtime.page, capture, directory: path.join(ROOT, 'transcripts-ui', session.id),
+        id: session.steps.length + (session.commandFailures?.length ?? 0) + 1,
+        intent: args.thought ?? null, action: command, target, outcome: 'failed',
+        error: { message: error instanceof Error ? error.message : String(error) },
+        readiness,
+        frustrationSignals: ['action-failed'],
+      });
+      session.steps.push(step);
+      await saveSession(session);
+      console.log(JSON.stringify(step, null, 2));
+    } else {
+      session.commandFailures ??= [];
+      session.commandFailures.push(redact({
+        id: session.steps.length + session.commandFailures.length + 1,
+        at: new Date().toISOString(),
+        action: command,
+        target,
+        code: error.code ?? 'COMMAND_FAILED',
+        message: String(error.message ?? error),
+        readiness: error.readiness ?? null,
+      }));
+      await saveSession(session);
+    }
     throw error;
   } finally {
     if (runtime) await runtime.close();

@@ -16,3 +16,25 @@ local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry
 with `AUTH_EXPIRED`; the harness never automates reauthentication. Targets are
 restricted to localhost/staging unless both `--allow-prod` and `--confirm-production`
 are explicitly supplied. Storage state is never logged or attached to evidence.
+
+## Pointer drag
+
+Use stable test IDs to reproduce canvas interactions with a real pointer sequence:
+
+```powershell
+# Connect two workflow nodes.
+node scripts/ui-harness/agent-driver-ui/tools.mjs drag --session <sessionId> `
+  --from-test-id workflow-node-implement-handle-source `
+  --to-test-id workflow-node-review-handle-target --steps 16
+
+# Reposition a node to a safe element-relative point inside the workflow canvas.
+node scripts/ui-harness/agent-driver-ui/tools.mjs drag --session <sessionId> `
+  --from-test-id workflow-node-implement --to-test-id workflow-canvas `
+  --to-x 640 --to-y 420 --steps 20
+```
+
+`--from-x`, `--from-y`, `--to-x`, and `--to-y` are optional pixel offsets inside
+their selected elements; omitted coordinates use the element center. Out-of-bounds
+coordinates and invisible/missing targets fail before pointerdown. If a drag fails
+after pointerdown, the driver releases the pointer and records the failed action in
+the session transcript/evidence before exiting `2`.
