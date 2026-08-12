@@ -365,8 +365,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var executor = sandboxPolicy.Direct
             ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
             : _executor;
-        if (executor is KataBwrapExecutor kataExecutor)
-            kataExecutor.RegisterTrustedWorkspace(workingDirectory);
+        if (executor is IRunWorkspaceRegistrar workspaceRegistrar)
+            workspaceRegistrar.RegisterTrustedWorkspace(workingDirectory);
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 

@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
+using Agentweaver.SandboxExec.PodExec;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.Agents.AI.Hosting;
@@ -14,6 +15,24 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+
+// ── Executor sidecar entrypoints ───────────────────────────────────────────────
+// The same image serves three roles so the sandbox toolchain is byte-identical on both sides of the
+// pod boundary and no second image has to be built, scanned, or version-matched:
+//   * default            — the AgentHost A2A server (this file, below);
+//   * --exec-agent       — the executor sidecar daemon that owns every model-controlled process;
+//   * --exec-relay       — a short-lived supervisor for one long-running sandboxed process.
+// Both auxiliary modes exit the process when done and never construct the web host.
+if (args.Contains(AgentHostExecutorEntrypoints.ExecAgentArgument, StringComparer.Ordinal))
+{
+    return await AgentHostExecutorEntrypoints.RunExecutorSidecarAsync(args).ConfigureAwait(false);
+}
+if (args.Contains(PodExecRelay.RelayArgument, StringComparer.Ordinal))
+{
+    return await PodExecRelay
+        .RunAsync(AgentHostExecutorEntrypoints.ResolveSocketArgument(args, PodExecRelay.RelayArgument))
+        .ConfigureAwait(false);
+}
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 var builder = WebApplication.CreateBuilder(args);
@@ -120,25 +139,38 @@ builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvid
 builder.Services.AddAgentHostRuntime();
 
 // The production AgentHost runs inside a per-run Kata VM, but the shared /workspace PVC is outside
-// the VM image and is visible to every pod. Add a second, process-level mount namespace that binds
-// only the current run roots. The executor mounts a private procfs for its unshared PID namespace,
-// so CoreCLR works normally without exposing AgentHost or sibling process roots.
-var useKataPassthrough =
+// the VM image and is visible to every pod. Model-controlled commands therefore run in a dedicated
+// executor sidecar container of the same pod: the container boundary supplies the PID namespace and
+// the runtime-provided procfs (a nested procfs mount is refused by the kernel in any masked-procfs
+// container — the failure that broke the Kata warm pool), while bubblewrap inside that container
+// binds only the current run's roots. Startup fails closed when the sidecar is unreachable or not
+// actually isolated.
+var useKataSidecarExecutor =
     SandboxExecutorFactory.IsInCluster &&
     string.Equals(
         builder.Configuration["AgentHost:SandboxMode"],
         "kata",
         StringComparison.OrdinalIgnoreCase);
-if (useKataPassthrough)
+if (useKataSidecarExecutor)
 {
-    if (!KataBwrapExecutor.TryProbeAvailability(out var probeReason))
+    using var probeLoggerFactory = LoggerFactory.Create(logging => logging.AddSimpleConsole());
+    var executorClient = new PodExecSandboxClient(
+        builder.Configuration["AgentHost:ExecSocketPath"],
+        probeLoggerFactory.CreateLogger(nameof(PodExecSandboxClient)));
+    var probeTimeout = TimeSpan.FromSeconds(
+        builder.Configuration.GetValue("AgentHost:ExecSidecarProbeTimeoutSeconds", 120));
+    var (isolationReady, isolationDetail) = executorClient
+        .ProbeAsync(probeTimeout)
+        .GetAwaiter()
+        .GetResult();
+    if (!isolationReady)
         throw new InvalidOperationException(
-            $"AgentHost Kata filesystem isolation is unavailable; refusing to start: {probeReason}");
+            $"AgentHost Kata filesystem isolation is unavailable; refusing to start: {isolationDetail}");
 
     builder.Services.AddSingleton<ISandboxExecutor>(sp =>
-        new KataBwrapExecutor(
-            sp.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(nameof(KataBwrapExecutor))));
+        new PodExecSandboxClient(
+            builder.Configuration["AgentHost:ExecSocketPath"],
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(PodExecSandboxClient))));
 }
 
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────
@@ -533,6 +565,7 @@ var opts0 = app.Services.GetRequiredService<IOptions<AgentHostOptions>>().Value;
 app.MapA2AHttpJson(agentHostedBuilder, opts0.A2APath);
 
 await app.RunAsync().ConfigureAwait(false);
+return 0;
 
 /// <summary>Request body for the warm-pool <c>POST /configure</c> endpoint.</summary>
 internal sealed record ConfigureRequest

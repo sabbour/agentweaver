@@ -169,8 +169,10 @@ Three things are deliberately distinct:
   session and its tool loop — out to the per-run pod. That is the pod-per-run story above. It is
   **orthogonal** to backend selection: the in-pod AgentHost still runs each `run_command` through *its
   own* `ISandboxExecutor`. When `AgentHost:SandboxMode=kata`, that executor is
-  `KataBwrapExecutor`: the Kata VM isolates the pod from the node, while an unprivileged bubblewrap
-  mount namespace removes the shared PVC root from each shell/preview child process.
+  `PodExecSandboxClient`: it forwards every model-controlled command to the **executor sidecar
+  container** of the same pod, where `KataBwrapExecutor` builds the per-run mount namespace. The Kata
+  VM isolates the pod from the node, the sidecar container isolates model-controlled processes from
+  AgentHost, and bubblewrap removes the shared PVC root from each shell/preview child process.
 
 Read the whole isolation stack top-down: pod-per-run decides *which process hosts the agent turn* (worker
 vs. per-run pod, via A2A); the executor abstraction decides *how each command inside that turn is
@@ -183,8 +185,17 @@ single: *one command in, one uniform result out, isolation chosen per host and a
 
 Every Kata AgentHost pod still mounts the shared RWX `/workspace` PVC because linked git worktrees
 refer to git metadata outside the worktree directory and the generic warm pool cannot vary pod
-mounts after adoption. `KataBwrapExecutor` therefore applies the per-run filesystem policy at the
-**process/mount boundary**, not by parsing shell syntax:
+mounts after adoption. The pod therefore applies the per-run policy at the **process/mount
+boundary**, not by parsing shell syntax. Two containers share the pod:
+
+- `agentweaver-agent-host` hosts the agent turn and the run's brokered GitHub token. It never
+  executes a model-controlled command.
+- `agentweaver-exec` (same image, `--exec-agent`) executes every model-controlled command inside
+  `KataBwrapExecutor`'s per-run mount namespace. It is a real, runtime-created PID namespace with a
+  runtime-provided procfs, holds no Kubernetes or AAD identity, and shares only the pod network
+  namespace (so preview ports stay reachable) and the two workspace volumes.
+
+Within that structure:
 
 - only the current run worktree, its explicitly registered run HOME, authorized run-scoped scratch,
   pod-private tmp, and the exact linked
@@ -192,12 +203,41 @@ mounts after adoption. `KataBwrapExecutor` therefore applies the per-run filesys
   performs the durable commit after the turn;
 - the PVC root and sibling worktrees are absent, so absolute paths, variable indirection, `..`,
   symlinks, and direct Python/.NET file APIs cannot resolve them;
-- `/proc` is a real procfs mounted inside the unshared child PID namespace, so CoreCLR process
-  discovery works while the parent AgentHost process and its mount namespace remain invisible;
+- `/proc` is the executor container's own procfs, bound into the run's mount namespace. It contains
+  only that container's processes, so CoreCLR process discovery works while AgentHost's process tree
+  is not merely hidden but **absent from the namespace**;
 - the child environment is cleared and rebuilt from a minimal baseline plus explicitly supplied
   values; and
-- AgentHost startup executes a real bwrap capability probe and refuses readiness if isolation cannot
-  be created. There is no passthrough fallback in Kata mode.
+- the sidecar executes a real bwrap capability probe before it binds its socket, and AgentHost
+  startup fails closed unless that sidecar answers a probe proving it is reachable, isolated, and in
+  a *different* PID namespace. There is no passthrough fallback in Kata mode.
+
+#### Why a sidecar and not a nested PID namespace
+
+The original design asked bubblewrap for `--unshare-pid --proc /proc`. That cannot work in **any**
+Kubernetes container: the kernel's `mount_too_revealing()` check refuses a fresh procfs inside an
+unprivileged user namespace whenever the visible procfs has masked or covered submounts, and every
+container runtime — Kata's guest agent included — masks `/proc/kcore`, `/proc/keys`,
+`/proc/timer_list`, `/proc/interrupts` and read-only-binds `/proc/bus`, `/proc/fs`, `/proc/irq`,
+`/proc/sys`, `/proc/sysrq-trigger`. In production this surfaced as
+`bwrap: Can't mount proc on /newroot/proc: Operation not permitted` and, because the isolation probe
+is fail-closed, a 0/2 warm pool. CI never caught it because GitHub runners are VMs with an unmasked
+`/proc`.
+
+Every way to make the nested mount succeed weakens the boundary — `procMount: Unmasked`,
+`CAP_SYS_ADMIN`, a privileged container, or a synthetic `/proc`. Dropping `--unshare-pid` while
+keeping `--proc` is worse than useless: bubblewrap then silently binds the outer `/proc`, so the
+sandbox *looks* isolated and is not. A second container gets the same guarantee for free, because the
+runtime creates the PID namespace and the matching procfs itself — no capability, no privilege, no
+host namespace. Bubblewrap keeps doing the per-run mount scoping it *can* still do, with
+`--bind /proc /proc` and no PID claim it cannot back.
+
+The AgentHost↔sidecar channel is a Unix domain socket on a pod-private `emptyDir` mounted into only
+those two containers, never bound into a sandboxed child's mount namespace, and guarded by a 32-byte
+token written mode-0600 next to it and compared in constant time. Long-lived preview processes are
+supervised by a relay child of AgentHost that holds the connection: if the relay or AgentHost dies,
+the sidecar sees the disconnect and terminates the sandboxed process group, preserving
+die-with-parent semantics across the container boundary.
 
 `ShellCommandValidator` and `SharedWorkspacePathGuard` remain compounding controls, but the security
 claim for #476 no longer depends on command text.
@@ -400,7 +440,8 @@ that an implementation turn intentionally created inside an otherwise ignored pa
 Every non-operator AgentHost run gets a HOME outside the checkout at
 `<execution-scratch>/runtime-home/<run-hash>`. After resolving the final Shared or pod-local
 working directory, `PodLocalWorkspaceManager` creates the HOME and its XDG children, then
-registers that exact path with `KataBwrapExecutor` for the run workspace:
+registers that exact path through `IRunWorkspaceRegistrar` — in Kata mode that registration travels
+over the executor socket and is applied by the sidecar's `KataBwrapExecutor`:
 
 | Variable | Registered value |
 | --- | --- |
@@ -768,6 +809,9 @@ Where this lives:
 | Local-writable launch coordinates | `apps/Agentweaver.Api/Sandbox/IRunAgentHostContextResolver.cs:65-99` |
 | API-side descriptor validation and authoritative fast-forward | `apps/Agentweaver.Api/Git/WorktreeManager.cs:482-644` |
 | Immutable Kata HOME mount and child environment | `packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs` |
+| Executor-sidecar wire protocol, daemon, client, and relay | `packages/Agentweaver.SandboxExec/PodExec/` |
+| Fail-closed sidecar probe at AgentHost startup | `apps/Agentweaver.AgentHost/Program.cs` |
+| Executor sidecar container and its volumes | `k8s/base/sandbox-template-agenthost.yaml` |
 | HOME propagation through WSL/bubblewrap | `packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-158` |
 | Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/base/sandbox-template-agenthost.yaml:139-175` |
 

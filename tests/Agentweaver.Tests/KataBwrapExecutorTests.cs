@@ -293,8 +293,16 @@ public sealed class KataBwrapExecutorTests : IDisposable
         (await File.ReadAllTextAsync(configPath)).Should().Be(originalConfig);
     }
 
+    /// <summary>
+    /// Process isolation is provided by the executor sidecar CONTAINER (its own runtime-created PID
+    /// namespace and matching runtime-provided procfs), not by bubblewrap. The kernel's
+    /// <c>mount_too_revealing()</c> check refuses a fresh procfs inside an unprivileged user
+    /// namespace whenever the visible procfs has masked submounts — which every Kubernetes runtime,
+    /// Kata included, always creates. So bubblewrap must bind the container's own procfs and must
+    /// NOT claim a PID namespace it cannot back with a matching procfs.
+    /// </summary>
     [Fact]
-    public void ProcessNamespace_MountsPrivateProcfsAndNeverBindsParentProc()
+    public void MountNamespace_BindsContainerProcfsAndNeverUnsharesPid()
     {
         if (!OperatingSystem.IsLinux())
             return;
@@ -303,10 +311,33 @@ public sealed class KataBwrapExecutorTests : IDisposable
         RegisterRun(executor);
         var arguments = executor.BuildProcessStartInfo(Command(_runA)).ArgumentList.ToArray();
 
-        arguments.Should().ContainInOrder("--proc", "/proc");
-        string.Join('\n', arguments).Should().NotContain("--ro-bind\n/proc\n/proc");
+        arguments.Should().ContainInOrder("--bind", "/proc", "/proc");
+        arguments.Should().NotContain("--proc");
+        // --unshare-pid without a matching procfs is a silent-degradation trap: bubblewrap would
+        // bind the outer /proc while the child's PIDs no longer match it.
+        arguments.Should().NotContain("--unshare-pid");
+        arguments.Should().Contain("--unshare-user");
         arguments.Should().ContainInOrder("--cap-drop", "ALL");
         arguments.Should().Contain("--clearenv");
+    }
+
+    /// <summary>
+    /// The startup probe is the fail-closed gate for the sidecar; it must exercise exactly the same
+    /// namespace flags the real command path uses, or the probe would pass where execution fails
+    /// (which is precisely how the v0.18.0 production outage reached the cluster).
+    /// </summary>
+    [Fact]
+    public void AvailabilityProbe_UsesTheSameNamespaceFlagsAsRealCommands()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        var probe = KataBwrapExecutor.BuildAvailabilityProbeArguments();
+
+        probe.Should().ContainInOrder("--bind", "/proc", "/proc");
+        probe.Should().NotContain("--proc");
+        probe.Should().NotContain("--unshare-pid");
+        probe.Should().Contain("--unshare-user");
     }
 
     [Fact]
@@ -330,7 +361,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
-    public async Task PrivateProcfs_RunsManagedCoreClrAndHidesHostParentProcess()
+    public async Task SandboxedProcess_RunsManagedCoreClrAndCannotReachSiblingRuns()
     {
         if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
             return;
@@ -350,9 +381,9 @@ public sealed class KataBwrapExecutorTests : IDisposable
         await File.WriteAllTextAsync(
             Path.Combine(app, "Program.cs"),
             """
-            var hostParentPid = args[0];
+            var siblingRun = args[0];
             Console.WriteLine($"coreclr-ok pid={Environment.ProcessId}");
-            return File.Exists($"/proc/{hostParentPid}/cmdline") ? 17 : 0;
+            return Directory.Exists(siblingRun) ? 17 : 0;
             """);
         Run("dotnet", "build", Path.Combine(app, "ManagedProcProbe.csproj"), "--nologo", "--verbosity", "quiet");
 
@@ -360,7 +391,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         RegisterRun(executor);
         var assembly = Path.Combine(app, "bin", "Debug", "net10.0", "ManagedProcProbe.dll");
         var result = await executor.ExecuteAsync(new SandboxCommand(
-            $"dotnet {QuoteForPosixShell(assembly)} {Environment.ProcessId}",
+            $"dotnet {QuoteForPosixShell(assembly)} {QuoteForPosixShell(_runB)}",
             _runA,
             null,
             new SandboxFsPolicy([_runA], [], []),

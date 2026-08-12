@@ -304,6 +304,11 @@ public sealed class PreviewRunnerObserveTests
         }
     }
 
+    /// <summary>
+    /// End-to-end proof that a preview server started through the executor sidecar is torn down by a
+    /// signal delivered to the REAL sandboxed process group inside the sidecar's PID namespace — the
+    /// relay's own PID is never used as a process-group id, because it is not one.
+    /// </summary>
     [LinuxFact]
     public async Task KataPreviewStop_SignalsActualSandboxProcessGroupWithTerm()
     {
@@ -322,8 +327,8 @@ public sealed class PreviewRunnerObserveTests
         Directory.CreateDirectory(Path.Combine(runtimeHome, ".local", "share"));
         Directory.CreateDirectory(Path.Combine(runtimeHome, ".config"));
 
-        var executor = new KataBwrapExecutor(
-            protectedRoots: [Path.Combine(root, "protected-workspace")]);
+        await using var sidecar = Sandbox.PodExecTestHarness.StartServer(root);
+        var executor = Sandbox.PodExecTestHarness.CreateClient(sidecar.SocketPath);
         executor.RegisterTrustedWorkspace(workspace);
         executor.RegisterRuntimeHome(workspace, runtimeHome);
         var runner = new PreviewRunner(

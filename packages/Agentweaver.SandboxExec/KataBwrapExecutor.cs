@@ -10,11 +10,31 @@ using Microsoft.Extensions.Logging;
 namespace Agentweaver.SandboxExec;
 
 /// <summary>
-/// Executes commands in a private bubblewrap mount namespace inside the run's Kata VM.
-/// The Kata VM remains the pod boundary; bubblewrap removes the shared PVC root and binds
-/// only this run's declared roots into the child process namespace.
+/// Executes commands in a private bubblewrap mount namespace, running <b>inside the executor
+/// sidecar container</b> of the run's Kata pod (<see cref="PodExec.PodExecServer"/> is its only
+/// production caller).
+///
+/// Layered boundary:
+/// <list type="bullet">
+///   <item>the Kata VM isolates the pod from the node;</item>
+///   <item>the executor sidecar container supplies the PID namespace, the runtime-provided procfs,
+///     and a mount namespace that the AgentHost process never shares;</item>
+///   <item>bubblewrap removes the shared workspace PVC root and binds only this run's declared roots
+///     into every model-controlled child.</item>
+/// </list>
+///
+/// <para><b>Why no <c>--unshare-pid</c> / <c>--proc</c> here.</b> Mounting a fresh procfs inside an
+/// unprivileged user namespace requires a fully visible procfs. Every Kubernetes container runtime —
+/// including Kata's guest agent — masks <c>/proc/kcore</c>, <c>/proc/keys</c>, <c>/proc/timer_list</c>,
+/// <c>/proc/interrupts</c> and read-only-binds <c>/proc/bus|fs|irq|sys|sysrq-trigger</c>, so the kernel's
+/// <c>mount_too_revealing()</c> check refuses the mount with <c>EPERM</c>
+/// (<c>bwrap: Can't mount proc on /newroot/proc: Operation not permitted</c>). The only ways to make a
+/// nested procfs mount succeed are to unmask procfs, add <c>CAP_SYS_ADMIN</c>, or fabricate a
+/// synthetic <c>/proc</c> — all of which weaken the boundary. The process boundary is therefore taken
+/// from the sidecar container (a real, runtime-created PID namespace) and bubblewrap binds that
+/// container's own procfs, which contains only this run's executor processes.</para>
 /// </summary>
-public sealed class KataBwrapExecutor : ISandboxExecutor
+public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 {
     private static readonly string[] SystemReadOnlyRoots = ["/usr", "/etc", "/opt"];
     private static readonly string[] PodPrivateReadWriteRoots = ["/tmp", "/var/tmp"];
@@ -26,9 +46,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         new(StringComparer.Ordinal);
 
     public bool IsRealIsolation => true;
-    public string BackendName => "kata-bwrap-fs";
+    public string BackendName => "kata-sidecar-bwrap-fs";
     public string SelectionReason =>
-        "Kata VM plus a fail-closed bubblewrap mount namespace scoped to this run.";
+        "Kata VM, executor sidecar PID/mount namespace, and a fail-closed bubblewrap mount namespace scoped to this run.";
     public bool HasNetworkWarning => false;
     public string? NetworkWarningMessage => null;
 
@@ -46,6 +66,35 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
     /// Proves that the current Linux security context can create the mount namespace used by
     /// this executor. Production startup fails closed when this probe fails.
     /// </summary>
+    /// <remarks>
+    /// The probe intentionally mirrors the production argument shape, including the
+    /// <c>--bind /proc /proc</c> that replaced the previously-attempted private <c>--proc</c> mount
+    /// (see the type remarks: a nested procfs mount is refused by the kernel in every masked-procfs
+    /// container, which is what broke the Kata warm pool). It therefore fails for the same reasons a
+    /// real command would fail, rather than for a probe-only reason.
+    /// </remarks>
+    /// <summary>
+    /// The exact bubblewrap argument vector used by the startup availability probe. Exposed so tests
+    /// can assert that the probe and the real command path claim the same namespaces — a probe that
+    /// is weaker than execution would pass in CI and fail in production (v0.18.0), and a probe that
+    /// is stronger would refuse to start a perfectly safe pod.
+    /// </summary>
+    internal static string[] BuildAvailabilityProbeArguments() =>
+    [
+        "--unshare-user",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--die-with-parent",
+        "--bind", "/proc", "/proc",
+        "--ro-bind", "/usr", "/usr",
+        "--symlink", "usr/bin", "/bin",
+        "--symlink", "usr/lib", "/lib",
+        "--symlink", "usr/lib64", "/lib64",
+        "--symlink", "usr/sbin", "/sbin",
+        "--cap-drop", "ALL",
+        "--", "/bin/true",
+    ];
+
     public static bool TryProbeAvailability(out string reason)
     {
         if (!OperatingSystem.IsLinux())
@@ -56,6 +105,11 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         if (!File.Exists("/usr/bin/setsid"))
         {
             reason = "Kata bubblewrap isolation requires /usr/bin/setsid.";
+            return false;
+        }
+        if (!Directory.Exists("/proc/self"))
+        {
+            reason = "Kata bubblewrap isolation requires a mounted procfs.";
             return false;
         }
 
@@ -69,20 +123,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
-            foreach (var argument in new[]
-                     {
-                         "--unshare-user",
-                         "--unshare-pid",
-                         "--die-with-parent",
-                         "--proc", "/proc",
-                         "--ro-bind", "/usr", "/usr",
-                         "--symlink", "usr/bin", "/bin",
-                         "--symlink", "usr/lib", "/lib",
-                         "--symlink", "usr/lib64", "/lib64",
-                         "--symlink", "usr/sbin", "/sbin",
-                         "--cap-drop", "ALL",
-                         "--", "/bin/true",
-                     })
+            foreach (var argument in BuildAvailabilityProbeArguments())
             {
                 psi.ArgumentList.Add(argument);
             }
@@ -111,6 +152,24 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         {
             reason = $"bwrap mount-namespace probe failed: {ex.Message}";
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Returns this process's PID-namespace identity (<c>/proc/self/ns/pid</c>), or null when it
+    /// cannot be read. The executor sidecar and the AgentHost compare these values at startup so a
+    /// deployment that accidentally collapses the two into one PID namespace fails closed.
+    /// </summary>
+    public static string? TryReadPidNamespace()
+    {
+        try
+        {
+            var link = new FileInfo("/proc/self/ns/pid").LinkTarget;
+            return string.IsNullOrWhiteSpace(link) ? null : link;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -352,7 +411,6 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
 
         Add(psi,
             "--unshare-user",
-            "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
             "--die-with-parent",
@@ -364,7 +422,10 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         if (!command.NetworkEnabled)
             Add(psi, "--unshare-net");
 
-        Add(psi, "--proc", "/proc");
+        // The executor sidecar container owns the PID namespace (see the type remarks); bind its
+        // runtime-provided procfs instead of mounting a nested one, which the kernel refuses in any
+        // masked-procfs container. The bound procfs only ever contains this run's sandbox processes.
+        Add(psi, "--bind", "/proc", "/proc");
         Add(psi, "--dev", "/dev", "--tmpfs", "/run");
         foreach (var root in SystemReadOnlyRoots.Where(Directory.Exists))
             Add(psi, "--ro-bind", root, root);
