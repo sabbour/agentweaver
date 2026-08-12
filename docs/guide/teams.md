@@ -151,7 +151,11 @@ Agents submit entries to the **Decision Inbox** with a type:
 | `technical` | A concrete technical decision |
 
 ::: tip Architectural and scope decisions are coordinator-reviewed
-Any agent can submit any inbox type. After a run, the **Scribe** auto-merges `learning`, `pattern`, and `update` entries into the ledger, but it leaves `architectural` and `scope` entries pending for the **Coordinator** to review and promote. These two carry team-wide authority, so they are merged deliberately rather than automatically.
+Any agent can submit any inbox type. After a run, the **Scribe** auto-merges only
+`learning`, `pattern`, and `update` entries attributed to that completed run. It leaves
+ordinary-agent `architectural` and `scope` entries pending. A project owner or verified
+Coordinator run must accept those team-wide boundaries; the Coordinator finalization
+path may promote architectural and scope entries authored by that same Coordinator run.
 :::
 
 ### The Decision Inbox
@@ -167,6 +171,10 @@ For each proposed entry you can:
 - **Promote** — promote it (with optional edits) to a decision
 - **Reject** — discard the proposal
 
+These actions cross the trust boundary. The API accepts them only from a project owner
+or a verified Coordinator run. Rejection retains the inbox record for audit rather than
+deleting it.
+
 ### Agent Memory
 
 The **Agent Memory** tab shows individual memory entries for each agent — learnings, preferences, and context that carry forward to future runs. Each entry has:
@@ -177,11 +185,24 @@ The **Agent Memory** tab shows individual memory entries for each agent — lear
 
 You can create entries manually and update existing ones from this tab.
 
+Memory and decisions carry provenance (`human`, `run`, or `legacy`) and a trust state:
+
+| Trust state | Effect |
+|---|---|
+| `pending` | New memory may inform its named agent, but cannot cross to another agent. |
+| `approved` | Eligible for the normal compilation rules; approved cross-team memory may be shared. |
+| `legacy` | Migrated record with unknown provenance; excluded from prompt compilation until approved. |
+
+Only a project owner or verified Coordinator run can approve memory. Active
+architectural and scope decisions are compiled only when their trust state is
+`approved`.
+
 ### Scribe
 
 After each completed orchestration, a **Scribe** agent runs automatically. The Scribe:
 
-- Merges pending Decision Inbox entries into the shared ledger
+- Auto-merges run-attributed `learning`, `pattern`, and `update` inbox entries
+- Leaves ordinary-agent architectural and scope proposals pending for authorized review
 - Writes a session log summarizing what happened
 - Updates the cross-agent history
 - Archives large history files that have grown past a threshold
@@ -190,7 +211,11 @@ You don't need to trigger the Scribe manually — it runs as part of the post-me
 
 ## Team state is file-native
 
-All team state — the roster, charters, decisions, and memory — is stored as human-readable files in the project's working directory (`.agentweaver/` and `.squad/`). You can read, edit, and version-control these files directly. Nothing is hidden in an opaque managed store.
+Team state is mirrored as human-readable files in the project's working directory
+(`.agentweaver/` and `.squad/`) so it can be inspected and version-controlled. The
+structured memory database remains authoritative for trust state and review
+transitions. Editing a mirror does not make its text trusted; importing an inbox file
+creates a proposal that must pass the same authorization and promotion rules.
 
 ## Saving a team as a Blueprint
 

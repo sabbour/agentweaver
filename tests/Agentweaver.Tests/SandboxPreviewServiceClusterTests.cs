@@ -388,19 +388,19 @@ public sealed class SandboxPreviewServiceClusterTests
         (await svc.VerifyTokenForRunAsync(token, "run-x")).Should().BeFalse();
     }
 
-    // ---- issue #542: HasActivePreviewAsync (pod-retention gate) ------------------------------------
-    // NOTE: HasActivePreviewAsync deliberately does NOT probe pod existence (podExists:true) — it runs
-    // at the teardown boundary where the pod is still present, so only the idle (keepalive) and hard-max
-    // expiries bound the deferral. Hence these tests need no pods GET stub.
+    // ---- issue #579: first-class Previewable / PreviewActive lifecycle -----------------------------
 
     [Fact]
-    public async Task HasActivePreview_true_when_run_has_an_unexpired_route()
+    public async Task ReconcileLifecycle_enters_PreviewActive_and_applies_all_protections()
     {
-        const string runId = "run-542-alive";
+        const string runId = "run-579-active";
+        const string podName = "agentweaver-agent-host-active";
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var runCommandClaim = SandboxClaimConventions.DeriveRunCommandClaimName(runId);
 
-        var handler = new FakeKubeHandler();
+        var handler = HandlerWithBoundPod(runId, podName);
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
             "{\"kind\":\"HTTPRouteList\",\"items\":[" +
             "{\"metadata\":{\"name\":\"preview-alive\",\"annotations\":{" +
@@ -411,77 +411,91 @@ public sealed class SandboxPreviewServiceClusterTests
 
         var svc = NewService(handler);
 
-        (await svc.HasActivePreviewAsync(runId)).Should().BeTrue(
-            "a run with a route whose idle and max expiries are both still in the future has a live preview");
+        var state = await svc.ReconcilePreviewLifecycleAsync(runId);
+
+        state.Should().Be(PreviewLifecycleState.PreviewActive);
+        var ttlPatch = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}")).Subject;
+        ttlPatch.Body.Should().Contain(ExpectedRenewedTtlSeconds.ToString());
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{runCommandClaim}"),
+            "the lifecycle must cover whichever claim convention backs the preview");
+        var podPatch = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}")).Subject;
+        podPatch.Body.Should().Contain("cluster-autoscaler.kubernetes.io/safe-to-evict")
+            .And.Contain("false");
     }
 
     [Fact]
-    public async Task HasActivePreview_false_when_route_idle_expired()
+    public async Task ReconcileLifecycle_active_transition_is_idempotent()
     {
-        const string runId = "run-542-idle-expired";
+        const string runId = "run-579-idempotent";
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
-        var handler = new FakeKubeHandler();
+        var handler = HandlerWithBoundPod(runId, "agentweaver-agent-host-idem");
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
             "{\"kind\":\"HTTPRouteList\",\"items\":[" +
-            "{\"metadata\":{\"name\":\"preview-idle\",\"annotations\":{" +
+            "{\"metadata\":{\"name\":\"preview-active\",\"annotations\":{" +
             "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
             "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
-            "\"agentweaver.dev/preview-expires-at\":\"2000-01-01T00:00:00Z\"," +
-            "\"agentweaver.dev/preview-max-until\":\"2099-01-01T00:00:00Z\"}}}]}");
-
-        var svc = NewService(handler);
-
-        (await svc.HasActivePreviewAsync(runId)).Should().BeFalse(
-            "an idle-expired preview must not pin the pod — it lets the reaper release it (eventual teardown)");
-    }
-
-    [Fact]
-    public async Task HasActivePreview_false_when_run_has_no_route()
-    {
-        const string runId = "run-542-none";
-        var handler = new FakeKubeHandler();
-        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
-            """{"kind":"HTTPRouteList","items":[]}""");
-
-        var svc = NewService(handler);
-
-        (await svc.HasActivePreviewAsync(runId)).Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task HasActivePreview_false_when_only_another_runs_route_is_active()
-    {
-        const string runId = "run-542-mine";
-        var otherSanitizedRun = PreviewReaper.PerRunLabel("run-542-someone-else");
-        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
-
-        var handler = new FakeKubeHandler();
-        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
-            "{\"kind\":\"HTTPRouteList\",\"items\":[" +
-            "{\"metadata\":{\"name\":\"preview-other\",\"annotations\":{" +
-            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
-            "\"agentweaver.dev/preview-run\":\"" + otherSanitizedRun + "\"," +
             "\"agentweaver.dev/preview-expires-at\":\"2099-01-01T00:00:00Z\"," +
             "\"agentweaver.dev/preview-max-until\":\"2099-01-01T00:00:00Z\"}}}]}");
 
         var svc = NewService(handler);
 
-        (await svc.HasActivePreviewAsync(runId)).Should().BeFalse(
-            "a live preview for a DIFFERENT run must not defer teardown of this run's pod");
+        await svc.ReconcilePreviewLifecycleAsync(runId);
+        await svc.ReconcilePreviewLifecycleAsync(runId);
+
+        handler.Requests.Where(r =>
+                r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}"))
+            .Should().HaveCount(2)
+            .And.OnlyContain(r => r.Body!.Contains(ExpectedRenewedTtlSeconds.ToString()),
+                "repeating PreviewActive must reassert the same bounded TTL without accumulating state");
+        handler.Requests.Where(r => r.Method == "PATCH" && r.Path.Contains("/pods/"))
+            .Should().HaveCount(2)
+            .And.OnlyContain(r => r.Body!.Contains("false"),
+                "repeating PreviewActive must idempotently reassert the same eviction protection");
     }
 
     [Fact]
-    public async Task HasActivePreview_true_when_feature_flag_is_off_but_cluster_route_exists()
+    public async Task ReconcileLifecycle_returns_to_Previewable_and_reverses_all_protections()
     {
-        // #578: the worker heartbeat reaper consults this cluster-state check even when the worker is
-        // not the role that provisions preview routes. A live HTTPRoute must still be visible.
-        const string runId = "run-578-drift";
+        const string runId = "run-579-cleanup";
+        const string podName = "agentweaver-agent-host-cleanup";
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = HandlerWithBoundPod(runId, podName);
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            """{"kind":"HTTPRouteList","items":[]}""");
+
+        var svc = new SandboxPreviewService(
+            ClientFor(handler),
+            EnabledOptions(),
+            NullLogger<SandboxPreviewService>.Instance,
+            kubernetesOptions: new KubernetesSandboxOptions { TimeoutSeconds = 321 });
+
+        var state = await svc.ReconcilePreviewLifecycleAsync(runId);
+
+        state.Should().Be(PreviewLifecycleState.Previewable);
+        var ttlPatch = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}")).Subject;
+        ttlPatch.Body.Should().Contain("321",
+            "leaving PreviewActive must restore the configured normal claim TTL");
+        var podPatch = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}")).Subject;
+        podPatch.Body.Should().Contain("true",
+            "leaving PreviewActive must release the autoscaler pin");
+    }
+
+    [Fact]
+    public async Task ReconcileLifecycle_sees_cluster_active_state_when_feature_flag_is_off()
+    {
+        const string runId = "run-579-worker-drift";
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
 
-        var handler = new FakeKubeHandler();
+        var handler = HandlerWithBoundPod(runId, "agentweaver-agent-host-worker");
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
             "{\"kind\":\"HTTPRouteList\",\"items\":[" +
             "{\"metadata\":{\"name\":\"preview-worker\",\"annotations\":{" +
@@ -495,87 +509,45 @@ public sealed class SandboxPreviewServiceClusterTests
             new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", MaxLifetimeHours = 8 },
             NullLogger<SandboxPreviewService>.Instance);
 
-        (await svc.HasActivePreviewAsync(runId)).Should().BeTrue(
-            "missing local preview-provisioning config must not make a live cluster preview invisible to the worker reaper");
+        (await svc.ReconcilePreviewLifecycleAsync(runId)).Should().Be(PreviewLifecycleState.PreviewActive,
+            "worker-side cleanup must honor durable preview state even when that process does not create routes");
     }
-
-    // ---- issue #560: RenewBackingClaimTtlAsync (cluster-side pod-retention) ------------------------
-    // PR #551 only deferred the API-side claim delete/reap. The claim is created with a cluster-side
-    // spec.lifecycle.ttlSecondsAfterFinished (default 600s); when a child subtask's workload finishes
-    // the sandbox controller reaps the pod ~TTL later, independently of the API — so a preview backed
-    // by a terminal run still NXDOMAINs. RenewBackingClaimTtlAsync patches that TTL up to cover the
-    // preview's hard-max lifetime so the controller keeps the pod alive as long as the preview may live.
 
     private const int ExpectedRenewedTtlSeconds = 8 * 3600 + 600; // MaxLifetimeHours(8h) + 10min margin
 
     [Fact]
-    public async Task RenewBackingClaimTtl_patches_agent_claim_with_extended_lifecycle_ttl()
+    public async Task StartPreview_enters_PreviewActive_with_ttl_and_eviction_protection()
     {
-        const string runId = "run-560-renew";
+        const string runId = "run-579-start";
+        const string podName = "agentweaver-agent-host-start";
         var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        using var listener = StartListener(out var targetPort);
 
-        var handler = new FakeKubeHandler(); // unstubbed PATCH echoes 200 OK
+        var handler = HandlerWithBoundPod(runId, podName);
+        handler.OnEcho("POST", "/api/v1/namespaces/agentweaver/services");
+        handler.OnEcho("POST", "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes");
         var svc = NewService(handler);
 
-        await svc.RenewBackingClaimTtlAsync(runId);
-
-        var patch = handler.Requests.Should().ContainSingle(r =>
-            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}")).Subject;
-        patch.Body.Should().Contain("ttlSecondsAfterFinished")
-            .And.Contain(ExpectedRenewedTtlSeconds.ToString(),
-                "#560: the backing claim's cluster-side TTL must be extended to cover the preview's hard-max lifetime");
-        patch.Body.Should().Contain("lifecycle",
-            "the patch must target spec.lifecycle so the sandbox controller honours the new TTL");
-    }
-
-    [Fact]
-    public async Task RenewBackingClaimTtl_also_covers_run_command_claim()
-    {
-        // A retained run-command (run-*) claim can back the preview instead of the agent-host claim;
-        // both candidate names must be renewed so whichever exists in-cluster is kept alive.
-        const string runId = "run-560-runcmd";
-        var runCommandClaim = SandboxClaimConventions.DeriveRunCommandClaimName(runId);
-
-        var handler = new FakeKubeHandler();
-        var svc = NewService(handler);
-
-        await svc.RenewBackingClaimTtlAsync(runId);
+        await svc.StartPreviewAsync(runId, targetPort, "user-1");
 
         handler.Requests.Should().Contain(r =>
-            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{runCommandClaim}"),
-            "#560: the run-command claim path shares the same cluster TTL, so it must be renewed too");
-    }
-
-    [Fact]
-    public async Task RenewBackingClaimTtl_still_patches_when_feature_flag_is_off_but_cluster_client_exists()
-    {
-        const string runId = "run-560-worker-drift";
-        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-        var handler = new FakeKubeHandler();
-        var svc = new SandboxPreviewService(
-            ClientFor(handler),
-            new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", MaxLifetimeHours = 8 },
-            NullLogger<SandboxPreviewService>.Instance);
-
-        await svc.RenewBackingClaimTtlAsync(runId);
-
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}"));
         handler.Requests.Should().Contain(r =>
-                r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}"),
-            "the worker reaper must still be able to renew the backing claim TTL for a live preview even if local preview-provisioning config is missing");
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}") &&
+            r.Body!.Contains("safe-to-evict") && r.Body.Contains("false"),
+            "a successful start must enter PreviewActive and apply every protection in one transition");
     }
 
     [Fact]
-    public async Task KeepAlive_renews_backing_claim_ttl_for_the_route_run()
+    public async Task KeepAlive_reasserts_the_PreviewActive_transition()
     {
-        // Keepalive must not only bump the route idle expiry — it must also renew the backing claim TTL
-        // so a long-lived, actively-viewed preview is never reaped by the cluster controller mid-session.
-        const string runId = "run-560-keepalive";
+        const string runId = "run-579-keepalive";
+        const string podName = "agentweaver-agent-host-keepalive";
         const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
         var routeName = PreviewReaper.ServiceName(token);
         var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
-        var handler = new FakeKubeHandler();
-        // GET the route so keepalive can read the durable preview-run-id annotation (replica-safe).
+        var handler = HandlerWithBoundPod(runId, podName);
         handler.OnGet(
             $"/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes/{routeName}",
             "{\"metadata\":{\"name\":\"" + routeName + "\",\"annotations\":{" +
@@ -587,14 +559,11 @@ public sealed class SandboxPreviewServiceClusterTests
 
         handler.Requests.Should().Contain(r =>
             r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}"),
-            "#560: keepalive must renew the backing claim TTL so an actively-viewed preview is not reaped");
+            "active-use keepalive must renew the claim through the same PreviewActive transition");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}") && r.Body!.Contains("false"),
+            "active-use keepalive must also reassert eviction protection");
     }
-
-    // ---- issue #574: SetBackingPodSafeToEvictAsync (cluster-autoscaler scale-down protection) ------
-    // The kata node pool runs the cluster-autoscaler (min 1 / max 5) and the agent-sandbox controller
-    // marks sandbox pods safe-to-evict=true by default, so a scale-down drains the node and kills a
-    // live preview pod independently of the SandboxClaim TTL. Pinning the pod (safe-to-evict=false)
-    // while a preview is live keeps the autoscaler from draining its node; teardown resets it to true.
 
     private static FakeKubeHandler HandlerWithBoundPod(string runId, string podName)
     {
@@ -611,67 +580,65 @@ public sealed class SandboxPreviewServiceClusterTests
     }
 
     [Fact]
-    public async Task SetBackingPodSafeToEvict_false_pins_pod_against_autoscaler_scaledown()
+    public async Task StopPreview_final_route_returns_run_to_Previewable()
     {
-        const string runId = "run-574-pin";
-        const string podName = "agentweaver-agent-host-pin";
+        const string runId = "run-579-stop-final";
+        const string podName = "agentweaver-agent-host-stop";
+        const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        var routeName = PreviewReaper.ServiceName(token);
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var handler = HandlerWithBoundPod(runId, podName);
+        handler.OnGet(
+            $"/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes/{routeName}",
+            "{\"metadata\":{\"annotations\":{\"agentweaver.dev/preview-run-id\":\"" + runId + "\"}}}");
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            """{"kind":"HTTPRouteList","items":[]}""");
+
         var svc = NewService(handler);
 
-        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: false);
+        await svc.StopPreviewAsync(token);
 
-        var patch = handler.Requests.Should().ContainSingle(r =>
-            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}")).Subject;
-        patch.Body.Should().Contain("cluster-autoscaler.kubernetes.io/safe-to-evict")
-            .And.Contain("false",
-                "#574: a live preview must pin its backing pod so the autoscaler will not drain the kata node");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}") &&
+            r.Body!.Contains("600"),
+            "final-preview cleanup must restore the normal claim TTL");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}") && r.Body!.Contains("true"),
+            "final-preview cleanup must release the eviction pin");
     }
 
     [Fact]
-    public async Task SetBackingPodSafeToEvict_true_releases_pod_on_teardown()
+    public async Task StopPreview_one_of_multiple_routes_keeps_run_PreviewActive()
     {
-        const string runId = "run-574-release";
-        const string podName = "agentweaver-agent-host-rel";
+        const string runId = "run-579-stop-one";
+        const string podName = "agentweaver-agent-host-multi";
+        const string stoppedToken = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
+        const string remainingToken = "calm-otter-cobalt-r4m8q2x6n1b9v3k7p5z0d4";
+        var routeName = PreviewReaper.ServiceName(stoppedToken);
+        var sanitizedRun = PreviewReaper.PerRunLabel(runId);
+        var agentClaim = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var handler = HandlerWithBoundPod(runId, podName);
+        handler.OnGet(
+            $"/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes/{routeName}",
+            "{\"metadata\":{\"annotations\":{\"agentweaver.dev/preview-run-id\":\"" + runId + "\"}}}");
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[{\"metadata\":{\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + remainingToken + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + sanitizedRun + "\"," +
+            "\"agentweaver.dev/preview-expires-at\":\"2099-01-01T00:00:00Z\"," +
+            "\"agentweaver.dev/preview-max-until\":\"2099-01-01T00:00:00Z\"}}}]}");
+
         var svc = NewService(handler);
 
-        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: true);
+        await svc.StopPreviewAsync(stoppedToken);
 
-        var patch = handler.Requests.Should().ContainSingle(r =>
-            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}")).Subject;
-        patch.Body.Should().Contain("cluster-autoscaler.kubernetes.io/safe-to-evict")
-            .And.Contain("true",
-                "#574: on teardown the pod is released so the autoscaler can reclaim the kata node again");
-    }
-
-    [Fact]
-    public async Task SetBackingPodSafeToEvict_is_noop_when_no_bound_pod()
-    {
-        // No claim/pod exists (all GETs 404) -> best-effort no-op, no pod PATCH.
-        const string runId = "run-574-nopod";
-        var handler = new FakeKubeHandler();
-        var svc = NewService(handler);
-
-        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: false);
-
-        handler.Requests.Should().NotContain(r => r.Method == "PATCH" && r.Path.Contains("/pods/"),
-            "#574: with no bound pod there is nothing to pin — the call is a silent no-op");
-    }
-
-    [Fact]
-    public async Task SetBackingPodSafeToEvict_still_patches_when_feature_flag_is_off_but_cluster_client_exists()
-    {
-        const string runId = "run-574-worker-drift";
-        var handler = HandlerWithBoundPod(runId, "agentweaver-agent-host-x");
-        var svc = new SandboxPreviewService(
-            ClientFor(handler),
-            new SandboxPreviewOptions { Enabled = false, Namespace = "agentweaver", MaxLifetimeHours = 8 },
-            NullLogger<SandboxPreviewService>.Instance);
-
-        await svc.SetBackingPodSafeToEvictAsync(runId, safeToEvict: false);
-
-        handler.Requests.Should().Contain(r => r.Method == "PATCH" && r.Path.Contains("/pods/"),
-            "the worker reaper must still be able to pin the backing pod for a live preview even if local preview-provisioning config is missing");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{agentClaim}") &&
+            r.Body!.Contains(ExpectedRenewedTtlSeconds.ToString()),
+            "removing one route must not drop claim protection while another preview remains active");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/pods/{podName}") && r.Body!.Contains("false"),
+            "removing one route must keep the backing pod pinned for the remaining preview");
     }
 }
 
