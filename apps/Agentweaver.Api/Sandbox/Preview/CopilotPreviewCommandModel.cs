@@ -87,7 +87,9 @@ public sealed class CopilotPreviewCommandModel : IPreviewCommandModel
                 throw new InvalidOperationException(
                     "Preview command resolution requires a submitting user identity.");
 
-            var scope = _scopeProvider.Resolve(context.SubmittingUser);
+            var scope = await _scopeProvider
+                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
+                .ConfigureAwait(false);
             if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "Preview command resolution requires a user Copilot token scope.");

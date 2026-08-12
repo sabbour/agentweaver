@@ -384,7 +384,7 @@ app.MapGet("/api/projects/{id}/github/repository-owners", async (
     IReadOnlyList<GitHubRepositoryOwner> owners;
     try
     {
-        owners = await projectService.ListRepositoryOwnersAsync(caller.User, ct);
+        owners = await projectService.ListRepositoryOwnersAsync(caller.User, ct, view.Project.Id);
     }
     catch (InvalidOperationException ex)
     {

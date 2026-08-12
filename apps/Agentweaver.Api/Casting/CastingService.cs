@@ -559,7 +559,8 @@ public sealed class CastingService
         var runId = castRunId.ToString();
 
         string result;
-        await using var runtime = new AgentweaverAgentRuntime(_agentRunner, project.WorkingDirectory, modelId);
+        await using var runtime = new AgentweaverAgentRuntime(
+            _agentRunner, project.WorkingDirectory, modelId, project.Id.ToString());
         try
         {
             result = await runtime.RunAsync(prompt, ct, userId: owner).ConfigureAwait(false);

@@ -167,6 +167,7 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
                 State = BacklogTaskState.Backlog,
                 OrderKey = orderKey,
                 CapturedBy = capturedBy,
+                CapturedByUserId = capturedBy,
                 CreatedAt = now,
                 ParentPrdRunId = parentPrdRunId,
                 PromotionKey = story.Key.Trim(),
@@ -234,6 +235,7 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
                 State = BacklogTaskState.Backlog,
                 OrderKey = orderKey,
                 CapturedBy = capturedBy,
+                CapturedByUserId = capturedBy,
                 CreatedAt = now,
                 ParentPrdRunId = parentPrdRunId,
                 PromotionKey = story.Key.Trim(),
@@ -248,6 +250,7 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
                 State = task.State.ToApiString(),
                 OrderKey = task.OrderKey,
                 CapturedBy = task.CapturedBy,
+                CapturedByUserId = task.CapturedByUserId,
                 CreatedAt = task.CreatedAt,
                 CommittedAt = task.CommittedAt,
                 ClaimedAt = task.ClaimedAt,
@@ -320,7 +323,7 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
         command.CommandText =
             $"""
             SELECT task_id, project_id, title, description, state, order_key,
-                   captured_by, created_at, committed_at, claimed_at, run_id,
+                   captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                    workflow_override_id, archived_at, source_file_path,
                    parent_prd_run_id, promotion_key, promotion_reason
               FROM backlog_tasks
@@ -379,6 +382,7 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
                 State = BacklogTaskStateExtensions.ParseState(record.State),
                 OrderKey = record.OrderKey,
                 CapturedBy = record.CapturedBy,
+                CapturedByUserId = record.CapturedByUserId,
                 CreatedAt = record.CreatedAt,
                 CommittedAt = record.CommittedAt,
                 ClaimedAt = record.ClaimedAt,
@@ -513,12 +517,12 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
             """
             INSERT INTO backlog_tasks (
                 task_id, project_id, title, description, state, order_key,
-                captured_by, created_at, committed_at, claimed_at, run_id,
+                captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                 workflow_override_id, archived_at, source_file_path,
                 parent_prd_run_id, promotion_key, promotion_reason)
             VALUES (
                 $taskId, $projectId, $title, $description, $state, $orderKey,
-                $capturedBy, $createdAt, NULL, NULL, NULL,
+                $capturedBy, $capturedByUserId, $createdAt, NULL, NULL, NULL,
                 NULL, NULL, NULL,
                 $parentPrdRunId, $promotionKey, $promotionReason);
             """;
@@ -529,6 +533,7 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
         command.Parameters.AddWithValue("$state", task.State.ToApiString());
         command.Parameters.AddWithValue("$orderKey", task.OrderKey);
         command.Parameters.AddWithValue("$capturedBy", task.CapturedBy);
+        command.Parameters.AddWithValue("$capturedByUserId", (object?)task.CapturedByUserId ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdAt", task.CreatedAt.ToString("O"));
         command.Parameters.AddWithValue("$parentPrdRunId", task.ParentPrdRunId!.Value.ToString());
         command.Parameters.AddWithValue("$promotionKey", task.PromotionKey!);
@@ -568,15 +573,16 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
         State = BacklogTaskStateExtensions.ParseState(reader.GetString(4)),
         OrderKey = reader.GetString(5),
         CapturedBy = reader.GetString(6),
-        CreatedAt = DateTimeOffset.Parse(reader.GetString(7)),
-        CommittedAt = reader.IsDBNull(8) ? null : DateTimeOffset.Parse(reader.GetString(8)),
-        ClaimedAt = reader.IsDBNull(9) ? null : DateTimeOffset.Parse(reader.GetString(9)),
-        RunId = reader.IsDBNull(10) ? null : RunId.Parse(reader.GetString(10)),
-        WorkflowOverrideId = reader.IsDBNull(11) ? null : reader.GetString(11),
-        ArchivedAt = reader.IsDBNull(12) ? null : DateTimeOffset.Parse(reader.GetString(12)),
-        SourceFilePath = reader.IsDBNull(13) ? null : reader.GetString(13),
-        ParentPrdRunId = reader.IsDBNull(14) ? null : RunId.Parse(reader.GetString(14)),
-        PromotionKey = reader.IsDBNull(15) ? null : reader.GetString(15),
-        PromotionReason = reader.IsDBNull(16) ? null : reader.GetString(16),
+        CapturedByUserId = reader.IsDBNull(7) ? null : reader.GetString(7),
+        CreatedAt = DateTimeOffset.Parse(reader.GetString(8)),
+        CommittedAt = reader.IsDBNull(9) ? null : DateTimeOffset.Parse(reader.GetString(9)),
+        ClaimedAt = reader.IsDBNull(10) ? null : DateTimeOffset.Parse(reader.GetString(10)),
+        RunId = reader.IsDBNull(11) ? null : RunId.Parse(reader.GetString(11)),
+        WorkflowOverrideId = reader.IsDBNull(12) ? null : reader.GetString(12),
+        ArchivedAt = reader.IsDBNull(13) ? null : DateTimeOffset.Parse(reader.GetString(13)),
+        SourceFilePath = reader.IsDBNull(14) ? null : reader.GetString(14),
+        ParentPrdRunId = reader.IsDBNull(15) ? null : RunId.Parse(reader.GetString(15)),
+        PromotionKey = reader.IsDBNull(16) ? null : reader.GetString(16),
+        PromotionReason = reader.IsDBNull(17) ? null : reader.GetString(17),
     };
 }

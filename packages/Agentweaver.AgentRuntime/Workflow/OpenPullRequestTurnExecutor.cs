@@ -127,7 +127,9 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
             if (string.IsNullOrWhiteSpace(baseBranch))
                 baseBranch = DefaultBaseBranch;
 
-            var scope = _scopeProvider.Resolve(input.SubmittingUser);
+            var scope = await _scopeProvider
+                .ResolveAsync(input.SubmittingUser, input.ProjectId, ct)
+                .ConfigureAwait(false);
             var accessToken = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(accessToken))
             {

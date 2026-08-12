@@ -85,7 +85,9 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
 
         try
         {
-            var scope = _scopeProvider.Resolve(context.SubmittingUser);
+            var scope = await _scopeProvider
+                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
+                .ConfigureAwait(false);
             if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "Story-independence classification requires a user Copilot token scope; installation scope is not permitted.");

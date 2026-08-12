@@ -397,6 +397,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.State).HasColumnName("state");
             e.Property(t => t.OrderKey).HasColumnName("order_key");
             e.Property(t => t.CapturedBy).HasColumnName("captured_by");
+            e.Property(t => t.CapturedByUserId).HasColumnName("captured_by_user_id");
             e.Property(t => t.CreatedAt).HasColumnName("created_at");
             e.Property(t => t.CommittedAt).HasColumnName("committed_at");
             e.Property(t => t.ClaimedAt).HasColumnName("claimed_at");

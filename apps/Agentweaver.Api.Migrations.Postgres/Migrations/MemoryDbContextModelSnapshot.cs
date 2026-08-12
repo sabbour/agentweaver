@@ -541,6 +541,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("captured_by");
 
+                    b.Property<string>("CapturedByUserId")
+                        .HasColumnType("text")
+                        .HasColumnName("captured_by_user_id");
+
                     b.Property<DateTimeOffset?>("ClaimedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("claimed_at");

@@ -78,7 +78,9 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
                 throw new InvalidOperationException(
                     "Assembly-gate code classification requires a submitting user identity.");
 
-            var scope = _scopeProvider.Resolve(context.SubmittingUser);
+            var scope = await _scopeProvider
+                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
+                .ConfigureAwait(false);
             if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "Assembly-gate code classification requires a user Copilot token scope.");

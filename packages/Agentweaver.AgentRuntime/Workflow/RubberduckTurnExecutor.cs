@@ -143,7 +143,7 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                 modelId: null,
                 systemPromptContext: charter,
                 streamWriter: subWriter,
-                projectId: null,
+                projectId: input.ProjectId,
                 agentName: _reviewAgentId,
                 apiBaseUrl: null,
                 apiKey: null,
