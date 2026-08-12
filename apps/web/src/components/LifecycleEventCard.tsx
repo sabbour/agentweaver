@@ -718,6 +718,7 @@ interface ToolApprovalCardProps {
   toolName: string;
   url: string | null;
   intention: string | null;
+  expiresAt?: string | null;
   runId?: string;
   isResolved?: boolean;
   resolvedScope?: string | null;
@@ -742,13 +743,14 @@ function payloadString(payload: Record<string, unknown>, keys: string[]): string
   return undefined;
 }
 
-function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intention, runId, isResolved, resolvedScope: resolvedScopeProp }: ToolApprovalCardProps) {
+function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intention, expiresAt, runId, isResolved, resolvedScope: resolvedScopeProp }: ToolApprovalCardProps) {
   const [resolvedScope, setResolvedScope] = useState<string | null>(
     isResolved ? (resolvedScopeProp ?? 'expired') : null,
   );
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [retryRequested, setRetryRequested] = useState(false);
 
   // Sync server-driven resolution (e.g. tool.approval_resolved expiry) into local state.
   // Runs when isResolved or resolvedScopeProp change — covers the case where the SSE event
@@ -799,6 +801,20 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleRetryPreviewApproval = async () => {
+    if (!runId || toolName !== 'start_preview' || busy || retryRequested) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await apiClient.retryPreviewApproval(runId, requestId);
+      setRetryRequested(true);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Collapsed inline view — shown after action or when pre-resolved from reducer
   if (resolvedScope !== null) {
     let label: string;
@@ -814,13 +830,34 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
       color = tokens.colorStatusSuccessForeground1;
     }
     return (
-      <div className={styles.rowS} style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}>
+      <div
+        className={styles.rowS}
+        style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}` }}
+        role={resolvedScope === 'expired' ? 'status' : undefined}
+        aria-live={resolvedScope === 'expired' ? 'polite' : undefined}
+      >
         <span className={styles.statusRow}>
           <span className={styles.statusIcon}>
             {resolvedScope === 'deny' ? <DismissCircleFilled aria-hidden="true" /> : resolvedScope === 'expired' ? <ClockRegular aria-hidden="true" /> : <CheckmarkCircleFilled aria-hidden="true" />}
           </span>
           <Text as="span" style={{ color }}>{label}</Text>
+          {resolvedScope === 'expired' && toolName === 'start_preview' && (
+            <Button
+              appearance="outline"
+              size="small"
+              disabled={busy || !runId || retryRequested}
+              onClick={() => void handleRetryPreviewApproval()}
+              aria-label="Retry expired preview approval"
+            >
+              {retryRequested ? 'Fresh approval requested' : busy ? 'Retrying' : 'Retry approval'}
+            </Button>
+          )}
         </span>
+        {actionError && (
+          <Text size={200} style={{ color: tokens.colorStatusDangerForeground1 }}>
+            Retry failed: {actionError}
+          </Text>
+        )}
       </div>
     );
   }
@@ -863,6 +900,15 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
 
         {intention && (
           <Text className={styles.approvalIntentionRedesign}>{intention}</Text>
+        )}
+        {expiresAt && (
+          <Text
+            size={200}
+            role="status"
+            aria-label={`Approval expires at ${new Date(expiresAt).toLocaleString()}`}
+          >
+            Approval expires {new Date(expiresAt).toLocaleString()}
+          </Text>
         )}
 
         <div className={styles.approvalActionsRedesign}>
@@ -1190,6 +1236,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
     const rawUrl = event.payload['url'] ? String(event.payload['url']) : null;
     const url = rawUrl && rawUrl.length > 80 ? rawUrl.slice(0, 80) + '...' : rawUrl;
     const intention = payloadString(event.payload, ['intention', 'message']) ?? null;
+    const expiresAt = payloadString(event.payload, ['expiresAt', 'expires_at']) ?? null;
     const approvalRunId = payloadString(event.payload, ['childRunId', 'child_run_id']) ?? runId;
 
     return (
@@ -1200,6 +1247,7 @@ export const LifecycleEventCard = memo(function LifecycleEventCard({ event, runI
         toolName={toolName}
         url={url}
         intention={intention}
+        expiresAt={expiresAt}
         runId={approvalRunId}
         isResolved={isResolved}
         resolvedScope={resolvedScope}

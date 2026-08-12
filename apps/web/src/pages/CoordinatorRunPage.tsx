@@ -483,7 +483,13 @@ type RunPreviewState =
   | { status: 'none' }
   | { status: 'ready'; previewUrl: string; targetPort?: string }
   | { status: 'pending'; targetPort?: string }
-  | { status: 'failed'; reason: string; message?: string };
+  | {
+    status: 'failed';
+    reason: string;
+    message?: string;
+    retryAvailable: boolean;
+    approvalRequestId?: string;
+  };
 
 function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState {
   for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -509,7 +515,9 @@ function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState
     if (evt.type === 'sandbox.preview_failed') {
       const reason = readStr(evt.payload, ['reason']) ?? 'unknown';
       const message = readStr(evt.payload, ['message']);
-      return { status: 'failed', reason, message };
+      const retryAvailable = evt.payload['retry_available'] === true;
+      const approvalRequestId = readStr(evt.payload, ['approval_request_id', 'approvalRequestId']);
+      return { status: 'failed', reason, message, retryAvailable, approvalRequestId };
     }
   }
   return { status: 'none' };
@@ -2134,6 +2142,8 @@ export function CoordinatorRunPage() {
   const styles = useStyles();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
+  const [previewRetrying, setPreviewRetrying] = useState(false);
+  const [previewRetryError, setPreviewRetryError] = useState<string | null>(null);
   // Actual run-level RunStatus (distinct from the WorkPlan/orchestration phase). A run can be
   // terminally Failed/Declined at the run level while its WorkPlan.Status is still `in_review`
   // (e.g. a run interrupted by an old build before the durability fix): the in-memory assembly
@@ -4136,6 +4146,22 @@ export function CoordinatorRunPage() {
   const openPreview = () => {
     if (previewAction) previewAction.onClick();
   };
+  const retryPreviewApproval = async () => {
+    if (!runId
+      || runPreviewState.status !== 'failed'
+      || !runPreviewState.retryAvailable
+      || !runPreviewState.approvalRequestId) return;
+
+    setPreviewRetrying(true);
+    setPreviewRetryError(null);
+    try {
+      await apiClient.retryPreviewApproval(runId, runPreviewState.approvalRequestId);
+    } catch (err) {
+      setPreviewRetryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewRetrying(false);
+    }
+  };
   const previewStatusContent = (compact = false) => {
     switch (runPreviewState.status) {
       case 'ready':
@@ -4161,12 +4187,28 @@ export function CoordinatorRunPage() {
         );
       case 'failed':
         return (
-          <div className={styles.previewStatusStack}>
-            <Text weight="semibold">Preview unavailable</Text>
-            <Text className={styles.previewStatusReason}>
-              {previewFailureCopy(runPreviewState)}. Human review can still proceed.
-            </Text>
-          </div>
+          <>
+            <div className={styles.previewStatusStack} role="status" aria-live="polite">
+              <Text weight="semibold">Preview unavailable</Text>
+              <Text className={styles.previewStatusReason}>
+                {previewFailureCopy(runPreviewState)}. Human review can still proceed.
+              </Text>
+              {previewRetryError && (
+                <Text className={styles.previewStatusReason}>Retry failed: {previewRetryError}</Text>
+              )}
+            </div>
+            {runPreviewState.retryAvailable && runPreviewState.approvalRequestId && (
+              <Button
+                appearance="primary"
+                size="small"
+                disabled={previewRetrying}
+                onClick={() => void retryPreviewApproval()}
+                aria-label="Retry expired preview approval"
+              >
+                {previewRetrying ? 'Retrying approval' : 'Retry approval'}
+              </Button>
+            )}
+          </>
         );
       default:
         return null;

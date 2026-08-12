@@ -150,6 +150,11 @@ If the run's sandbox policy requires approval before executing certain tool call
 
 Enable **Auto-approve tools** in the run header to skip per-call approval prompts for the remainder of that run.
 
+Preview exposure approvals also remain visible in the notification bell, a persistent toast, and
+the timeline until resolved. Their project-configurable window defaults to 30 minutes. If one
+expires, choose **Retry approval** to create a fresh approval attempt while keeping the run and
+healthy preview process in place.
+
 ## RAI check
 
 Each agent run passes a **Responsible AI (RAI)** check before its output proceeds. If the check flags the output, the run automatically loops back — the agent revises and the check re-runs. This loopback is visible as a "Revise" edge in the pipeline graph. If the check passes, the run proceeds to the next stage (human review or assembly).

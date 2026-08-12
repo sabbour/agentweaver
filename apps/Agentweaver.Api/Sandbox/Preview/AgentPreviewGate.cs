@@ -16,15 +16,30 @@ public enum PreviewApprovalOutcome
     TimedOut,
 }
 
+/// <summary>Completed preview approval decision plus its durable request identity.</summary>
+public sealed record PreviewApprovalResult(
+    PreviewApprovalOutcome Outcome,
+    string? RequestId,
+    DateTimeOffset? ExpiresAt);
+
+/// <summary>
+/// A newly armed approval request. The request identity is available immediately so retry endpoints
+/// can return without waiting for the operator decision.
+/// </summary>
+public sealed record PreviewApprovalAttempt(
+    string? RequestId,
+    DateTimeOffset? ExpiresAt,
+    Task<PreviewApprovalResult> Completion);
+
 /// <summary>
 /// Human-in-the-loop approval gate for the agent-initiated <c>start_preview</c> tool. A running
 /// agent calls <c>start_preview(port)</c> which routes here: the request is auto-approved when an
 /// auto-approve source is on, otherwise a <see cref="EventTypes.ToolApprovalRequired"/> card is
 /// emitted onto the run stream and the call suspends on the shared <see cref="IToolApprovalGate"/>
 /// until an operator grants it (POST /api/runs/{id}/tool-approvals) or the approval window times
-/// out. The wait window is configurable via <c>Sandbox:Preview:ApprovalTimeoutMinutes</c> / env
-/// <c>SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES</c>; missing or invalid values fall back to 15
-/// minutes and non-positive values clamp to 1 minute.
+/// out. Each project stores its own approval window (30 minutes by default). The global
+/// <c>Sandbox:Preview:ApprovalTimeoutMinutes</c> / <c>SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES</c>
+/// value remains the fallback for legacy/non-project runs.
 ///
 /// <para>Auto-approve sources (any true ⇒ auto-grant, prod default is human-gated):</para>
 /// <list type="number">
@@ -39,26 +54,30 @@ public sealed class AgentPreviewGate
 {
     /// <summary>The tool name surfaced on HITL cards and approval-policy lookups.</summary>
     public const string ToolName = "start_preview";
-    private const int DefaultApprovalTimeoutMinutes = 15;
+    public const int DefaultApprovalTimeoutMinutes = 30;
     private const int MinimumApprovalTimeoutMinutes = 1;
+    private const int MaximumApprovalTimeoutMinutes = 1440;
 
     private readonly IToolApprovalGate _approvalGate;
     private readonly IRunOptionsStore _runOptions;
     private readonly RunStreamStore _streams;
     private readonly bool _autoApproveConfigured;
-    private readonly TimeSpan _approvalTimeout;
+    private readonly TimeSpan _fallbackApprovalTimeout;
+    private readonly IRunStore? _runStore;
+    private readonly IProjectStore? _projectStore;
     private readonly ILogger<AgentPreviewGate> _logger;
 
     /// <summary>
     /// Builds the preview approval gate, resolving the global auto-approve flag and approval
-    /// timeout from <c>Sandbox:Preview</c> configuration. The approval timeout defaults to 15
-    /// minutes, falls back to the env var helper name, and clamps configured non-positive values
-    /// to 1 minute.
+    /// timeout fallback from <c>Sandbox:Preview</c> configuration. Project-backed runs use their
+    /// project setting; legacy/non-project runs use this fallback, which defaults to 30 minutes.
     /// </summary>
     public AgentPreviewGate(
         IToolApprovalGate approvalGate,
         IRunOptionsStore runOptions,
         RunStreamStore streams,
+        IRunStore runStore,
+        IProjectStore projectStore,
         IConfiguration configuration,
         ILogger<AgentPreviewGate> logger)
         : this(
@@ -67,13 +86,15 @@ public sealed class AgentPreviewGate
             streams,
             ResolveAutoApprove(configuration),
             logger,
-            ResolveApprovalTimeout(configuration))
+            ResolveApprovalTimeout(configuration),
+            runStore,
+            projectStore)
     {
     }
 
     /// <summary>
     /// Test seam: inject the resolved auto-approve flag and timeout directly. When the timeout is
-    /// omitted, the same 15-minute default is used.
+    /// omitted, the same 30-minute default is used.
     /// </summary>
     internal AgentPreviewGate(
         IToolApprovalGate approvalGate,
@@ -81,14 +102,18 @@ public sealed class AgentPreviewGate
         RunStreamStore streams,
         bool autoApproveConfigured,
         ILogger<AgentPreviewGate> logger,
-        TimeSpan? approvalTimeout = null)
+        TimeSpan? approvalTimeout = null,
+        IRunStore? runStore = null,
+        IProjectStore? projectStore = null)
     {
         _approvalGate = approvalGate;
         _runOptions = runOptions;
         _streams = streams;
         _autoApproveConfigured = autoApproveConfigured;
         _logger = logger;
-        _approvalTimeout = approvalTimeout ?? TimeSpan.FromMinutes(DefaultApprovalTimeoutMinutes);
+        _fallbackApprovalTimeout = approvalTimeout ?? TimeSpan.FromMinutes(DefaultApprovalTimeoutMinutes);
+        _runStore = runStore;
+        _projectStore = projectStore;
     }
 
     /// <summary>
@@ -105,26 +130,68 @@ public sealed class AgentPreviewGate
     /// immediately as <see cref="PreviewApprovalOutcome.Approved"/> when auto-approved; otherwise
     /// emits a HITL card and suspends until an operator grants/denies or the timeout elapses.
     /// </summary>
-    public async Task<PreviewApprovalOutcome> RequestApprovalAsync(
+    public async Task<PreviewApprovalResult> RequestApprovalAsync(
         string runId,
         int port,
         CancellationToken ct,
         int? workPlanId = null,
         string? treeHash = null)
     {
+        var attempt = await BeginApprovalAsync(runId, port, ct, workPlanId, treeHash)
+            .ConfigureAwait(false);
+        return await attempt.Completion.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Arms a fresh approval attempt and returns its request id immediately. A retry always receives
+    /// a new request id; the prior request remains expired in the audit trail.
+    /// </summary>
+    public async Task<PreviewApprovalAttempt> BeginApprovalAsync(
+        string runId,
+        int port,
+        CancellationToken ct,
+        int? workPlanId = null,
+        string? treeHash = null,
+        string? retryOfRequestId = null)
+    {
         if (IsAutoApproved(runId))
         {
             _logger.LogInformation(
                 "start_preview auto-approved (config/run-option/policy) — port={Port} runId={RunId}", port, runId);
-            return PreviewApprovalOutcome.Approved;
+            var retryRequestId = retryOfRequestId is null ? null : Guid.NewGuid().ToString("n");
+            if (retryRequestId is not null)
+            {
+                _streams.Get(runId)?.RecordNext(EventTypes.SandboxPreviewPending, new
+                {
+                    run_id = runId,
+                    work_plan_id = workPlanId,
+                    tree_hash = treeHash,
+                    target_port = port,
+                    approval = "auto_approved",
+                    request_id = retryRequestId,
+                    retry_of_request_id = retryOfRequestId,
+                    timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+                });
+            }
+
+            return new PreviewApprovalAttempt(
+                retryRequestId,
+                null,
+                Task.FromResult(new PreviewApprovalResult(
+                    PreviewApprovalOutcome.Approved,
+                    retryRequestId,
+                    null)));
         }
 
+        var approvalTimeout = await ResolveApprovalTimeoutForRunAsync(runId, ct).ConfigureAwait(false);
         var requestId = Guid.NewGuid().ToString("n");
         var displayId = requestId[..8];
+        var requestedAt = DateTimeOffset.UtcNow;
+        var expiresAt = requestedAt.Add(approvalTimeout);
 
         // Register the gate BEFORE emitting the card so an immediate operator grant is not lost.
         var approvalTask = _approvalGate.WaitForApprovalAsync(
-            runId, requestId, ToolName, $"sandbox-preview:{port}", _approvalTimeout, ct);
+            runId, requestId, ToolName, $"sandbox-preview:{port}", approvalTimeout, ct);
 
         // Surface a HITL card on the run timeline so an operator can approve via
         // POST /api/runs/{runId}/tool-approvals with this request_id.
@@ -135,6 +202,10 @@ public sealed class AgentPreviewGate
             toolName = ToolName,
             url = $"sandbox-preview:{port}",
             message = $"The agent wants to expose a preview server on port {port}. Operator approval required.",
+            requestedAt = requestedAt.ToString("O"),
+            expiresAt = expiresAt.ToString("O"),
+            timeoutMinutes = (int)approvalTimeout.TotalMinutes,
+            retryOfRequestId,
         });
         _streams.Get(runId)?.RecordNext(EventTypes.SandboxPreviewPending, new
         {
@@ -144,7 +215,10 @@ public sealed class AgentPreviewGate
             target_port = port,
             approval = "pending",
             request_id = requestId,
-            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            retry_of_request_id = retryOfRequestId,
+            expires_at = expiresAt.ToString("O"),
+            timeout_minutes = (int)approvalTimeout.TotalMinutes,
+            timestamp_utc = requestedAt.ToString("O"),
         });
         _streams.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
         {
@@ -159,13 +233,42 @@ public sealed class AgentPreviewGate
             "start_preview HITL gate — waiting for operator approval: requestId={RequestId} port={Port} runId={RunId}",
             displayId, port, runId);
 
-        var approved = await approvalTask.ConfigureAwait(false);
-        if (approved)
-            return PreviewApprovalOutcome.Approved;
+        return new PreviewApprovalAttempt(
+            requestId,
+            expiresAt,
+            CompleteAsync(runId, requestId, expiresAt, approvalTask));
+    }
 
-        return _approvalGate.GetRequestState(runId, requestId) == ToolApprovalRequestState.Expired
-            ? PreviewApprovalOutcome.TimedOut
-            : PreviewApprovalOutcome.Denied;
+    private async Task<PreviewApprovalResult> CompleteAsync(
+        string runId,
+        string requestId,
+        DateTimeOffset expiresAt,
+        Task<bool> approvalTask)
+    {
+        var approved = await approvalTask.ConfigureAwait(false);
+        var outcome = approved
+            ? PreviewApprovalOutcome.Approved
+            : _approvalGate.GetRequestState(runId, requestId) == ToolApprovalRequestState.Expired
+                ? PreviewApprovalOutcome.TimedOut
+                : PreviewApprovalOutcome.Denied;
+        return new PreviewApprovalResult(outcome, requestId, expiresAt);
+    }
+
+    internal async Task<TimeSpan> ResolveApprovalTimeoutForRunAsync(string runId, CancellationToken ct)
+    {
+        if (_runStore is null || _projectStore is null || !RunId.TryParse(runId, out var parsedRunId))
+            return _fallbackApprovalTimeout;
+
+        var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+        if (run?.ProjectId is null)
+            return _fallbackApprovalTimeout;
+
+        var project = await _projectStore.GetAsync(run.ProjectId.Value, ct).ConfigureAwait(false);
+        var minutes = project?.PreviewApprovalTimeoutMinutes ?? (int)_fallbackApprovalTimeout.TotalMinutes;
+        return TimeSpan.FromMinutes(Math.Clamp(
+            minutes,
+            MinimumApprovalTimeoutMinutes,
+            MaximumApprovalTimeoutMinutes));
     }
 
     /// <summary>
@@ -180,7 +283,7 @@ public sealed class AgentPreviewGate
     /// <summary>
     /// Resolves the preview approval timeout from <c>Sandbox:Preview:ApprovalTimeoutMinutes</c> or
     /// the <c>SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES</c> environment variable. Missing or
-    /// invalid values default to 15 minutes; non-positive values clamp to 1 minute.
+    /// invalid values default to 30 minutes; values clamp to the supported project range.
     /// </summary>
     internal static TimeSpan ResolveApprovalTimeout(IConfiguration configuration) =>
         ResolveApprovalTimeoutMinutes(configuration["Sandbox:Preview:ApprovalTimeoutMinutes"])
@@ -198,6 +301,9 @@ public sealed class AgentPreviewGate
         if (!int.TryParse(value, out var minutes))
             return null;
 
-        return TimeSpan.FromMinutes(Math.Max(MinimumApprovalTimeoutMinutes, minutes));
+        return TimeSpan.FromMinutes(Math.Clamp(
+            minutes,
+            MinimumApprovalTimeoutMinutes,
+            MaximumApprovalTimeoutMinutes));
     }
 }
