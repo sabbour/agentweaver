@@ -83,6 +83,9 @@ Controls how agent commands execute and what they can reach. Options include:
 - Allowed/blocked shell commands
 - Network access rules
 - Destructive command gating
+- **Preview approval timeout** — how long an agent-initiated live-preview request waits for
+  approval. The default is 30 minutes; project owners can choose 1–1440 minutes. Existing
+  projects inherit the 30-minute default.
 
 ### Review policy
 

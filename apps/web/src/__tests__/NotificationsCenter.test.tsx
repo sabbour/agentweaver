@@ -151,6 +151,22 @@ describe('NotificationBell + NotificationsProvider', () => {
     expect(screen.getByText(makeNotification().title)).toBeTruthy();
   });
 
+  it('keeps the badge visible for a pending tool approval after the popover is opened', async () => {
+    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([
+      makeNotification({ type: 'tool_approval', title: 'Approval needed to run "start_preview"' }),
+    ]));
+    const user = userEvent.setup();
+
+    renderBell();
+
+    await waitFor(() => expect(screen.getByTestId('notification-bell-badge').textContent).toContain('1'));
+    await user.click(screen.getByTestId('notification-bell'));
+
+    expect(screen.getByTestId('notification-bell-badge').textContent).toContain('1');
+    expect(screen.getByTestId('notification-bell').getAttribute('aria-label'))
+      .toContain('1 pending tool approval');
+  });
+
   it('CTA click in the popover navigates to the notification cta_path', async () => {
     vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([makeNotification()]));
     const user = userEvent.setup();

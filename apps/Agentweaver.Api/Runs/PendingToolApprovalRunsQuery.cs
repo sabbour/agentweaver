@@ -11,8 +11,9 @@ namespace Agentweaver.Api.Runs;
 /// gate", shared by <see cref="BoardProjectionService"/> (board card badges, #issue n/a) and
 /// <see cref="Agentweaver.Api.Notifications.NotificationsService"/> (tool_approval notifications,
 /// #321). A run is pending iff it has at least one <c>tool.approval_required</c> event whose
-/// requestId has no matching <c>tool.result</c>/<c>tool.error</c> callId yet — the same resolution
-/// logic used by the frontend's own pending-approval projection.
+/// requestId has no matching <c>tool.approval_resolved</c> requestId or
+/// <c>tool.result</c>/<c>tool.error</c> callId yet — the same resolution logic used by the
+/// frontend's own pending-approval projection.
 /// </summary>
 public sealed class PendingToolApprovalRunsQuery
 {
@@ -54,8 +55,10 @@ public sealed class PendingToolApprovalRunsQuery
 
         var resolvedEvents = await db.RunEvents.AsNoTracking()
             .Where(e => runIds.Contains(e.RunId) &&
-                        (e.EventType == EventTypes.ToolResult || e.EventType == EventTypes.ToolError))
-            .Select(e => new { e.RunId, e.PayloadJson })
+                        (e.EventType == EventTypes.ToolResult
+                         || e.EventType == EventTypes.ToolError
+                         || e.EventType == EventTypes.ToolApprovalResolved))
+            .Select(e => new { e.RunId, e.EventType, e.PayloadJson })
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
@@ -65,9 +68,12 @@ public sealed class PendingToolApprovalRunsQuery
         {
             if (!resolvedByRun.TryGetValue(evt.RunId, out var set))
                 resolvedByRun[evt.RunId] = set = new HashSet<string>(StringComparer.Ordinal);
-            var callId = ExtractStringField(evt.PayloadJson, "callId")
-                ?? ExtractStringField(evt.PayloadJson, "call_id");
-            if (callId is not null) set.Add(callId);
+            var resolvedId = evt.EventType == EventTypes.ToolApprovalResolved
+                ? ExtractStringField(evt.PayloadJson, "requestId")
+                    ?? ExtractStringField(evt.PayloadJson, "request_id")
+                : ExtractStringField(evt.PayloadJson, "callId")
+                    ?? ExtractStringField(evt.PayloadJson, "call_id");
+            if (resolvedId is not null) set.Add(resolvedId);
         }
 
         // Keep the most recent unresolved request per run (approval events are appended in order).

@@ -129,10 +129,10 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | --- | --- | --- | --- |
 | `sandbox.preview_applicability` | No | `run_id`, `work_plan_id`, `tree_hash`, `state`, `reason`, `evidence` | Applicability recorded before Build & Test. |
 | `sandbox.preview_start_requested` | No | `run_id`, `work_plan_id`, `tree_hash`, `source`, `command_source` | `PreviewStep` resolved a command and is starting the app. `command_source` distinguishes the tier that resolved it: a heuristic source (e.g. `package.json:dev`, `csproj`, `dockerfile`) or `llm` for the model fallback (issue #541). |
-| `sandbox.preview_pending` | No | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id` | Existing preview approval gate is waiting. |
+| `sandbox.preview_pending` | No | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `approval`, `request_id`, `expires_at`, `timeout_minutes`, optional `retry_of_request_id` | Preview approval gate is waiting, including a fresh retry attempt. |
 | `sandbox.preview_ready` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `target_port`, `pod_name`, `session_id`, `preview_runner_session_id`, `preview_url`, `keepalive_url`, `started_at` | Gateway preview is ready. `session_id` is the Gateway token; `preview_runner_session_id` is the supervised process id. |
 | `coordinator.preview_ready` | Mirror | Same as `sandbox.preview_ready` | Coordinator-family mirror for the ready outcome. |
-| `sandbox.preview_failed` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message` | Preview did not produce a URL; review can continue. |
+| `sandbox.preview_failed` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message`; timeout additionally includes `approval_request_id`, `retry_available`, `expired_at`, `preview_runner_session_id` | Preview did not produce a URL; review can continue. An approval timeout retains the process and can be retried. |
 | `sandbox.preview_skipped_not_applicable` | Yes | `run_id`, `work_plan_id`, `tree_hash`, `source`, `reason`, `message` or `evidence` | Preview intentionally skipped, including infra unavailable. |
 | `workflow.step` | Stage state | `step: "preview"`, `status`, `label`, `message`, `timestamp_utc` | Drives graph/run-tree preview status. |
 
@@ -151,7 +151,7 @@ Auth accepts either the per-run turn bearer token or the per-run preview-runner 
 | `bound_unreachable` | The app's loopback health check passed, but the forwarder public port did not pass the through-forwarder health check. |
 | `no_public_port_available` | AgentHost could not bind any free forwarder public port in the allowed `3000-9000` range. |
 | `approval_denied` | Operator denied preview exposure. |
-| `approval_timed_out` | Operator did not approve before the approval timeout. |
+| `approval_timed_out` | Operator did not approve before the project timeout (30 minutes by default). The latest expired attempt can be retried with a fresh request id while reusing the retained process. |
 | `port_not_allowed` | Observed port is outside the allowed Gateway preview range. |
 | `registration_failed` | Gateway preview registration failed. |
 | `preview_outcome_missing` | Safety-net guard found no terminal outcome. |

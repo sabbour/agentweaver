@@ -363,6 +363,23 @@ public sealed class ProjectService
         return true;
     }
 
+    public async Task<bool> UpdatePreviewApprovalTimeoutAsync(
+        ProjectId id,
+        int timeoutMinutes,
+        CancellationToken ct = default)
+    {
+        if (timeoutMinutes is < 1 or > 1440)
+            throw new ArgumentOutOfRangeException(
+                nameof(timeoutMinutes),
+                "Preview approval timeout must be between 1 and 1440 minutes.");
+
+        var project = await _store.GetAsync(id, ct).ConfigureAwait(false);
+        if (project is null) return false;
+        await _store.UpdatePreviewApprovalTimeoutAsync(
+            id, timeoutMinutes, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        return true;
+    }
+
     // -----------------------------------------------------------------------
     // Race-safe delete
     // -----------------------------------------------------------------------

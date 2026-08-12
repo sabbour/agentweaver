@@ -144,10 +144,9 @@ public sealed class PreviewStep
             //    preview-runner credential from the run secret store for a cross-replica reconcile.
             var bearer = await ResolveBearerAsync(runId, ct).ConfigureAwait(false);
 
-            // 5. Start the supervised process (deterministic). Once started, EVERY non-success terminal
-            //    exit below best-effort stops the process (which disposes the forwarder) so we never
-            //    leak the app process + forwarder until the idle reaper — only a SUCCESSFUL
-            //    registration keeps them alive.
+            // 5. Start the supervised process (deterministic). Non-success exits best-effort stop
+            //    the process, except approval timeout: that leaves the healthy process private and
+            //    supervised so a fresh approval attempt can reuse it without duplicate execution.
             PreviewRunnerStartResult started;
             try
             {
@@ -213,11 +212,24 @@ public sealed class PreviewStep
             // 7. Register through the gate (honors Decision 1 — no auto-approve bypass).
             var approval = await _previewGate.RequestApprovalAsync(
                 runId, port.Port, ct, request.WorkPlanId, request.TreeHash).ConfigureAwait(false);
-            if (approval != PreviewApprovalOutcome.Approved)
+            if (approval.Outcome != PreviewApprovalOutcome.Approved)
             {
-                var reason = approval == PreviewApprovalOutcome.TimedOut ? "approval_timed_out" : "approval_denied";
-                await TryStopProcessAsync(runId, bearer, started.SessionId, reason, ct).ConfigureAwait(false);
-                EmitFailed(request, reason, "Preview approval was denied or timed out.");
+                if (approval.Outcome == PreviewApprovalOutcome.TimedOut)
+                {
+                    // Keep the supervised process alive but unexposed. The operator can re-arm a
+                    // fresh approval attempt against this same session without restarting the run
+                    // or executing the preview command again.
+                    EmitApprovalTimedOut(
+                        request,
+                        port.Port,
+                        started.SessionId,
+                        approval.RequestId!,
+                        approval.ExpiresAt);
+                    return;
+                }
+
+                await TryStopProcessAsync(runId, bearer, started.SessionId, "approval_denied", ct).ConfigureAwait(false);
+                EmitFailed(request, "approval_denied", "Preview approval was denied.");
                 return;
             }
 
@@ -427,6 +439,31 @@ public sealed class PreviewStep
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
         EmitWorkflowStep(r.RunId, "failed", message);
+    }
+
+    private void EmitApprovalTimedOut(
+        PreviewStepRequest r,
+        int targetPort,
+        string previewRunnerSessionId,
+        string approvalRequestId,
+        DateTimeOffset? expiredAt)
+    {
+        Record(r.RunId, EventTypes.SandboxPreviewFailed, new
+        {
+            run_id = r.RunId,
+            work_plan_id = r.WorkPlanId,
+            tree_hash = r.TreeHash,
+            source = "preview-step",
+            reason = "approval_timed_out",
+            message = "Preview approval expired. Retry approval to expose the already-running preview process.",
+            target_port = targetPort,
+            preview_runner_session_id = previewRunnerSessionId,
+            approval_request_id = approvalRequestId,
+            retry_available = true,
+            expired_at = expiredAt?.ToString("O"),
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        });
+        EmitWorkflowStep(r.RunId, "failed", "Preview approval expired. Retry is available.");
     }
 
     private void EmitSkipped(PreviewStepRequest r, string reason, string message)

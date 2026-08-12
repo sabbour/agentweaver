@@ -152,6 +152,26 @@ public sealed class KubernetesRemoteApiManifestTests
     }
 
     [Fact]
+    public void ApiAndWorker_CannotMutateTemplatesPoolsOrWorkspacePvcs()
+    {
+        var rbac = ReadManifest("rbac-api.yaml");
+        var templatePoolRules = Regex.Matches(
+            rbac,
+            @"(?ms)^\s{4}resources:\r?\n\s{6}- sandboxtemplates\r?\n\s{6}- sandboxwarmpools\r?\n" +
+            @"\s{4}verbs:\r?\n(?<verbs>(?:\s{6}- \S+\r?\n)+)");
+
+        templatePoolRules.Should().NotBeEmpty();
+        foreach (Match rule in templatePoolRules)
+        {
+            var verbs = Regex.Matches(rule.Groups["verbs"].Value, @"- (\S+)")
+                .Select(match => match.Groups[1].Value);
+            verbs.Should().BeEquivalentTo(["get", "list"],
+                "issue #476 does not overlap #481 by creating per-run templates, pools, or volumes");
+        }
+        rbac.Should().NotContain("persistentvolumeclaims");
+    }
+
+    [Fact]
     public void ProductionOverlay_EnablesAgentHostMtls()
     {
         var patch = ReadOverlayManifest("production", "patch-agenthost-mtls.yaml");

@@ -248,6 +248,35 @@ app.MapPut("/api/projects/{id}/provider-settings", async (
     return updated ? Results.NoContent() : Results.NotFound();
 });
 
+// PUT /api/projects/{id}/preview-settings — update the project-scoped preview HITL window.
+app.MapPut("/api/projects/{id}/preview-settings", async (
+    HttpContext httpContext,
+    string id,
+    UpdateProjectPreviewSettingsRequest request,
+    ProjectService projectService,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    if (request.ApprovalTimeoutMinutes is < 1 or > 1440)
+        return Results.BadRequest(new { error = "approval_timeout_minutes must be between 1 and 1440." });
+
+    var view = await projectService.GetViewAsync(projectId, ct);
+    if (view is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
+
+    var updated = await projectService.UpdatePreviewApprovalTimeoutAsync(
+        projectId, request.ApprovalTimeoutMinutes, ct);
+    return updated
+        ? Results.Ok(new ProjectPreviewSettingsResponse
+        {
+            ApprovalTimeoutMinutes = request.ApprovalTimeoutMinutes,
+        })
+        : Results.NotFound();
+})
+    .WithName("UpdateProjectPreviewSettings")
+    .WithTags("Projects");
+
 // POST /api/projects/{id}/webhook-secret/rotate — generate and reveal a GitHub webhook secret once.
 app.MapPost("/api/projects/{id}/webhook-secret/rotate", async (
     HttpContext httpContext,
@@ -951,6 +980,7 @@ static ProjectResponse MapProject(Project p, bool available, ProjectRole? effect
     BlueprintGenerationModel = p.BlueprintGenerationModel,
     WorkflowGenerationModel = p.WorkflowGenerationModel,
     OutcomeSpecGenerationModel = p.OutcomeSpecGenerationModel,
+    PreviewApprovalTimeoutMinutes = p.PreviewApprovalTimeoutMinutes,
     Available = available,
     State = p.State == ProjectState.Active ? "active" : "deleting",
     CreatedAt = p.CreatedAt,

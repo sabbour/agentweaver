@@ -1,4 +1,5 @@
 import userEvent from '@testing-library/user-event';
+import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { LifecycleEventCard } from '../components/LifecycleEventCard';
 import { act, cleanup, render, screen } from '@testing-library/react';
@@ -13,6 +14,7 @@ afterEach(() => {
   // Explicit cleanup to prevent DOM state leaks between tests.
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function makeEvent(type: string, payload: Record<string, unknown> = {}): RunStreamEvent {
@@ -491,5 +493,35 @@ describe('LifecycleEventCard — tool.approval_required resolved/expired states'
 
     expect(screen.getByText('✗ Denied · web_fetch')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
+  });
+
+  it('offers a fresh approval attempt for an expired start_preview request', async () => {
+    const retry = vi.spyOn(apiClient, 'retryPreviewApproval').mockResolvedValue({
+      run_id: 'run-preview',
+      request_id: 'req-fresh',
+      retry_of_request_id: 'req-expired',
+      expires_at: '2026-08-10T21:00:00Z',
+      state: 'pending',
+    });
+    const user = userEvent.setup();
+
+    render(
+      <Wrapper>
+        <LifecycleEventCard
+          event={makeEvent('tool.approval_required', {
+            requestId: 'req-expired',
+            toolName: 'start_preview',
+          })}
+          runId="run-preview"
+          isResolved={true}
+          resolvedScope="expired"
+        />
+      </Wrapper>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Retry expired preview approval' }));
+
+    expect(retry).toHaveBeenCalledWith('run-preview', 'req-expired');
+    expect(screen.getByText('Fresh approval requested')).toBeDefined();
   });
 });

@@ -44,7 +44,26 @@ public sealed class AgentPreviewGateTests
 
         var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
 
-        outcome.Should().Be(PreviewApprovalOutcome.Approved);
+        outcome.Outcome.Should().Be(PreviewApprovalOutcome.Approved);
+    }
+
+    [Fact]
+    public async Task BeginApproval_AutoApprovedRetryCreatesFreshPendingIdentity()
+    {
+        var gate = CreateGate(autoApproveConfigured: true, out _, out _, out var streams);
+
+        var retry = await gate.BeginApprovalAsync(
+            RunId,
+            3000,
+            CancellationToken.None,
+            retryOfRequestId: "expired-request");
+
+        retry.RequestId.Should().NotBeNullOrWhiteSpace().And.NotBe("expired-request");
+        (await retry.Completion).Outcome.Should().Be(PreviewApprovalOutcome.Approved);
+        var pending = streams.Get(RunId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.SandboxPreviewPending);
+        ReadString(pending.Payload, "request_id").Should().Be(retry.RequestId);
+        ReadString(pending.Payload, "retry_of_request_id").Should().Be("expired-request");
     }
 
     [Fact]
@@ -55,7 +74,7 @@ public sealed class AgentPreviewGateTests
 
         var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
 
-        outcome.Should().Be(PreviewApprovalOutcome.Approved);
+        outcome.Outcome.Should().Be(PreviewApprovalOutcome.Approved);
     }
 
     [Fact]
@@ -70,7 +89,7 @@ public sealed class AgentPreviewGateTests
         var resolved = await approvalGate.GrantAsync(RunId, requestId, ApprovalScope.Once);
         resolved.Should().BeTrue();
 
-        (await task).Should().Be(PreviewApprovalOutcome.Approved);
+        (await task).Outcome.Should().Be(PreviewApprovalOutcome.Approved);
     }
 
     [Fact]
@@ -89,7 +108,7 @@ public sealed class AgentPreviewGateTests
 
         // Resolve so the awaiting task completes deterministically.
         approvalGate.Deny(RunId, requestId);
-        (await task).Should().Be(PreviewApprovalOutcome.Denied);
+        (await task).Outcome.Should().Be(PreviewApprovalOutcome.Denied);
     }
 
     [Fact]
@@ -103,18 +122,48 @@ public sealed class AgentPreviewGateTests
 
         approvalGate.Deny(RunId, requestId).Should().BeTrue();
 
-        (await task).Should().Be(PreviewApprovalOutcome.Denied);
+        (await task).Outcome.Should().Be(PreviewApprovalOutcome.Denied);
     }
 
     [Fact]
-    public async Task RequestApproval_Timeout_ReturnsDenied()
+    public async Task RequestApproval_Timeout_ReturnsTimedOut()
     {
         var gate = CreateGate(autoApproveConfigured: false, out _, out _, out _,
             timeout: ExpirationTimeout);
 
         var outcome = await gate.RequestApprovalAsync(RunId, 3000, CancellationToken.None);
 
-        outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
+        outcome.Outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
+        outcome.RequestId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task BeginApproval_RetryCreatesFreshLinkedRequest()
+    {
+        var gate = CreateGate(
+            autoApproveConfigured: false,
+            out var approvalGate,
+            out _,
+            out var streams,
+            timeout: ExpirationTimeout);
+
+        var first = await gate.BeginApprovalAsync(RunId, 3000, CancellationToken.None);
+        (await first.Completion).Outcome.Should().Be(PreviewApprovalOutcome.TimedOut);
+
+        var retry = await gate.BeginApprovalAsync(
+            RunId,
+            3000,
+            CancellationToken.None,
+            retryOfRequestId: first.RequestId);
+
+        retry.RequestId.Should().NotBeNullOrWhiteSpace().And.NotBe(first.RequestId);
+        var card = streams.Get(RunId)!.GetSnapshotSince(0).Events
+            .Last(e => e.Type == EventTypes.ToolApprovalRequired);
+        ReadString(card.Payload, "requestId").Should().Be(retry.RequestId);
+        ReadString(card.Payload, "retryOfRequestId").Should().Be(first.RequestId);
+
+        approvalGate.Deny(RunId, retry.RequestId!).Should().BeTrue();
+        (await retry.Completion).Outcome.Should().Be(PreviewApprovalOutcome.Denied);
     }
 
     [Fact]
@@ -140,11 +189,12 @@ public sealed class AgentPreviewGateTests
     }
 
     [Theory]
-    [InlineData(null, 15)]
-    [InlineData("", 15)]
-    [InlineData("wat", 15)]
+    [InlineData(null, 30)]
+    [InlineData("", 30)]
+    [InlineData("wat", 30)]
     [InlineData("0", 1)]
     [InlineData("-4", 1)]
+    [InlineData("2000", 1440)]
     public void ResolveApprovalTimeout_UsesDefaultOrMinimum(string? configuredMinutes, int expectedMinutes)
     {
         WithApprovalTimeoutEnvironmentVariable(null, () =>

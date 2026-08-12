@@ -1209,6 +1209,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasDefaultValue(true)
                         .HasColumnName("pickup_autopilot");
 
+                    b.Property<int>("PreviewApprovalTimeoutMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30)
+                        .HasColumnName("preview_approval_timeout_minutes");
+
                     b.Property<string>("SandboxProfile")
                         .HasColumnType("text")
                         .HasColumnName("sandbox_profile");

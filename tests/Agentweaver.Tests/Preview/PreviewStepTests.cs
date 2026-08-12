@@ -495,6 +495,23 @@ public sealed class PreviewStepTests : IDisposable
 
         Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("approval_denied");
         h.PreviewService.StartCalls.Should().Be(0);
+        h.PreviewRunner.StopCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ApprovalExpired_RetainsProcessAndEmitsRetryContext()
+    {
+        var h = new Harness(_worktree, autoApprove: false, approvalTimeout: TimeSpan.FromMilliseconds(25));
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        var failure = h.Single(EventTypes.SandboxPreviewFailed);
+        Str(failure, "reason").Should().Be("approval_timed_out");
+        Str(failure, "preview_runner_session_id").Should().Be("proc-sess-1");
+        Str(failure, "approval_request_id").Should().NotBeNullOrEmpty();
+        Str(failure, "retry_available").Should().Be("true");
+        h.PreviewRunner.StopCalls.Should().Be(0, "the healthy process is reused by a fresh approval attempt");
+        h.PreviewService.StartCalls.Should().Be(0);
     }
 
     // ── Credential durable lifecycle ────────────────────────────────────────────────────
@@ -554,7 +571,8 @@ public sealed class PreviewStepTests : IDisposable
             bool podPerRun = true,
             bool autoApprove = true,
             IPodNameRegistry? podRegistry = null,
-            IPreviewCommandModel? commandModel = null)
+            IPreviewCommandModel? commandModel = null,
+            TimeSpan? approvalTimeout = null)
         {
             Streams.Create(RunId, "owner");
             var runtime = new SandboxRuntimeOptions
@@ -563,7 +581,7 @@ public sealed class PreviewStepTests : IDisposable
             };
             var gate = new AgentPreviewGate(
                 ApprovalGate, new InMemoryRunOptionsStore(), Streams, autoApprove,
-                NullLogger<AgentPreviewGate>.Instance, TimeSpan.FromSeconds(5));
+                NullLogger<AgentPreviewGate>.Instance, approvalTimeout ?? TimeSpan.FromSeconds(5));
 
             Step = new PreviewStep(
                 PreviewService,

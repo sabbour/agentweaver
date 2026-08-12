@@ -605,6 +605,18 @@ public sealed record UpdateProjectProviderSettingsRequest
     [JsonPropertyName("outcome_spec_generation_model")] public string? OutcomeSpecGenerationModel { get; init; }
 }
 
+/// <summary>Request body for updating project-scoped preview approval behavior.</summary>
+public sealed record UpdateProjectPreviewSettingsRequest
+{
+    [JsonPropertyName("approval_timeout_minutes")] public int ApprovalTimeoutMinutes { get; init; }
+}
+
+/// <summary>Project-scoped preview approval settings.</summary>
+public sealed record ProjectPreviewSettingsResponse
+{
+    [JsonPropertyName("approval_timeout_minutes")] public required int ApprovalTimeoutMinutes { get; init; }
+}
+
 /// <summary>Canonical project view returned from creation, listing, and detail endpoints.</summary>
 public sealed record ProjectResponse
 {
@@ -621,6 +633,7 @@ public sealed record ProjectResponse
     [JsonPropertyName("blueprint_generation_model")] public string? BlueprintGenerationModel { get; init; }
     [JsonPropertyName("workflow_generation_model")] public string? WorkflowGenerationModel { get; init; }
     [JsonPropertyName("outcome_spec_generation_model")] public string? OutcomeSpecGenerationModel { get; init; }
+    [JsonPropertyName("preview_approval_timeout_minutes")] public required int PreviewApprovalTimeoutMinutes { get; init; }
     [JsonPropertyName("available")] public required bool Available { get; init; }
     [JsonPropertyName("state")] public required string State { get; init; }
     [JsonPropertyName("created_at")] public required DateTimeOffset CreatedAt { get; init; }

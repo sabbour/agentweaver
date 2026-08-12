@@ -99,6 +99,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_autopilot INTEGER NOT NULL DEFAULT 1;", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN pickup_auto_approve_tools INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN preview_approval_timeout_minutes INTEGER NOT NULL DEFAULT 30;", ct);
 
         // Per-project default workflow + per-task workflow override (Feature 010, FR-041/FR-042).
         // YAML/predefined workflows are loaded from .agentweaver/workflows/ and referenced here by id.
@@ -611,7 +612,8 @@ public sealed class SqliteDb
             created_at              TEXT NOT NULL,
             updated_at              TEXT NOT NULL,
             webhook_secret          TEXT,
-            team_revision           INTEGER NOT NULL DEFAULT 0
+            team_revision           INTEGER NOT NULL DEFAULT 0,
+            preview_approval_timeout_minutes INTEGER NOT NULL DEFAULT 30
         );
 
         CREATE INDEX IF NOT EXISTS idx_projects_state ON projects (state);
