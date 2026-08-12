@@ -378,4 +378,16 @@ trigger:
       expect.stringContaining('id: default-copy'),
     ));
   });
+
+  it('keeps schedule configuration read-only for built-in workflows', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({
+      default_workflow_id: 'default',
+      workflows: [sampleList.workflows[0]],
+    });
+
+    renderPage('proj-1');
+
+    expect(await screen.findByRole('button', { name: /duplicate to project/i })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /schedule/i })).toBeNull();
+  });
 });
