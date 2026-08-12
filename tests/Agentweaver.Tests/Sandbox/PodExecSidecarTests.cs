@@ -136,6 +136,44 @@ public sealed class PodExecSidecarTests
         result.Stderr.Should().Contain("executor sidecar isolation unavailable");
     }
 
+    /// <summary>
+    /// Preview output is the product surface for a spawned process: the workload must own a real
+    /// stdout, and the sidecar must stream it to the supervisor line by line.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task SpawnedProcess_StreamsItsOwnStdoutToTheSupervisor()
+    {
+        if (!KataBwrapExecutor.TryProbeAvailability(out _))
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        var supervised = await client.StartSupervisedProcessAsync(
+            "echo preview-listening; while :; do sleep 1; done",
+            workspace,
+            null,
+            networkEnabled: false);
+
+        try
+        {
+            var line = await supervised.Process.StandardOutput.ReadLineAsync()
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            line.Should().Be(
+                "preview-listening",
+                "the sandboxed process must inherit a working stdout, not one bubblewrap closed");
+        }
+        finally
+        {
+            await supervised.StopAsync(TimeSpan.FromSeconds(2));
+            supervised.Process.Dispose();
+        }
+    }
+
     [SidecarLinuxFact]
     public async Task SpawnedProcessGroup_IsTerminatedWhenTheSupervisingRelayDies()
     {
@@ -146,12 +184,14 @@ public sealed class PodExecSidecarTests
         var (workspace, _) = CreateTwoRuns(root);
         var ready = Path.Combine(workspace, "ready.txt");
         var terminated = Path.Combine(workspace, "terminated.txt");
+        var daemonPidFile = Path.Combine(workspace, "daemon.pid");
         await using var harness = PodExecTestHarness.StartServer(root);
         var client = PodExecTestHarness.CreateClient(harness.SocketPath);
         client.RegisterTrustedWorkspace(workspace);
         client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
 
         var supervised = await client.StartSupervisedProcessAsync(
+            $"(sleep 300 & echo $! > {Quote(daemonPidFile)}) ; " +
             $"trap 'printf terminated > {Quote(terminated)}; exit 0' TERM; " +
             $"printf ready > {Quote(ready)}; while :; do sleep 1; done",
             workspace,
@@ -161,6 +201,8 @@ public sealed class PodExecSidecarTests
         try
         {
             await WaitForFileAsync(ready, TimeSpan.FromSeconds(20));
+            await WaitForFileAsync(daemonPidFile, TimeSpan.FromSeconds(20));
+            var daemonPid = int.Parse(File.ReadAllText(daemonPidFile).Trim());
 
             // Killing the relay is the AgentHost-crash scenario: the sidecar sees the disconnect and
             // must reap the whole sandboxed process group rather than stranding it.
@@ -168,6 +210,12 @@ public sealed class PodExecSidecarTests
 
             await WaitForFileAsync(terminated, TimeSpan.FromSeconds(20));
             File.ReadAllText(terminated).Should().Be("terminated");
+
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (Directory.Exists($"/proc/{daemonPid}") && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+            Directory.Exists($"/proc/{daemonPid}").Should().BeFalse(
+                "process-group termination must also reap processes the workload daemonised");
         }
         finally
         {

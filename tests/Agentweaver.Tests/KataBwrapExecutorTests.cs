@@ -340,24 +340,67 @@ public sealed class KataBwrapExecutorTests : IDisposable
         probe.Should().Contain("--unshare-user");
     }
 
+    /// <summary>
+    /// The workload must own the sandbox's stdout/stderr and its own session. Bubblewrap closes
+    /// <c>--info-fd</c> after setup, so reusing fd 1 for it silently breaks every write the command
+    /// makes to stdout ("write error: Bad file descriptor"), and an extra <c>setsid</c> wrapper
+    /// would fork a grandchild that the executor cannot attribute on a kernel without
+    /// <c>/proc/&lt;pid&gt;/task/&lt;pid&gt;/children</c>. Both were observed on real Kata.
+    /// </summary>
     [Fact]
-    public void ChildProcessMetadata_RequiresPositiveBwrapChildPid()
+    public void SupervisedLaunch_KeepsWorkloadStdoutAndExecsItDirectlyInItsOwnSession()
     {
-        KataBwrapExecutor.ParseChildPid("""{"child-pid":4321}""").Should().Be(4321);
-        KataBwrapExecutor.ParseChildPid(
-            """
-            {
-              "child-pid": 4321
-            }
-            """).Should().Be(4321);
+        if (!OperatingSystem.IsLinux())
+            return;
 
-        var missing = () => KataBwrapExecutor.ParseChildPid("""{"version":1}""");
-        var invalid = () => KataBwrapExecutor.ParseChildPid("not-json");
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+        var startInfo = executor.BuildProcessStartInfo(Command(_runA));
+        var arguments = startInfo.ArgumentList.ToArray();
 
-        missing.Should().Throw<InvalidOperationException>()
-            .WithMessage("*valid sandbox child PID*");
-        invalid.Should().Throw<InvalidOperationException>()
-            .WithMessage("*invalid child process metadata*");
+        startInfo.RedirectStandardOutput.Should().BeTrue();
+        arguments.Should().NotContain("--info-fd");
+        arguments.Should().Contain("--new-session");
+        arguments.Should().NotContain("/usr/bin/setsid");
+        var terminator = Array.IndexOf(arguments, "--");
+        terminator.Should().BeGreaterThan(0);
+        arguments[terminator + 1].Should().Be("/bin/bash");
+    }
+
+    /// <summary>
+    /// Nothing reaps daemonised grandchildren for a sandbox that deliberately does not claim its
+    /// own PID namespace, and .NET's <c>Kill(entireProcessTree)</c> cannot help because it walks the
+    /// procfs children file the Kata guest kernel omits. The executor must terminate the run's
+    /// process group itself.
+    /// </summary>
+    [Fact]
+    public async Task CompletedCommand_LeavesNoDaemonisedProcessesBehind()
+    {
+        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+            return;
+
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+        var marker = Path.Combine(_runA, "daemon.pid");
+        var result = await executor.ExecuteAsync(new SandboxCommand(
+            $"(sleep 300 & echo $! > {QuoteForPosixShell(marker)}) ; sleep 0.2",
+            _runA,
+            null,
+            new SandboxFsPolicy([_runA], [], []),
+            30_000,
+            NetworkEnabled: false));
+
+        result.ExitCode.Should().Be(0, result.Stderr);
+        var daemonPid = int.Parse((await File.ReadAllTextAsync(marker)).Trim());
+
+        // The pid is the executor-container-visible pid because the sandbox shares this PID
+        // namespace by design; the process group kill must already have reaped it.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (Directory.Exists($"/proc/{daemonPid}") && DateTime.UtcNow < deadline)
+            await Task.Delay(100);
+
+        Directory.Exists($"/proc/{daemonPid}").Should().BeFalse(
+            "a command that daemonises a background process must not leak it into the executor container");
     }
 
     [Fact]

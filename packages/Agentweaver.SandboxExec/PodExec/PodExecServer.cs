@@ -172,9 +172,17 @@ public sealed class PodExecServer : IAsyncDisposable
             _logger?.LogWarning(ex, "Executor sidecar denied a request (op={Op}).", request?.Op);
             await TryWriteAsync(writer, Error($"Sandbox policy violation: {ex.Message}")).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Shutdown or client disconnect.
+            // Sidecar shutdown; the supervisor sees the connection drop and fails closed.
+        }
+        catch (OperationCanceledException ex)
+        {
+            // An internal deadline expired (for example sandbox startup). Never close silently:
+            // the supervisor must see a reason instead of an unexplained disconnect.
+            _logger?.LogError(ex, "Executor sidecar timed out handling a request (op={Op}).", request?.Op);
+            await TryWriteAsync(writer, Error("Executor request timed out inside the sandbox executor."))
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {

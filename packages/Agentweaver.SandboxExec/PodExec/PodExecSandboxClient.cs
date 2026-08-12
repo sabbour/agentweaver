@@ -77,7 +77,9 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
             }
             catch (Exception ex)
             {
-                lastDetail = ex.Message;
+                lastDetail =
+                    $"executor sidecar socket '{_socketPath}' is not answering ({ex.Message}); "
+                    + "the pod must run the 'agentweaver-exec' container";
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1), deadline.Token).ConfigureAwait(false);

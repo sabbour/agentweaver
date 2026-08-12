@@ -242,6 +242,27 @@ die-with-parent semantics across the container boundary.
 `ShellCommandValidator` and `SharedWorkspacePathGuard` remain compounding controls, but the security
 claim for #476 no longer depends on command text.
 
+#### Process lifetime without a nested PID namespace
+
+Because the sandbox deliberately does not claim a PID namespace of its own, nothing implicitly reaps
+what a command leaves behind, and two kernel details of the Kata guest matter:
+
+- `/proc/<pid>/task/<pid>/children` does **not** exist there (`CONFIG_PROC_CHILDREN` is off), so
+  neither the executor nor .NET's `Process.Kill(entireProcessTree: true)` may depend on it. The
+  executor instead uses bubblewrap's own `--info-fd` child pid — which, because `--new-session`
+  already made that child a session and process-group leader and the workload is exec'd directly
+  (no extra `setsid` indirection), *is* the run's process-group id.
+- `--die-with-parent` only SIGKILLs bubblewrap's immediate child. Anything the command daemonised
+  (a Roslyn build server, a watcher) would survive. So every command path — one-shot `exec` as well
+  as supervised preview processes — ends by terminating that process group (`TERM`, then `KILL`),
+  and the executor refuses to signal a group that is its own.
+
+Commands in one pod share the executor container's PID namespace with each other. That is the
+correct boundary rather than a gap: a sandbox pod is claimed by exactly one run, and the boundary
+that carries credentials — AgentHost, its brokered GitHub token, and the pod's workload identity —
+is a *different* container in a different PID namespace, which the sidecar re-verifies on every
+probe.
+
 ### Contract with #481
 
 #481 remains the pod-wide storage redesign: relocate authoritative worktrees off the API HOME tree,
