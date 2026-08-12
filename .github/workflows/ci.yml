@@ -126,15 +126,53 @@ jobs:
       - name: Run .NET validation
         run: node scripts/ci/validate.mjs --profile ci --area dotnet
 
+      # Every sandbox proof that needs a real bubblewrap runtime carries
+      # [Trait("Category", "KataRuntime")], so this gate can never drift away from a
+      # renamed test the way a hardcoded FullyQualifiedName list did. AGENTWEAVER_REQUIRE_BWRAP=1
+      # turns "bubblewrap missing/unusable" from a silent early return into a failure.
       - name: Run Kata Linux runtime regressions
+        env:
+          AGENTWEAVER_REQUIRE_BWRAP: "1"
+          KATA_RUNTIME_FILTER: Category=KataRuntime
+          KATA_RUNTIME_MIN_TESTS: "21"
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
+          # The gate is worthless if bwrap is absent or cannot create a user namespace.
+          # `bwrap --version` proves the binary; the product's own availability probe
+          # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
+          # proves the namespaces, using exactly the flags the executor uses.
+          bwrap --version
+          echo "::group::Tests selected by ${KATA_RUNTIME_FILTER}"
+          dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+            --no-build --no-restore -p:CopilotSkipCliDownload=true \
+            --list-tests --filter "${KATA_RUNTIME_FILTER}" \
+            | tee kata-runtime-selected.txt
+          echo "::endgroup::"
+          selected=$(grep -cE '^[[:space:]]+Agentweaver\.Tests\.' kata-runtime-selected.txt || echo 0)
+          echo "Selected ${selected} Kata runtime tests (minimum ${KATA_RUNTIME_MIN_TESTS})."
+          if [ "${selected}" -lt "${KATA_RUNTIME_MIN_TESTS}" ]; then
+            echo "::error::${KATA_RUNTIME_FILTER} selected ${selected} tests, expected at least ${KATA_RUNTIME_MIN_TESTS}. The trait was probably dropped from a sandbox regression."
+            exit 1
+          fi
           dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
             --no-build \
             --no-restore \
             -p:CopilotSkipCliDownload=true \
-            --filter "FullyQualifiedName~PrivateProcfs_RunsManagedCoreClrAndHidesHostParentProcess|FullyQualifiedName~KataPreviewStop_SignalsActualSandboxProcessGroupWithTerm|FullyQualifiedName~ConfigureAsync_without_shared_workspace_uses_writable_pod_private_fallback"
+            --filter "${KATA_RUNTIME_FILTER}" \
+            --logger "trx;LogFileName=kata-runtime.trx" \
+            --results-directory kata-runtime-results
+
+      - name: Upload Kata runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kata-runtime-regressions
+          path: |
+            kata-runtime-selected.txt
+            kata-runtime-results
+          if-no-files-found: warn
 
   node-toolchain-tests:
     name: Node toolchain tests

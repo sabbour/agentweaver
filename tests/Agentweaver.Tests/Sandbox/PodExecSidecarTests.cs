@@ -14,8 +14,24 @@ namespace Agentweaver.Tests.Sandbox;
 /// bubblewrap design (see <c>docs/deep-dive/sandbox-pod-execution.md</c>). The protocol tests run
 /// everywhere; the ones that actually execute sandboxed commands are Linux + bubblewrap gated.
 /// </summary>
+[Trait("Category", KataRuntimeGate.Category)]
 public sealed class PodExecSidecarTests
 {
+    /// <summary>
+    /// Self-check for the bwrap-enabled CI job: when <c>AGENTWEAVER_REQUIRE_BWRAP=1</c> is set the
+    /// runtime must really be there, so a broken or missing bubblewrap install fails the required
+    /// gate instead of turning every sandboxed proof into a silent early return.
+    /// </summary>
+    [Fact]
+    public void KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne()
+    {
+        if (!KataRuntimeGate.IsRequired)
+            return;
+
+        KataRuntimeGate.BwrapAvailable(out var detail)
+            .Should().BeTrue($"{KataRuntimeGate.RequireVariable}=1 promises a usable runtime, but {detail}");
+    }
+
     [Fact]
     public void Endpoint_ResolvesConfiguredPathThenEnvironmentThenPodDefault()
     {
@@ -42,7 +58,7 @@ public sealed class PodExecSidecarTests
     [SidecarLinuxFact]
     public async Task Server_RejectsRequestsWithoutThePodPrivateToken()
     {
-        if (!KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         await using var harness = PodExecTestHarness.StartServer(NewRoot());
@@ -64,7 +80,7 @@ public sealed class PodExecSidecarTests
     [SidecarLinuxFact]
     public async Task Probe_FailsClosedWhenCallerSharesTheExecutorPidNamespace()
     {
-        if (!KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         await using var harness = PodExecTestHarness.StartServer(NewRoot());
@@ -91,7 +107,7 @@ public sealed class PodExecSidecarTests
     [SidecarLinuxFact]
     public async Task Execute_RunsInsideTheSidecarMountNamespaceAndCannotSeeSiblingRuns()
     {
-        if (!KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var root = NewRoot();
@@ -143,7 +159,7 @@ public sealed class PodExecSidecarTests
     [SidecarLinuxFact]
     public async Task SpawnedProcess_StreamsItsOwnStdoutToTheSupervisor()
     {
-        if (!KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var root = NewRoot();
@@ -177,7 +193,7 @@ public sealed class PodExecSidecarTests
     [SidecarLinuxFact]
     public async Task SpawnedProcessGroup_IsTerminatedWhenTheSupervisingRelayDies()
     {
-        if (!KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var root = NewRoot();
@@ -277,7 +293,8 @@ public sealed class SidecarLinuxFactAttribute : FactAttribute
 {
     public SidecarLinuxFactAttribute()
     {
-        if (!OperatingSystem.IsLinux())
+        // A required bwrap gate must never report success by skipping.
+        if (!OperatingSystem.IsLinux() && !KataRuntimeGate.IsRequired)
             Skip = "Executor-sidecar isolation is a Linux-only boundary.";
     }
 }

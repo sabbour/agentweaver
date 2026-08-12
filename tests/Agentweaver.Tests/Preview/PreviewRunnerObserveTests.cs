@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Agentweaver.SandboxExec;
+using Agentweaver.Tests.Sandbox;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -310,9 +311,10 @@ public sealed class PreviewRunnerObserveTests
     /// relay's own PID is never used as a process-group id, because it is not one.
     /// </summary>
     [LinuxFact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task KataPreviewStop_SignalsActualSandboxProcessGroupWithTerm()
     {
-        if (!KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var root = Path.Combine(

@@ -187,9 +187,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public void PreviewChildProcess_UsesRegisteredRuntimeHomeAndXdg()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!KataRuntimeGate.Available())
             return;
 
         var subdirectory = Path.Combine(_runA, "app");
@@ -268,9 +269,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task ReadOnlyGitMountCannotBeHardLinkedIntoWritableWorkspace()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         Run("git", "-C", _runA, "init");
@@ -302,9 +304,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     /// NOT claim a PID namespace it cannot back with a matching procfs.
     /// </summary>
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public void MountNamespace_BindsContainerProcfsAndNeverUnsharesPid()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!KataRuntimeGate.Available())
             return;
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
@@ -327,9 +330,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     /// (which is precisely how the v0.18.0 production outage reached the cluster).
     /// </summary>
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public void AvailabilityProbe_UsesTheSameNamespaceFlagsAsRealCommands()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!KataRuntimeGate.Available())
             return;
 
         var probe = KataBwrapExecutor.BuildAvailabilityProbeArguments();
@@ -348,9 +352,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     /// <c>/proc/&lt;pid&gt;/task/&lt;pid&gt;/children</c>. Both were observed on real Kata.
     /// </summary>
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public void SupervisedLaunch_KeepsWorkloadStdoutAndExecsItDirectlyInItsOwnSession()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!KataRuntimeGate.Available())
             return;
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
@@ -374,9 +379,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     /// process group itself.
     /// </summary>
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task CompletedCommand_LeavesNoDaemonisedProcessesBehind()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
@@ -404,9 +410,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task SandboxedProcess_RunsManagedCoreClrAndCannotReachSiblingRuns()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var app = Path.Combine(_runA, "managed-proc-probe");
@@ -446,9 +453,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task VariableAbsolutePathAndSymlinkCannotReadOrWriteSibling()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var secret = Path.Combine(_runB, "secret.txt");
@@ -471,9 +479,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task LinkedWorktreeReadOperationsAndPlatformCommitRemainFunctional()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var repository = Path.Combine(_workspace, "repositories", "project");

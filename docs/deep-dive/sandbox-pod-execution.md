@@ -208,9 +208,14 @@ Within that structure:
   is not merely hidden but **absent from the namespace**;
 - the child environment is cleared and rebuilt from a minimal baseline plus explicitly supplied
   values; and
-- the sidecar executes a real bwrap capability probe before it binds its socket, and AgentHost
-  startup fails closed unless that sidecar answers a probe proving it is reachable, isolated, and in
-  a *different* PID namespace. There is no passthrough fallback in Kata mode.
+- the sidecar runs a real bwrap capability probe **before it binds its socket** — if bubblewrap
+  cannot build the mount namespace the daemon exits and the container never serves, so there is no
+  window in which a command could run unisolated; and
+- AgentHost runs a **one-shot startup probe** against that socket and refuses to start unless the
+  sidecar answers, proving it is reachable, isolated (the probe re-runs the bwrap capability check
+  server-side on every request), and in a *different* PID namespace than AgentHost. It is a startup
+  gate, not a periodic health check: afterwards each individual command still fails closed with exit
+  126 if the socket ever stops answering. There is no passthrough fallback in Kata mode.
 
 #### Why a sidecar and not a nested PID namespace
 
@@ -249,9 +254,15 @@ what a command leaves behind, and two kernel details of the Kata guest matter:
 
 - `/proc/<pid>/task/<pid>/children` does **not** exist there (`CONFIG_PROC_CHILDREN` is off), so
   neither the executor nor .NET's `Process.Kill(entireProcessTree: true)` may depend on it. The
-  executor instead uses bubblewrap's own `--info-fd` child pid — which, because `--new-session`
-  already made that child a session and process-group leader and the workload is exec'd directly
-  (no extra `setsid` indirection), *is* the run's process-group id.
+  executor therefore discovers the sandboxed process by scanning `/proc/*/stat` for the single entry
+  whose PPID is the bubblewrap process it just started, and reads that entry's process-group id from
+  the same line. Because `--new-session` already made that child a session and process-group leader
+  and the workload is exec'd directly (no extra `setsid` indirection), the pid it finds *is* the
+  run's process-group id. The scan polls until bubblewrap has forked (bounded by a deadline) and
+  fails closed if bubblewrap exits first or if the resolved group is the executor's own.
+  Bubblewrap's `--info-fd` is deliberately **not** used: pointing it at fd 1 closes the workload's
+  stdout (every write then fails with `EBADF`), and .NET's `ProcessStartInfo` cannot hand an
+  arbitrary extra pipe to the child, so there is no spare descriptor to point it at instead.
 - `--die-with-parent` only SIGKILLs bubblewrap's immediate child. Anything the command daemonised
   (a Roslyn build server, a watcher) would survive. So every command path — one-shot `exec` as well
   as supervised preview processes — ends by terminating that process group (`TERM`, then `KILL`),
@@ -262,6 +273,25 @@ correct boundary rather than a gap: a sandbox pod is claimed by exactly one run,
 that carries credentials — AgentHost, its brokered GitHub token, and the pod's workload identity —
 is a *different* container in a different PID namespace, which the sidecar re-verifies on every
 probe.
+
+##### Disclosure: intra-run argv visibility
+
+One consequence of that shared PID namespace is worth stating explicitly rather than leaving to be
+rediscovered. `/proc/<pid>/cmdline`, `/proc/<pid>/stat` and `/proc/<pid>/status` are world-readable
+and are **not** gated by procfs' ptrace check, so a sandboxed command can read the *command line* of
+other processes running in the same executor container — that is, other commands of the **same run**,
+and the sidecar daemon's own argv. It cannot read their environment, memory, cwd or mount root:
+`/proc/<pid>/environ`, `/proc/<pid>/mem`, `/proc/<pid>/cwd` and `/proc/<pid>/root` are gated by
+`ptrace_may_access`, and every command runs in its own user namespace (`--unshare-user`), which is
+neither an ancestor nor a descendant of the sidecar's or of a sibling command's, so those accesses
+are refused.
+
+The blast radius is therefore one run's own commands, and the contract that follows is: **secrets
+belong in the environment (or a file inside the run's own mount view), never in a command line.**
+That is how the runtime already passes the brokered token — the executor clears the child
+environment and rebuilds it from explicitly supplied values, and those values are unreadable across
+the user-namespace boundary. Cross-run and AgentHost-facing exposure is unaffected: sibling runs are
+in different pods, and AgentHost is in a different PID namespace in this one.
 
 ### Contract with #481
 
