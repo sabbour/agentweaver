@@ -168,45 +168,58 @@ Three things are deliberately distinct:
 - **A2A agent-turn remoting** (the [A2A bridge](./a2a-bridge.md)) moves an entire *agent turn* — the SDK
   session and its tool loop — out to the per-run pod. That is the pod-per-run story above. It is
   **orthogonal** to backend selection: the in-pod AgentHost still runs each `run_command` through *its
-  own* `ISandboxExecutor`. When `AgentHost:SandboxMode=kata`, that executor is direct passthrough
-  because the AgentHost process already lives inside the per-run Kata VM; nesting bubblewrap would
-  require mount privileges deliberately withheld by the pod security context.
+  own* `ISandboxExecutor`. When `AgentHost:SandboxMode=kata`, that executor is
+  `KataBwrapExecutor`: the Kata VM isolates the pod from the node, while an unprivileged bubblewrap
+  mount namespace removes the shared PVC root from each shell/preview child process.
 
 Read the whole isolation stack top-down: pod-per-run decides *which process hosts the agent turn* (worker
 vs. per-run pod, via A2A); the executor abstraction decides *how each command inside that turn is
-isolated* (MXC / bwrap / Kata-pod claim); and the governance gate decides *whether the command may run at
+isolated* (MXC / bwrap / Kata-pod claim plus an in-pod mount namespace); and the governance gate decides *whether the command may run at
 all* given the selected backend's `IsRealIsolation`. On a laptop these collapse onto one host — the agent
 turn runs in-process and commands isolate via MXC or bubblewrap; in-cluster they fan out — the agent turn
-runs in its own Kata VM and commands execute directly within that VM. The contract a reader has to remember is
+runs in its own Kata VM and commands execute in a run-scoped mount view within that VM. The contract a reader has to remember is
 single: *one command in, one uniform result out, isolation chosen per host and announced by
 `sandbox.selected`.*
 
-This Kata passthrough is an explicit deployment-level security tradeoff. `RunCommandTool` constructs
-`SandboxCommand` with `Environment: null`, so it does not add credentials to the child environment.
-The child still inherits the AgentHost process environment, however, and direct execution removes
-bubblewrap's PID/filesystem view. A same-UID adversarial command may therefore inspect in-pod process
-metadata or projected credentials through `/proc`; that residual risk is accepted because the
-disposable per-run Kata VM is the primary isolation boundary.
+Every Kata AgentHost pod still mounts the shared RWX `/workspace` PVC because linked git worktrees
+refer to git metadata outside the worktree directory and the generic warm pool cannot vary pod
+mounts after adoption. `KataBwrapExecutor` therefore applies the per-run filesystem policy at the
+**process/mount boundary**, not by parsing shell syntax:
 
-Because the Kata passthrough removes bubblewrap's filesystem view, the per-run **filesystem policy
-must be enforced by the executor itself**. Every Kata AgentHost pod also mounts the *shared* RWX
-`/workspace` PVC (used by all runs across all projects), so an adversarial command whose declared
-working directory stays inside its own tree could otherwise reach a sibling project through an
-absolute path (`cat /workspace/<other-project>/secrets`, `git -C /workspace/<other-project> …`).
-Two layers close this (#476): `ShellCommandValidator` (host-side, at the `run_command` tool) and
-`PassthroughExecutor` (executor boundary, consuming the `SandboxCommand.FilesystemPolicy`) both run
-`SharedWorkspacePathGuard`, which scans the command *text* for absolute paths that resolve under a
-protected shared-mount root (default `/workspace`, override via `AGENTWEAVER_PROTECTED_SHARED_ROOTS`)
-but outside the run's own allowed roots, and rejects them before the shell starts. This is
-defense-in-depth — a text filter cannot see every obfuscation — so it complements, rather than
-replaces, the tracked follow-up of giving each run a private per-run volume instead of the shared
-`/workspace` mount.
+- only the current run worktree, its explicitly registered run HOME, authorized run-scoped scratch,
+  pod-private tmp, and the exact linked
+  worktree git metadata are bind-mounted; git control metadata is read-only, while the platform
+  performs the durable commit after the turn;
+- the PVC root and sibling worktrees are absent, so absolute paths, variable indirection, `..`,
+  symlinks, and direct Python/.NET file APIs cannot resolve them;
+- `/proc` is a real procfs mounted inside the unshared child PID namespace, so CoreCLR process
+  discovery works while the parent AgentHost process and its mount namespace remain invisible;
+- the child environment is cleared and rebuilt from a minimal baseline plus explicitly supplied
+  values; and
+- AgentHost startup executes a real bwrap capability probe and refuses readiness if isolation cannot
+  be created. There is no passthrough fallback in Kata mode.
+
+`ShellCommandValidator` and `SharedWorkspacePathGuard` remain compounding controls, but the security
+claim for #476 no longer depends on command text.
+
+### Contract with #481
+
+#481 remains the pod-wide storage redesign: relocate authoritative worktrees off the API HOME tree,
+empirically prove `volumeClaimTemplates` warm-pool behavior on the pinned controller, provision a
+private volume/source snapshot for every run, define authenticated write-back/resume semantics, and
+securely sanitize/delete the volume. It may then remove the shared PVC mount from the AgentHost pod
+entirely. #476 does **not** create dynamic PVCs, templates, or pools and does not alter controller
+adoption; it guarantees that model-triggerable shell and preview child processes cannot see the
+shared root while preserving existing linked-worktree operation. Until #481 lands, linked worktrees
+still receive read-only access to their repository's shared common git metadata, so commits and refs
+already present in that same repository are not a per-run confidentiality boundary; other projects'
+worktrees and git metadata remain absent.
 
 ## The agent-sandbox controller (MXC vs. the controller)
 
 In-cluster, the sandbox pod a run executes in is not created by Agentweaver directly and is **not** MXC.
 It is provisioned by the upstream **agent-sandbox controller** ([`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox)),
-which Agentweaver installs in `scripts/azure/steps/10-create-cluster.mjs` (default `v0.4.6`). The naming overlap
+which Agentweaver installs in `scripts/azure/steps/10-create-cluster.mjs` (default `v0.5.3`). The naming overlap
 trips people up, so pin it down:
 
 - **MXC** = `Sabbour.Mxc.Sdk` / `wxc-exec.exe`, the **local-host** command-isolation runtime behind the
@@ -373,7 +386,7 @@ stages the nested directory as ordinary files, and restores the metadata even on
 The discovery walk is deliberately bounded operationally:
 
 - it checks cancellation while popping and enumerating directories;
-- it prunes `.git`, `.agentweaver-home`, `.next`, `bin`, `build`, `dist`, `node_modules`, and `obj`
+- it prunes `.git`, `.next`, `bin`, `build`, `dist`, `node_modules`, and `obj`
   unless that directory is itself a nested repository root;
 - it does not traverse reparse points; and
 - filesystem access failures become a typed `writeback_invalid` failure instead of silently producing
@@ -384,21 +397,25 @@ that an implementation turn intentionally created inside an otherwise ignored pa
 
 ##### One HOME/XDG cache contract for every toolchain
 
-Each pod-local checkout gets an ignored `.agentweaver-home` directory containing:
+Every non-operator AgentHost run gets a HOME outside the checkout at
+`<execution-scratch>/runtime-home/<run-hash>`. After resolving the final Shared or pod-local
+working directory, `PodLocalWorkspaceManager` creates the HOME and its XDG children, then
+registers that exact path with `KataBwrapExecutor` for the run workspace:
 
-| Variable | Relative value |
+| Variable | Registered value |
 | --- | --- |
-| `HOME` | `.agentweaver-home` |
-| `XDG_CACHE_HOME` | `.agentweaver-home/.cache` |
-| `XDG_DATA_HOME` | `.agentweaver-home/.local/share` |
-| `XDG_CONFIG_HOME` | `.agentweaver-home/.config` |
+| `HOME` | `<runtime-home>` |
+| `XDG_CACHE_HOME` | `<runtime-home>/.cache` |
+| `XDG_DATA_HOME` | `<runtime-home>/.local/share` |
+| `XDG_CONFIG_HOME` | `<runtime-home>/.config` |
 
 This tech-agnostic contract replaced the former matrix of npm-, Yarn-, and pnpm-specific variables.
 Tools that follow HOME/XDG conventions now place caches and state on the same fast scratch disk
-without every new ecosystem requiring another environment-variable exception. The directory is added
-to `.git/info/exclude`, so cache state cannot enter write-back. The WSL/bubblewrap executor also
-derives and binds the same sandbox home inside the isolated command, preserving the contract across
-the local executor boundary.
+without every new ecosystem requiring another environment-variable exception. Because the runtime
+HOME is outside the checkout, it cannot enter write-back. Kata shell and preview children fail closed
+until the workspace and runtime HOME are both registered, bind only the registered HOME read-write,
+and rebuild HOME/XDG from that immutable registration. Inherited or command-supplied HOME/XDG values
+cannot select another mount or override the registered values.
 
 Preview command discovery still reads the API-visible tree, but `PreviewStep` maps the resolved
 relative cwd into the verified local checkout. The preview therefore sees the exact dependencies and
@@ -743,13 +760,14 @@ Where this lives:
 | --- | --- |
 | Scratch checkout creation, immutable commit/tree verification | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:38-139` |
 | Alternate index, commit creation, literal non-force push | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:152-326` |
-| HOME/XDG directory creation and environment | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:459-483` |
+| HOME/XDG directory creation and Kata registration | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs` |
 | Cancellable, pruned nested-repository discovery | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:575-628` |
 | Nested metadata removal, content staging, gitlink rejection | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:631-735` |
 | Writable-turn finalization after the agent response | `apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:198-250` |
 | Existing in-pod GitHub token store | `apps/Agentweaver.AgentHost/PodGitHubTokenStore.cs:6-49` |
 | Local-writable launch coordinates | `apps/Agentweaver.Api/Sandbox/IRunAgentHostContextResolver.cs:65-99` |
 | API-side descriptor validation and authoritative fast-forward | `apps/Agentweaver.Api/Git/WorktreeManager.cs:482-644` |
+| Immutable Kata HOME mount and child environment | `packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs` |
 | HOME propagation through WSL/bubblewrap | `packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-158` |
 | Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/base/sandbox-template-agenthost.yaml:139-175` |
 
