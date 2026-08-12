@@ -266,7 +266,10 @@ what a command leaves behind, and two kernel details of the Kata guest matter:
 - `--die-with-parent` only SIGKILLs bubblewrap's immediate child. Anything the command daemonised
   (a Roslyn build server, a watcher) would survive. So every command path — one-shot `exec` as well
   as supervised preview processes — ends by terminating that process group (`TERM`, then `KILL`),
-  and the executor refuses to signal a group that is its own.
+  and the executor refuses to signal a group that is its own. For one-shot `exec` that reap happens
+  **before** the executor drains stdout/stderr: a daemonised grandchild inherits the command's
+  output pipes, so waiting for end-of-file first would stall the whole command until that leftover
+  process happened to exit, and report a spurious timeout.
 
 Commands in one pod share the executor container's PID namespace with each other. That is the
 correct boundary rather than a gap: a sandbox pod is claimed by exactly one run, and the boundary

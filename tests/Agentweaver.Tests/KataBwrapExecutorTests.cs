@@ -440,10 +440,14 @@ public sealed class KataBwrapExecutorTests : IDisposable
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
         RegisterRun(executor);
         var assembly = Path.Combine(app, "bin", "Debug", "net10.0", "ManagedProcProbe.dll");
+        // The sibling path is passed through the environment, not the command line: the static
+        // shared-mount guard rejects a literal cross-run path before the command ever runs, and
+        // this test is about the mount namespace, not that guard (see
+        // VariableAbsolutePathAndSymlinkCannotReadOrWriteSibling for the guard itself).
         var result = await executor.ExecuteAsync(new SandboxCommand(
-            $"dotnet {QuoteForPosixShell(assembly)} {QuoteForPosixShell(_runB)}",
+            $"dotnet {QuoteForPosixShell(assembly)} \"$SIBLING_RUN\"",
             _runA,
-            null,
+            new Dictionary<string, string> { ["SIBLING_RUN"] = _runB },
             new SandboxFsPolicy([_runA], [], []),
             30_000,
             NetworkEnabled: true));

@@ -321,6 +321,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 
         Process? process = null;
         Task<int>? sandboxProcessGroup = null;
+        var groupReaped = false;
         try
         {
             process = new Process
@@ -357,6 +358,17 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
                 throw;
             }
 
+            // A command that daemonises a background process (build server, watcher) leaves that
+            // process holding the inherited stdout/stderr pipes, so draining below would block
+            // until it exits even though the command itself is finished. The run's process group
+            // is reaped here, before the drain, rather than only in `finally`.
+            if (sandboxProcessGroup is not null)
+            {
+                try { TerminateProcessGroup(await sandboxProcessGroup.ConfigureAwait(false)); }
+                catch { }
+                groupReaped = true;
+            }
+
             var (stdout, stdoutTruncated) = await stdoutTask.ConfigureAwait(false);
             var (stderr, stderrTruncated) = await stderrTask.ConfigureAwait(false);
             return new SandboxExecResult(
@@ -382,8 +394,8 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
                 try { process.Kill(entireProcessTree: true); } catch { }
             // Reap anything the command daemonised inside the sandbox. Without a nested PID
             // namespace nothing else collects those processes, so the run's process group is
-            // terminated explicitly.
-            if (sandboxProcessGroup is not null)
+            // terminated explicitly. Skipped when the drain path already reaped it.
+            if (sandboxProcessGroup is not null && !groupReaped)
             {
                 try { TerminateProcessGroup(sandboxProcessGroup.GetAwaiter().GetResult()); }
                 catch { }
