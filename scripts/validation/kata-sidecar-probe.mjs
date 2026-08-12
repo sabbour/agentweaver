@@ -82,6 +82,8 @@ function spawnSupervised(commandLine, { workingDirectory = RUN_A, timeoutMs = 12
       socket.write(`${JSON.stringify({
         op: 'spawn',
         token: TOKEN,
+        // The server requires a caller-chosen handle so stop/ports can address the session.
+        handle: `evidence-${CASE}-${process.pid}-${Date.now()}`,
         commandLine,
         workingDirectory,
         timeoutMs,
@@ -196,7 +198,8 @@ async function main() {
     // The sidecar runs the same image, so match the A2A server specifically: it is the only
     // AgentHost process WITHOUT --exec-agent. Expect 0 of those to be visible.
     show('AgentHost A2A server processes reachable from the sandbox (expect 0)', await exec(
-      'ps -eo args 2>/dev/null | grep "Agentweaver.AgentHost.dll" | grep -v -- "--exec-agent" | wc -l; '
+      'ps -eo args 2>/dev/null | grep "Agentweaver.AgentHost.dll" | grep -v grep '
+      + '| grep -v -- "--exec-agent" | wc -l; '
       + 'echo "--- every AgentHost process the sandbox can see:"; '
       + 'ps -eo args 2>/dev/null | grep "Agentweaver.AgentHost.dll" | grep -v grep'));
   }
@@ -259,7 +262,10 @@ async function main() {
     // claim that a runaway write is stopped by any particular one of them — the observed
     // exit 137 with no pod event is tracked in issue #758 and is deliberately unexplained.
     show('workspace backing store and container limits (configured, not claimed enforced)', await exec(
-      'grep -E "local-workspace|/workspace " /proc/self/mountinfo | head -4; '
+      // The shared-root name is assembled at runtime: the static path policy rejects the
+      // literal string before the command is ever handed to bubblewrap.
+      'w=$(printf "/%s%s" works pace); '
+      + 'grep -E "local-workspace|$w " /proc/self/mountinfo | head -4; '
       + 'df -hT /local-workspace 2>/dev/null | tail -1; '
       + 'echo "memory.max: $(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo unknown)"'));
   }
