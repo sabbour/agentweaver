@@ -234,11 +234,11 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `GET` | `/api/projects/{projectId}/review-policies` | List review policies |
 | `POST` | `/api/projects/{projectId}/review-policies/sync` | Reload review policies from disk |
 | `GET` | `/api/projects/{projectId}/workflows` | List workflows, including structured trigger metadata |
-| `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get one workflow, including its trigger |
-| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get the workflow's trigger config as structured JSON |
-| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Replace/create the workflow's trigger config |
-| `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update the workflow's trigger config |
-| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear the workflow's trigger config |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get one workflow, including all triggers |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get the workflow's trigger configs as structured JSON |
+| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Create/replace one trigger by type |
+| `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update one trigger by type |
+| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear all triggers, or one type with `?type=` |
 | `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
 | `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |
 | `POST` | `/api/projects/{projectId}/webhooks/github/provision` | Create or update the connected repository's webhook using the project's effective GitHub identity |
@@ -278,8 +278,9 @@ Example trigger payload:
 | `POST` | `/api/projects/{projectId}/workflows/sync` | Reload workflow definitions from disk |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get a workflow definition |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get a workflow's structured trigger config |
-| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Create or replace a workflow trigger |
-| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear a workflow trigger |
+| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Create or replace one workflow trigger type |
+| `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update one workflow trigger type |
+| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear all triggers or one trigger type |
 | `PUT` | `/api/projects/{projectId}/workflows/default` | Set the default workflow |
 | `PUT` | `/api/projects/{projectId}/backlog/tasks/{taskId}/workflow-override` | Set a task workflow override |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/graph` | Get a workflow graph |
@@ -289,19 +290,24 @@ Example trigger payload:
 
 ### Workflow trigger configuration
 
-Workflow list and detail responses already embed a workflow's `trigger` when one is present. The
-dedicated trigger CRUD endpoints expose the same shape without requiring callers to rewrite the whole
-workflow YAML.
+Workflow list and detail responses expose the complete `triggers` array. The legacy `trigger` field
+remains as an alias for the first trigger so existing clients continue to deserialize unchanged. The
+dedicated trigger CRUD endpoints expose the same shapes without requiring callers to rewrite the
+whole workflow YAML.
 
 ```http
 GET    /api/projects/{projectId}/workflows/{workflowId}/trigger
 PUT    /api/projects/{projectId}/workflows/{workflowId}/trigger
+PATCH  /api/projects/{projectId}/workflows/{workflowId}/trigger
 DELETE /api/projects/{projectId}/workflows/{workflowId}/trigger
 ```
 
-- `GET` returns `{ "trigger": <WorkflowTriggerDto|null> }`
-- `PUT` accepts a `WorkflowTriggerDto` as the request body and returns the same wrapper
-- `DELETE` preserves the rest of the workflow definition and returns `{ "trigger": null }`
+- Every response returns `{ "trigger": <WorkflowTriggerDto|null>, "triggers": [...] }`.
+- `PUT` accepts a `WorkflowTriggerDto` and upserts that trigger type without removing other types.
+- `PATCH` partially updates the trigger named by `type`. When the workflow has multiple triggers,
+  `type` is required; a single-trigger workflow retains the legacy type-optional behavior.
+- `DELETE ?type=schedule` or `?type=event` removes only that type.
+- `DELETE` without a `type` preserves its legacy behavior and clears all triggers.
 
 The JSON contract is intentionally close to workflow YAML:
 

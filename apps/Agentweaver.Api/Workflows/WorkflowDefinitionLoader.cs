@@ -200,13 +200,25 @@ public static class WorkflowDefinitionLoader
             }
         }
 
-        // Parse optional automation trigger (issue #53). Malformed/unsupported cadences are rejected
-        // at definition load time with a clear message rather than silently never firing.
-        WorkflowTrigger? trigger = null;
-        if (dto.Trigger is not null)
+        // Parse optional automation triggers. The singular shape remains accepted for compatibility;
+        // new multi-trigger definitions use the plural list.
+        if (dto.Trigger is not null && dto.Triggers is not null)
+            return Fail(source, "declare either 'trigger' or 'triggers', not both.", out error);
+
+        var triggerDtos = dto.Triggers ?? (dto.Trigger is null ? [] : [dto.Trigger]);
+        if (triggerDtos.Count > 16)
+            return Fail(source, "a workflow cannot declare more than 16 triggers.", out error);
+
+        var triggers = new List<WorkflowTrigger>(triggerDtos.Count);
+        var triggerTypes = new HashSet<WorkflowTriggerType>();
+        for (var i = 0; i < triggerDtos.Count; i++)
         {
-            if (!TryParseTrigger(dto.Trigger, source, out trigger, out error))
+            var triggerSource = dto.Triggers is null ? source : $"{source}: triggers[{i}]";
+            if (!TryParseTrigger(triggerDtos[i], triggerSource, out var trigger, out error))
                 return false;
+            if (!triggerTypes.Add(trigger!.Type))
+                return Fail(source, $"a workflow cannot declare more than one {Normalize(triggerDtos[i].Type!)} trigger.", out error);
+            triggers.Add(trigger!);
         }
 
         definition = new WorkflowDefinition
@@ -219,7 +231,7 @@ public static class WorkflowDefinitionLoader
             Nodes = nodes,
             Edges = edges,
             Stages = stages,
-            Trigger = trigger,
+            Triggers = triggers,
         };
         return true;
     }
@@ -597,6 +609,7 @@ internal sealed class WorkflowYamlDto
     public List<EdgeYamlDto>? Edges { get; set; }
     public List<StageYamlDto>? Stages { get; set; }
     public TriggerYamlDto? Trigger { get; set; }
+    public List<TriggerYamlDto>? Triggers { get; set; }
 }
 
 internal sealed class NodeYamlDto
@@ -641,7 +654,7 @@ internal sealed class StageYamlDto
     public int Order { get; set; }
 }
 
-/// <summary>YAML DTO for the optional <c>trigger:</c> block (issue #53).</summary>
+/// <summary>YAML DTO for an entry in the optional <c>trigger:</c>/<c>triggers:</c> contract.</summary>
 internal sealed class TriggerYamlDto
 {
     public string? Type { get; set; }
