@@ -31,6 +31,70 @@ public sealed class WorkflowTriggerLoaderTests
 
         result.IsValid.Should().BeTrue(because: result.Error);
         result.Definition!.Trigger.Should().BeNull();
+        result.Definition.Triggers.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Load_ScheduleAndEventTriggers_ParsesBoth()
+    {
+        var yaml = BaseYaml + """
+
+            triggers:
+              - type: schedule
+                interval: weekly
+                day_of_week: monday
+                time_of_day: "09:00"
+              - type: event
+                event_name: github.issues.labeled
+                if:
+                  - has_label: { label: "roadmap-review" }
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        result.IsValid.Should().BeTrue(because: result.Error);
+        result.Definition!.Triggers.Should().HaveCount(2);
+        result.Definition.Triggers[0].Type.Should().Be(WorkflowTriggerType.Schedule);
+        result.Definition.Triggers[1].Type.Should().Be(WorkflowTriggerType.Event);
+        result.Definition.Triggers[1].If.Single().HasLabel!.Label.Should().Be("roadmap-review");
+    }
+
+    [Fact]
+    public void Load_SingularAndPluralTriggerShapesTogether_IsInvalid()
+    {
+        var yaml = BaseYaml + """
+
+            trigger:
+              type: schedule
+              interval: daily
+              time_of_day: "09:00"
+            triggers:
+              - type: event
+                event_name: github.issues.opened
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("either 'trigger' or 'triggers'");
+    }
+
+    [Fact]
+    public void Load_DuplicateTriggerType_IsInvalid()
+    {
+        var yaml = BaseYaml + """
+
+            triggers:
+              - type: event
+                event_name: github.issues.opened
+              - type: event
+                event_name: github.issues.labeled
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("more than one event trigger");
     }
 
     [Fact]
@@ -374,6 +438,33 @@ public sealed class WorkflowTriggerLoaderTests
         trigger.EventName.Should().Be("github.pull_request.opened");
         trigger.If.Should().HaveCount(2);
         trigger.If[1].Or.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void Serialize_ThenReload_RoundTripsScheduleAndEventTriggers()
+    {
+        var definition = WorkflowDefinitionLoader.Load(BaseYaml + """
+
+            triggers:
+              - type: schedule
+                interval: weekly
+                day_of_week: monday
+                time_of_day: "09:00"
+              - type: event
+                event_name: github.issues.labeled
+                if:
+                  - has_label: { label: "roadmap-review" }
+            """, "triage.yaml").Definition!;
+
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(definition);
+        var reloaded = WorkflowDefinitionLoader.Load(yaml, "triage.yaml");
+
+        yaml.Should().Contain("triggers:");
+        yaml.Should().NotContain("\ntrigger:");
+        reloaded.IsValid.Should().BeTrue(because: reloaded.Error);
+        reloaded.Definition!.Triggers.Should().HaveCount(2);
+        reloaded.Definition.Triggers.Select(trigger => trigger.Type)
+            .Should().Equal(WorkflowTriggerType.Schedule, WorkflowTriggerType.Event);
     }
 
     [Fact]

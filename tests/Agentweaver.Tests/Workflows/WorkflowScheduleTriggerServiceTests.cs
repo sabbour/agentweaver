@@ -100,6 +100,35 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
           time_of_day: "09:00"
         """;
 
+    private const string ScheduleAndEventYaml = """
+        id: scheduled-and-event-triage
+        name: Scheduled and Event Triage
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "Triage roadmap issues."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+
+        triggers:
+          - type: schedule
+            interval: weekly
+            day_of_week: monday
+            time_of_day: "09:00"
+          - type: event
+            event_name: github.issues.labeled
+            if:
+              - has_label: { label: "roadmap-review" }
+        """;
+
     [Fact]
     public async Task RunTick_WhenOccurrenceDue_CreatesReadyBacklogTaskBoundToWorkflow()
     {
@@ -116,6 +145,20 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
         task.WorkflowOverrideId.Should().Be("scheduled-triage");
         task.CapturedBy.Should().Be(WorkflowScheduleTriggerService.CapturedBy);
         task.RunId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunTick_WhenWorkflowAlsoHasEventTrigger_FiresSchedule()
+    {
+        var project = await SeedProjectAsync(ScheduleAndEventYaml);
+
+        await _service.RunTickAsync(
+            new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero),
+            CancellationToken.None);
+
+        var task = (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        task.WorkflowOverrideId.Should().Be("scheduled-and-event-triage");
+        task.CapturedBy.Should().Be(WorkflowScheduleTriggerService.CapturedBy);
     }
 
     [Fact]
