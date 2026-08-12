@@ -125,12 +125,8 @@ public sealed class AgentHostReaperCredentialTests
 
         reaped.Should().Be(0,
             "an orphaned claim whose run still has a live preview must be deferred, not reaped (#542)");
-        preview.RenewedRunId.Should().Be(runId,
-            "#560: deferring the reap must also renew the claim's cluster-side TTL so the sandbox " +
-            "controller does not reap the pod out from under the live preview");
-        preview.SafeToEvictCalls.Should().ContainSingle().Which.Should().Be((runId, false),
-            "#574: deferring the reap must also pin the backing pod (safe-to-evict=false) so the " +
-            "cluster-autoscaler does not drain the kata node and kill the pod during a scale-down");
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId,
+            "#579: the orphan reaper must use the single lifecycle transition that owns all protections");
     }
 
     [Fact]
@@ -160,8 +156,7 @@ public sealed class AgentHostReaperCredentialTests
         reaped.Should().Be(0,
             "the reaper must not delete a claim when cluster preview state still proves a live preview, " +
             "even if the local process is not the one that provisions previews");
-        preview.RenewedRunId.Should().Be(runId);
-        preview.SafeToEvictCalls.Should().ContainSingle().Which.Should().Be((runId, false));
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId);
     }
 
     [Fact]
@@ -373,37 +368,25 @@ public sealed class AgentHostReaperCredentialTests
         public void Advance(TimeSpan duration) => _utcNow += duration;
     }
 
-    // Minimal ISandboxPreviewService test double for the reaper defer path (#542): only
-    // HasActivePreviewAsync is consulted; every other member throws so an unexpected call is loud.
+    // Minimal ISandboxPreviewService test double for the reaper defer path (#542): only lifecycle
+    // reconciliation is consulted; every other member throws so an unexpected call is loud.
     private sealed class StubPreviewService : ISandboxPreviewService
     {
-        private readonly bool _hasActivePreview;
+        private readonly PreviewLifecycleState _state;
         private readonly bool _enabled;
         public StubPreviewService(bool hasActivePreview, bool enabled = true)
         {
-            _hasActivePreview = hasActivePreview;
+            _state = hasActivePreview ? PreviewLifecycleState.PreviewActive : PreviewLifecycleState.Previewable;
             _enabled = enabled;
         }
 
-        public Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult(_hasActivePreview);
+        public List<string> ReconciledRunIds { get; } = new();
 
-        /// <summary>Run id passed to <see cref="RenewBackingClaimTtlAsync"/>, or null if never called (#560).</summary>
-        public string? RenewedRunId { get; private set; }
-
-        public Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
+        public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
+            string runId, CancellationToken ct = default)
         {
-            RenewedRunId = runId;
-            return Task.CompletedTask;
-        }
-
-        /// <summary>(runId, safeToEvict) tuples passed to <see cref="SetBackingPodSafeToEvictAsync"/> (#574).</summary>
-        public List<(string RunId, bool SafeToEvict)> SafeToEvictCalls { get; } = new();
-
-        public Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
-        {
-            SafeToEvictCalls.Add((runId, safeToEvict));
-            return Task.CompletedTask;
+            ReconciledRunIds.Add(runId);
+            return Task.FromResult(_state);
         }
 
         public bool Enabled => _enabled;
