@@ -132,6 +132,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
             {
                 Content = JsonContent.Create(new { targetPort = 3000 }),
             },
+            new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/sandbox/preview-approvals/request-id/retry"),
         };
 
         foreach (var request in requests)
@@ -390,6 +391,7 @@ public sealed class LegacyRunAuthorizationTests : IClassFixture<ReviewWebApplica
                 {
                     Content = JsonContent.Create(new { targetPort = 3000 }),
                 },
+                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/sandbox/preview-approvals/request-id/retry"),
             };
 
             foreach (var request in requests)

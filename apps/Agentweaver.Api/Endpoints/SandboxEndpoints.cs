@@ -143,8 +143,8 @@ public static class SandboxEndpoints
 
             var run = await runStore.GetAsync(parsedRunId, ct);
             if (run is null) return Results.NotFound();
-            if (!EndpointHelpers.IsOwner(httpContext, run))
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+                return denied;
             var retryGateKey = $"{runId}:{requestId}";
             var retryGate = PreviewApprovalRetryGates.GetOrAdd(
                 retryGateKey,
