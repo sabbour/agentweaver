@@ -65,6 +65,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     private readonly bool _writableSystemRootEnabled;
     private readonly string _writableSystemRootSize;
     private readonly string _imageBuildSocket;
+    private readonly int _maxWritableSystemRoots;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kata-sidecar-bwrap-fs";
@@ -76,7 +77,8 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     public KataBwrapExecutor(
         ILogger? logger = null,
         IReadOnlyList<string>? protectedRoots = null,
-        string? imageBuildSocket = null)
+        string? imageBuildSocket = null,
+        int? maxWritableSystemRoots = null)
     {
         _logger = logger;
         _protectedRoots = (protectedRoots ?? ResolveProtectedRoots())
@@ -87,6 +89,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         _imageBuildSocket = string.IsNullOrWhiteSpace(imageBuildSocket)
             ? ResolveImageBuildSocket()
             : imageBuildSocket.Trim();
+        _maxWritableSystemRoots = maxWritableSystemRoots is > 0
+            ? maxWritableSystemRoots.Value
+            : MaxWritableSystemRoots;
     }
 
     private static string ResolveImageBuildSocket()
@@ -681,7 +686,10 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             existing.Dispose();
         }
 
-        if (_writableSystemRoots.Count >= MaxWritableSystemRoots)
+        if (_writableSystemRoots.Count >= _maxWritableSystemRoots)
+            ReapStaleWritableSystemRoots();
+
+        if (_writableSystemRoots.Count >= _maxWritableSystemRoots)
         {
             _logger?.LogWarning(
                 "Not starting another per-run writable system root: {Count} are already held.",
@@ -767,6 +775,34 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         finally
         {
             holder.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Nothing ever tells this executor a run has ended — there is no per-run release call in
+    /// <see cref="IRunWorkspaceRegistrar"/>, and a sidecar can outlive many runs' workspaces. Without
+    /// this, a holder for a workspace whose directory the platform has already deleted (the run is
+    /// long over) would sit in <see cref="_writableSystemRoots"/> forever, permanently occupying one
+    /// of the <see cref="_maxWritableSystemRoots"/> slots and eventually starving a still-active run
+    /// of a writable root — silently, since the capability contract only reports whether the
+    /// *feature* is enabled, not whether a slot is actually available. This reclaims exactly the
+    /// holders whose workspace no longer exists on disk; it never touches a holder for a workspace
+    /// that is still present, so an active run's holder is never at risk of being reaped out from
+    /// under it.
+    /// </summary>
+    private void ReapStaleWritableSystemRoots()
+    {
+        foreach (var (runKey, holder) in _writableSystemRoots.ToArray())
+        {
+            if (Directory.Exists(runKey))
+                continue;
+            if (_writableSystemRoots.TryRemove(new KeyValuePair<string, Process>(runKey, holder)))
+            {
+                _logger?.LogInformation(
+                    "Reclaiming a per-run writable system root whose workspace no longer exists: {Run}.",
+                    runKey);
+                TerminateWritableSystemRoot(holder);
+            }
         }
     }
 

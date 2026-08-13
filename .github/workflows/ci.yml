@@ -134,7 +134,7 @@ jobs:
         env:
           AGENTWEAVER_REQUIRE_BWRAP: "1"
           KATA_RUNTIME_FILTER: Category=KataRuntime
-          KATA_RUNTIME_MIN_TESTS: "32"
+          KATA_RUNTIME_MIN_TESTS: "34"
         run: |
           set -euo pipefail
           sudo apt-get update

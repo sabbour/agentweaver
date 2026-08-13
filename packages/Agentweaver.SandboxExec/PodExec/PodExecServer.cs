@@ -632,6 +632,12 @@ public sealed class PodExecServer : IAsyncDisposable
         foreach (var session in _sessions.Values)
             await TerminateAsync(session, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
         _sessions.Clear();
+        // Releases every per-run writable system root this sidecar is still holding. Pod teardown
+        // would tear these down anyway, but a clean shutdown must not depend on that: this same
+        // executor instance can serve a long-lived sidecar process across a pod's whole life, so an
+        // explicit release here (in addition to the stale-workspace reap that already runs on the
+        // hot path) is the only place a graceful shutdown gets to free every slot deterministically.
+        _executor.Dispose();
         _listener?.Dispose();
         _shutdown.Dispose();
         try

@@ -32,7 +32,12 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
 
         // RegisterRuntimeHome refuses a HOME that is missing any authoritative XDG directory, so
         // the fixture has to create the same shape AgentHost provisions for a real run.
-        var home = Path.Combine(_root, "home", "run-a");
+        CreateHome(Path.Combine(_root, "home", "run-a"));
+    }
+
+    /// <summary>Creates the same HOME shape AgentHost provisions for a real run.</summary>
+    private static void CreateHome(string home)
+    {
         Directory.CreateDirectory(Path.Combine(home, ".cache"));
         Directory.CreateDirectory(Path.Combine(home, ".local", "share"));
         Directory.CreateDirectory(Path.Combine(home, ".config"));
@@ -108,6 +113,65 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
     }
 
     /// <summary>
+    /// Nothing ever tells the executor a run has ended, and one sidecar process can outlive many
+    /// runs' workspaces, so a holder for a workspace the platform already deleted must not go on
+    /// occupying a slot forever — that would eventually starve a still-active run of a writable root
+    /// while the capability contract keeps claiming apt-get is <c>Supported</c>. This pins the fix:
+    /// once the cap is reached, a holder whose workspace directory no longer exists is reclaimed to
+    /// make room, while a holder for a workspace that still exists is left alone.
+    /// </summary>
+    [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
+    public void AHolderForADeletedWorkspace_IsReclaimedWhenTheCapIsReached()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+        if (!SandboxCapabilityProbe.ProbeWritableSystemRoot(out _))
+            return;
+
+        var runB = Path.Combine(_workspace, "worktrees", "run-b");
+        var runC = Path.Combine(_workspace, "worktrees", "run-c");
+        Directory.CreateDirectory(runB);
+        Directory.CreateDirectory(runC);
+        var homeB = Path.Combine(_root, "home", "run-b");
+        var homeC = Path.Combine(_root, "home", "run-c");
+        CreateHome(homeB);
+        CreateHome(homeC);
+
+        // Cap of 2 so this test only ever has to hold two real writable roots at once, rather than
+        // needing to fill the production default (8) to prove the same reclaim path.
+        using var executor = new KataBwrapExecutor(protectedRoots: [_workspace], maxWritableSystemRoots: 2);
+        executor.RegisterTrustedWorkspace(_runA);
+        executor.RegisterRuntimeHome(_runA, Path.Combine(_root, "home", "run-a"));
+        executor.RegisterTrustedWorkspace(runB);
+        executor.RegisterRuntimeHome(runB, homeB);
+        executor.RegisterTrustedWorkspace(runC);
+        executor.RegisterRuntimeHome(runC, homeC);
+
+        // Fill both slots: run-a and run-b each get a real holder.
+        executor.BuildProcessStartInfo(Command(_runA)).FileName.Should().Be("nsenter");
+        executor.BuildProcessStartInfo(Command(runB)).FileName.Should().Be("nsenter");
+
+        // The cap is full and every workspace still exists, so run-c must fall back to read-only
+        // rather than evicting an active run's holder.
+        var stillFull = executor.BuildProcessStartInfo(Command(runC));
+        stillFull.FileName.Should().Be("bwrap");
+        stillFull.ArgumentList.Should().ContainInOrder("--ro-bind", "/usr", "/usr");
+
+        // The platform deletes run-a's workspace once that run is over.
+        Directory.Delete(_runA, recursive: true);
+
+        // run-c can now claim a slot: the stale run-a holder is reclaimed, and run-b's holder (whose
+        // workspace still exists) is left untouched.
+        var afterReclaim = executor.BuildProcessStartInfo(Command(runC));
+        afterReclaim.FileName.Should().Be("nsenter");
+        afterReclaim.ArgumentList.Should().ContainInOrder("--bind", "/usr", "/usr");
+
+        var runBStillWritable = executor.BuildProcessStartInfo(Command(runB));
+        runBStillWritable.FileName.Should().Be("nsenter");
+    }
+
+    /// <summary>
     /// An operator must be able to turn the writable root off without redeploying a different
     /// image; turning it off is always safe because it only removes a capability.
     /// </summary>
@@ -162,12 +226,14 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
         executor.RegisterRuntimeHome(_runA, Path.Combine(_root, "home", "run-a"));
     }
 
-    private SandboxCommand Command() =>
+    private SandboxCommand Command() => Command(_runA);
+
+    private static SandboxCommand Command(string workingDirectory) =>
         new(
             "true",
-            _runA,
+            workingDirectory,
             null,
-            new SandboxFsPolicy([_runA], [], []),
+            new SandboxFsPolicy([workingDirectory], [], []),
             5000);
 
     public void Dispose()

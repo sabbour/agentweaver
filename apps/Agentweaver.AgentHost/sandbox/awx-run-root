@@ -42,11 +42,16 @@ hold_inner() {
     }
     # /etc cannot be an overlay lowerdir here: the container runtime bind-mounts resolv.conf,
     # hosts and hostname inside it and the kernel then refuses the overlay. A copy is cheap (a few
-    # MB) and keeps those runtime-provided files intact.
-    cp -a /etc/. /mnt/etc/ 2>/dev/null || true
+    # MB) and keeps those runtime-provided files intact. This must fail loudly like every other step
+    # here: a partially-copied /etc bound over the real one would be a worse failure mode (a run
+    # silently seeing a broken/incomplete system config) than refusing the writable root outright.
+    cp -a /etc/. /mnt/etc/ || {
+        echo "awx-run-root: /etc copy failed" >&2
+        exit 6
+    }
     mount --bind /mnt/etc /etc || {
         echo "awx-run-root: /etc bind failed" >&2
-        exit 6
+        exit 7
     }
 
     echo READY
