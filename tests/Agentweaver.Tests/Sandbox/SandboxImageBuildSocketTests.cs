@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Sockets;
 using Agentweaver.SandboxExec;
 using FluentAssertions;
@@ -89,14 +90,47 @@ public sealed class SandboxImageBuildSocketTests
     {
         // A crashed daemon does not unlink its socket. The inode outlives the process, so anything
         // that only asks "does this path exist" reports a builder that cannot be connected to.
+        //
+        // The "crash" has to happen in a real, separate process. Binding-then-disposing a Socket in
+        // this test process used to leave the path behind, but since .NET 8 (dotnet/runtime#52103)
+        // disposing a bound unix-socket Socket now unlinks its own path — which would make the very
+        // cleanup this test needs to defeat run on its behalf, and the path would never exist for the
+        // probe to observe. A child process killed with SIGKILL never runs that (or any) cleanup, so
+        // the socket file it bound is left behind exactly as a daemon's would be after `kill -9`.
         var directory = Directory.CreateTempSubdirectory("awx-buildsock-").FullName;
         var socketPath = Path.Combine(directory, "buildkitd.sock");
         try
         {
-            using (var dead = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified))
+            using var daemon = Process.Start(new ProcessStartInfo("python3", ["-c",
+                "import os,socket,time\n" +
+                "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n" +
+                "s.bind(os.environ['AWX_TEST_DEAD_SOCKET_PATH'])\n" +
+                "s.listen(1)\n" +
+                "time.sleep(60)\n"])
             {
-                dead.Bind(new UnixDomainSocketEndPoint(socketPath));
-                dead.Listen(1);
+                UseShellExecute = false,
+                Environment = { ["AWX_TEST_DEAD_SOCKET_PATH"] = socketPath },
+            })!;
+            try
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (!File.Exists(socketPath) && DateTime.UtcNow < deadline)
+                {
+                    Thread.Sleep(20);
+                }
+
+                File.Exists(socketPath).Should().BeTrue(
+                    "the simulated daemon must have bound the socket before it is killed");
+            }
+            finally
+            {
+                // SIGKILL on Linux: the process gets no chance to unlink the path itself.
+                if (!daemon.HasExited)
+                {
+                    daemon.Kill(entireProcessTree: true);
+                }
+
+                daemon.WaitForExit();
             }
 
             File.Exists(socketPath).Should().BeTrue("the test needs a leftover socket inode to be meaningful");
