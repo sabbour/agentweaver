@@ -49,6 +49,12 @@ export interface AppDialogProps {
   maxWidth?: string;
   /** Show the absolute-positioned close button (default: true). */
   showClose?: boolean;
+  /**
+   * Fluent dialog modality. Default `modal` closes when focus leaves the surface
+   * (e.g. mid-re-render after an in-dialog control click). Use `alert` for dense
+   * multi-control dialogs that must stay open across internal state updates.
+   */
+  modalType?: 'modal' | 'non-modal' | 'alert';
 }
 
 const useStyles = makeStyles({
@@ -129,6 +135,7 @@ export function AppDialog({
   footer,
   maxWidth = '480px',
   showClose = true,
+  modalType = 'modal',
 }: AppDialogProps) {
   const styles = useStyles();
 
@@ -191,7 +198,7 @@ export function AppDialog({
   // trigger slot, which fails that union — so we use two explicit render paths.
   if (trigger) {
     return (
-      <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
+      <Dialog open={open} modalType={modalType} onOpenChange={(_, state) => onOpenChange(state.open)}>
         <DialogTrigger disableButtonEnhancement>{trigger}</DialogTrigger>
         {surfaceNode}
       </Dialog>
@@ -199,7 +206,7 @@ export function AppDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
+    <Dialog open={open} modalType={modalType} onOpenChange={(_, state) => onOpenChange(state.open)}>
       {surfaceNode}
     </Dialog>
   );

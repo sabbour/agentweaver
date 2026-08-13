@@ -358,6 +358,10 @@ function CreateProjectDialogShell({
       onOpenChange={onOpenChange}
       trigger={trigger}
       maxWidth="1180px"
+      // Keep open across in-dialog account/repo filter clicks. Default Fluent
+      // `modal` closes when focus briefly leaves the surface during re-render
+      // (reproduced: re-clicking the selected GitHub account dismissed the dialog).
+      modalType="alert"
     >
       <div className={styles.dialogHeader}>
         <div className={styles.titleBlock}>
@@ -813,6 +817,9 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
               key={acc.login}
               className={styles.orgRow}
               type="button"
+              // preventDefault on mousedown keeps focus from leaving the dialog
+              // surface during the controlled re-render of the repo filter.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => { changeAccount(selectedAccount?.login === acc.login ? null : acc); setRepoFilter(''); if (!crossAccount) d.setSourceRepository(''); }}
             >
               <span className={styles.accountOption}>
