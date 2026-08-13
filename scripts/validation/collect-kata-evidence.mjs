@@ -2,10 +2,11 @@
 // Reproducible AKS/Kata evidence collector for the AgentHost executor sidecar (#476).
 //
 // Stands up a NON-PRODUCTION copy of k8s/base/sandbox-template-agenthost.yaml (renamed,
-// pinned to an explicit image ref), waits for the warm pool, drives the real executor
-// protocol from inside the pod via scripts/validation/kata-sidecar-probe.mjs, proves the
-// fail-closed behaviour by running the same template WITHOUT the sidecar, prints a
-// labelled transcript, and deletes everything it created.
+// pinned to an explicit image ref), applies the shipped k8s/optional builder patch when build
+// evidence is requested, waits for the warm pool, drives the real executor protocol from inside
+// the pod via scripts/validation/kata-sidecar-probe.mjs, proves the fail-closed behaviour by
+// running the same template WITHOUT the sidecar, prints a labelled transcript, and deletes
+// everything it created.
 //
 // Production objects are never touched: every object it applies is prefixed and every one
 // of them is deleted in the finally block.
@@ -18,6 +19,7 @@
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -77,13 +79,22 @@ function section(title) {
 
 // Rename + pin the shipped template so the evidence is collected against the manifest that
 // is actually under review, not a hand-written copy of it.
-function renderTemplate({ withSidecar }) {
+function renderTemplate({ withSidecar, withBuilder = false }) {
   const source = path.join(repoRoot, 'k8s', 'base', 'sandbox-template-agenthost.yaml');
   const document = fs.readFileSync(source, 'utf8');
   const objects = document.split(/^---$/m).map((part) => part.trim()).filter(Boolean);
-  const template = objects[objects.length - 1]
+  let template = objects[objects.length - 1]
     .replace(/^(metadata:\n(?:.*\n)*?  name: )agentweaver-agent-host$/m, `$1${withSidecar ? NAME : NOSIDECAR}`)
     .replace(/image: \S+agentweaver-agent-host:\S+/g, `image: ${IMAGE}`);
+
+  // The image-build capability only exists when the optional builder sidecar is patched in.
+  // Applying the SHIPPED RFC 6902 patch — rather than hand-writing a builder container here —
+  // is what makes the capability evidence evidence about the reviewed artifact. `--local` renders
+  // it offline, so what gets applied is exactly `patch(shipped template)`.
+  if (withBuilder) {
+    template = applyBuilderPatch(template);
+  }
+
   if (withSidecar) return template;
 
   // For the fail-closed case, remove ONLY the executor sidecar container. Doing it on the
@@ -98,6 +109,36 @@ function renderTemplate({ withSidecar }) {
     throw new Error('expected exactly one agentweaver-exec container to remove');
   object.spec.podTemplate.spec.containers = remaining;
   return JSON.stringify(object);
+}
+
+// Extracts the RFC 6902 patch out of the commented YAML in k8s/optional and applies it locally.
+function applyBuilderPatch(template) {
+  const patchFile = path.join(repoRoot, 'k8s', 'optional', 'sandbox-buildkit-sidecar.yaml');
+  const body = fs.readFileSync(patchFile, 'utf8');
+  // Everything before the first `- op:` is the explanatory header; the rest is the patch itself,
+  // taken verbatim so the evidence is collected against the shipped bytes.
+  const start = body.search(/^- op:/m);
+  if (start < 0) throw new Error(`${patchFile} does not contain an RFC 6902 patch list`);
+  const patch = body.slice(start);
+
+  const templateFile = path.join(os.tmpdir(), `awx-evidence-template-${process.pid}.yaml`);
+  const patchPath = path.join(os.tmpdir(), `awx-evidence-patch-${process.pid}.yaml`);
+  try {
+    fs.writeFileSync(templateFile, template);
+    fs.writeFileSync(patchPath, patch);
+    const patched = run('kubectl',
+      ['patch', '-f', templateFile, '--type', 'json', '--patch-file', patchPath, '--local', '-o', 'json'],
+      { check: true, quiet: true });
+    const object = JSON.parse(patched.output);
+    const names = (object.spec.podTemplate.spec.containers || []).map((container) => container.name);
+    if (!names.includes('buildkitd'))
+      throw new Error(`the builder patch did not add a buildkitd container (got ${names.join(', ')})`);
+    return JSON.stringify(object);
+  } finally {
+    for (const file of [templateFile, patchPath]) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+  }
 }
 
 function renderWarmPool(name, replicas) {
@@ -124,12 +165,13 @@ function podsFor(name) {
   return output.split('\n').filter((line) => line.startsWith(name));
 }
 
-function waitForReady(name, expected, timeoutMs) {
+function waitForReady(name, expected, timeoutMs, { containers = 2 } = {}) {
+  const allReady = new RegExp(`\\b${Array(containers).fill('true').join(',')}\\b`);
   const deadline = Date.now() + timeoutMs;
   let last = [];
   while (Date.now() < deadline) {
     last = podsFor(name);
-    const ready = last.filter((line) => /\btrue,true\b/.test(line) && /Running/.test(line));
+    const ready = last.filter((line) => allReady.test(line) && /Running/.test(line));
     if (ready.length >= expected) return { ready: true, lines: last };
     spawnSync(process.platform === 'win32' ? 'powershell' : 'sh',
       process.platform === 'win32' ? ['-c', 'Start-Sleep -Seconds 10'] : ['-c', 'sleep 10']);
@@ -146,6 +188,13 @@ const created = [];
 
 const CAPABILITY_CASES = arg('cases',
   'npm,nuget,apt,buildkit,preview,nested-userns').split(',').map((entry) => entry.trim()).filter(Boolean);
+
+// The image-build capability is only present when the optional builder sidecar is patched in, so
+// the validation template carries it whenever a build case is going to be exercised. Collecting
+// build evidence from a pod without the builder would have produced a transcript of a capability
+// that the deployment does not actually offer.
+const WITH_BUILDER = (PHASE === 'capability' || PHASE === 'all') && CAPABILITY_CASES.includes('buildkit');
+const READY_CONTAINERS = WITH_BUILDER ? 3 : 2;
 
 // Streams a probe script into the pod and refuses to run a truncated copy.
 function copyScript(pod, fileName) {
@@ -164,9 +213,12 @@ function copyScript(pod, fileName) {
     throw new Error(`${fileName} copy is not intact: ${copiedBytes} bytes in pod vs ${expectedBytes} locally`);
 }
 
+// Runs a probe case in the pod. A non-zero exit is a failed proof, so it is fatal: a probe that
+// dies (missing builder socket, unreachable registry, a case that threw) would otherwise leave a
+// plausible-looking transcript in the evidence with no indication that it proved nothing.
 function runProbe(pod, fileName, probeCase) {
   return kubectl(['exec', pod, '-c', 'agentweaver-agent-host', '--',
-    'node', `/tmp/awx-evidence/${fileName}`, probeCase]);
+    'node', `/tmp/awx-evidence/${fileName}`, probeCase], { check: true });
 }
 
 function apply(manifest, kind, name) {
@@ -187,13 +239,14 @@ try {
     console.log(`pod         : ${REUSE}`);
   } else {
     section('1. Apply the reviewed manifest under a validation name');
-    apply(renderTemplate({ withSidecar: true }), 'sandboxtemplate', NAME);
+    console.log(`builder sidecar patched in: ${WITH_BUILDER}`);
+    apply(renderTemplate({ withSidecar: true, withBuilder: WITH_BUILDER }), 'sandboxtemplate', NAME);
     apply(renderWarmPool(NAME, 2), 'sandboxwarmpool', NAME);
 
-    section('2. Warm-pool readiness (expect 2 pods, both containers ready)');
-    const pool = waitForReady(NAME, 2, 15 * 60 * 1000);
+    section(`2. Warm-pool readiness (expect 2 pods, ${READY_CONTAINERS}/${READY_CONTAINERS} containers ready)`);
+    const pool = waitForReady(NAME, 2, 15 * 60 * 1000, { containers: READY_CONTAINERS });
     console.log(pool.lines.join('\n'));
-    if (!pool.ready) throw new Error('validation warm pool did not reach 2/2 ready');
+    if (!pool.ready) throw new Error('validation warm pool did not reach 2 ready pods');
     pod = firstPod(NAME);
   }
 

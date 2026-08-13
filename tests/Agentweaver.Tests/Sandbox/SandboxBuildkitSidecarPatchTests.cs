@@ -93,6 +93,61 @@ public sealed class SandboxBuildkitSidecarPatchTests
         // named `loopback`, so both files are required for the daemon to become ready.
         body.Should().Contain("/etc/buildkit/cni.json");
         body.Should().Contain("/opt/cni/bin/loopback");
+
+        // CNI mode is the reason SYS_PTRACE is here at all: runc opens /proc/<pid>/ns/mnt of its
+        // own init process to join the prepared namespace. Removing it while leaving CNI mode in
+        // place ships a builder whose every build step fails.
+        body.Should().Contain("SYS_PTRACE");
+    }
+
+    /// <summary>
+    /// The isolation argument in <c>docs/deep-dive/sandbox-pod-execution.md</c> names two
+    /// invariants that a future edit could silently remove, and one of them is a property of this
+    /// file: the elevated builder must never mount the shared workspace volume. The other —
+    /// <c>shareProcessNamespace</c> — is covered above. Without this the builder could read
+    /// another run's checkout through the RWX workspace.
+    /// </summary>
+    [Fact]
+    public void Patch_NeverMountsTheSharedWorkspaceIntoTheElevatedBuilder()
+    {
+        var mounts = BuilderVolumeMountNames();
+
+        mounts.Should().NotContain("workspace");
+        mounts.Should().NotContain("execution-scratch");
+        mounts.Should().BeEquivalentTo(
+            ["buildkit-socket", "buildkit-state", "buildkit-tmp", "exec-no-serviceaccount"],
+            "the builder gets its own socket, state and scratch, the service-account mask, and nothing else");
+    }
+
+    /// <summary>
+    /// Reads the builder container's <c>volumeMounts</c> out of the patch structurally, so this
+    /// asserts on the actual mount list rather than on substrings that happen to appear elsewhere
+    /// in the file.
+    /// </summary>
+    private static IReadOnlyList<string> BuilderVolumeMountNames()
+    {
+        var lines = PatchBody().Split('\n');
+        var start = Array.FindIndex(lines, line => line.Trim() == "volumeMounts:");
+        start.Should().BeGreaterThan(-1, "the builder container declares volume mounts");
+
+        var indent = lines[start].Length - lines[start].TrimStart().Length;
+        var names = new List<string>();
+        for (var i = start + 1; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Trim().Length == 0)
+                continue;
+
+            // Dedent past the mount list ends the block.
+            if (line.Length - line.TrimStart().Length <= indent)
+                break;
+
+            var match = Regex.Match(line, @"^\s*- name:\s*(\S+)\s*$");
+            if (match.Success)
+                names.Add(match.Groups[1].Value);
+        }
+
+        return names;
     }
 
     /// <summary>

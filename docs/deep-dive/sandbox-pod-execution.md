@@ -1046,17 +1046,24 @@ allow-list, so build-enabled sandbox pods need a namespace whose PSA level admit
 container. Do **not** relax `agentweaver` itself — it hosts the control plane. On a stock cluster
 the sidecar is absent, the socket does not exist, and the capability contract reports `image_build`
 as `RequiresExternalService`; availability is probed from the socket, never inferred from an
-environment variable.
+environment variable. The probe is protocol-level, not existence-level: it connects and sends the
+HTTP/2 client preface, and only reports `Supported` when the peer answers with a SETTINGS frame. A
+crashed daemon leaves its socket inode behind, and a sidecar that is still starting will accept
+without speaking gRPC — both would otherwise be advertised as a working builder to a caller whose
+every build then fails at connect time.
 
 **Registry publishing: what actually stops it, and what merely helps.** The real reason a build
 cannot publish is that **there is no credential to publish with** — the builder holds no registry
 credentials, no service-account token and no workload identity (measured above), so an authenticated
 push has nothing to authenticate with.
 
-`awx-docker` refuses `--push` and validates `--output`, rejecting
-`--output type=image,name=…,push=true` and `type=registry` with exit 2 while allowing
+`awx-docker` refuses `--push` and validates `--output` by parsing it as CSV field by field —
+rejecting `--output type=image,name=…,push=true`, `type=registry`, a quoted `"push=true"` field, a
+second `type=` anywhere in the value, and any quoted field at all — with exit 2, while allowing
 `type=oci|docker|tar|local`; with no socket present it exits 3 with the contract's explanation
-instead of a connection error. That is **ergonomics and defence-in-depth, not a boundary** —
+instead of a connection error. (A substring scan was not enough: `buildctl` reads this value as CSV,
+so `type=image,name=x,"push=true",k=type=oci` would have been read as a pushing image build while a
+last-match scan saw a permitted `oci`.) That is **ergonomics and defence-in-depth, not a boundary** —
 `buildctl` ships in the AgentHost image and `BUILDKIT_HOST` is exported, so a run can call the
 daemon directly and skip the shim entirely. This is the same reasoning that ruled out the shared
 broker above: the shim is not in the trust path, so no property may rest on it. Stated as an
@@ -1064,6 +1071,30 @@ invariant: *every* guarantee in this section must hold when the shim is bypassed
 listed here does — they rest on the absent credential, the empty build netns, and the per-run VM.
 
 Per-run builders were tracked as issue #761; this design closes it.
+
+### Reproducing the capability evidence
+
+`scripts/validation/collect-kata-evidence.mjs` collects the transcript. It renders the shipped
+`k8s/base/sandbox-template-agenthost.yaml` under a validation name, and — whenever the requested
+cases include `buildkit` — applies the shipped `k8s/optional/sandbox-buildkit-sidecar.yaml` patch
+with `kubectl patch --local`, so what gets deployed is exactly *patch(reviewed manifest)* rather
+than a hand-written copy. The warm pool must then reach 3/3 ready containers, not 2/2.
+
+```bash
+node scripts/validation/collect-kata-evidence.mjs \
+  --image <registry>/agentweaver-agent-host:<tag> \
+  --phase capability --cases npm,nuget,apt,buildkit,preview
+```
+
+Two properties make the transcript trustworthy rather than merely plausible. Every `kubectl exec`
+that runs a probe is checked, so a probe that died produces a failed collection instead of a
+truncated transcript; and inside the probe, each positive proof is marked `required`, so a build
+that failed, a registry that was unreachable or a missing builder socket ends the run loudly. The
+build case drives the shipped `docker`/`awx-docker` shim over the pod-private socket — the artifact
+a run actually gets on its PATH, which is how a shim gap in `--progress plain` was found and fixed —
+and captures the build's own exit status directly rather than
+through a pipeline, because `docker build … | tail` reports `tail`'s status and would turn a failed
+build into a passing proof.
 
 ### How the preview hop was verified
 

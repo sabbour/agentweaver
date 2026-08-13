@@ -77,11 +77,16 @@ async function exec(commandLine, { timeoutMs = 600000, env = {}, network = true 
   };
 }
 
-function show(label, r) {
+// Prints a labelled result. `required: true` marks a positive proof: if the command failed, the
+// probe must fail too, because a transcript that shows a broken proof but exits 0 reads, to anyone
+// scanning it later, exactly like a transcript that proved something.
+function show(label, r, { required = false } = {}) {
   console.log(`--- ${label}`);
   console.log(`exit=${r.exitCode}${r.message ? ` message=${r.message}` : ''}`);
   if (r.stdout) console.log(r.stdout);
   if (r.stderr) console.log(`[stderr] ${r.stderr}`);
+  if (required && r.exitCode !== 0)
+    throw new Error(`required proof failed (exit=${r.exitCode}): ${label}`);
 }
 
 async function main() {
@@ -91,7 +96,7 @@ async function main() {
     show('npm install (real registry, no lockfile)', await exec(
       'set -e; rm -rf npmprobe; mkdir npmprobe; cd npmprobe; npm init -y >/dev/null; '
       + 'npm install --no-audit --no-fund left-pad@1.3.0 2>&1 | tail -5; '
-      + 'node -e "console.log(\'left-pad says\', require(\'left-pad\')(\'x\',3,\'0\'))"'));
+      + 'node -e "console.log(\'left-pad says\', require(\'left-pad\')(\'x\',3,\'0\'))"'), { required: true });
   }
 
   if (CASE === 'nuget') {
@@ -101,7 +106,7 @@ async function main() {
       + 'dotnet add package Newtonsoft.Json --version 13.0.3 2>&1 | tail -3; '
       + 'dotnet restore 2>&1 | tail -3; '
       + 'printf \'%s\\n\' \'System.Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(new{ok=true}));\' > Program.cs; '
-      + 'dotnet run --no-restore 2>&1 | tail -2'));
+      + 'dotnet run --no-restore 2>&1 | tail -2'), { required: true });
   }
 
   if (CASE === 'apt') {
@@ -115,7 +120,7 @@ async function main() {
       + 'apt-get update 2>&1 | tail -2; '
       + 'apt-get install -y --no-install-recommends pv cowsay 2>&1 | grep -Ev "Reading database" | tail -5; '
       + 'pv --version | head -1; /usr/games/cowsay -f tux "installed inside the run" | head -3; '
-      + 'command -v pv && echo "INSTALLED"'));
+      + 'command -v pv && echo "INSTALLED"'), { required: true });
     show('the installed package survives a second exec of the SAME run', await exec(
       'command -v pv >/dev/null && echo "PERSISTED-WITHIN-RUN" || echo "GONE"'));
     show('apt sources and reachability', await exec(
@@ -241,18 +246,60 @@ async function main() {
   }
 
   if (CASE === 'buildkit') {
-    show('buildkit rootless build of a fixture image', await exec(
-      'set -x; rm -rf bkprobe; mkdir bkprobe; cd bkprobe; '
-      + 'printf "FROM mcr.microsoft.com/cbl-mariner/busybox:2.0\\nRUN echo agentweaver-fixture > /fixture.txt\\nCMD [\\"cat\\",\\"/fixture.txt\\"]\\n" > Dockerfile; '
-      + 'buildctl-daemonless.sh build --frontend dockerfile.v0 --local context=. --local dockerfile=. '
-      + '--output type=oci,dest=fixture.tar 2>&1 | tail -20; ls -l fixture.tar'));
+    // The builder is the opt-in rootful sidecar reached over the pod-private unix socket that the
+    // executor bind-mounts into the run. This deliberately drives the SHIPPED `docker`/`awx-docker`
+    // shim rather than buildctl directly, so the evidence covers the artifact that a run actually
+    // gets on its PATH, and it asserts the socket first so a missing sidecar is a loud failure
+    // instead of a build that quietly falls back to something else.
+    show('the build endpoint the run was given', await exec(
+      'printf "BUILDKIT_HOST=%s\\n" "${BUILDKIT_HOST:-<unset>}"; '
+      + 'sock=${BUILDKIT_HOST#unix://}; sock=${sock:-/run/buildkit/buildkitd.sock}; '
+      + 'printf "socket: "; (test -S "$sock" && ls -l "$sock") || { echo "MISSING-NO-BUILDER"; exit 9; }; '
+      + 'printf "shim: "; command -v docker; '
+      + 'printf "rootless daemonless present: "; command -v buildctl-daemonless.sh || echo "absent (expected: this design is socket-based)"'), { required: true });
+
+    show('image build through the shim, including a RUN step and an OCI export', await exec(
+      'set -e; rm -rf bkprobe; mkdir bkprobe; cd bkprobe; '
+      + 'printf "FROM mcr.microsoft.com/cbl-mariner/base/core:2.0\\n'
+      + 'RUN echo agentweaver-fixture > /fixture.txt\\n'
+      + 'RUN tdnf install -y tar >/dev/null 2>&1 && echo STEP2_TDNF_OK || echo STEP2_TDNF_FAILED\\n'
+      + 'CMD [\\"cat\\",\\"/fixture.txt\\"]\\n" > Dockerfile; '
+      // The build status is captured directly rather than through a pipeline, because `| tail`
+      // would report tail's exit code and turn a failed build into a passing proof.
+      + 'if docker build --progress plain --output type=oci,dest=fixture.tar . > build.log 2>&1; '
+      + 'then echo "BUILD_EXIT=0"; else echo "BUILD_EXIT=$?"; tail -40 build.log; exit 1; fi; '
+      + 'tail -20 build.log; '
+      + 'ls -l fixture.tar; '
+      + 'printf "oci blob count: "; tar -tf fixture.tar | grep -c "^blobs/sha256/"; '
+      + 'tar -tf fixture.tar | head -5'), { required: true });
+
+    // The reason the builder may hold elevated capabilities at all is that its build steps do not
+    // run in the pod's network namespace. Proving that requires comparing the netns of a RUN step
+    // against the caller's, from inside the same pod.
+    show('RUN steps execute in an empty network namespace, not the pod\'s', await exec(
+      'set -e; cd bkprobe; printf "CALLER_NETNS=%s\\n" "$(readlink /proc/self/ns/net)"; '
+      + 'printf "FROM mcr.microsoft.com/cbl-mariner/base/core:2.0\\n'
+      + 'RUN echo RUN_NETNS=$(readlink /proc/self/ns/net)\\n'
+      + 'RUN echo IFACES=$(ls /sys/class/net | xargs)\\n'
+      + 'RUN (getent hosts mcr.microsoft.com >/dev/null 2>&1 \\&\\& echo DNS=RESOLVED-VIOLATION) || echo DNS=BLOCKED-OK\\n'
+      + 'RUN (curl -sS --max-time 5 -o /dev/null http://169.254.169.254/metadata/instance 2>/dev/null \\&\\& echo IMDS=REACHABLE-VIOLATION) || echo IMDS=UNREACHABLE-OK\\n" > Dockerfile.netns; '
+      + 'docker build --progress plain -f Dockerfile.netns --output type=tar,dest=/dev/null . 2>&1 '
+      + '| grep -E "CALLER_NETNS|RUN_NETNS|IFACES|DNS=|IMDS=" | head -10'), { required: true });
+
+    // The builder must be worth exactly one run: no identity it could spend, and no view of the
+    // shared workspace.
+    show('the caller holds no elevated capability and no cluster identity', await exec(
+      'printf "CapEff: "; grep ^CapEff /proc/self/status; '
+      + 'printf "serviceaccount token verdict: "; '
+      + '(test -r /var/run/secrets/kubernetes.io/serviceaccount/token && echo "READABLE-VIOLATION") || echo "NOT-READABLE-OK"; '
+      + 'printf "azure identity env count: "; env | grep -c "^AZURE_" || true'));
   }
 
   if (CASE === 'preview') {
     show('bind a preview port inside the sandbox and reach it from AgentHost', await exec(
       'set -e; (node -e "require(\'http\').createServer((_,res)=>res.end(\'preview-ok\')).listen(3000,\'127.0.0.1\')" & '
       + 'sleep 2; curl -sS --max-time 5 http://127.0.0.1:3000/ ; echo; '
-      + 'ss -ltnp 2>/dev/null | head -5)'));
+      + 'ss -ltnp 2>/dev/null | head -5)'), { required: true });
   }
 
   // The capability contract itself, straight off the executor protocol. This is what makes an

@@ -61,7 +61,13 @@
 # cluster, same image:
 #
 #   RUN step netns net:[4026532186]   daemon/pod netns net:[4026531840]   (different)
-#   DNS_BLOCKED_GOOD   NET_IN_RUN_BLOCKED   BUILD_EXIT=0   28736000-byte OCI tar
+#   DNS_BLOCKED_GOOD   NET_IN_RUN_BLOCKED   IMDS_BLOCKED_GOOD   BUILD_EXIT=0
+#   28,738,560-byte OCI tar, entries beginning blobs/sha256/…
+#
+# Those figures come from a probe pod rendered from *this file* — the base template with this
+# patch applied via `kubectl patch --local -o json`, so the builder container under test is the
+# one that ships. An earlier hand-written probe of the same shape reported a 28,736,000-byte tar;
+# the number above is the one from the shipped-bytes run.
 #
 # Two consequences, stated plainly rather than buried:
 #
@@ -97,7 +103,7 @@
 #   "SYS_ADMIN" in securityContext.capabilities.add)
 #
 # Build-enabled sandbox pods therefore need their own namespace whose PSA level permits
-# these two capabilities. Do NOT relax `agentweaver` itself — it hosts the control plane.
+# these three capabilities. Do NOT relax `agentweaver` itself — it hosts the control plane.
 #
 # APPLY
 # -----

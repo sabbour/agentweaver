@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -106,16 +107,72 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     private string? ResolveImageBuildEndpoint() =>
         ImageBuildSocketAvailable() ? $"unix://{_imageBuildSocket}" : null;
 
+    /// <summary>
+    /// How long the liveness probe waits for the builder to speak. The socket is in the same pod, so
+    /// a healthy daemon answers in microseconds; this only bounds the pathological cases.
+    /// </summary>
+    private const int ImageBuildProbeTimeoutMs = 750;
+
+    /// <summary>
+    /// The HTTP/2 client connection preface (RFC 9113 §3.4) followed by an empty SETTINGS frame.
+    /// BuildKit's control API is gRPC, so a healthy daemon answers this with its own SETTINGS frame.
+    /// </summary>
+    private static ReadOnlySpan<byte> Http2Preface =>
+    [
+        0x50, 0x52, 0x49, 0x20, 0x2a, 0x20, 0x48, 0x54, 0x54, 0x50, 0x2f, 0x32, 0x2e, 0x30, 0x0d,
+        0x0a, 0x0d, 0x0a, 0x53, 0x4d, 0x0d, 0x0a, 0x0d, 0x0a,
+        0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    private const byte Http2SettingsFrameType = 0x04;
+
+    /// <summary>
+    /// Whether a builder is actually reachable on the socket.
+    ///
+    /// Existence of the socket inode is not evidence: a crashed daemon, a sidecar that has not
+    /// finished starting, and a bind-without-listen all leave a socket file behind that no longer
+    /// accepts anything. Probing therefore connects, and then speaks enough of the wire protocol to
+    /// tell a gRPC server from some unrelated process that merely holds the path. Anything short of
+    /// that reports <c>image_build</c> as supported on a pod where every build fails at connect
+    /// time, which is exactly the dishonest contract the capability probe exists to prevent.
+    /// </summary>
     private bool ImageBuildSocketAvailable()
     {
         try
         {
-            // A unix socket is neither a regular file nor a directory; File.Exists covers the
-            // socket inode, and the directory check keeps a partially-wired pod from claiming it.
-            return File.Exists(_imageBuildSocket)
-                && Directory.Exists(Path.GetDirectoryName(_imageBuildSocket));
+            if (!File.Exists(_imageBuildSocket)
+                || !Directory.Exists(Path.GetDirectoryName(_imageBuildSocket)))
+            {
+                return false;
+            }
+
+            using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
+            {
+                SendTimeout = ImageBuildProbeTimeoutMs,
+                ReceiveTimeout = ImageBuildProbeTimeoutMs,
+            };
+
+            socket.Connect(new UnixDomainSocketEndPoint(_imageBuildSocket));
+            socket.Send(Http2Preface);
+
+            // A SETTINGS frame is nine bytes of header; byte 3 is the frame type.
+            Span<byte> header = stackalloc byte[9];
+            var read = 0;
+            while (read < header.Length)
+            {
+                var received = socket.Receive(header[read..]);
+                if (received <= 0)
+                {
+                    return false;
+                }
+
+                read += received;
+            }
+
+            return header[3] == Http2SettingsFrameType;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or SocketException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException or ObjectDisposedException)
         {
             return false;
         }

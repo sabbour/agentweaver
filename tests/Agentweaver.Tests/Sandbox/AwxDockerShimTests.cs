@@ -6,8 +6,10 @@ namespace Agentweaver.Tests.Sandbox;
 
 /// <summary>
 /// Executes the shipped <c>awx-docker</c> shim itself, rather than asserting against a re-implemented
-/// copy of its logic. The shim is the only thing standing between a run and BuildKit's publishing
-/// exporters, so its refusals have to be proven on the artifact that actually ships in the image.
+/// copy of its logic. The shim's exporter refusals are ergonomics, not a security boundary — a run
+/// can invoke <c>buildctl</c> directly, and what actually prevents publishing is that the builder
+/// holds no registry credential. They still have to behave as documented, so they are proven on the
+/// artifact that actually ships in the image.
 ///
 /// The shim reaches the builder over a unix socket, and refuses to do anything when that socket is
 /// absent. These tests therefore bind a real listening socket to get past the fail-closed preflight,
@@ -131,14 +133,20 @@ public sealed class AwxDockerShimTests
         using var listener = Listen(socketPath);
         try
         {
-            // --push is the obvious one; the --output spellings are the bypasses that made the
-            // documented "nothing is ever pushed" guarantee untrue before it was validated.
+            // --push is the obvious one; the --output spellings are the ways a caller could reach
+            // a registry exporter without typing --push. The last three are CSV-parsing evasions:
+            // buildctl reads this value as CSV, so a quoted field or a trailing `type=` in some
+            // other key's value defeats a substring scan while buildctl still sees type=image
+            // with push=true.
             string[][] publishingInvocations =
             [
                 ["build", "--push", "-t", "example.com/app:1", context],
                 ["build", "--output", "type=image,push=true", context],
                 ["build", "--output", "type=registry,name=example.com/app:1", context],
                 ["build", "-o", "type=image,name=example.com/app:1,push=1", context],
+                ["build", "--output", "type=image,name=example.com/app:1,\"push=true\"", context],
+                ["build", "--output", "type=image,name=example.com/app:1,annotation=type=oci", context],
+                ["build", "--output", "type=oci,dest=/tmp/x.tar,PUSH=true", context],
             ];
 
             foreach (var invocation in publishingInvocations)
@@ -178,6 +186,19 @@ public sealed class AwxDockerShimTests
                 // It never completes a build here (there is no daemon behind the socket), but it must
                 // get past the policy: exit 2 would mean a permitted exporter was wrongly refused.
                 result.ExitCode.Should().NotBe(2, "'{0}' writes into the run's own filesystem", exporter);
+            }
+
+            // Docker accepts `--progress plain` as well as `--progress=plain`. The separated form
+            // used to fall through to the positional branch and be reported as a second build
+            // context, which a live build against a real builder caught.
+            foreach (var progress in new[] { "--progress=plain", "--progress" })
+            {
+                var invocation = progress == "--progress"
+                    ? new[] { "build", progress, "plain", "--output", "type=oci,dest=out.tar", context }
+                    : ["build", progress, "--output", "type=oci,dest=out.tar", context];
+
+                RunShim(socketPath, invocation).ExitCode.Should().NotBe(
+                    2, "'{0}' is a progress selector, not a second build context", progress);
             }
         }
         finally

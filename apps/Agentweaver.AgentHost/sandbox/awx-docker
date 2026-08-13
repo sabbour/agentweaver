@@ -112,6 +112,12 @@ while [ "$#" -gt 0 ]; do
             exit 2 ;;
         --progress=*|--pull|-q|--quiet)
             shift ;;
+        --progress)
+            # Docker accepts both `--progress=plain` and `--progress plain`; the shim has to consume
+            # the separated value too, or it lands in the positional branch and is mistaken for a
+            # second build context.
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            shift 2 ;;
         --)
             shift ;;
         -*)
@@ -145,9 +151,50 @@ if [ -z "$output" ]; then
 fi
 
 # Validate the exporter. `--push` is refused above, but BuildKit also publishes via
-# `--output type=image,push=true` / `type=registry`, which would bypass that refusal entirely.
-# Only exporters that write an artifact into the run's own filesystem are permitted.
-output_type=$(printf '%s' "$output" | sed -n 's/.*\btype=\([a-zA-Z]*\).*/\1/p')
+# `--output type=image,push=true` / `type=registry`. This refusal is ergonomics rather than a
+# boundary -- `buildctl` is on PATH and BUILDKIT_HOST is exported, so a caller can reach the daemon
+# directly, and what actually prevents publishing is that the builder holds no credential. It still
+# has to be *correct*, though: a substring scan is not, because buildctl parses this value as CSV
+# and would read `type=image,name=x,"push=true",k=type=oci` as type=image with push=true while a
+# last-match scan sees a permitted `oci`. So the value is parsed field by field.
+case "$output" in
+    *'"'*|*"'"*)
+        echo "awx-docker: --output must not use quoted CSV fields. The exporters this sandbox" >&2
+        echo "            permits (oci, docker, tar, local) never need quoting, and quoting hides" >&2
+        echo "            the real field values from validation." >&2
+        exit 2 ;;
+esac
+
+output_type=""
+output_type_count=0
+awx_saved_ifs="$IFS"
+IFS=','
+for output_field in $output; do
+    case "$output_field" in
+        *=*)
+            output_key=$(printf '%s' "${output_field%%=*}" | tr '[:upper:]' '[:lower:]')
+            output_value="${output_field#*=}" ;;
+        *)
+            output_key=$(printf '%s' "$output_field" | tr '[:upper:]' '[:lower:]')
+            output_value="" ;;
+    esac
+    case "$output_key" in
+        type)
+            output_type_count=$((output_type_count + 1))
+            output_type="$output_value" ;;
+        push)
+            IFS="$awx_saved_ifs"
+            echo "awx-docker: --output push=$output_value is refused; see --push." >&2
+            exit 2 ;;
+    esac
+done
+IFS="$awx_saved_ifs"
+
+if [ "$output_type_count" -gt 1 ]; then
+    echo "awx-docker: --output declares type= more than once, which is ambiguous. Give one type." >&2
+    exit 2
+fi
+
 case "$output_type" in
     oci|docker|tar|local) ;;
     "")
@@ -158,10 +205,6 @@ case "$output_type" in
         echo "            Publishing to a registry from a run is not permitted." >&2
         exit 2 ;;
 esac
-if printf '%s' "$output" | grep -qiE '(^|,)push=(true|1)'; then
-    echo "awx-docker: --output push=true is refused; see --push." >&2
-    exit 2
-fi
 
 echo "awx-docker: building via the in-pod BuildKit sidecar at $socket" >&2
 
