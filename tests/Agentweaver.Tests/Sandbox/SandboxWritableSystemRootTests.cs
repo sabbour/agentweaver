@@ -29,7 +29,13 @@ public sealed class SandboxWritableSystemRootTests : IDisposable
         _workspace = Path.Combine(_root, "workspace");
         _runA = Path.Combine(_workspace, "worktrees", "run-a");
         Directory.CreateDirectory(_runA);
-        Directory.CreateDirectory(Path.Combine(_root, "home", "run-a"));
+
+        // RegisterRuntimeHome refuses a HOME that is missing any authoritative XDG directory, so
+        // the fixture has to create the same shape AgentHost provisions for a real run.
+        var home = Path.Combine(_root, "home", "run-a");
+        Directory.CreateDirectory(Path.Combine(home, ".cache"));
+        Directory.CreateDirectory(Path.Combine(home, ".local", "share"));
+        Directory.CreateDirectory(Path.Combine(home, ".config"));
     }
 
     /// <summary>

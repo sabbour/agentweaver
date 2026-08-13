@@ -95,9 +95,9 @@ spec:
         - name: buildkitd
           # Azure Policy (azurepolicy-k8sazurev2customcontainerallow) rejects upstream
           # moby/buildkit, so the image is mirrored into the project registry. Import with:
-          #   az acr import --name <registry> --source docker.io/moby/buildkit:v0.16.0 \
-          #     --image moby/buildkit:v0.16.0
-          image: agentweaverasabbour.azurecr.io/moby/buildkit:v0.16.0
+          #   az acr import --name <registry> --source docker.io/moby/buildkit:v0.32.2 \
+          #     --image moby/buildkit:v0.32.2
+          image: agentweaverasabbour.azurecr.io/moby/buildkit:v0.32.2
           command:
             - /bin/sh
             - -c

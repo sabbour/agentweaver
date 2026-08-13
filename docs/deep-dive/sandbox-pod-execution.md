@@ -917,7 +917,7 @@ be on a shared-kernel node.
 Verified end-to-end on the live cluster from a sandbox-shaped client pod (unprivileged, non-root,
 `CapEff=0`, no service-account token) through the `agentweaver-buildkit` Service over mTLS: a build
 of `FROM alpine:3.20` with `RUN apk add --no-cache jq` exits 0 and produces a 4,138,496-byte OCI
-tarball whose index digest is `sha256:f8ff283e…` and whose extracted layers contain `jq-1.7.1` and
+tarball whose index digest is `sha256:df749f0f…` and whose extracted layers contain `jq-1.7.1` and
 the expected marker file. The same client is refused without a client certificate
 (`tls: certificate required`), refused without TLS (`EOF`), and — once its `app.kubernetes.io/component`
 label is removed — cannot reach the port at all (`i/o timeout`), which is the NetworkPolicy doing its

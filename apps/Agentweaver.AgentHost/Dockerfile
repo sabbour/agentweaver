@@ -215,13 +215,15 @@ RUN echo "appuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/appuser \
 RUN mkdir -p /workspace /app/config /app/logs && chown -R 1000:1000 /workspace /app
 
 # ── Image builds via the external BuildKit broker ─────────────────────────────
-# Only the *client* lives here. buildkitd itself cannot run in this pod (it needs a mapped uid
-# range that a runAsNonRoot, no-capabilities container cannot create), so `docker build` inside a
-# run is translated by `awx-docker` into a buildctl call against the broker deployed from
-# k8s/optional/buildkit-broker.yaml. `docker` is a symlink because an agent reaches for `docker
-# build`, and a missing binary is indistinguishable from a broken image; the shim answers every
-# other subcommand with the reason it cannot work here.
-ARG BUILDCTL_VERSION=0.16.0
+# Only the *client* lives here. buildkitd itself cannot run in this pod: it needs to create cgroups
+# and mounts per build step, which requires CAP_SYS_ADMIN and CAP_NET_ADMIN, and this container
+# holds no capabilities at all. So `docker build` inside a run is translated by `awx-docker` into a
+# buildctl call against the broker deployed from k8s/optional/buildkit-broker.yaml. `docker` is a
+# symlink because an agent reaches for `docker build`, and a missing binary is indistinguishable
+# from a broken image; the shim answers every other subcommand with the reason it cannot work here.
+# Keep BUILDCTL_VERSION current: buildctl is a Go binary, so its embedded stdlib is what the Trivy
+# gate scans, and an old release fails the build on Go CVEs even though the client itself is fine.
+ARG BUILDCTL_VERSION=0.32.2
 RUN curl -fsSL "https://github.com/moby/buildkit/releases/download/v${BUILDCTL_VERSION}/buildkit-v${BUILDCTL_VERSION}.linux-amd64.tar.gz" \
         | tar -xz -C /usr/local bin/buildctl \
     && chmod 0755 /usr/local/bin/buildctl \
