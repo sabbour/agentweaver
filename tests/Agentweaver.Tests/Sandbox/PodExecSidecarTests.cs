@@ -240,6 +240,114 @@ public sealed class PodExecSidecarTests
         }
     }
 
+    /// <summary>
+    /// Regression for a cleanup flaw found in review: when the command itself finishes normally
+    /// (the wrapper exits on its own, not because the relay disconnected) but leaves a backgrounded
+    /// descendant running, <c>TerminateAsync</c> used to return early as soon as it saw the wrapper's
+    /// <c>Process.HasExited</c>, so the descendant was never signalled at all, and the spawn handler
+    /// drained the workload's inherited stdout/stderr pipes -- which that descendant still held open
+    /// -- before ever attempting cleanup, so the connection hung instead of ever reaching the Exit
+    /// frame. Both must now happen in the opposite order: reap the recorded group first, then drain.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task SpawnedProcessGroup_IsReapedWhenTheCommandExitsWhileADescendantIsStillRunning()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        var daemonPidFile = Path.Combine(workspace, "daemon.pid");
+        var doneFile = Path.Combine(workspace, "done.txt");
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        // The command backgrounds a long-lived descendant and then exits on its own -- no relay
+        // disconnect, no long-running loop keeping the wrapper alive. This is the shape a
+        // model-controlled build server or watcher takes: `npm run dev &` followed by the invoking
+        // shell returning. The trailing `sleep 0.2` (matching
+        // KataBwrapExecutorTests.CompletedCommand_LeavesNoDaemonisedProcessesBehind) keeps the
+        // sandboxed wrapper alive long enough for procfs-based child discovery to observe it before
+        // it exits; without it the resolution race is indistinguishable from -- and would mask --
+        // the cleanup regression this test targets.
+        var supervised = await client.StartSupervisedProcessAsync(
+            $"(sleep 300 & echo $! > {Quote(daemonPidFile)}) ; sleep 0.2 ; printf done > {Quote(doneFile)}",
+            workspace,
+            null,
+            networkEnabled: false);
+
+        try
+        {
+            await WaitForFileAsync(doneFile, TimeSpan.FromSeconds(20));
+            await WaitForFileAsync(daemonPidFile, TimeSpan.FromSeconds(20));
+            var daemonPid = int.Parse(File.ReadAllText(daemonPidFile).Trim());
+
+            // The relay must observe a terminal Exit frame promptly. Before the fix, draining the
+            // still-open stdout/stderr pipes ahead of cleanup meant this would hang until the test
+            // itself timed out, because the backgrounded daemon never closed them.
+            await supervised.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (Directory.Exists($"/proc/{daemonPid}") && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+            Directory.Exists($"/proc/{daemonPid}").Should().BeFalse(
+                "the spawn path must reap the recorded process group even though the wrapper had "
+                + "already exited on its own");
+        }
+        finally
+        {
+            await supervised.StopAsync(TimeSpan.FromSeconds(2));
+            supervised.Process.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Same regression as <see cref="SpawnedProcessGroup_IsReapedWhenTheCommandExitsWhileADescendantIsStillRunning"/>
+    /// for the one-shot exec path, exercised through the sidecar socket protocol (not the direct
+    /// <c>KataBwrapExecutor</c> unit test) so the <c>HandleExecAsync</c> boundary itself is covered.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task Execute_ReapsADaemonisedDescendantThroughTheSidecarBoundary()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        var daemonPidFile = Path.Combine(workspace, "daemon.pid");
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        var result = await client.ExecuteAsync(new SandboxCommand(
+                // The trailing `sleep 0.2` (matching
+                // KataBwrapExecutorTests.CompletedCommand_LeavesNoDaemonisedProcessesBehind) keeps
+                // the sandboxed wrapper alive long enough for procfs-based child discovery to
+                // observe it before it exits.
+                $"(sleep 300 & echo $! > {Quote(daemonPidFile)}) ; sleep 0.2 ; printf done",
+                workspace,
+                null,
+                new SandboxFsPolicy([workspace], [], []),
+                20_000,
+                NetworkEnabled: false))
+            .WaitAsync(TimeSpan.FromSeconds(25));
+
+        result.ExitCode.Should().Be(0, result.Stderr);
+        result.TimedOut.Should().BeFalse(
+            "a daemonised descendant must not make the sidecar exec path hang or time out");
+
+        var daemonPid = int.Parse(File.ReadAllText(daemonPidFile).Trim());
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (Directory.Exists($"/proc/{daemonPid}") && DateTime.UtcNow < deadline)
+            await Task.Delay(100);
+        Directory.Exists($"/proc/{daemonPid}").Should().BeFalse(
+            "the executor sidecar exec path must reap the run's process group too, not just the "
+            + "directly-invoked executor covered by KataBwrapExecutorTests");
+    }
+
     private static async Task<PodExecFrame> SendRawAsync(string socketPath, PodExecRequest request)
     {
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);

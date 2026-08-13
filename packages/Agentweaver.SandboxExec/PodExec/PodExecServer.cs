@@ -313,6 +313,14 @@ public sealed class PodExecServer : IAsyncDisposable
                 return;
             }
 
+            // The wrapper process itself just exited, but a setsid'd or otherwise backgrounded
+            // descendant can still hold the workload's inherited stdout/stderr pipes open, so
+            // draining them below would block forever even though the run is really done. Reap the
+            // recorded sandbox process group here -- before the drain -- exactly as the one-shot
+            // exec path already does; TerminateAsync no longer skips this because the wrapper has
+            // already exited.
+            await TerminateAsync(session, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
             await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
             await WriteAsync(
                 writer,
@@ -364,30 +372,93 @@ public sealed class PodExecServer : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Terminates a spawned session. The recorded sandbox process group is always signalled here,
+    /// even when <see cref="Process.HasExited"/> is already true for the supervised wrapper: a
+    /// setsid'd or otherwise backgrounded descendant can outlive the wrapper while remaining part of
+    /// the recorded group, and returning early in that case (the previous behaviour) let it escape
+    /// cleanup entirely instead of ever receiving TERM/KILL.
+    /// </summary>
     private async Task TerminateAsync(SpawnedSession session, TimeSpan grace)
     {
         try
         {
-            if (session.Supervised.Process.HasExited)
-                return;
-
-            PodExecSignals.SendProcessGroupSignal(session.ProcessGroupId, "TERM");
-            using var graceCts = new CancellationTokenSource(grace);
-            try
-            {
-                await session.Supervised.Process.WaitForExitAsync(graceCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                PodExecSignals.SendProcessGroupSignal(session.ProcessGroupId, "KILL");
-            }
+            SendGroupSignalIfSafe(session.ProcessGroupId, "TERM");
 
             if (!session.Supervised.Process.HasExited)
-                session.Supervised.Process.Kill(entireProcessTree: true);
+            {
+                using var graceCts = new CancellationTokenSource(grace);
+                try
+                {
+                    await session.Supervised.Process.WaitForExitAsync(graceCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    SendGroupSignalIfSafe(session.ProcessGroupId, "KILL");
+                }
+
+                if (!session.Supervised.Process.HasExited)
+                    session.Supervised.Process.Kill(entireProcessTree: true);
+            }
+            else
+            {
+                // The wrapper already exited, so there is nothing left to await on the .NET Process
+                // handle: give the group's TERM a short, bounded moment (never the full -- up to
+                // 60s -- caller-supplied grace, so cleanup can never stall on this path) before the
+                // final KILL, instead of assuming TERM already stopped every recorded member.
+                await Task.Delay(
+                        TimeSpan.FromMilliseconds(Math.Min(grace.TotalMilliseconds, 500)),
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                SendGroupSignalIfSafe(session.ProcessGroupId, "KILL");
+            }
+
+            // Reap the wrapper process so it never lingers as a zombie once its recorded process
+            // group has been signalled.
+            try
+            {
+                session.Supervised.Process.WaitForExit(0);
+            }
+            catch
+            {
+                // Best effort; the runtime may already have reaped it.
+            }
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Executor sidecar could not terminate handle {Handle}.", session.Handle);
+        }
+    }
+
+    /// <summary>
+    /// Sends a signal to the recorded sandbox process group, guarding against an invalid id and
+    /// against ever signalling this executor sidecar's own process group -- a misresolved group id
+    /// must never make the sidecar kill itself.
+    /// </summary>
+    private static void SendGroupSignalIfSafe(int processGroupId, string signal)
+    {
+        if (processGroupId <= 0 || !OperatingSystem.IsLinux())
+            return;
+        if (processGroupId == TryReadOwnProcessGroupId())
+            return;
+        PodExecSignals.SendProcessGroupSignal(processGroupId, signal);
+    }
+
+    private static int TryReadOwnProcessGroupId()
+    {
+        try
+        {
+            var stat = File.ReadAllText($"/proc/{Environment.ProcessId}/stat");
+            var commandEnd = stat.LastIndexOf(')');
+            if (commandEnd < 0 || commandEnd + 2 >= stat.Length)
+                return 0;
+            var fields = stat[(commandEnd + 1)..]
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            return fields.Length > 2 && int.TryParse(fields[2], out var pgid) ? pgid : 0;
+        }
+        catch
+        {
+            return 0;
         }
     }
 
