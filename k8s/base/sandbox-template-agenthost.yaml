@@ -271,6 +271,14 @@ spec:
               value: "/var/run/agentweaver-exec/exec.sock"
             - name: HOME
               value: "/home/appuser"
+            # Image builds are served by an OPTIONAL BuildKit sidecar in this same pod, reached over
+            # a pod-local unix socket (k8s/optional/sandbox-buildkit-sidecar.yaml). The base
+            # template does NOT deploy that sidecar, so on a stock cluster the socket is absent, the
+            # executor reports image_build as unsupported, and `docker build` fails with the
+            # contract's explanation instead of a connection error. Availability is probed from the
+            # socket itself, never inferred from this variable.
+            - name: AGENTWEAVER_IMAGE_BUILD_SOCKET
+              value: "/run/buildkit/buildkitd.sock"
           # The model-controlled build/test/preview working set lives here now. Pod-level totals are
           # deliberately UNCHANGED versus the single-container layout (requests 1000m/2Gi, limits
           # 2000m/4Gi) so katapool scheduling density and burst ceiling stay exactly as documented
@@ -301,6 +309,11 @@ spec:
             - name: exec-no-serviceaccount
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
+            # Build daemon socket, published by the optional in-pod BuildKit sidecar. Deliberately
+            # under /run and NOT under /mnt: the per-run writable system root mounts a tmpfs over
+            # /mnt, which would mask anything published there and break every sandboxed command.
+            - name: buildkit-socket
+              mountPath: /run/buildkit
       volumes:
         - name: workspace
           persistentVolumeClaim:
@@ -328,6 +341,11 @@ spec:
           emptyDir:
             sizeLimit: "4Gi"
         - name: exec-no-serviceaccount
+          emptyDir:
+            sizeLimit: "1Mi"
+        # Empty on a stock cluster: the socket only appears when the optional BuildKit sidecar is
+        # patched in. An empty directory here means "no builder", which is what the executor probes.
+        - name: buildkit-socket
           emptyDir:
             sizeLimit: "1Mi"
         - name: a2a-tls

@@ -94,8 +94,20 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
         return (false, lastDetail);
     }
 
-    public void RegisterTrustedWorkspace(string workingDirectory) =>
-        SendAsync(
+    /// <summary>
+    /// Asks the sidecar what it can actually do. The contract distinguishes capabilities that work
+    /// here from ones that need an external service (image builds) or a different operating system
+    /// (winget), so callers can refuse or reroute work instead of failing mid-task.
+    /// </summary>
+    public async Task<IReadOnlyList<PodExecCapability>> GetCapabilitiesAsync(
+        CancellationToken ct = default)
+    {
+        var frame = await SendAsync(new PodExecRequest { Op = PodExecOps.Capabilities }, ct)
+            .ConfigureAwait(false);
+        return frame.Capabilities ?? [];
+    }
+
+    public void RegisterTrustedWorkspace(string workingDirectory) =>        SendAsync(
                 new PodExecRequest
                 {
                     Op = PodExecOps.RegisterWorkspace,
