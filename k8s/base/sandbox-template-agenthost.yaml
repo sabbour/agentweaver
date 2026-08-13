@@ -271,6 +271,14 @@ spec:
               value: "/var/run/agentweaver-exec/exec.sock"
             - name: HOME
               value: "/home/appuser"
+            # Image builds are delegated to the BuildKit broker (k8s/optional/buildkit-broker.yaml).
+            # When the broker is not deployed, the client certificate Secret is absent, the endpoint
+            # resolves to nothing, and the capability contract keeps reporting image_build as
+            # RequiresExternalService — the sandbox never silently degrades into a build failure.
+            - name: AGENTWEAVER_IMAGE_BUILD_ENDPOINT
+              value: "tcp://agentweaver-buildkit.agentweaver-build.svc.cluster.local:1234"
+            - name: AGENTWEAVER_IMAGE_BUILD_TLS_DIR
+              value: "/mnt/buildkit-client-tls"
           # The model-controlled build/test/preview working set lives here now. Pod-level totals are
           # deliberately UNCHANGED versus the single-container layout (requests 1000m/2Gi, limits
           # 2000m/4Gi) so katapool scheduling density and burst ceiling stay exactly as documented
@@ -301,6 +309,13 @@ spec:
             - name: exec-no-serviceaccount
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
+            # Client certificate authorising build submission to the BuildKit broker. Optional, so
+            # a cluster without the broker starts unchanged. It is reachable by sandboxed code by
+            # design — it buys a build and nothing else, since the broker has no registry
+            # credentials, no cluster token and no workspace access.
+            - name: buildkit-client-tls
+              mountPath: /mnt/buildkit-client-tls
+              readOnly: true
       volumes:
         - name: workspace
           persistentVolumeClaim:
@@ -330,6 +345,11 @@ spec:
         - name: exec-no-serviceaccount
           emptyDir:
             sizeLimit: "1Mi"
+        - name: buildkit-client-tls
+          secret:
+            secretName: agentweaver-buildkit-client-tls
+            defaultMode: 0444
+            optional: true
         - name: a2a-tls
           secret:
             secretName: agentweaver-a2a-server-tls

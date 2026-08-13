@@ -782,6 +782,192 @@ To rebuild pod-per-run from these ideas:
 8. **Gate the whole thing behind `Sandbox:AgentExecutionMode`** so production can run `pod-per-run`
    while retaining `in-api` as an instant rollback path.
 
+## Capability contract: what a run can actually do
+
+An agent that discovers halfway through a task that the sandbox cannot perform an operation is
+indistinguishable from a bug. The executor therefore publishes a **capability contract** — a
+`capabilities` op on the pod-private executor protocol
+(`packages/Agentweaver.SandboxExec/SandboxCapabilities.cs`) — that states, for every developer
+workload we support, whether it works here, why not if it doesn't, and what would change that. An
+operation the platform genuinely cannot perform is declared explicitly; it is never silently
+omitted from the list, and never reported as supported.
+
+| Capability | State on the Linux Kata executor | Why |
+| --- | --- | --- |
+| `npm_install` | **Supported** | Installs into the run's own workspace over the sandbox's egress allowlist; no system-root write is needed. |
+| `nuget_restore` | **Supported** | `dotnet restore`/`run` write to the run's workspace and per-run NuGet cache. |
+| `preview_port_binding` | **Supported** | The app binds loopback inside the sandbox; AgentHost forwards it to the preview Gateway, because both containers of the run's pod share one network namespace. |
+| `apt_install` | **Supported** (via the per-run writable system root, below) | `apt-get install` needs a writable `/usr`, `/var` and `/etc`; the run gets a private overlay of them. |
+| `image_build` | **RequiresExternalService** | BuildKit cannot run in this pod at all — see below. Builds are delegated to the opt-in broker, which runs in its own Kata VM. |
+| `winget_install` | **UnsupportedOnPlatform** | winget is Windows-only; see "winget and the Windows executor". |
+
+`Unavailable` and `RequiresExternalService` mean "a deployment change would fix this".
+`UnsupportedOnPlatform` means "no configuration of this executor will ever do it — move the work to
+another executor". Callers branch on that distinction; both carry a remediation string.
+
+`npm_install`, `nuget_restore` and `apt_install` all depend on the sandbox reaching public package
+registries, so it is worth being precise about what egress is *actually* enforced today rather than
+what the surrounding sections describe. Kubernetes NetworkPolicies are additive, and the
+controller-generated per-template policy permits all ports to public CIDRs; unioned with the narrow
+base policy, the effective rule is broader than the "HTTPS only" description implies, and the Azure
+IMDS address is reachable from a sandbox run. That is a confidentiality gap rather than an isolation
+break — the run still has no host namespaces, no hostPath, no service-account token, and no
+cross-run workspace access — and it is **pre-existing**, tracked in issue #759 with the measurement
+that found it. It is recorded here because a reader comparing this document against the cluster
+should not have to discover the discrepancy themselves.
+
+### The per-run writable system root
+
+Package managers that install into the system root cannot work against a read-only image, so each
+run that needs one gets a **private, disposable system root**:
+
+- `apps/Agentweaver.AgentHost/sandbox/awx-run-root` creates an unprivileged **user + mount
+  namespace**, mounts a size-bounded **tmpfs**, layers `/usr` and `/var` as **overlays** whose upper
+  directories live on that tmpfs, and copies `/etc` onto it. It then holds those namespaces open for
+  the lifetime of the run.
+- The executor re-enters them per command with `nsenter --target <pid> --user --mount
+  --preserve-credentials`, and runs the *same* bubblewrap command line inside — same namespace
+  flags, `--cap-drop ALL`, `--die-with-parent`, same mount plan. The only difference is that `/usr`,
+  `/etc` and `/var` are bound from the run's private overlay instead of read-only from the image.
+
+Properties that make this safe:
+
+- **No pod-level privilege is added.** The pod spec is unchanged: non-root, `allowPrivilegeEscalation:
+  false`, all capabilities dropped, `RuntimeDefault` seccomp, no host namespaces, no hostPath.
+  "Root" inside the run's user namespace is the sandbox's own unprivileged uid everywhere else.
+- **Nothing escapes the run.** The upper layer is a tmpfs private to one user namespace: another
+  run, the AgentHost container, and the node never see what was installed.
+- **Nothing persists.** When the holder exits, the namespaces and the tmpfs die with it, so a run
+  cannot leave anything behind in the image or on the node. Installed packages last for the run,
+  not beyond it.
+- **Failure is strictly more restrictive.** If the helper is missing or any mount fails, the
+  executor logs it, reports `apt_install` as `Unavailable`, and runs the command against the
+  read-only image system root exactly as before. There is no path where a failure grants more.
+- **It is RAM.** The overlay upper must be tmpfs — under Kata every persistent pod volume is
+  virtiofs, which cannot back an overlay upper — so the writable system root counts against the
+  container's memory limit. It defaults to 1 GiB
+  (`AGENTWEAVER_EXEC_WRITABLE_ROOT_SIZE`) and can be disabled entirely with
+  `AGENTWEAVER_EXEC_WRITABLE_ROOT=0`.
+
+One image requirement follows from the kernel, and is worth stating because it looks surprising in a
+diff: **directories under `/usr` and `/var` are owned by uid 1000 in the image**. The run's user
+namespace can map exactly one id (mapping a *range* needs an effective `CAP_SETUID`, which a
+`runAsNonRoot` + `allowPrivilegeEscalation=false` container cannot hold), so root-owned directories
+are unmapped inside it — and overlayfs must copy a directory up before anything can be created in
+it, which fails with `EOVERFLOW` when the directory's owner has no representation in the namespace.
+This grants model-controlled code nothing: it never sees the image's `/usr` and `/var` directly,
+only the read-only bind or the per-run overlay.
+
+A second kernel limitation needs a small apt hook. dpkg installs a package's directories by
+extracting each under a temporary `.dpkg-new` name and renaming it into place; renaming a directory
+across overlay layers requires overlayfs's `redirect_dir` feature, and the kernel refuses
+`redirect_dir=on` for a mount created in a non-initial user namespace. Without help, `apt-get
+install` downloads and unpacks correctly and then fails with `Invalid cross-device link`. dpkg only
+performs that rename when the directory does not already exist, so
+`apps/Agentweaver.AgentHost/sandbox/awx-apt-predirs` — registered as apt's `DPkg::Pre-Install-Pkgs`
+hook — pre-creates the directories of the packages apt is about to install, which is an ordinary
+`mkdir` in the overlay's upper layer. It creates directories and nothing else.
+
+### Image builds need an external builder
+
+Building container images **inside the sandbox pod** is not a policy choice we can relax, and every
+step below was measured on the live cluster rather than assumed:
+
+1. `buildkitd` must create a cgroup and perform mounts for every build step, which needs
+   `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`. The sandbox pod holds **no** capabilities (`CapEff=0`).
+2. `CAP_SYS_ADMIN` is **rejected by the namespace's PodSecurity `baseline` policy**.
+3. Rootless `buildkitd` is not an escape hatch: it needs a sub-UID *range*, and mapping a range
+   requires `newuidmap` to carry file capabilities. The Kata guest filesystem cannot store
+   `security.capability` xattrs at all — `setcap` returns **`Not supported`** — so `newuidmap`
+   fails with "Could not set caps". `rootlesskit` has no single-id fallback either; it exits with
+   `No subuid ranges found`.
+
+An *in-pod* elevated builder would also be worse than useless: the exec sidecar mounts the shared
+workspace PVC, and a root + `CAP_SYS_ADMIN` container in the same Kata VM could mount the guest's
+virtiofs share and cross the run boundary. Keeping the builder outside the sandbox pod is the
+security property, not a limitation of it.
+
+#### The broker that does work
+
+`k8s/optional/buildkit-broker.yaml` is opt-in and off by default. It was derived from measurement,
+and three findings shaped it — each of which breaks builds if reverted:
+
+- **Rootful, not rootless.** Rootless is impossible under Kata for the reason above. Rootless *does*
+  work on ordinary AKS nodes, but only with seccomp **and** AppArmor `Unconfined` — `baseline`
+  forbids both, and an escape would land beside the API and worker pods on a shared kernel. The
+  broker instead runs rootful in **its own Kata VM**, so the VM is the boundary and an escape lands
+  in a disposable guest with no service-account token, no PVC and no registry credentials. It is
+  still `privileged: false` under `seccompProfile: RuntimeDefault`.
+- **`CAP_NET_ADMIN` is required, and `CAP_BPF` does not substitute.** `runc` attaches a
+  `BPF_CGROUP_DEVICE` program for the cgroup v2 device controller, and the kernel gates
+  `BPF_PROG_QUERY` on `CAP_NET_ADMIN`. Without it every `RUN` fails with
+  `bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted`. Adding `CAP_BPF` instead was
+  tested and does not help.
+- **BuildKit state must be tmpfs.** A default `emptyDir` in a Kata pod is **virtiofs**, which does
+  not implement xattrs, so the OCI exporter fails at the final step with
+  `failed to get xattr for /tmp/containerd-mount…/bin: operation not supported` *after* every layer
+  has already built. `tmpfs` lives in the guest and supports xattrs. The cost is that build state is
+  RAM, charged against the container's memory limit.
+
+Kubernetes also mounts `/sys/fs/cgroup` read-only for unprivileged containers, so the entrypoint
+remounts it read-write before exec'ing `buildkitd`. Inside a Kata guest that tree is the VM's own,
+so the remount cannot reach the node's cgroups — which is why this is acceptable here and would not
+be on a shared-kernel node.
+
+Verified end-to-end on the live cluster from a sandbox-shaped client pod (unprivileged, non-root,
+`CapEff=0`, no service-account token) through the `agentweaver-buildkit` Service over mTLS: a build
+of `FROM alpine:3.20` with `RUN apk add --no-cache jq` exits 0 and produces a 4,138,496-byte OCI
+tarball whose index digest is `sha256:f8ff283e…` and whose extracted layers contain `jq-1.7.1` and
+the expected marker file. The same client is refused without a client certificate
+(`tls: certificate required`), refused without TLS (`EOF`), and — once its `app.kubernetes.io/component`
+label is removed — cannot reach the port at all (`i/o timeout`), which is the NetworkPolicy doing its
+job. Note that Cilium takes roughly 30–60s to propagate a pod label change into a new identity, so a
+freshly relabelled pod keeps its old access for a short window; that is a property of the CNI, not of
+this policy.
+
+Two smaller things this shook out, both of which break builds if reverted:
+
+- **The readiness probe needs its own client certificate.** buildkitd's only real health signal is an
+  mTLS gRPC call, and it rejects the server's own certificate as a client credential
+  (`tls: bad certificate`) because that one is `extendedKeyUsage=serverAuth`. Rather than widen the
+  server certificate, `gen-buildkit-mtls-certs.mjs` issues a third `clientAuth` certificate held only
+  by the broker, so the key that proves the broker's identity to sandboxes still cannot submit builds.
+- **`buildctl` needs a writable Docker config directory.** It writes registry auth before resolving
+  `FROM`, and with `DOCKER_CONFIG` and `HOME` unset it tries to create `/.docker` and dies at "load
+  metadata" with `permission denied`. The `awx-docker` shim points `DOCKER_CONFIG` at the run's own
+  workspace.
+
+**Known limitation, deliberately not hidden:** the broker is **shared across runs**, so its build
+cache is a cross-run channel. The per-run boundary the sandbox enforces does not extend to it. That
+is why it is opt-in; per-run builders would close it and are tracked as issue #761.
+
+### How the preview hop was verified
+
+The preview chain has two hops, and they were proven separately rather than as one run, so it is
+worth being precise about which evidence covers which:
+
+- **App → forwarder.** The app binds `127.0.0.1` only; a fetch of that loopback address from inside
+  the sandbox returns the app's own payload. The forwarder reaches it because both containers of the
+  run's pod share one network namespace — the same property the exec sidecar relies on.
+- **Gateway → pod.** A request to `https://<name>.<zone>/` through `agentweaver-preview-gateway`
+  returns **HTTP 200** with the expected body: real DNS-free SNI to the gateway's public address,
+  real TLS termination against the zone wildcard certificate, a matched `HTTPRoute`, and a routed
+  backend.
+
+What has *not* been captured as a single end-to-end transcript is one run doing both at once. The
+forwarder itself is unchanged by this work, so nothing here alters that hop; it is called out so the
+evidence is not read as more than it is.
+
+### winget
+
+`winget` is the Windows Package Manager, and the sandbox is a Linux container inside a **Linux** Kata
+VM, so it cannot execute there — not with an added capability, a mount, or a policy change. The
+contract reports `winget_install` as `UnsupportedOnPlatform` with the remediation "use `apt-get` for
+Linux runs, or a Windows executor backend", so callers get a machine-readable *no with a reason*
+rather than a silent omission or a mysterious failure. A Windows executor backend is **out of scope
+here and deferred** to issue #760. The state is deliberately distinct from `Unavailable`: no
+redeployment of the Linux executor will ever change it.
+
 ## Security invariants
 
 - The orchestration graph, HITL decisions, and run record live in the **worker**, never in the pod — a
@@ -794,6 +980,11 @@ To rebuild pod-per-run from these ideas:
 - The pod is **disposable and re-creatable**: durable state lives in the shared workspace volume and the
   brokered checkpoint, so killing a pod loses no run.
 - The whole capability is **reversible by a single flag** (`Sandbox:AgentExecutionMode=in-api`).
+- A run that installs system packages does so into a **per-run, RAM-backed, disposable** system
+  root; the pod's privilege envelope is unchanged, and nothing installed is visible to another run,
+  to the AgentHost container, or to the node.
+- Container image builds are **never** performed inside the sandbox pod, because the privileges
+  BuildKit needs would let the builder cross the run boundary inside the shared Kata VM.
 
 ## Orphaned-pod reaper and Kubernetes-owned admission
 

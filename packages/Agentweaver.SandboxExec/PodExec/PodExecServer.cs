@@ -161,6 +161,9 @@ public sealed class PodExecServer : IAsyncDisposable
                 case PodExecOps.Stop:
                     await HandleStopAsync(request, writer, ct).ConfigureAwait(false);
                     break;
+                case PodExecOps.Capabilities:
+                    await HandleCapabilitiesAsync(writer, ct).ConfigureAwait(false);
+                    break;
                 default:
                     await WriteAsync(writer, Error($"Unknown executor op '{request.Op}'."), ct)
                         .ConfigureAwait(false);
@@ -236,6 +239,39 @@ public sealed class PodExecServer : IAsyncDisposable
                 Ok = ok,
                 Detail = string.Join("; ", details),
                 Message = _executor.BackendName,
+            },
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Publishes the executor's capability contract: what a run can actually do here, and for
+    /// everything it cannot, why and what would change it. Callers use this instead of discovering
+    /// an unsupported operation halfway through a task — notably winget, which cannot run on a
+    /// Linux executor at all and needs a Windows executor backend.
+    /// </summary>
+    private async Task HandleCapabilitiesAsync(StreamWriter writer, CancellationToken ct)
+    {
+        var capabilities = (_executor as KataBwrapExecutor)?.DescribeCapabilities()
+            ?? SandboxCapabilityProbe.Describe(
+                _executor.BackendName,
+                writableSystemRootAvailable: false);
+
+        await WriteAsync(
+            writer,
+            new PodExecFrame
+            {
+                Type = PodExecFrameTypes.Capabilities,
+                Ok = true,
+                Message = _executor.BackendName,
+                Capabilities = capabilities
+                    .Select(capability => new PodExecCapability
+                    {
+                        Id = capability.Id,
+                        State = capability.State.ToString(),
+                        Detail = capability.Detail,
+                        Remediation = capability.Remediation,
+                    })
+                    .ToList(),
             },
             ct).ConfigureAwait(false);
     }

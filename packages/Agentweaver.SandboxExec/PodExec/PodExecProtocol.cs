@@ -21,6 +21,7 @@ public static class PodExecOps
     public const string Spawn = "spawn";
     public const string Ports = "ports";
     public const string Stop = "stop";
+    public const string Capabilities = "capabilities";
 }
 
 /// <summary>Frame type discriminators emitted by <see cref="PodExecServer"/>.</summary>
@@ -35,6 +36,16 @@ public static class PodExecFrameTypes
     public const string Ports = "ports";
     public const string Probe = "probe";
     public const string Error = "error";
+    public const string Capabilities = "capabilities";
+}
+
+/// <summary>One capability as reported over the executor protocol.</summary>
+public sealed record PodExecCapability
+{
+    public string Id { get; init; } = string.Empty;
+    public string State { get; init; } = string.Empty;
+    public string Detail { get; init; } = string.Empty;
+    public string? Remediation { get; init; }
 }
 
 /// <summary>A single executor-sidecar request.</summary>
@@ -77,6 +88,7 @@ public sealed record PodExecFrame
     public List<int>? Ports { get; init; }
     public bool Ok { get; init; }
     public string? Detail { get; init; }
+    public List<PodExecCapability>? Capabilities { get; init; }
 }
 
 /// <summary>Shared serialization settings — compact, camelCase, no indentation.</summary>

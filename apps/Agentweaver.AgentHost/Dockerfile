@@ -124,6 +124,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # comes from the sidecar container itself, because the kernel refuses a nested procfs mount
     # whenever the container runtime masks parts of /proc (which Kata and runc always do).
     bubblewrap \
+    # `unshare`/`nsenter` build and re-enter the per-run writable system root (see
+    # `sandbox/awx-run-root`), which is what lets a run apt-install packages without any of that
+    # reaching the image, the node, or another run.
+    util-linux \
     # Text editors
     vim \
     nano \
@@ -209,6 +213,56 @@ RUN echo "appuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/appuser \
     && chmod 0440 /etc/sudoers.d/appuser
 
 RUN mkdir -p /workspace /app/config /app/logs && chown -R 1000:1000 /workspace /app
+
+# ── Image builds via the external BuildKit broker ─────────────────────────────
+# Only the *client* lives here. buildkitd itself cannot run in this pod (it needs a mapped uid
+# range that a runAsNonRoot, no-capabilities container cannot create), so `docker build` inside a
+# run is translated by `awx-docker` into a buildctl call against the broker deployed from
+# k8s/optional/buildkit-broker.yaml. `docker` is a symlink because an agent reaches for `docker
+# build`, and a missing binary is indistinguishable from a broken image; the shim answers every
+# other subcommand with the reason it cannot work here.
+ARG BUILDCTL_VERSION=0.16.0
+RUN curl -fsSL "https://github.com/moby/buildkit/releases/download/v${BUILDCTL_VERSION}/buildkit-v${BUILDCTL_VERSION}.linux-amd64.tar.gz" \
+        | tar -xz -C /usr/local bin/buildctl \
+    && chmod 0755 /usr/local/bin/buildctl \
+    && buildctl --version
+COPY apps/Agentweaver.AgentHost/sandbox/awx-docker /usr/local/bin/awx-docker
+RUN chmod 0755 /usr/local/bin/awx-docker \
+    && ln -sf /usr/local/bin/awx-docker /usr/local/bin/docker
+
+# ── Per-run writable system root ──────────────────────────────────────────────
+# The executor sidecar runs as uid 1000 with no added capabilities, so a run can only write to
+# /usr, /etc and /var by overlaying them inside its own user namespace (`awx-run-root`).
+#
+# That user namespace can map exactly one id (mapping a range needs an effective CAP_SETUID, which
+# a runAsNonRoot + allowPrivilegeEscalation=false container cannot hold), so every file and
+# directory owned by *root* is unmapped inside it. Unmapped ownership is not merely unwritable:
+# overlayfs must copy a directory up before anything can be created in it, and copying up a
+# root-owned directory fails with EOVERFLOW because root has no representation in the namespace.
+# Directories under /usr and /var therefore have to belong to uid 1000 in the image for
+# `apt-get install` to work at all.
+#
+# This grants no new access to model-controlled code: the sandbox never sees the image's /usr and
+# /var directly — bubblewrap binds them read-only, or binds the per-run overlay whose writes land
+# on a tmpfs that is discarded with the run. Only file *contents* ownership is left untouched, so
+# the image stays a few hundred MB smaller than a recursive chown would make it.
+COPY apps/Agentweaver.AgentHost/sandbox/awx-run-root /usr/local/bin/awx-run-root
+COPY apps/Agentweaver.AgentHost/sandbox/awx-apt-predirs /usr/local/bin/awx-apt-predirs
+RUN chmod 0755 /usr/local/bin/awx-run-root /usr/local/bin/awx-apt-predirs \
+    && mkdir -p /var/lib/apt /var/lib/dpkg /var/cache/apt /var/log/apt /etc/apt/apt.conf.d \
+    # apt drops its own privileges to the `_apt` user before fetching, which needs setgroups(2) —
+    # denied in a user namespace. Without this an agent's plain `apt-get install` fails with a
+    # confusing permission error instead of installing. Nothing is granted by it: inside the sandbox
+    # "root" is the run's own id, mapped only within its namespace.
+    #
+    # The pre-install hook works around an overlayfs limitation that the kernel will not let an
+    # unprivileged user namespace lift; see `sandbox/awx-apt-predirs` for the full explanation.
+    && printf 'APT::Sandbox::User "root";\nDPkg::Pre-Install-Pkgs { "/usr/local/bin/awx-apt-predirs"; };\n' \
+        > /etc/apt/apt.conf.d/99-agentweaver-sandbox \
+    && touch /var/log/dpkg.log /var/log/alternatives.log /var/log/apt/term.log /var/log/apt/history.log \
+    && chown -R 1000:1000 /var/lib/apt /var/lib/dpkg /var/cache/apt /var/log/apt /etc/apt \
+    && chown 1000:1000 /var/log/dpkg.log /var/log/alternatives.log \
+    && find /usr /var -xdev -type d -exec chown 1000:1000 {} +
 
 # ── Sandbox tool manifest ─────────────────────────────────────────────────────
 # Baked at build time so agents can discover available tools without probing.

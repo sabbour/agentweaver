@@ -34,16 +34,32 @@ namespace Agentweaver.SandboxExec;
 /// from the sidecar container (a real, runtime-created PID namespace) and bubblewrap binds that
 /// container's own procfs, which contains only this run's executor processes.</para>
 /// </summary>
-public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
+public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar, IDisposable
 {
     private static readonly string[] SystemReadOnlyRoots = ["/usr", "/etc", "/opt"];
     private static readonly string[] PodPrivateReadWriteRoots = ["/tmp", "/var/tmp"];
+
+    /// <summary>System trees a run may write to when it owns a per-run writable system root.</summary>
+    private static readonly string[] WritableSystemRoots = ["/usr", "/etc", "/var"];
+
+    /// <summary>Default location of the mTLS material authorising build submission to the broker.</summary>
+    private const string DefaultImageBuildTlsDirectory = "/mnt/buildkit-client-tls";
+
+    /// <summary>At most this many runs may hold a writable system root at once (each costs tmpfs).</summary>
+    private const int MaxWritableSystemRoots = 8;
+
     private readonly ILogger? _logger;
     private readonly IReadOnlyList<string> _protectedRoots;
     private readonly ConcurrentDictionary<string, IReadOnlyList<MountSpec>> _trustedWorkspaces =
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _runtimeHomes =
         new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Process> _writableSystemRoots =
+        new(StringComparer.Ordinal);
+    private readonly bool _writableSystemRootEnabled;
+    private readonly string _writableSystemRootSize;
+    private readonly string? _imageBuildEndpoint;
+    private readonly string _imageBuildTlsDirectory;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kata-sidecar-bwrap-fs";
@@ -60,6 +76,59 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         _protectedRoots = (protectedRoots ?? ResolveProtectedRoots())
             .Select(Path.GetFullPath)
             .ToArray();
+        _writableSystemRootSize = ResolveWritableSystemRootSize();
+        _writableSystemRootEnabled = ResolveWritableSystemRootEnabled();
+        _imageBuildEndpoint = ResolveImageBuildEndpoint();
+        _imageBuildTlsDirectory = ResolveImageBuildTlsDirectory();
+    }
+
+    /// <summary>
+    /// The BuildKit broker this deployment delegates image builds to, or <c>null</c> when no broker
+    /// is configured. Nothing is inferred: a build is offered only when an operator has wired an
+    /// endpoint, so an unconfigured cluster reports the capability honestly instead of failing at
+    /// the moment a run tries to build.
+    /// </summary>
+    private static string? ResolveImageBuildEndpoint()
+    {
+        var configured = Environment.GetEnvironmentVariable("AGENTWEAVER_IMAGE_BUILD_ENDPOINT");
+        return string.IsNullOrWhiteSpace(configured) ? null : configured.Trim();
+    }
+
+    private static string ResolveImageBuildTlsDirectory()
+    {
+        var configured = Environment.GetEnvironmentVariable("AGENTWEAVER_IMAGE_BUILD_TLS_DIR");
+        return string.IsNullOrWhiteSpace(configured) ? DefaultImageBuildTlsDirectory : configured.Trim();
+    }
+
+    /// <summary>
+    /// The capability contract for this executor, measured on the live container: what a run can
+    /// actually do, and for everything it cannot do, why and what would change it.
+    /// </summary>
+    public IReadOnlyList<SandboxCapability> DescribeCapabilities() =>
+        SandboxCapabilityProbe.Describe(
+            BackendName,
+            _writableSystemRootEnabled,
+            _imageBuildEndpoint);
+
+    private static string ResolveWritableSystemRootSize()
+    {
+        var configured = Environment.GetEnvironmentVariable("AGENTWEAVER_EXEC_WRITABLE_ROOT_SIZE");
+        return string.IsNullOrWhiteSpace(configured) ? "1g" : configured.Trim();
+    }
+
+    private bool ResolveWritableSystemRootEnabled()
+    {
+        var configured = Environment.GetEnvironmentVariable("AGENTWEAVER_EXEC_WRITABLE_ROOT");
+        if (configured is "0" or "false" or "False")
+            return false;
+        if (!SandboxCapabilityProbe.ProbeWritableSystemRoot(out var detail))
+        {
+            _logger?.LogInformation(
+                "Per-run writable system roots are unavailable; package installs into /usr are not offered. {Detail}",
+                detail);
+            return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -424,14 +493,26 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 
         var mounts = BuildMountPlan(command);
         var environment = BuildChildEnvironment(command);
+        var runRootPid = EnsureWritableSystemRoot(command);
         var psi = new ProcessStartInfo
         {
-            FileName = "bwrap",
+            FileName = runRootPid is null ? "bwrap" : "nsenter",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+
+        if (runRootPid is not null)
+        {
+            // Join this run's own user + mount namespaces, where /usr and /var are overlays backed
+            // by a per-run tmpfs. --preserve-credentials keeps the sidecar's unprivileged uid on the
+            // way in; inside the namespace it is mapped to uid 0, which is what dpkg requires and
+            // which confers no privilege outside the namespace.
+            Add(psi,
+                "--target", runRootPid.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "--user", "--mount", "--preserve-credentials", "--", "bwrap");
+        }
 
         Add(psi,
             "--unshare-user",
@@ -449,8 +530,20 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         // masked-procfs container. The bound procfs only ever contains this run's sandbox processes.
         Add(psi, "--bind", "/proc", "/proc");
         Add(psi, "--dev", "/dev", "--tmpfs", "/run");
-        foreach (var root in SystemReadOnlyRoots.Where(Directory.Exists))
-            Add(psi, "--ro-bind", root, root);
+        if (runRootPid is null)
+        {
+            foreach (var root in SystemReadOnlyRoots.Where(Directory.Exists))
+                Add(psi, "--ro-bind", root, root);
+        }
+        else
+        {
+            // The writable trees are this run's private overlay/copy, not the image: writes are
+            // discarded when the run ends and are invisible to every other run.
+            foreach (var root in WritableSystemRoots.Where(Directory.Exists))
+                Add(psi, "--bind", root, root);
+            foreach (var root in SystemReadOnlyRoots.Except(WritableSystemRoots).Where(Directory.Exists))
+                Add(psi, "--ro-bind", root, root);
+        }
         Add(psi,
             "--symlink", "usr/bin", "/bin",
             "--symlink", "usr/lib", "/lib",
@@ -481,6 +574,137 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         return psi;
     }
 
+    /// <summary>
+    /// Returns the pid of this run's writable-system-root holder, starting it on first use, or
+    /// <c>null</c> when the feature is disabled or the holder cannot start. A failure is strictly
+    /// more restrictive than success — the command then runs against the image's read-only system
+    /// root exactly as before — so this path can never weaken isolation.
+    /// </summary>
+    private int? EnsureWritableSystemRoot(SandboxCommand command)
+    {
+        if (!_writableSystemRootEnabled || !OperatingSystem.IsLinux())
+            return null;
+
+        string runKey;
+        try
+        {
+            (runKey, _) = ResolveExecutionRegistration(command.WorkingDirectory);
+        }
+        catch (SandboxViolationException)
+        {
+            return null;
+        }
+
+        if (_writableSystemRoots.TryGetValue(runKey, out var existing))
+        {
+            if (!existing.HasExited)
+                return existing.Id;
+            _writableSystemRoots.TryRemove(new KeyValuePair<string, Process>(runKey, existing));
+            existing.Dispose();
+        }
+
+        if (_writableSystemRoots.Count >= MaxWritableSystemRoots)
+        {
+            _logger?.LogWarning(
+                "Not starting another per-run writable system root: {Count} are already held.",
+                _writableSystemRoots.Count);
+            return null;
+        }
+
+        var holder = StartWritableSystemRootHolder(runKey);
+        if (holder is null)
+            return null;
+        if (_writableSystemRoots.TryAdd(runKey, holder))
+            return holder.Id;
+
+        // Another exec of the same run won the race; keep one holder per run.
+        TerminateWritableSystemRoot(holder);
+        return _writableSystemRoots.TryGetValue(runKey, out var winner) && !winner.HasExited
+            ? winner.Id
+            : null;
+    }
+
+    private Process? StartWritableSystemRootHolder(string runKey)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = SandboxCapabilityProbe.RunRootHelperPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("hold");
+        psi.ArgumentList.Add(_writableSystemRootSize);
+
+        Process? holder = null;
+        try
+        {
+            holder = Process.Start(psi);
+            if (holder is null)
+                return null;
+
+            // The helper prints READY only after every mount succeeded; entering its namespaces
+            // before that would expose the image's read-only /usr and produce confusing failures.
+            var readyLine = holder.StandardOutput.ReadLineAsync();
+            var signalled = readyLine.Wait(TimeSpan.FromSeconds(30));
+            if (!signalled || !string.Equals(readyLine.Result?.Trim(), "READY", StringComparison.Ordinal)
+                || holder.HasExited)
+            {
+                var error = holder.HasExited ? holder.StandardError.ReadToEnd().Trim() : "timed out";
+                _logger?.LogWarning(
+                    "Per-run writable system root failed to start for {Run}: {Error}", runKey, error);
+                TerminateWritableSystemRoot(holder);
+                return null;
+            }
+
+            _logger?.LogInformation(
+                "Per-run writable system root ready for {Run} (pid {Pid}, tmpfs {Size}).",
+                runKey, holder.Id, _writableSystemRootSize);
+            return holder;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Per-run writable system root could not start for {Run}.", runKey);
+            if (holder is not null)
+                TerminateWritableSystemRoot(holder);
+            return null;
+        }
+    }
+
+    private static void TerminateWritableSystemRoot(Process holder)
+    {
+        try
+        {
+            // The holder execs `sleep` in place, so it has no children to walk — which matters
+            // because the Kata guest kernel does not expose /proc/<pid>/task/<pid>/children and the
+            // entire-process-tree kill path cannot be trusted here.
+            if (!holder.HasExited)
+                holder.Kill();
+        }
+        catch
+        {
+            // The holder is already gone; its namespaces and tmpfs died with it.
+        }
+        finally
+        {
+            holder.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Releases every per-run writable system root. Each holder's namespaces — and therefore the
+    /// tmpfs holding whatever the run installed — are destroyed with it.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var key in _writableSystemRoots.Keys.ToArray())
+        {
+            if (_writableSystemRoots.TryRemove(key, out var holder))
+                TerminateWritableSystemRoot(holder);
+        }
+    }
+
     internal IReadOnlyList<MountSpec> BuildMountPlan(SandboxCommand command)
     {
         var mounts = new List<MountSpec>();
@@ -500,6 +724,12 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         foreach (var mount in _trustedWorkspaces[trustedWorkspace])
             AddMount(mounts, mount.Source, mount.ReadOnly);
 
+        // The build client certificate is bound read-only when a broker is configured. It authorises
+        // build submission and nothing else — the broker holds no registry credentials — so a run
+        // reading it gains the ability to build, which is exactly the capability being offered.
+        if (_imageBuildEndpoint is not null && Directory.Exists(_imageBuildTlsDirectory))
+            AddMount(mounts, _imageBuildTlsDirectory, readOnly: true);
+
         return CollapseMounts(mounts);
     }
 
@@ -507,6 +737,17 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     {
         var (_, runtimeHome) = ResolveExecutionRegistration(command.WorkingDirectory);
         var environment = DefaultEnvironment(runtimeHome);
+
+        // Point buildctl (and the `docker` shim in front of it) at the broker. Set before the
+        // caller's own environment so a run can still override the endpoint for a local builder,
+        // and absent entirely when no broker is configured, which keeps `docker build` failing with
+        // the contract's explanation instead of a connection error.
+        if (_imageBuildEndpoint is not null)
+        {
+            environment["BUILDKIT_HOST"] = _imageBuildEndpoint;
+            environment["AGENTWEAVER_BUILDKIT_TLS_DIR"] = _imageBuildTlsDirectory;
+        }
+
         if (command.Environment is not null)
         {
             foreach (var pair in command.Environment)

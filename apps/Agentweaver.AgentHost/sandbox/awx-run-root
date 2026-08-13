@@ -1,0 +1,67 @@
+#!/bin/sh
+# awx-run-root — per-run writable system root for the Agentweaver executor sidecar.
+#
+# Model-controlled commands run inside a bubblewrap mount namespace whose /usr, /etc and /var come
+# from the read-only container image, so package managers that install into the system root
+# (apt-get, dpkg) cannot work. This helper gives one run — and only that run — a writable view of
+# those trees without adding a single pod-level privilege:
+#
+#   * it creates an unprivileged user namespace (the sandbox uid is mapped to uid 0 *inside* that
+#     namespace only; outside it is still the container's unprivileged uid),
+#   * it mounts a size-bounded tmpfs and layers /usr and /var as overlays whose upper directories
+#     live on that tmpfs, and copies /etc onto it,
+#   * it holds those namespaces open so every exec of the same run sees the same installed
+#     packages, and
+#   * it exits — discarding every byte written to the system root — when the run ends.
+#
+# No capability is added to the pod, no host path is mounted, and nothing written here is visible to
+# any other run, to the AgentHost container, or to the node. Overlay upper directories must live on
+# tmpfs: under Kata every persistent pod volume is virtiofs, which cannot back an overlay upper.
+#
+# usage: awx-run-root hold <tmpfs-size>      # prints READY on stdout, then blocks
+set -eu
+
+SIZE="${2:-1g}"
+
+hold_inner() {
+    mount -t tmpfs -o "size=$SIZE,mode=0755" tmpfs /mnt || {
+        echo "awx-run-root: tmpfs mount failed" >&2
+        exit 3
+    }
+    mkdir -p /mnt/usr/upper /mnt/usr/work /mnt/var/upper /mnt/var/work /mnt/etc
+
+    mount -t overlay awx-usr \
+        -o "lowerdir=/usr,upperdir=/mnt/usr/upper,workdir=/mnt/usr/work" /usr || {
+        echo "awx-run-root: /usr overlay failed" >&2
+        exit 4
+    }
+    mount -t overlay awx-var \
+        -o "lowerdir=/var,upperdir=/mnt/var/upper,workdir=/mnt/var/work" /var || {
+        echo "awx-run-root: /var overlay failed" >&2
+        exit 5
+    }
+    # /etc cannot be an overlay lowerdir here: the container runtime bind-mounts resolv.conf,
+    # hosts and hostname inside it and the kernel then refuses the overlay. A copy is cheap (a few
+    # MB) and keeps those runtime-provided files intact.
+    cp -a /etc/. /mnt/etc/ 2>/dev/null || true
+    mount --bind /mnt/etc /etc || {
+        echo "awx-run-root: /etc bind failed" >&2
+        exit 6
+    }
+
+    echo READY
+    exec sleep infinity
+}
+
+case "${1:-}" in
+    hold)
+        exec unshare --user --map-root-user --mount "$0" __hold_inner "$SIZE"
+        ;;
+    __hold_inner)
+        hold_inner
+        ;;
+    *)
+        echo "usage: awx-run-root hold <tmpfs-size>" >&2
+        exit 2
+        ;;
+esac

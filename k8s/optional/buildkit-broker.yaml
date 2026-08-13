@@ -1,0 +1,297 @@
+# Optional BuildKit broker for sandboxed image builds.
+#
+# Apply this only if runs need `docker build`. Nothing in the product requires it: when the
+# broker is absent the sandbox's `awx-docker` shim fails closed with an explanation, and
+# SandboxCapabilities reports image-build as RequiresExternalService rather than pretending
+# it works.
+#
+#   kubectl apply -f k8s/optional/buildkit-broker.yaml
+#
+# mTLS material must exist first (server cert in this namespace, client cert in the
+# agent-host namespace):
+#
+#   node scripts/azure/steps/gen-buildkit-mtls-certs.mjs
+#
+# ---------------------------------------------------------------------------------------
+# Why this shape - every line below was chosen against measured behaviour on real AKS Kata,
+# not from the upstream examples, which do not work here.
+#
+# Rootless BuildKit is structurally impossible under Kata. Rootless buildkitd needs
+# `newuidmap` to map a uid *range*; `newuidmap` is setuid-less and relies on file
+# capabilities, and the Kata guest filesystem rejects `security.capability` xattrs -
+# `setcap` returns "Not supported". Without a uid range runc cannot map gid 5 for devpts,
+# so the daemon never starts ("newuidmap: Could not set caps"). rootlesskit has no
+# single-id fallback either: it exits with "No subuid ranges found". Rootless does work on
+# ordinary AKS nodes, but only with seccomp *and* AppArmor Unconfined, which PodSecurity
+# `baseline` forbids and which would place an escape next to the API and worker pods on a
+# shared kernel.
+#
+# So the broker runs rootful inside its own Kata VM. That reads worse on paper and is
+# better in practice: the VM, not the container, is the boundary, and an escape lands in a
+# disposable guest with no service-account token, no PVC and no registry credentials.
+# It still runs unprivileged with RuntimeDefault seccomp - see the container comments.
+#
+# The broker is shared across runs, so it does NOT preserve the per-run boundary that the
+# sandbox itself enforces: two runs can observe each other through the build cache. That is
+# why it is opt-in and off by default. Per-run builders would fix it and are tracked
+# separately.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentweaver-build
+  labels:
+    app.kubernetes.io/part-of: agentweaver
+    # `restricted` cannot admit CAP_SYS_ADMIN and `baseline` forbids it too, so the broker
+    # needs its own namespace rather than sharing the agent-host's. Keeping it separate also
+    # keeps this relaxation away from the API, worker and agent-host pods.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentweaver-buildkit
+  namespace: agentweaver-build
+  labels:
+    app.kubernetes.io/name: agentweaver-buildkit
+    app.kubernetes.io/part-of: agentweaver
+# No RoleBinding anywhere: the broker never talks to the Kubernetes API.
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentweaver-buildkit
+  namespace: agentweaver-build
+  labels:
+    app.kubernetes.io/name: agentweaver-buildkit
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentweaver-buildkit
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentweaver-buildkit
+        app.kubernetes.io/part-of: agentweaver
+    spec:
+      # The broker executes untrusted Dockerfiles, so it gets the same VM isolation the
+      # sandbox gets. This is the property the whole design leans on.
+      runtimeClassName: kata-vm-isolation
+      nodeSelector:
+        kubernetes.azure.com/kata-vm-isolation: "true"
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: kata
+          effect: NoSchedule
+      serviceAccountName: agentweaver-buildkit
+      automountServiceAccountToken: false
+      containers:
+        - name: buildkitd
+          # Azure Policy (azurepolicy-k8sazurev2customcontainerallow) rejects upstream
+          # moby/buildkit, so the image is mirrored into the project registry. Import with:
+          #   az acr import --name <registry> --source docker.io/moby/buildkit:v0.16.0 \
+          #     --image moby/buildkit:v0.16.0
+          image: agentweaverasabbour.azurecr.io/moby/buildkit:v0.16.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Kubernetes mounts /sys/fs/cgroup read-only for every unprivileged
+              # container, and runc must create a cgroup per build step, so without this
+              # every RUN fails with
+              #   "unable to apply cgroup configuration: mkdir /sys/fs/cgroup/buildkit:
+              #    read-only file system".
+              # CAP_SYS_ADMIN makes the remount possible. Inside a Kata guest the tree
+              # being remounted is the VM's own, so this cannot touch the node's cgroups -
+              # which is precisely why this is acceptable here and would not be on a
+              # shared-kernel node.
+              mount -o remount,rw /sys/fs/cgroup
+              exec buildkitd \
+                --addr tcp://0.0.0.0:1234 \
+                --tlscacert /certs/ca.crt \
+                --tlscert /certs/tls.crt \
+                --tlskey /certs/tls.key \
+                --oci-worker-net host
+          securityContext:
+            # Measured, not assumed. A build needs exactly two capabilities beyond the
+            # default container set:
+            #   SYS_ADMIN - remount cgroup2 rw, and the mounts runc performs per step.
+            #   NET_ADMIN - runc attaches a BPF_CGROUP_DEVICE program for the cgroup v2
+            #               device controller, and the kernel gates BPF_PROG_QUERY on
+            #               CAP_NET_ADMIN. Without it every RUN fails with
+            #               "bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not
+            #               permitted". CAP_BPF does NOT substitute - that was tested.
+            # The rest are the standard container defaults, required only because runc
+            # cannot raise a build step's capabilities above this bounding set ("unable to
+            # apply caps: operation not permitted").
+            privileged: false
+            runAsUser: 0
+            capabilities:
+              drop: ["ALL"]
+              add:
+                - SYS_ADMIN
+                - NET_ADMIN
+                - SYS_CHROOT
+                - MKNOD
+                - SETUID
+                - SETGID
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+                - FSETID
+                - KILL
+                - SETPCAP
+                - SETFCAP
+                - NET_RAW
+                - NET_BIND_SERVICE
+                - AUDIT_WRITE
+            # Kept at RuntimeDefault deliberately: unlike the rootless-on-a-shared-node
+            # alternative, this design needs no seccomp or AppArmor relaxation at all.
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: buildkit
+              containerPort: 1234
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "6Gi"
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+            - name: buildkit-state
+              mountPath: /var/lib/buildkit
+            - name: buildkit-run
+              mountPath: /run/buildkit
+            - name: buildkit-tmp
+              mountPath: /tmp
+          readinessProbe:
+            # A real mTLS gRPC call, not a TCP check: buildkitd binds the port before its
+            # worker is usable, so "port open" would report ready too early. The probe uses
+            # its own clientAuth certificate (probe.crt) because the server certificate is
+            # serverAuth-only and buildkitd rejects it with "tls: bad certificate".
+            exec:
+              command:
+                - buildctl
+                - --addr
+                - tcp://127.0.0.1:1234
+                - --tlscacert
+                - /certs/ca.crt
+                - --tlscert
+                - /certs/probe.crt
+                - --tlskey
+                - /certs/probe.key
+                - --tlsservername
+                - agentweaver-buildkit
+                - debug
+                - workers
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+      volumes:
+        - name: certs
+          secret:
+            secretName: agentweaver-buildkit-server-tls
+            defaultMode: 0400
+        # tmpfs, not the default emptyDir, and this is load-bearing rather than a tuning
+        # choice. A default emptyDir in a Kata pod is virtiofs, which does not implement
+        # xattrs, so the OCI exporter fails at the very last step with
+        #   "failed to get xattr for /tmp/containerd-mount.../bin: operation not supported"
+        # after every layer has already been built. tmpfs lives in the guest and supports
+        # xattrs. The cost is that build state is RAM: sizeLimit is charged against the
+        # container's memory limit, so raise both together for larger builds.
+        - name: buildkit-state
+          emptyDir:
+            medium: Memory
+            sizeLimit: 3Gi
+        - name: buildkit-run
+          emptyDir: {}
+        - name: buildkit-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentweaver-buildkit
+  namespace: agentweaver-build
+  labels:
+    app.kubernetes.io/name: agentweaver-buildkit
+    app.kubernetes.io/part-of: agentweaver
+spec:
+  selector:
+    app.kubernetes.io/name: agentweaver-buildkit
+  ports:
+    - name: buildkit
+      port: 1234
+      targetPort: buildkit
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentweaver-buildkit-default-deny
+  namespace: agentweaver-build
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentweaver-buildkit
+  namespace: agentweaver-build
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agentweaver-buildkit
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # Only sandbox pods may submit builds, and only over mTLS. A client certificate is
+    # still required: this policy narrows who can reach the port, not who may use it.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentweaver
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: agent-host
+      ports:
+        - protocol: TCP
+          port: 1234
+  egress:
+    # DNS, then registries on 443 for FROM/RUN. Note the same caveat recorded in
+    # k8s/base/networkpolicy-agenthost-egress.yaml: NetworkPolicies union, so a broad
+    # policy elsewhere in this namespace would widen this. There is none today.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 443

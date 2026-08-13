@@ -34,9 +34,17 @@ const NAME = arg('name', 'agentweaver-katafix');
 const NOSIDECAR = `${NAME}-nosidecar`;
 const IMAGE = arg('image', null);
 const KEEP = process.argv.includes('--keep');
+// evidence = the isolation proofs; capability = the developer workloads the executor must
+// support (npm/NuGet/apt/BuildKit/preview); all = both, which is what a full review needs.
+const PHASE = arg('phase', 'all');
+const REUSE = arg('reuse', null);
 
 if (!IMAGE) {
   console.error('--image <registry>/agentweaver-agent-host:<tag> is required.');
+  process.exit(2);
+}
+if (!['evidence', 'capability', 'all'].includes(PHASE)) {
+  console.error(`--phase must be evidence|capability|all (got ${PHASE}).`);
   process.exit(2);
 }
 
@@ -136,6 +144,31 @@ function firstPod(name) {
 
 const created = [];
 
+const CAPABILITY_CASES = arg('cases',
+  'npm,nuget,apt,buildkit,preview,nested-userns').split(',').map((entry) => entry.trim()).filter(Boolean);
+
+// Streams a probe script into the pod and refuses to run a truncated copy.
+function copyScript(pod, fileName) {
+  const script = path.join(here, fileName);
+  const expectedBytes = fs.statSync(script).size;
+  kubectl(['exec', pod, '-c', 'agentweaver-agent-host', '--', 'mkdir', '-p', '/tmp/awx-evidence'], { check: true });
+  // `kubectl cp` cannot take a Windows absolute path (the drive colon is parsed as a pod
+  // separator), so stream the bytes through stdin instead — portable on every platform.
+  run('kubectl', ['-n', NAMESPACE, 'exec', '-i', pod, '-c', 'agentweaver-agent-host', '--',
+    'sh', '-c', `cat > /tmp/awx-evidence/${fileName}`],
+  { input: fs.readFileSync(script), check: true });
+  const copied = kubectl(['exec', pod, '-c', 'agentweaver-agent-host', '--',
+    'wc', '-c', `/tmp/awx-evidence/${fileName}`], { check: true });
+  const copiedBytes = Number.parseInt(copied.output.trim().split(/\s+/)[0], 10);
+  if (!Number.isFinite(copiedBytes) || Math.abs(copiedBytes - expectedBytes) > 64)
+    throw new Error(`${fileName} copy is not intact: ${copiedBytes} bytes in pod vs ${expectedBytes} locally`);
+}
+
+function runProbe(pod, fileName, probeCase) {
+  return kubectl(['exec', pod, '-c', 'agentweaver-agent-host', '--',
+    'node', `/tmp/awx-evidence/${fileName}`, probeCase]);
+}
+
 function apply(manifest, kind, name) {
   run('kubectl', ['-n', NAMESPACE, 'apply', '-f', '-'], { input: manifest, check: true });
   created.push([kind, name]);
@@ -145,18 +178,25 @@ try {
   section('0. Inputs');
   console.log(`namespace   : ${NAMESPACE}`);
   console.log(`image       : ${IMAGE}`);
+  console.log(`phase       : ${PHASE}`);
   kubectl(['get', 'nodes', '-o', 'custom-columns=NAME:.metadata.name,RUNTIME:.status.nodeInfo.containerRuntimeVersion,HANDLER:.metadata.labels.kubernetes\\.azure\\.com/kata-mshv-vm-isolation']);
 
-  section('1. Apply the reviewed manifest under a validation name');
-  apply(renderTemplate({ withSidecar: true }), 'sandboxtemplate', NAME);
-  apply(renderWarmPool(NAME, 2), 'sandboxwarmpool', NAME);
+  let pod = REUSE;
+  if (REUSE) {
+    section('1. Reusing an existing validation pod');
+    console.log(`pod         : ${REUSE}`);
+  } else {
+    section('1. Apply the reviewed manifest under a validation name');
+    apply(renderTemplate({ withSidecar: true }), 'sandboxtemplate', NAME);
+    apply(renderWarmPool(NAME, 2), 'sandboxwarmpool', NAME);
 
-  section('2. Warm-pool readiness (expect 2 pods, both containers ready)');
-  const pool = waitForReady(NAME, 2, 15 * 60 * 1000);
-  console.log(pool.lines.join('\n'));
-  if (!pool.ready) throw new Error('validation warm pool did not reach 2/2 ready');
+    section('2. Warm-pool readiness (expect 2 pods, both containers ready)');
+    const pool = waitForReady(NAME, 2, 15 * 60 * 1000);
+    console.log(pool.lines.join('\n'));
+    if (!pool.ready) throw new Error('validation warm pool did not reach 2/2 ready');
+    pod = firstPod(NAME);
+  }
 
-  const pod = firstPod(NAME);
   section(`3. Resolved image digest actually running in ${pod}`);
   kubectl(['get', 'pod', pod, '-o',
     'jsonpath={range .status.containerStatuses[*]}{.name}{"  "}{.image}{"  "}{.imageID}{"\\n"}{end}']);
@@ -167,46 +207,44 @@ try {
   kubectl(['get', 'pod', pod, '-o',
     'jsonpath={range .spec.containers[*]}{.name}: privileged={.securityContext.privileged} allowPrivilegeEscalation={.securityContext.allowPrivilegeEscalation} runAsNonRoot={.securityContext.runAsNonRoot} seccomp={.securityContext.seccompProfile.type} caps={.securityContext.capabilities}{"\\n"}{end}']);
 
-  section('5. Executor protocol evidence, collected from inside the pod');
-  const probeScript = path.join(here, 'kata-sidecar-probe.mjs');
-  const expectedBytes = fs.statSync(probeScript).size;
-  kubectl(['exec', pod, '-c', 'agentweaver-agent-host', '--', 'mkdir', '-p', '/tmp/awx-evidence'], { check: true });
-  // `kubectl cp` cannot take a Windows absolute path (the drive colon is parsed as a pod
-  // separator), so stream the bytes through stdin instead — portable on every platform.
-  run('kubectl', ['-n', NAMESPACE, 'exec', '-i', pod, '-c', 'agentweaver-agent-host', '--',
-    'sh', '-c', 'cat > /tmp/awx-evidence/kata-sidecar-probe.mjs'],
-  { input: fs.readFileSync(probeScript), check: true });
-  // The copy can still truncate silently; refuse to report evidence from a partial script.
-  const copied = kubectl(['exec', pod, '-c', 'agentweaver-agent-host', '--',
-    'wc', '-c', '/tmp/awx-evidence/kata-sidecar-probe.mjs'], { check: true });
-  const copiedBytes = Number.parseInt(copied.output.trim().split(/\s+/)[0], 10);
-  if (!Number.isFinite(copiedBytes) || Math.abs(copiedBytes - expectedBytes) > 64)
-    throw new Error(`probe script copy is not intact: ${copiedBytes} bytes in pod vs ${expectedBytes} locally`);
-
-  for (const evidenceCase of ['probe', 'coreclr', 'process', 'mount', 'procfs', 'argv', 'stdout', 'termination', 'limits']) {
-    section(`5.${evidenceCase}`);
-    kubectl(['exec', pod, '-c', 'agentweaver-agent-host', '--',
-      'node', '/tmp/awx-evidence/kata-sidecar-probe.mjs', evidenceCase]);
+  if (PHASE === 'evidence' || PHASE === 'all') {
+    section('5. Executor protocol evidence, collected from inside the pod');
+    copyScript(pod, 'kata-sidecar-probe.mjs');
+    for (const evidenceCase of ['probe', 'coreclr', 'process', 'mount', 'procfs', 'argv', 'stdout', 'termination', 'limits']) {
+      section(`5.${evidenceCase}`);
+      runProbe(pod, 'kata-sidecar-probe.mjs', evidenceCase);
+    }
   }
 
-  section('6. Fail-closed: the same manifest without the executor sidecar');
-  apply(renderTemplate({ withSidecar: false }), 'sandboxtemplate', NOSIDECAR);
-  apply(renderWarmPool(NOSIDECAR, 1), 'sandboxwarmpool', NOSIDECAR);
-  const failClosed = waitForReady(NOSIDECAR, 1, 4 * 60 * 1000);
-  console.log(failClosed.lines.join('\n'));
-  if (failClosed.ready) throw new Error('SECURITY REGRESSION: AgentHost became ready without the executor sidecar');
-  const failedPod = (podsFor(NOSIDECAR)[0] || '').split(/\s+/)[0];
-  if (failedPod) {
-    kubectl(['logs', failedPod, '--tail=8', '--all-containers'], { quiet: false });
-    kubectl(['get', 'pod', failedPod, '-o',
-      'jsonpath={range .status.containerStatuses[*]}{.name} exitCode={.state.terminated.exitCode} reason={.state.terminated.reason}{"\\n"}{end}']);
+  if (PHASE === 'capability' || PHASE === 'all') {
+    section('9. Developer-workload capability evidence (real network, real toolchains)');
+    copyScript(pod, 'kata-capability-probe.mjs');
+    for (const capabilityCase of CAPABILITY_CASES) {
+      section(`9.${capabilityCase}`);
+      runProbe(pod, 'kata-capability-probe.mjs', capabilityCase);
+    }
+  }
+
+  if (PHASE === 'evidence' || PHASE === 'all') {
+    section('6. Fail-closed: the same manifest without the executor sidecar');
+    apply(renderTemplate({ withSidecar: false }), 'sandboxtemplate', NOSIDECAR);
+    apply(renderWarmPool(NOSIDECAR, 1), 'sandboxwarmpool', NOSIDECAR);
+    const failClosed = waitForReady(NOSIDECAR, 1, 4 * 60 * 1000);
+    console.log(failClosed.lines.join('\n'));
+    if (failClosed.ready) throw new Error('SECURITY REGRESSION: AgentHost became ready without the executor sidecar');
+    const failedPod = (podsFor(NOSIDECAR)[0] || '').split(/\s+/)[0];
+    if (failedPod) {
+      kubectl(['logs', failedPod, '--tail=8', '--all-containers'], { quiet: false });
+      kubectl(['get', 'pod', failedPod, '-o',
+        'jsonpath={range .status.containerStatuses[*]}{.name} exitCode={.state.terminated.exitCode} reason={.state.terminated.reason}{"\\n"}{end}']);
+    }
   }
 
   section('7. Pod health after the evidence run');
-  console.log(podsFor(NAME).join('\n'));
+  console.log(podsFor(REUSE ? pod : NAME).join('\n'));
 } finally {
-  if (KEEP) {
-    console.log('\n--keep set: leaving validation objects in place. Delete them manually.');
+  if (KEEP || REUSE) {
+    console.log('\n--keep/--reuse set: leaving validation objects in place. Delete them manually.');
   } else {
     section('8. Cleanup (validation objects only)');
     for (const [kind, name] of created.reverse()) {

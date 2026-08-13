@@ -1,0 +1,32 @@
+#!/bin/sh
+# awx-apt-predirs — apt `DPkg::Pre-Install-Pkgs` hook for the per-run writable system root.
+#
+# dpkg installs a package's directories by extracting each one under a temporary `.dpkg-new` name
+# and renaming it into place. On an overlay mounted inside a user namespace that rename fails with
+# EXDEV ("Invalid cross-device link"): renaming a directory across overlay layers needs the
+# `redirect_dir` feature, and the kernel refuses `redirect_dir=on` for a mount whose user namespace
+# is not the initial one — which is exactly the mount a sandboxed run gets. Without this hook,
+# `apt-get install` downloads and unpacks correctly and then fails on the first directory.
+#
+# dpkg only performs that rename when the directory does not already exist. So this hook reads the
+# .deb files apt is about to install (apt writes their paths on stdin) and pre-creates their
+# directories, which is a plain mkdir in the overlay's upper layer and always succeeds.
+#
+# It creates directories and nothing else: no files are extracted, no package is configured, and no
+# privilege is involved beyond what the run already has inside its own namespace.
+set -u
+
+while IFS= read -r deb; do
+    case "$deb" in
+        '' | *[!!-~]*) continue ;;
+    esac
+    [ -f "$deb" ] || continue
+
+    dpkg-deb -c "$deb" 2>/dev/null \
+        | awk '$1 ~ /^d/ { sub(/^\.\//, "/", $6); if ($6 ~ /^\//) print $6 }' \
+        | while IFS= read -r directory; do
+            mkdir -p "$directory" 2>/dev/null || true
+        done
+done
+
+exit 0
