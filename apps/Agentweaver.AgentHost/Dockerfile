@@ -118,8 +118,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     psmisc \
     htop \
     tmux \
-    # Sandboxed command execution. Kata AgentHost startup probes bwrap and fails closed if the
-    # hardened security context cannot create its per-run mount namespace (#476).
+    # Sandboxed command execution. The executor sidecar (`--exec-agent`, same image) probes bwrap at
+    # startup and fails closed if the hardened security context cannot create its per-run mount
+    # namespace (#476). Note bubblewrap can only scope MOUNTS in-cluster: the PID/process boundary
+    # comes from the sidecar container itself, because the kernel refuses a nested procfs mount
+    # whenever the container runtime masks parts of /proc (which Kata and runc always do).
     bubblewrap \
     # Text editors
     vim \

@@ -10,11 +10,31 @@ using Microsoft.Extensions.Logging;
 namespace Agentweaver.SandboxExec;
 
 /// <summary>
-/// Executes commands in a private bubblewrap mount namespace inside the run's Kata VM.
-/// The Kata VM remains the pod boundary; bubblewrap removes the shared PVC root and binds
-/// only this run's declared roots into the child process namespace.
+/// Executes commands in a private bubblewrap mount namespace, running <b>inside the executor
+/// sidecar container</b> of the run's Kata pod (<see cref="PodExec.PodExecServer"/> is its only
+/// production caller).
+///
+/// Layered boundary:
+/// <list type="bullet">
+///   <item>the Kata VM isolates the pod from the node;</item>
+///   <item>the executor sidecar container supplies the PID namespace, the runtime-provided procfs,
+///     and a mount namespace that the AgentHost process never shares;</item>
+///   <item>bubblewrap removes the shared workspace PVC root and binds only this run's declared roots
+///     into every model-controlled child.</item>
+/// </list>
+///
+/// <para><b>Why no <c>--unshare-pid</c> / <c>--proc</c> here.</b> Mounting a fresh procfs inside an
+/// unprivileged user namespace requires a fully visible procfs. Every Kubernetes container runtime —
+/// including Kata's guest agent — masks <c>/proc/kcore</c>, <c>/proc/keys</c>, <c>/proc/timer_list</c>,
+/// <c>/proc/interrupts</c> and read-only-binds <c>/proc/bus|fs|irq|sys|sysrq-trigger</c>, so the kernel's
+/// <c>mount_too_revealing()</c> check refuses the mount with <c>EPERM</c>
+/// (<c>bwrap: Can't mount proc on /newroot/proc: Operation not permitted</c>). The only ways to make a
+/// nested procfs mount succeed are to unmask procfs, add <c>CAP_SYS_ADMIN</c>, or fabricate a
+/// synthetic <c>/proc</c> — all of which weaken the boundary. The process boundary is therefore taken
+/// from the sidecar container (a real, runtime-created PID namespace) and bubblewrap binds that
+/// container's own procfs, which contains only this run's executor processes.</para>
 /// </summary>
-public sealed class KataBwrapExecutor : ISandboxExecutor
+public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 {
     private static readonly string[] SystemReadOnlyRoots = ["/usr", "/etc", "/opt"];
     private static readonly string[] PodPrivateReadWriteRoots = ["/tmp", "/var/tmp"];
@@ -26,9 +46,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         new(StringComparer.Ordinal);
 
     public bool IsRealIsolation => true;
-    public string BackendName => "kata-bwrap-fs";
+    public string BackendName => "kata-sidecar-bwrap-fs";
     public string SelectionReason =>
-        "Kata VM plus a fail-closed bubblewrap mount namespace scoped to this run.";
+        "Kata VM, executor sidecar PID/mount namespace, and a fail-closed bubblewrap mount namespace scoped to this run.";
     public bool HasNetworkWarning => false;
     public string? NetworkWarningMessage => null;
 
@@ -46,6 +66,35 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
     /// Proves that the current Linux security context can create the mount namespace used by
     /// this executor. Production startup fails closed when this probe fails.
     /// </summary>
+    /// <remarks>
+    /// The probe intentionally mirrors the production argument shape, including the
+    /// <c>--bind /proc /proc</c> that replaced the previously-attempted private <c>--proc</c> mount
+    /// (see the type remarks: a nested procfs mount is refused by the kernel in every masked-procfs
+    /// container, which is what broke the Kata warm pool). It therefore fails for the same reasons a
+    /// real command would fail, rather than for a probe-only reason.
+    /// </remarks>
+    /// <summary>
+    /// The exact bubblewrap argument vector used by the startup availability probe. Exposed so tests
+    /// can assert that the probe and the real command path claim the same namespaces — a probe that
+    /// is weaker than execution would pass in CI and fail in production (v0.18.0), and a probe that
+    /// is stronger would refuse to start a perfectly safe pod.
+    /// </summary>
+    internal static string[] BuildAvailabilityProbeArguments() =>
+    [
+        "--unshare-user",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--die-with-parent",
+        "--bind", "/proc", "/proc",
+        "--ro-bind", "/usr", "/usr",
+        "--symlink", "usr/bin", "/bin",
+        "--symlink", "usr/lib", "/lib",
+        "--symlink", "usr/lib64", "/lib64",
+        "--symlink", "usr/sbin", "/sbin",
+        "--cap-drop", "ALL",
+        "--", "/bin/true",
+    ];
+
     public static bool TryProbeAvailability(out string reason)
     {
         if (!OperatingSystem.IsLinux())
@@ -53,9 +102,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             reason = "Kata bubblewrap isolation is supported only on Linux.";
             return false;
         }
-        if (!File.Exists("/usr/bin/setsid"))
+        if (!Directory.Exists("/proc/self"))
         {
-            reason = "Kata bubblewrap isolation requires /usr/bin/setsid.";
+            reason = "Kata bubblewrap isolation requires a mounted procfs.";
             return false;
         }
 
@@ -69,20 +118,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
-            foreach (var argument in new[]
-                     {
-                         "--unshare-user",
-                         "--unshare-pid",
-                         "--die-with-parent",
-                         "--proc", "/proc",
-                         "--ro-bind", "/usr", "/usr",
-                         "--symlink", "usr/bin", "/bin",
-                         "--symlink", "usr/lib", "/lib",
-                         "--symlink", "usr/lib64", "/lib64",
-                         "--symlink", "usr/sbin", "/sbin",
-                         "--cap-drop", "ALL",
-                         "--", "/bin/true",
-                     })
+            foreach (var argument in BuildAvailabilityProbeArguments())
             {
                 psi.ArgumentList.Add(argument);
             }
@@ -111,6 +147,24 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         {
             reason = $"bwrap mount-namespace probe failed: {ex.Message}";
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Returns this process's PID-namespace identity (<c>/proc/self/ns/pid</c>), or null when it
+    /// cannot be read. The executor sidecar and the AgentHost compare these values at startup so a
+    /// deployment that accidentally collapses the two into one PID namespace fails closed.
+    /// </summary>
+    public static string? TryReadPidNamespace()
+    {
+        try
+        {
+            var link = new FileInfo("/proc/self/ns/pid").LinkTarget;
+            return string.IsNullOrWhiteSpace(link) ? null : link;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -150,7 +204,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             NetworkEnabled: networkEnabled);
         var process = new Process
         {
-            StartInfo = BuildProcessStartInfo(command, reportChildPid: true),
+            StartInfo = BuildProcessStartInfo(command),
             EnableRaisingEvents = true,
         };
 
@@ -159,18 +213,21 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             if (!process.Start())
                 throw new InvalidOperationException("Failed to start bwrap.");
 
-            var sandboxInitPid = await ReadChildPidAsync(process.StandardOutput, ct)
-                .ConfigureAwait(false);
-            var workloadProcessGroupId = await ResolveWorkloadProcessGroupAsync(
-                    sandboxInitPid,
-                    ct)
-                .ConfigureAwait(false);
+            // The sandbox child is discovered through procfs parent pointers rather than
+            // bubblewrap's --info-fd: bubblewrap closes the info fd after setup, so reusing fd 1
+            // for it would leave the workload without a usable stdout (preview output would be
+            // lost with "write error: Bad file descriptor").
+            var (sandboxInitPid, workloadProcessGroupId) =
+                await ResolveSandboxProcessAsync(process, ct).ConfigureAwait(false);
             return new SupervisedProcess(process, sandboxInitPid, workloadProcessGroupId);
         }
         catch
         {
             try
             {
+                // Reap the sandbox group first: Process.Kill(entireProcessTree) walks
+                // /proc/<pid>/task/<pid>/children, which the Kata guest kernel does not provide.
+                TerminateProcessGroup(TryResolveSandboxProcessGroup(process.Id));
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
             }
@@ -263,6 +320,8 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         }
 
         Process? process = null;
+        Task<int>? sandboxProcessGroup = null;
+        var groupReaped = false;
         try
         {
             process = new Process
@@ -277,6 +336,13 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             if (!process.Start())
                 throw new InvalidOperationException("Failed to start bwrap.");
 
+            // Resolved while bwrap is alive: once it exits, the sandbox child is gone and the group
+            // can no longer be discovered, but daemonised grandchildren (build servers, watchers)
+            // would survive without an explicit process-group kill.
+            sandboxProcessGroup = Task.Run(
+                () => WaitForSandboxProcessGroup(process!, TimeSpan.FromSeconds(10)),
+                CancellationToken.None);
+
             const int stdoutCap = 4 * 1024 * 1024;
             const int stderrCap = 1 * 1024 * 1024;
             var stdoutTask = ReadBoundedAsync(process.StandardOutput, stdoutCap, cts.Token);
@@ -290,6 +356,17 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 throw;
+            }
+
+            // A command that daemonises a background process (build server, watcher) leaves that
+            // process holding the inherited stdout/stderr pipes, so draining below would block
+            // until it exits even though the command itself is finished. The run's process group
+            // is reaped here, before the drain, rather than only in `finally`.
+            if (sandboxProcessGroup is not null)
+            {
+                try { TerminateProcessGroup(await sandboxProcessGroup.ConfigureAwait(false)); }
+                catch { }
+                groupReaped = true;
             }
 
             var (stdout, stdoutTruncated) = await stdoutTask.ConfigureAwait(false);
@@ -315,6 +392,14 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         {
             if (process is not null && !process.HasExited)
                 try { process.Kill(entireProcessTree: true); } catch { }
+            // Reap anything the command daemonised inside the sandbox. Without a nested PID
+            // namespace nothing else collects those processes, so the run's process group is
+            // terminated explicitly. Skipped when the drain path already reaped it.
+            if (sandboxProcessGroup is not null && !groupReaped)
+            {
+                try { TerminateProcessGroup(sandboxProcessGroup.GetAwaiter().GetResult()); }
+                catch { }
+            }
             process?.Dispose();
         }
     }
@@ -332,9 +417,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
         yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, result.ExitCode.ToString());
     }
 
-    internal ProcessStartInfo BuildProcessStartInfo(
-        SandboxCommand command,
-        bool reportChildPid = false)
+    internal ProcessStartInfo BuildProcessStartInfo(SandboxCommand command)
     {
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException("Kata bubblewrap isolation requires Linux.");
@@ -352,19 +435,19 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
 
         Add(psi,
             "--unshare-user",
-            "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
             "--die-with-parent",
             "--new-session",
             "--cap-drop",
             "ALL");
-        if (reportChildPid)
-            Add(psi, "--info-fd", "1");
         if (!command.NetworkEnabled)
             Add(psi, "--unshare-net");
 
-        Add(psi, "--proc", "/proc");
+        // The executor sidecar container owns the PID namespace (see the type remarks); bind its
+        // runtime-provided procfs instead of mounting a nested one, which the kernel refuses in any
+        // masked-procfs container. The bound procfs only ever contains this run's sandbox processes.
+        Add(psi, "--bind", "/proc", "/proc");
         Add(psi, "--dev", "/dev", "--tmpfs", "/run");
         foreach (var root in SystemReadOnlyRoots.Where(Directory.Exists))
             Add(psi, "--ro-bind", root, root);
@@ -387,10 +470,11 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             Add(psi, "--setenv", pair.Key, pair.Value);
 
         Add(psi, "--chdir", Path.GetFullPath(command.WorkingDirectory));
-        if (reportChildPid)
-            Add(psi, "--", "/usr/bin/setsid", "/bin/bash", "-c", command.CommandLine);
-        else
-            Add(psi, "--", "/bin/bash", "-c", command.CommandLine);
+        // bwrap's own --new-session already puts the sandbox child in a fresh session and process
+        // group, so the workload must be exec'd directly: an extra /usr/bin/setsid would fork a
+        // grandchild whose pid bwrap never reports, and the Kata guest kernel has no
+        // /proc/<pid>/task/<pid>/children to walk.
+        Add(psi, "--", "/bin/bash", "-c", command.CommandLine);
 
         psi.Environment.Clear();
         psi.Environment["PATH"] = "/usr/local/bin:/usr/bin:/bin";
@@ -725,106 +809,157 @@ public sealed class KataBwrapExecutor : ISandboxExecutor
             psi.ArgumentList.Add(argument);
     }
 
-    internal static int ParseChildPid(string? info)
-    {
-        if (string.IsNullOrWhiteSpace(info))
-            throw new InvalidOperationException("bwrap did not report its sandbox child PID.");
-
-        try
-        {
-            using var document = JsonDocument.Parse(info);
-            if (document.RootElement.TryGetProperty("child-pid", out var childPid)
-                && childPid.TryGetInt32(out var pid)
-                && pid > 0)
-            {
-                return pid;
-            }
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException(
-                $"bwrap returned invalid child process metadata: {info}", ex);
-        }
-
-        throw new InvalidOperationException(
-            $"bwrap did not report a valid sandbox child PID: {info}");
-    }
-
-    private static async Task<int> ReadChildPidAsync(StreamReader reader, CancellationToken ct)
-    {
-        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        startupCts.CancelAfter(TimeSpan.FromSeconds(5));
-        var info = new StringBuilder();
-        while (info.Length < 16 * 1024)
-        {
-            var line = await reader.ReadLineAsync(startupCts.Token).ConfigureAwait(false);
-            if (line is null)
-                break;
-            info.AppendLine(line);
-
-            try
-            {
-                return ParseChildPid(info.ToString());
-            }
-            catch (InvalidOperationException ex) when (ex.InnerException is JsonException)
-            {
-                // --info-fd emits pretty-printed JSON; keep reading until the object is complete.
-            }
-        }
-
-        return ParseChildPid(info.ToString());
-    }
-
-    private static async Task<int> ResolveWorkloadProcessGroupAsync(
-        int sandboxInitPid,
+    /// <summary>
+    /// Resolves the sandbox child of a freshly started bwrap process and the process group that
+    /// owns every process inside that sandbox.
+    /// </summary>
+    /// <remarks>
+    /// This intentionally uses only procfs parent pointers:
+    /// <c>/proc/&lt;pid&gt;/task/&lt;pid&gt;/children</c> is absent on the Kata guest kernel, and
+    /// bubblewrap's <c>--info-fd</c> would have to consume the workload's stdout. Fails closed if
+    /// the sandbox never appears or would resolve to the executor's own process group.
+    /// </remarks>
+    private static async Task<(int SandboxPid, int ProcessGroupId)> ResolveSandboxProcessAsync(
+        Process bwrap,
         CancellationToken ct)
     {
         using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        startupCts.CancelAfter(TimeSpan.FromSeconds(5));
-        var childrenPath = $"/proc/{sandboxInitPid}/task/{sandboxInitPid}/children";
+        startupCts.CancelAfter(TimeSpan.FromSeconds(10));
+        var ownProcessGroupId = TryReadProcessGroupId(Environment.ProcessId);
         while (true)
         {
             startupCts.Token.ThrowIfCancellationRequested();
-            try
+            if (bwrap.HasExited)
             {
-                var child = File.ReadAllText(childrenPath)
-                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(value => int.TryParse(value, out var pid) ? pid : 0)
-                    .FirstOrDefault(pid => pid > 0);
-                if (child > 0 && IsProcessGroupLeader(child))
-                    return child;
+                throw new InvalidOperationException(
+                    $"bwrap exited with code {bwrap.ExitCode} before its sandbox child appeared.");
             }
-            catch (IOException)
+
+            var sandboxPid = TryFindChildProcess(bwrap.Id);
+            if (sandboxPid > 0)
             {
-                // The bwrap init process may not have forked the workload yet.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // Retry until the startup deadline; production startup is fail-closed.
+                var processGroupId = TryReadProcessGroupId(sandboxPid);
+                if (processGroupId > 0)
+                {
+                    if (processGroupId == ownProcessGroupId)
+                    {
+                        throw new InvalidOperationException(
+                            $"bwrap sandbox child {sandboxPid} shares the executor's process group "
+                            + $"{processGroupId}; refusing to supervise it.");
+                    }
+
+                    return (sandboxPid, processGroupId);
+                }
             }
 
             await Task.Delay(10, startupCts.Token).ConfigureAwait(false);
         }
     }
 
-    private static bool IsProcessGroupLeader(int pid)
+    /// <summary>
+    /// Finds the sandbox child of a running bwrap process by scanning procfs parent pointers.
+    /// bwrap forks exactly one child, and <c>--new-session</c> makes that child its own
+    /// process-group leader, so this yields the process group that owns every sandboxed process.
+    /// </summary>
+    private static int TryResolveSandboxProcessGroup(int bwrapPid) =>
+        TryReadProcessGroupId(TryFindChildProcess(bwrapPid));
+
+    /// <summary>
+    /// Polls until bubblewrap's sandbox child exists (it is forked a few milliseconds after
+    /// bubblewrap starts) and returns the process group that owns the sandbox, or 0 if the command
+    /// finished before the child could be observed.
+    /// </summary>
+    private static int WaitForSandboxProcessGroup(Process bwrap, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var processGroupId = TryResolveSandboxProcessGroup(bwrap.Id);
+            if (processGroupId > 0)
+                return processGroupId;
+            if (bwrap.HasExited)
+                return 0;
+            Thread.Sleep(5);
+        }
+
+        return 0;
+    }
+
+    private static int TryFindChildProcess(int parentPid)
+    {
+        if (parentPid <= 0 || !OperatingSystem.IsLinux())
+            return 0;
+        try
+        {
+            foreach (var directory in Directory.EnumerateDirectories("/proc"))
+            {
+                var name = Path.GetFileName(directory);
+                if (!int.TryParse(name, out var pid) || pid <= 0)
+                    continue;
+                var fields = TryReadStatFields(pid);
+                if (fields is null || fields.Length < 3)
+                    continue;
+                // stat fields after the comm field: state, ppid, pgrp, session, ...
+                if (int.TryParse(fields[1], out var candidateParent) && candidateParent == parentPid)
+                    return pid;
+            }
+        }
+        catch (IOException)
+        {
+            // Best-effort discovery; callers fail closed or fall back to killing bwrap itself.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        return 0;
+    }
+
+    private static int TryReadProcessGroupId(int pid)
+    {
+        if (pid <= 0)
+            return 0;
+        var fields = TryReadStatFields(pid);
+        if (fields is null || fields.Length < 3)
+            return 0;
+        return int.TryParse(fields[2], out var processGroupId) ? processGroupId : 0;
+    }
+
+    private static string[]? TryReadStatFields(int pid)
     {
         try
         {
             var stat = File.ReadAllText($"/proc/{pid}/stat");
             var commandEnd = stat.LastIndexOf(')');
             if (commandEnd < 0 || commandEnd + 2 >= stat.Length)
-                return false;
-            var fields = stat[(commandEnd + 1)..]
+                return null;
+            return stat[(commandEnd + 1)..]
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            return fields.Length > 2
-                && int.TryParse(fields[2], out var processGroupId)
-                && processGroupId == pid;
         }
-        catch
+        catch (IOException)
         {
-            return false;
+            return null;
         }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Terminates a sandbox process group after its command finished. Nothing else reaps
+    /// processes the command daemonised, because the sandbox deliberately does not claim a PID
+    /// namespace of its own (see the type remarks).
+    /// </summary>
+    private static void TerminateProcessGroup(int processGroupId)
+    {
+        if (processGroupId <= 0 || !OperatingSystem.IsLinux())
+            return;
+        if (processGroupId == TryReadProcessGroupId(Environment.ProcessId))
+            return;
+        PodExec.PodExecSignals.SendProcessGroupSignal(processGroupId, "TERM");
+        Thread.Sleep(200);
+        PodExec.PodExecSignals.SendProcessGroupSignal(processGroupId, "KILL");
     }
 
     private static async Task<(string Output, bool Truncated)> ReadBoundedAsync(

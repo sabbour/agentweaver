@@ -28,7 +28,7 @@ internal sealed class PodLocalWorkspaceManager
 
     private readonly AgentHostOptions _options;
     private readonly ILogger<PodLocalWorkspaceManager> _logger;
-    private readonly KataBwrapExecutor? _kataExecutor;
+    private readonly IRunWorkspaceRegistrar? _workspaceRegistrar;
     private PreparedWorkspace? _preparedWorkspace;
     private string? _agentScratchPath;
     private string? _fallbackWorkspacePath;
@@ -40,7 +40,7 @@ internal sealed class PodLocalWorkspaceManager
     {
         _options = options.Value;
         _logger = logger;
-        _kataExecutor = sandboxExecutor as KataBwrapExecutor;
+        _workspaceRegistrar = sandboxExecutor as IRunWorkspaceRegistrar;
     }
 
     public async Task<PreparedWorkspace> PrepareAsync(
@@ -543,7 +543,7 @@ internal sealed class PodLocalWorkspaceManager
         foreach (var path in new[] { home, cache, data, config })
             Directory.CreateDirectory(path);
 
-        _kataExecutor?.RegisterRuntimeHome(workspace, home);
+        _workspaceRegistrar?.RegisterRuntimeHome(workspace, home);
         Environment.SetEnvironmentVariable("HOME", home);
         Environment.SetEnvironmentVariable("XDG_CACHE_HOME", cache);
         Environment.SetEnvironmentVariable("XDG_DATA_HOME", data);
