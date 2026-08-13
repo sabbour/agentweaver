@@ -247,7 +247,15 @@
 # writing this was in exactly that state, with `podTemplate.metadata` carrying labels only.
 - op: add
   path: /spec/podTemplate/metadata/annotations/azure.workload.identity~1skip-containers
-  value: "agentweaver-exec,buildkitd"
+  # Semicolon-separated, NOT comma: the azure-workload-identity webhook (verified against
+  # v1.5.1) parses this value as one opaque semicolon-delimited list. A comma here is a
+  # silent no-op — it does not skip either name, and BOTH agentweaver-exec and buildkitd get
+  # the projected AAD federated-identity token volume + AZURE_* env anyway. Confirmed live on
+  # the AKS cluster: `kubectl exec -c buildkitd -- env | grep AZURE_` showed
+  # AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_FEDERATED_TOKEN_FILE populated, and the token file
+  # under /var/run/secrets/azure/tokens/ was present and readable, with the comma-separated
+  # value in place.
+  value: "agentweaver-exec;buildkitd"
 # Both of these MUST be tmpfs. A default emptyDir in a Kata pod is virtiofs, which does not
 # support xattrs, so every layer builds and then the OCI export dies with
 # "failed to get xattr ... operation not supported" (measured). Cost: build state is RAM,

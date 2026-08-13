@@ -85,6 +85,10 @@ function renderTemplate({ withSidecar, withBuilder = false }) {
   const objects = document.split(/^---$/m).map((part) => part.trim()).filter(Boolean);
   let template = objects[objects.length - 1]
     .replace(/^(metadata:\n(?:.*\n)*?  name: )agentweaver-agent-host$/m, `$1${withSidecar ? NAME : NOSIDECAR}`)
+    // The shipped template hardcodes `namespace: agentweaver`; rewrite it so `--namespace`
+    // actually targets a non-default (e.g. validation-only, elevated-PSA) namespace instead
+    // of silently colliding with `kubectl -n <NAMESPACE>` on apply.
+    .replace(/^(  namespace: )agentweaver$/m, `$1${NAMESPACE}`)
     .replace(/image: \S+agentweaver-agent-host:\S+/g, `image: ${IMAGE}`);
 
   // The image-build capability only exists when the optional builder sidecar is patched in.

@@ -1006,10 +1006,17 @@ offered as a flag.
 
 `buildkitd` is added to `azure.workload.identity/skip-containers` and mounts an empty `emptyDir`
 over `/var/run/secrets/kubernetes.io/serviceaccount`, exactly as the executor sidecar already does.
-Measured in the builder container: the service-account directory contains only `.` and `..`, no
-`token` file exists, and `env | grep -c ^AZURE_` returns `0`. The socket it publishes is
-`srw-rw---- root 1000`, which is what lets the uid-1000 sandbox container connect without granting
-it anything else.
+The annotation value must be **semicolon**-separated (`agentweaver-exec;buildkitd`) — the deployed
+azure-workload-identity webhook (measured at image tag `v1.5.1-17`) parses `skip-containers` as one
+semicolon-delimited list, so a comma-joined value matches neither container name and the webhook
+silently injects the federated token into both anyway. This was caught live on AKS Kata (SHA
+`04b3fdc6`): with the comma-joined value in place, `kubectl exec -c buildkitd -- env | grep -c
+^AZURE_` returned `4` and `/var/run/secrets/azure/tokens/azure-identity-token` existed and was
+readable — a real credential leak into the builder, and into `agentweaver-exec` as well. Measured
+in the builder container after the fix: the service-account directory contains only `.` and `..`,
+no `token` file exists, `/var/run/secrets/azure/tokens/` does not exist, and `env | grep -c
+^AZURE_` returns `0`. The socket it publishes is `srw-rw---- root 1000`, which is what lets the
+uid-1000 sandbox container connect without granting it anything else.
 
 #### What was measured, and the trade-off
 

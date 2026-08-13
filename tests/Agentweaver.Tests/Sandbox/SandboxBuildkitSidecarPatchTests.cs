@@ -152,9 +152,20 @@ public sealed class SandboxBuildkitSidecarPatchTests
 
     /// <summary>
     /// The builder must hold no cluster or cloud identity, for the same reason the executor sidecar
-    /// does not: it runs code that untrusted input reaches. Verified on-cluster — the
-    /// service-account directory contains only <c>.</c> and <c>..</c>, and <c>env | grep -c ^AZURE_</c>
-    /// returns 0.
+    /// does not: it runs code that untrusted input reaches. Verified live on AKS Kata (SHA
+    /// 04b3fdc6): with the value comma-separated, <c>kubectl exec -c buildkitd -- env | grep -c
+    /// ^AZURE_</c> returned 4 (AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_AUTHORITY_HOST/
+    /// AZURE_FEDERATED_TOKEN_FILE) and the federated token file under
+    /// <c>/var/run/secrets/azure/tokens/</c> existed and was readable in BOTH buildkitd and
+    /// agentweaver-exec — a real workload-identity credential leak into the builder. The
+    /// azure-workload-identity webhook (measured at image tag v1.5.1-17) parses
+    /// <c>skip-containers</c> as a single semicolon-delimited list per
+    /// https://azure.github.io/azure-workload-identity/docs/topics/service-account-labels-and-annotations.html —
+    /// a comma-joined value matches neither name, so the webhook silently injects the token into
+    /// both containers anyway. Re-verified after switching to a semicolon: `env | grep -c ^AZURE_`
+    /// is 0 and the token directory does not exist in either sidecar, while the main
+    /// agentweaver-agent-host container (which legitimately needs Key Vault access) still gets 6
+    /// AZURE_* vars.
     /// </summary>
     [Fact]
     public void Patch_LeavesTheBuilderWithoutAServiceAccountTokenOrWorkloadIdentity()
@@ -164,7 +175,11 @@ public sealed class SandboxBuildkitSidecarPatchTests
         body.Should().Contain("/var/run/secrets/kubernetes.io/serviceaccount");
         body.Should().Contain("name: exec-no-serviceaccount");
         body.Should().Contain("azure.workload.identity~1skip-containers");
-        body.Should().Contain("agentweaver-exec,buildkitd");
+        body.Should().Contain("agentweaver-exec;buildkitd");
+
+        // A comma here is a silent no-op (the webhook only understands `;`-separated lists), so
+        // guard against the exact regression this file previously shipped.
+        body.Should().NotContain("agentweaver-exec,buildkitd");
     }
 
     /// <summary>
