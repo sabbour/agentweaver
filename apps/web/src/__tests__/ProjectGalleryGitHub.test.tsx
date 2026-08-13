@@ -131,7 +131,8 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeDefined();
   });
 
-  it('lists repositories across linked GitHub accounts when the cross-account fetch succeeds', async () => {
+  it('defaults to the is_default account and filters repo list to that account on open', async () => {
+    // LINKED_ACCOUNT (octocat) is is_default=true; ALT_LINKED_ACCOUNT (altcat) is not.
     vi.mocked(apiClient.listAccessibleGitHubRepos).mockResolvedValue([
       { ...REPO, source_login: 'octocat', source_is_default: true },
       { ...REPO_B, source_login: 'altcat', source_is_default: false },
@@ -141,15 +142,61 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
 
     await waitFor(() => expect(apiClient.listAccessibleGitHubRepos).toHaveBeenCalled());
     expect(screen.queryByText(/Connect your GitHub account/)).toBeNull();
+
+    // Helper text reflects active account filter.
     await waitFor(() =>
-      expect(screen.getByText((content) => content.includes('Showing repositories reachable across all linked GitHub accounts.'))).toBeDefined(),
+      expect(screen.getAllByText((content) => content.includes('Showing repositories reachable via @octocat')).length).toBeGreaterThan(0),
     );
 
-    // Opening the repo combobox surfaces the fetched repo with an owner/repo label plus source account.
+    // Opening the repo combobox shows only octocat repos (altcat filtered out by default).
     fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
     await waitFor(() => expect(screen.getAllByText('octocat / hello-world').length).toBeGreaterThan(0));
     expect(screen.getAllByText(/via @octocat/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/via @altcat/i)).toBeNull();
+  });
+
+  it('clicking an account in the linked-accounts list deselects current and shows all repos', async () => {
+    vi.mocked(apiClient.listAccessibleGitHubRepos).mockResolvedValue([
+      { ...REPO, source_login: 'octocat', source_is_default: true },
+      { ...REPO_B, source_login: 'altcat', source_is_default: false },
+    ] as never);
+
+    await openGitHubDialog();
+    await waitFor(() => expect(apiClient.listAccessibleGitHubRepos).toHaveBeenCalled());
+
+    // Clicking the already-selected default account (octocat) deselects it → show all.
+    const octocatRow = await screen.findByRole('button', { name: /octocat/i });
+    fireEvent.click(octocatRow);
+
+    await waitFor(() =>
+      expect(screen.getAllByText((content) => content.includes('Showing repositories reachable across all linked GitHub accounts.')).length).toBeGreaterThan(0),
+    );
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
+    await waitFor(() => expect(screen.getAllByText('octocat / hello-world').length).toBeGreaterThan(0));
     expect(screen.getAllByText(/via @altcat/i).length).toBeGreaterThan(0);
+  });
+
+  it('clicking a non-default account switches the repo filter to that account', async () => {
+    vi.mocked(apiClient.listAccessibleGitHubRepos).mockResolvedValue([
+      { ...REPO, source_login: 'octocat', source_is_default: true },
+      { ...REPO_B, source_login: 'altcat', source_is_default: false },
+    ] as never);
+
+    await openGitHubDialog();
+    await waitFor(() => expect(apiClient.listAccessibleGitHubRepos).toHaveBeenCalled());
+
+    // Click altcat account row to switch filter.
+    const altcatRow = await screen.findByRole('button', { name: /altcat/i });
+    fireEvent.click(altcatRow);
+
+    await waitFor(() =>
+      expect(screen.getAllByText((content) => content.includes('Showing repositories reachable via @altcat')).length).toBeGreaterThan(0),
+    );
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
+    await waitFor(() => expect(screen.getAllByText('octocat / aardvark').length).toBeGreaterThan(0));
+    expect(screen.queryByText('octocat / hello-world')).toBeNull();
   });
 
   it('does not render the repo description in the dropdown', async () => {
@@ -165,10 +212,11 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     expect(screen.queryByText('A sample repo')).toBeNull();
   });
 
-  it('sorts repos alphabetically by name (case-insensitive)', async () => {
+  it('sorts repos alphabetically by name (case-insensitive) within the active account filter', async () => {
     vi.mocked(apiClient.listAccessibleGitHubRepos).mockResolvedValue([
       { ...REPO_C, source_login: 'octocat', source_is_default: true },
       { ...REPO, source_login: 'octocat', source_is_default: true },
+      // REPO_B is from altcat — filtered out by the default octocat selection.
       { ...REPO_B, source_login: 'altcat', source_is_default: false },
     ] as never);
 
@@ -177,11 +225,12 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.listAccessibleGitHubRepos).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
 
-    await waitFor(() => expect(screen.getAllByText('octocat / aardvark').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('octocat / hello-world').length).toBeGreaterThan(0));
 
+    // Only octocat repos visible (altcat filtered by default selection).
     const options = screen.getAllByRole('option');
     const labels = options.map(o => o.textContent);
-    expect(labels).toEqual(['GHoctocat / aardvarkvia @altcat', 'GHoctocat / hello-worldvia @octocat', 'GHoctocat / zebravia @octocat']);
+    expect(labels).toEqual(['GHoctocat / hello-worldvia @octocat', 'GHoctocat / zebravia @octocat']);
   });
 
   it('still submits a manually typed owner/repo when repo browsing fails but a linked account exists', async () => {

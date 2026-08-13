@@ -608,7 +608,8 @@ function useGitHubData(open: boolean) {
           source_is_default: repo.source_is_default,
         })));
         setCrossAccount(true);
-        setSelectedAccount(null);
+        // Do NOT reset selectedAccount — keep the default/chosen account so the
+        // client-side filter in filteredRepos can apply immediately.
       } catch (err: unknown) {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
@@ -760,7 +761,9 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         </Combobox>
         <Text className={styles.tipLine}>
           {crossAccount
-            ? 'Browsing repositories reachable across all linked GitHub accounts. Start typing to narrow the list.'
+            ? selectedAccount
+              ? `Showing repositories reachable via @${selectedAccount.login}. Start typing to narrow the list.`
+              : 'Showing repositories reachable across all linked GitHub accounts. Start typing to narrow the list.'
             : 'Start typing to search any owner/repository on GitHub. Import succeeds only if one of your linked GitHub identities can actually access it.'}
         </Text>
       </div>
