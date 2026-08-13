@@ -74,7 +74,8 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 
     public KataBwrapExecutor(
         ILogger? logger = null,
-        IReadOnlyList<string>? protectedRoots = null)
+        IReadOnlyList<string>? protectedRoots = null,
+        string? imageBuildSocket = null)
     {
         _logger = logger;
         _protectedRoots = (protectedRoots ?? ResolveProtectedRoots())
@@ -82,7 +83,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             .ToArray();
         _writableSystemRootSize = ResolveWritableSystemRootSize();
         _writableSystemRootEnabled = ResolveWritableSystemRootEnabled();
-        _imageBuildSocket = ResolveImageBuildSocket();
+        _imageBuildSocket = string.IsNullOrWhiteSpace(imageBuildSocket)
+            ? ResolveImageBuildSocket()
+            : imageBuildSocket.Trim();
     }
 
     private static string ResolveImageBuildSocket()

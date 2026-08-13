@@ -55,83 +55,106 @@
 #
 # APPLY
 # -----
-#   kubectl patch sandboxtemplate agentweaver-agent-host -n <sandbox-ns> \
-#     --type merge --patch-file k8s/optional/sandbox-buildkit-sidecar.yaml
+# This is an RFC 6902 JSON patch, NOT a merge patch, and that matters. SandboxTemplate is a
+# custom resource, so kubectl cannot use a strategic merge patch on it, and a plain
+# `--type merge` REPLACES list fields wholesale rather than merging them by name. Applying
+# this as a merge patch would delete every other container and volume in the template.
+# Measured against the live CRD with a server-side dry run:
 #
-spec:
-  podTemplate:
-    spec:
-      containers:
-        - name: buildkitd
-          image: agentweaverasabbour.azurecr.io/moby/buildkit:v0.32.2
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              # Kubernetes mounts /sys/fs/cgroup read-only for unprivileged containers, and runc
-              # needs to create a cgroup per build step (measured: EROFS without this). Inside
-              # Kata this remounts the guest VM's own cgroup tree, not the node's.
-              mount -o remount,rw /sys/fs/cgroup
-              exec buildkitd \
-                --addr unix:///run/buildkit/buildkitd.sock \
-                --group 1000 \
-                --oci-worker-net host
-          securityContext:
-            privileged: false
-            runAsUser: 0
-            allowPrivilegeEscalation: true
-            capabilities:
-              drop: ["ALL"]
-              add:
-                # Required to remount the cgroup tree read-write.
-                - SYS_ADMIN
-                # Required by bpf_prog_query(BPF_CGROUP_DEVICE). CAP_BPF does NOT substitute:
-                # the kernel gates this query on CAP_NET_ADMIN specifically (measured).
-                - NET_ADMIN
-                # runc cannot raise a build step's capabilities above its own bounding set, so
-                # the 14 default container capabilities must be present or every RUN fails with
-                # "unable to apply caps: operation not permitted" (measured).
-                - SYS_CHROOT
-                - MKNOD
-                - SETUID
-                - SETGID
-                - CHOWN
-                - DAC_OVERRIDE
-                - FOWNER
-                - FSETID
-                - KILL
-                - SETPCAP
-                - SETFCAP
-                - NET_RAW
-                - NET_BIND_SERVICE
-                - AUDIT_WRITE
-            seccompProfile:
-              type: RuntimeDefault
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "2Gi"
-            limits:
-              cpu: "2"
-              memory: "6Gi"
-          volumeMounts:
-            - name: buildkit-socket
-              mountPath: /run/buildkit
-            - name: buildkit-state
-              mountPath: /var/lib/buildkit
-            - name: buildkit-tmp
-              mountPath: /tmp
-      volumes:
-        # Both of these MUST be tmpfs. A default emptyDir in a Kata pod is virtiofs, which does
-        # not support xattrs, so every layer builds and then the OCI export dies with
-        # "failed to get xattr ... operation not supported" (measured). Cost: build state is
-        # RAM, charged against this container's memory limit.
-        - name: buildkit-state
-          emptyDir:
-            medium: Memory
-            sizeLimit: 3Gi
-        - name: buildkit-tmp
-          emptyDir:
-            medium: Memory
-            sizeLimit: 2Gi
+#   --type merge  -> containers: probe-merge-behaviour            (the real container is GONE)
+#   --type json   -> containers: agentweaver-agent-host buildkitd (appended, nothing lost)
+#
+#   kubectl patch sandboxtemplate agentweaver-agent-host -n <sandbox-ns> \
+#     --type json --patch-file k8s/optional/sandbox-buildkit-sidecar.yaml
+#
+# Verify with a server-side dry run before applying for real by adding
+# `--dry-run=server -o jsonpath='{.spec.podTemplate.spec.containers[*].name}'`.
+#
+# The `buildkit-socket` volume and the sandbox container's mount of it already exist in
+# k8s/base/sandbox-template-agenthost.yaml, so this patch only appends the builder itself
+# and the two tmpfs volumes it needs.
+#
+- op: add
+  path: /spec/podTemplate/spec/containers/-
+  value:
+    name: buildkitd
+    image: agentweaverasabbour.azurecr.io/moby/buildkit:v0.32.2
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        # Kubernetes mounts /sys/fs/cgroup read-only for unprivileged containers, and runc
+        # needs to create a cgroup per build step (measured: EROFS without this). Inside
+        # Kata this remounts the guest VM's own cgroup tree, not the node's.
+        mount -o remount,rw /sys/fs/cgroup
+        # --group 1000 makes the socket srw-rw---- root:1000 so the uid-1000 sandbox
+        # container can connect to it. Without it the socket is root-only and every build
+        # fails with "permission denied" on connect.
+        exec buildkitd \
+          --addr unix:///run/buildkit/buildkitd.sock \
+          --group 1000 \
+          --oci-worker-net host
+    securityContext:
+      privileged: false
+      runAsUser: 0
+      allowPrivilegeEscalation: true
+      capabilities:
+        drop: ["ALL"]
+        add:
+          # Required to remount the cgroup tree read-write.
+          - SYS_ADMIN
+          # Required by bpf_prog_query(BPF_CGROUP_DEVICE). CAP_BPF does NOT substitute:
+          # the kernel gates this query on CAP_NET_ADMIN specifically (measured).
+          - NET_ADMIN
+          # runc cannot raise a build step's capabilities above its own bounding set, so
+          # the 14 default container capabilities must be present or every RUN fails with
+          # "unable to apply caps: operation not permitted" (measured).
+          - SYS_CHROOT
+          - MKNOD
+          - SETUID
+          - SETGID
+          - CHOWN
+          - DAC_OVERRIDE
+          - FOWNER
+          - FSETID
+          - KILL
+          - SETPCAP
+          - SETFCAP
+          - NET_RAW
+          - NET_BIND_SERVICE
+          - AUDIT_WRITE
+      seccompProfile:
+        type: RuntimeDefault
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "6Gi"
+    volumeMounts:
+      - name: buildkit-socket
+        mountPath: /run/buildkit
+      - name: buildkit-state
+        mountPath: /var/lib/buildkit
+      - name: buildkit-tmp
+        mountPath: /tmp
+# Both of these MUST be tmpfs. A default emptyDir in a Kata pod is virtiofs, which does not
+# support xattrs, so every layer builds and then the OCI export dies with
+# "failed to get xattr ... operation not supported" (measured). Cost: build state is RAM,
+# charged against the builder's memory limit, which is why that limit is 6Gi.
+- op: add
+  path: /spec/podTemplate/spec/volumes/-
+  value:
+    name: buildkit-state
+    emptyDir:
+      medium: Memory
+      sizeLimit: 3Gi
+- op: add
+  path: /spec/podTemplate/spec/volumes/-
+  value:
+    name: buildkit-tmp
+    emptyDir:
+      medium: Memory
+      sizeLimit: 2Gi

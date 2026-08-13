@@ -11,30 +11,29 @@ namespace Agentweaver.Tests.Sandbox;
 /// cluster where every build fails at connect time.
 ///
 /// These tests bind a real unix socket rather than mocking the probe, because the whole point of
-/// the change is that the executor observes the socket instead of trusting configuration.
+/// the change is that the executor observes the socket instead of trusting configuration. The path
+/// is injected through the constructor rather than through the process environment: mutating
+/// <c>AGENTWEAVER_IMAGE_BUILD_SOCKET</c> globally made every executor built by a concurrently
+/// running test bind-mount this test's temporary directory, which broke an unrelated preview
+/// teardown proof on CI.
 /// </summary>
 [Trait("Category", KataRuntimeGate.Category)]
 public sealed class SandboxImageBuildSocketTests
 {
-    private const string SocketVariable = "AGENTWEAVER_IMAGE_BUILD_SOCKET";
-
-    private static string NewSocketDirectory() =>
-        Directory.CreateTempSubdirectory("awx-buildsock-").FullName;
+    private static SandboxCapability ImageBuildCapability(string socketPath) =>
+        new KataBwrapExecutor(imageBuildSocket: socketPath)
+            .DescribeCapabilities()
+            .Single(capability => capability.Id == SandboxCapabilityIds.ImageBuild);
 
     [SidecarLinuxFact]
     public void ImageBuild_IsUnavailableWhenNoBuilderSidecarPublishedASocket()
     {
-        var directory = NewSocketDirectory();
-        var previous = Environment.GetEnvironmentVariable(SocketVariable);
+        // The directory exists (the pod always mounts it) but nothing is listening: this is exactly
+        // the stock cluster where the optional sidecar was never patched in.
+        var directory = Directory.CreateTempSubdirectory("awx-buildsock-").FullName;
         try
         {
-            // The directory exists (the pod always mounts it) but nothing is listening: this is
-            // exactly the stock cluster where the optional sidecar was never patched in.
-            Environment.SetEnvironmentVariable(SocketVariable, Path.Combine(directory, "buildkitd.sock"));
-
-            var capability = new KataBwrapExecutor()
-                .DescribeCapabilities()
-                .Single(c => c.Id == SandboxCapabilityIds.ImageBuild);
+            var capability = ImageBuildCapability(Path.Combine(directory, "buildkitd.sock"));
 
             capability.State.Should().Be(
                 SandboxCapabilityState.RequiresExternalService,
@@ -44,7 +43,6 @@ public sealed class SandboxImageBuildSocketTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(SocketVariable, previous);
             Directory.Delete(directory, recursive: true);
         }
     }
@@ -52,19 +50,15 @@ public sealed class SandboxImageBuildSocketTests
     [SidecarLinuxFact]
     public void ImageBuild_BecomesSupportedOnlyWhenARealSocketIsListening()
     {
-        var directory = NewSocketDirectory();
+        var directory = Directory.CreateTempSubdirectory("awx-buildsock-").FullName;
         var socketPath = Path.Combine(directory, "buildkitd.sock");
-        var previous = Environment.GetEnvironmentVariable(SocketVariable);
         using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try
         {
-            Environment.SetEnvironmentVariable(SocketVariable, socketPath);
             listener.Bind(new UnixDomainSocketEndPoint(socketPath));
             listener.Listen(1);
 
-            var capability = new KataBwrapExecutor()
-                .DescribeCapabilities()
-                .Single(c => c.Id == SandboxCapabilityIds.ImageBuild);
+            var capability = ImageBuildCapability(socketPath);
 
             capability.State.Should().Be(SandboxCapabilityState.Supported);
 
@@ -75,7 +69,6 @@ public sealed class SandboxImageBuildSocketTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(SocketVariable, previous);
             listener.Dispose();
             Directory.Delete(directory, recursive: true);
         }
