@@ -1,0 +1,230 @@
+#!/bin/sh
+# awx-docker -- `docker build` for the sandbox, executed by the in-pod BuildKit sidecar.
+#
+# Image builds cannot happen inside the sandbox container (see
+# docs/deep-dive/sandbox-pod-execution.md), so this shim translates the docker CLI surface an agent
+# actually reaches for into a `buildctl` call against the builder sidecar over a pod-local unix
+# socket. It exists because the alternative -- telling the agent "docker is not
+# installed" -- is indistinguishable from a broken environment and produces worse behaviour than an
+# explicit, actionable message.
+#
+# Supported:   docker build [-t NAME[:TAG]] [-f DOCKERFILE] [--build-arg K=V] [--target STAGE]
+#                           [--platform P] [--no-cache] [--output TYPE=...] CONTEXT
+# Everything else exits non-zero with the reason, because the sandbox has no container runtime: a
+# built image is an artifact in the workspace, not something that can be run or pushed from here.
+#
+# Default output is an OCI archive in the workspace, named after -t. Nothing is ever pushed: the
+# builder holds no registry credentials, and registry exporters are refused below. That refusal is
+# ergonomics, not a boundary -- `buildctl` is on PATH and BUILDKIT_HOST is exported, so a caller can
+# reach the daemon directly. What actually prevents publishing is the absent credential.
+#
+# Build steps run in an empty network namespace (loopback only), so `RUN apt-get install`,
+# `RUN npm install` and any other network-dependent build step fail. Install dependencies in the
+# sandbox shell, which has normal pod networking, and COPY the result in. Base images still pull,
+# because the daemon fetches them itself. See docs/deep-dive/sandbox-pod-execution.md.
+set -eu
+
+usage_error() {
+    echo "awx-docker: $1" >&2
+    echo >&2
+    echo "This sandbox builds images through an in-pod BuildKit sidecar. Supported form:" >&2
+    echo "  docker build [-t name:tag] [-f Dockerfile] [--build-arg K=V] [--target stage] CONTEXT" >&2
+    echo >&2
+    echo "The result is written to the workspace as an OCI archive. The sandbox has no container" >&2
+    echo "runtime and no registry credentials, so 'docker run', 'docker push' and 'docker images'" >&2
+    echo "cannot work here. Load the archive where a runtime exists, or push it from a trusted job." >&2
+    exit 2
+}
+
+if [ "$#" -eq 0 ]; then
+    usage_error "no subcommand given"
+fi
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+    build|buildx)
+        # `docker buildx build ...` -- drop the extra verb so both spellings work.
+        if [ "$subcommand" = "buildx" ]; then
+            [ "${1:-}" = "build" ] || usage_error "only 'docker buildx build' is supported"
+            shift
+        fi
+        ;;
+    version)
+        echo "awx-docker shim (BuildKit sidecar socket: ${AGENTWEAVER_IMAGE_BUILD_SOCKET:-/run/buildkit/buildkitd.sock})"
+        exit 0
+        ;;
+    *)
+        usage_error "'docker $subcommand' is not available in the sandbox"
+        ;;
+esac
+
+socket="${AGENTWEAVER_IMAGE_BUILD_SOCKET:-/run/buildkit/buildkitd.sock}"
+if [ ! -S "$socket" ]; then
+    echo "awx-docker: no build daemon socket at $socket. This sandbox has no builder sidecar," >&2
+    echo "            so image builds are not available here. See the sandbox capability" >&2
+    echo "            contract for how to enable one." >&2
+    exit 3
+fi
+
+tag=""
+dockerfile=""
+context=""
+output=""
+no_cache=""
+frontend_args=""
+
+add_frontend_arg() {
+    # buildctl takes frontend options as repeated --opt flags; collect them positionally so values
+    # containing spaces survive (the eval below re-quotes each one).
+    frontend_args="$frontend_args --opt $(printf '%s' "$1" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")"
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -t|--tag)
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            tag="$2"; shift 2 ;;
+        -f|--file)
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            dockerfile="$2"; shift 2 ;;
+        --build-arg)
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            add_frontend_arg "build-arg:$2"; shift 2 ;;
+        --target)
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            add_frontend_arg "target=$2"; shift 2 ;;
+        --platform)
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            add_frontend_arg "platform=$2"; shift 2 ;;
+        --output|-o)
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            # Validated below. Accepting this verbatim would let `--output type=image,push=true`
+            # walk straight past the --push refusal, so the value is checked, not trusted.
+            output="$2"; shift 2 ;;
+        --no-cache)
+            no_cache="--no-cache"; shift ;;
+        --push)
+            echo "awx-docker: --push is refused. The builder holds no registry credentials, so a build" >&2
+            echo "            cannot publish from the sandbox. Export the archive and push it from a" >&2
+            echo "            trusted job that owns the credential." >&2
+            exit 2 ;;
+        --progress=*|--pull|-q|--quiet)
+            shift ;;
+        --progress)
+            # Docker accepts both `--progress=plain` and `--progress plain`; the shim has to consume
+            # the separated value too, or it lands in the positional branch and is mistaken for a
+            # second build context.
+            [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            shift 2 ;;
+        --)
+            shift ;;
+        -*)
+            usage_error "option '$1' is not supported by the sandbox build shim" ;;
+        *)
+            [ -z "$context" ] || usage_error "more than one build context given"
+            context="$1"; shift ;;
+    esac
+done
+
+[ -n "$context" ] || usage_error "no build context given"
+[ -d "$context" ] || usage_error "build context '$context' is not a directory"
+
+if [ -z "$dockerfile" ]; then
+    dockerfile="$context/Dockerfile"
+fi
+[ -r "$dockerfile" ] || usage_error "dockerfile '$dockerfile' is not readable"
+
+dockerfile_dir=$(CDPATH= cd -- "$(dirname -- "$dockerfile")" && pwd)
+dockerfile_name=$(basename -- "$dockerfile")
+context_dir=$(CDPATH= cd -- "$context" && pwd)
+
+if [ -z "$output" ]; then
+    if [ -n "$tag" ]; then
+        archive_name=$(printf '%s' "$tag" | tr '/:' '__')
+    else
+        archive_name="image"
+    fi
+    output="type=oci,dest=$context_dir/$archive_name.oci.tar"
+    [ -n "$tag" ] && output="$output,name=$tag"
+fi
+
+# Validate the exporter. `--push` is refused above, but BuildKit also publishes via
+# `--output type=image,push=true` / `type=registry`. This refusal is ergonomics rather than a
+# boundary -- `buildctl` is on PATH and BUILDKIT_HOST is exported, so a caller can reach the daemon
+# directly, and what actually prevents publishing is that the builder holds no credential. It still
+# has to be *correct*, though: a substring scan is not, because buildctl parses this value as CSV
+# and would read `type=image,name=x,"push=true",k=type=oci` as type=image with push=true while a
+# last-match scan sees a permitted `oci`. So the value is parsed field by field.
+case "$output" in
+    *'"'*|*"'"*)
+        echo "awx-docker: --output must not use quoted CSV fields. The exporters this sandbox" >&2
+        echo "            permits (oci, docker, tar, local) never need quoting, and quoting hides" >&2
+        echo "            the real field values from validation." >&2
+        exit 2 ;;
+esac
+
+output_type=""
+output_type_count=0
+awx_saved_ifs="$IFS"
+IFS=','
+for output_field in $output; do
+    case "$output_field" in
+        *=*)
+            output_key=$(printf '%s' "${output_field%%=*}" | tr '[:upper:]' '[:lower:]')
+            output_value="${output_field#*=}" ;;
+        *)
+            output_key=$(printf '%s' "$output_field" | tr '[:upper:]' '[:lower:]')
+            output_value="" ;;
+    esac
+    case "$output_key" in
+        type)
+            output_type_count=$((output_type_count + 1))
+            output_type="$output_value" ;;
+        push)
+            IFS="$awx_saved_ifs"
+            echo "awx-docker: --output push=$output_value is refused; see --push." >&2
+            exit 2 ;;
+    esac
+done
+IFS="$awx_saved_ifs"
+
+if [ "$output_type_count" -gt 1 ]; then
+    echo "awx-docker: --output declares type= more than once, which is ambiguous. Give one type." >&2
+    exit 2
+fi
+
+case "$output_type" in
+    oci|docker|tar|local) ;;
+    "")
+        usage_error "--output must specify a type= (oci, docker, tar or local)" ;;
+    *)
+        echo "awx-docker: --output type='$output_type' is refused. The sandbox may only export a" >&2
+        echo "            build artifact into its own workspace (type=oci, docker, tar or local)." >&2
+        echo "            Publishing to a registry from a run is not permitted." >&2
+        exit 2 ;;
+esac
+
+echo "awx-docker: building via the in-pod BuildKit sidecar at $socket" >&2
+
+# buildctl writes a registry-auth config before resolving `FROM`, and falls back to $HOME/.docker
+# when DOCKER_CONFIG is unset. If HOME is unset or read-only it tries to create /.docker and the
+# build dies at "load metadata" with "mkdir /.docker: permission denied" -- measured, not
+# hypothetical. Point it at the run's own workspace, which is always writable and always private.
+DOCKER_CONFIG="${DOCKER_CONFIG:-$context_dir/.awx-docker-config}"
+export DOCKER_CONFIG
+mkdir -p "$DOCKER_CONFIG"
+
+# shellcheck disable=SC2086  # frontend_args is a deliberately pre-quoted argument list.
+eval set -- "$frontend_args"
+exec buildctl \
+    --addr "unix://$socket" \
+    build \
+    --frontend dockerfile.v0 \
+    --local context="$context_dir" \
+    --local dockerfile="$dockerfile_dir" \
+    --opt filename="$dockerfile_name" \
+    ${no_cache:+--no-cache} \
+    "$@" \
+    --output "$output"

@@ -156,6 +156,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", Agentweaver.Tests.Sandbox.KataRuntimeGate.Category)]
     public async Task ConfigureAsync_without_shared_workspace_uses_writable_pod_private_fallback()
     {
         const string runId = "run-null-shared-workspace";

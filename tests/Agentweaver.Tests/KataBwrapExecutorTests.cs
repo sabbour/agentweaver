@@ -187,9 +187,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public void PreviewChildProcess_UsesRegisteredRuntimeHomeAndXdg()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!KataRuntimeGate.Available())
             return;
 
         var subdirectory = Path.Combine(_runA, "app");
@@ -268,9 +269,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task ReadOnlyGitMountCannotBeHardLinkedIntoWritableWorkspace()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         Run("git", "-C", _runA, "init");
@@ -293,46 +295,125 @@ public sealed class KataBwrapExecutorTests : IDisposable
         (await File.ReadAllTextAsync(configPath)).Should().Be(originalConfig);
     }
 
+    /// <summary>
+    /// Process isolation is provided by the executor sidecar CONTAINER (its own runtime-created PID
+    /// namespace and matching runtime-provided procfs), not by bubblewrap. The kernel's
+    /// <c>mount_too_revealing()</c> check refuses a fresh procfs inside an unprivileged user
+    /// namespace whenever the visible procfs has masked submounts — which every Kubernetes runtime,
+    /// Kata included, always creates. So bubblewrap must bind the container's own procfs and must
+    /// NOT claim a PID namespace it cannot back with a matching procfs.
+    /// </summary>
     [Fact]
-    public void ProcessNamespace_MountsPrivateProcfsAndNeverBindsParentProc()
+    [Trait("Category", KataRuntimeGate.Category)]
+    public void MountNamespace_BindsContainerProcfsAndNeverUnsharesPid()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!KataRuntimeGate.Available())
             return;
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
         RegisterRun(executor);
         var arguments = executor.BuildProcessStartInfo(Command(_runA)).ArgumentList.ToArray();
 
-        arguments.Should().ContainInOrder("--proc", "/proc");
-        string.Join('\n', arguments).Should().NotContain("--ro-bind\n/proc\n/proc");
+        arguments.Should().ContainInOrder("--bind", "/proc", "/proc");
+        arguments.Should().NotContain("--proc");
+        // --unshare-pid without a matching procfs is a silent-degradation trap: bubblewrap would
+        // bind the outer /proc while the child's PIDs no longer match it.
+        arguments.Should().NotContain("--unshare-pid");
+        arguments.Should().Contain("--unshare-user");
         arguments.Should().ContainInOrder("--cap-drop", "ALL");
         arguments.Should().Contain("--clearenv");
     }
 
+    /// <summary>
+    /// The startup probe is the fail-closed gate for the sidecar; it must exercise exactly the same
+    /// namespace flags the real command path uses, or the probe would pass where execution fails
+    /// (which is precisely how the v0.18.0 production outage reached the cluster).
+    /// </summary>
     [Fact]
-    public void ChildProcessMetadata_RequiresPositiveBwrapChildPid()
+    [Trait("Category", KataRuntimeGate.Category)]
+    public void AvailabilityProbe_UsesTheSameNamespaceFlagsAsRealCommands()
     {
-        KataBwrapExecutor.ParseChildPid("""{"child-pid":4321}""").Should().Be(4321);
-        KataBwrapExecutor.ParseChildPid(
-            """
-            {
-              "child-pid": 4321
-            }
-            """).Should().Be(4321);
+        if (!KataRuntimeGate.Available())
+            return;
 
-        var missing = () => KataBwrapExecutor.ParseChildPid("""{"version":1}""");
-        var invalid = () => KataBwrapExecutor.ParseChildPid("not-json");
+        var probe = KataBwrapExecutor.BuildAvailabilityProbeArguments();
 
-        missing.Should().Throw<InvalidOperationException>()
-            .WithMessage("*valid sandbox child PID*");
-        invalid.Should().Throw<InvalidOperationException>()
-            .WithMessage("*invalid child process metadata*");
+        probe.Should().ContainInOrder("--bind", "/proc", "/proc");
+        probe.Should().NotContain("--proc");
+        probe.Should().NotContain("--unshare-pid");
+        probe.Should().Contain("--unshare-user");
+    }
+
+    /// <summary>
+    /// The workload must own the sandbox's stdout/stderr and its own session. Bubblewrap closes
+    /// <c>--info-fd</c> after setup, so reusing fd 1 for it silently breaks every write the command
+    /// makes to stdout ("write error: Bad file descriptor"), and an extra <c>setsid</c> wrapper
+    /// would fork a grandchild that the executor cannot attribute on a kernel without
+    /// <c>/proc/&lt;pid&gt;/task/&lt;pid&gt;/children</c>. Both were observed on real Kata.
+    /// </summary>
+    [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
+    public void SupervisedLaunch_KeepsWorkloadStdoutAndExecsItDirectlyInItsOwnSession()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+        var startInfo = executor.BuildProcessStartInfo(Command(_runA));
+        var arguments = startInfo.ArgumentList.ToArray();
+
+        startInfo.RedirectStandardOutput.Should().BeTrue();
+        arguments.Should().NotContain("--info-fd");
+        arguments.Should().Contain("--new-session");
+        arguments.Should().NotContain("/usr/bin/setsid");
+        var terminator = Array.IndexOf(arguments, "--");
+        terminator.Should().BeGreaterThan(0);
+        arguments[terminator + 1].Should().Be("/bin/bash");
+    }
+
+    /// <summary>
+    /// Nothing reaps daemonised grandchildren for a sandbox that deliberately does not claim its
+    /// own PID namespace, and .NET's <c>Kill(entireProcessTree)</c> cannot help because it walks the
+    /// procfs children file the Kata guest kernel omits. The executor must terminate the run's
+    /// process group itself.
+    /// </summary>
+    [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
+    public async Task CompletedCommand_LeavesNoDaemonisedProcessesBehind()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
+        RegisterRun(executor);
+        var marker = Path.Combine(_runA, "daemon.pid");
+        var result = await executor.ExecuteAsync(new SandboxCommand(
+            $"(sleep 300 & echo $! > {QuoteForPosixShell(marker)}) ; sleep 0.2",
+            _runA,
+            null,
+            new SandboxFsPolicy([_runA], [], []),
+            30_000,
+            NetworkEnabled: false));
+
+        result.ExitCode.Should().Be(0, result.Stderr);
+        var daemonPid = int.Parse((await File.ReadAllTextAsync(marker)).Trim());
+
+        // The pid is the executor-container-visible pid because the sandbox shares this PID
+        // namespace by design; the process group kill must already have reaped it.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (Directory.Exists($"/proc/{daemonPid}") && DateTime.UtcNow < deadline)
+            await Task.Delay(100);
+
+        Directory.Exists($"/proc/{daemonPid}").Should().BeFalse(
+            "a command that daemonises a background process must not leak it into the executor container");
     }
 
     [Fact]
-    public async Task PrivateProcfs_RunsManagedCoreClrAndHidesHostParentProcess()
+    [Trait("Category", KataRuntimeGate.Category)]
+    public async Task SandboxedProcess_RunsManagedCoreClrAndCannotReachSiblingRuns()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var app = Path.Combine(_runA, "managed-proc-probe");
@@ -350,19 +431,23 @@ public sealed class KataBwrapExecutorTests : IDisposable
         await File.WriteAllTextAsync(
             Path.Combine(app, "Program.cs"),
             """
-            var hostParentPid = args[0];
+            var siblingRun = args[0];
             Console.WriteLine($"coreclr-ok pid={Environment.ProcessId}");
-            return File.Exists($"/proc/{hostParentPid}/cmdline") ? 17 : 0;
+            return Directory.Exists(siblingRun) ? 17 : 0;
             """);
         Run("dotnet", "build", Path.Combine(app, "ManagedProcProbe.csproj"), "--nologo", "--verbosity", "quiet");
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
         RegisterRun(executor);
         var assembly = Path.Combine(app, "bin", "Debug", "net10.0", "ManagedProcProbe.dll");
+        // The sibling path is passed through the environment, not the command line: the static
+        // shared-mount guard rejects a literal cross-run path before the command ever runs, and
+        // this test is about the mount namespace, not that guard (see
+        // VariableAbsolutePathAndSymlinkCannotReadOrWriteSibling for the guard itself).
         var result = await executor.ExecuteAsync(new SandboxCommand(
-            $"dotnet {QuoteForPosixShell(assembly)} {Environment.ProcessId}",
+            $"dotnet {QuoteForPosixShell(assembly)} \"$SIBLING_RUN\"",
             _runA,
-            null,
+            new Dictionary<string, string> { ["SIBLING_RUN"] = _runB },
             new SandboxFsPolicy([_runA], [], []),
             30_000,
             NetworkEnabled: true));
@@ -372,9 +457,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task VariableAbsolutePathAndSymlinkCannotReadOrWriteSibling()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var secret = Path.Combine(_runB, "secret.txt");
@@ -397,9 +483,10 @@ public sealed class KataBwrapExecutorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", KataRuntimeGate.Category)]
     public async Task LinkedWorktreeReadOperationsAndPlatformCommitRemainFunctional()
     {
-        if (!OperatingSystem.IsLinux() || !KataBwrapExecutor.TryProbeAvailability(out _))
+        if (!KataRuntimeGate.Available())
             return;
 
         var repository = Path.Combine(_workspace, "repositories", "project");

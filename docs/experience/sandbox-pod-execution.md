@@ -215,7 +215,10 @@ back when it's waiting."** Concretely:
   workspace volume and the brokered checkpoint, and the run re-claims a fresh pod. Pods never persist past
   their run, and they hold only a short-lived, run-scoped credential.
 - **Blast radius is small and visible.** Each pod is Kata-isolated, default-deny on egress (model +
-  worker + git only, never the database), and holds no broker key. The pod pill in the UI is the
+  worker + git only, never the database), and holds no broker key. Inside the pod the boundary goes one
+  level further: model-controlled commands run in a separate **executor sidecar container** with its
+  own PID namespace and no cluster or cloud identity, so an injected agent cannot see, signal, or read
+  the AgentHost process that holds the run's brokered GitHub token. The pod pill in the UI is the
   operator's quick "which pod is this run in?" answer.
 
 ### Diagnostics surface (MCP and runtime)
