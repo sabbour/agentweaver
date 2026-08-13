@@ -14,9 +14,18 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId>
 node scripts/ui-harness/agent-driver-ui/tools.mjs finish --session <sessionId>
 ```
 
-`login` is the only headful step. Complete the visible GitHub or Microsoft Entra sign-in
-manually, resume Playwright, and the
-local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry stops
+`login-edge-default.mjs` is the primary login script. It opens the real Edge Default
+profile (`%LOCALAPPDATA%\Microsoft\Edge\User Data`) to satisfy Conditional Access.
+Close all Edge windows first, then run:
+
+```powershell
+node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain>
+```
+
+If Edge is already running with `--remote-debugging-port=9222`, use `--cdp` instead.
+See `scripts/ui-harness/SKILL.md` for full options and what is saved.
+
+The local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry stops
 with `AUTH_EXPIRED`; the harness never automates reauthentication. Targets are
 restricted to localhost/staging unless both `--allow-prod` and `--confirm-production`
 are explicitly supplied. Storage state is never logged or attached to evidence.

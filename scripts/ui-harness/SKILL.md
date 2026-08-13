@@ -28,22 +28,55 @@ command. Never add those flags without explicit authorization.
 
 ## Authentication
 
-Authenticate through a visible browser exactly once per valid session:
+Agentweaver staging uses Microsoft Entra Conditional Access, which blocks plain
+Chromium (and device-code flow). Authentication must use the managed **Edge Default
+profile** on Windows (enrolled device).
+
+### Option A — Edge is not currently running (preferred)
+
+Close all Edge windows first (save any open work — they will be lost), then:
 
 ```powershell
-node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url https://<host>.staging.<domain>
+node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain>
 ```
 
-`login` opens Chromium headfully. Complete the visible GitHub or Microsoft Entra sign-in
-yourself in that window, then
-resume Playwright. The command saves the local, git-ignored storage state at
-`scripts/ui-harness/.auth/staging.storageState.json`; it is reused by the remaining
-headless commands. Treat that file as a credential: never print, commit, log, or attach
-it to evidence. The harness never automates reauthentication. On `AUTH_EXPIRED`, run
-the headful `login` command again (or pass `--storage-state <local-path>` consistently).
+This launches the real Edge Default profile (`%LOCALAPPDATA%\Microsoft\Edge\User Data`).
+Entra SSO often completes automatically. If the sign-in page appears, complete it in the
+Edge window, then press Resume in the Playwright Inspector.
+
+### Option B — Edge is already running (CDP attach)
+
+Relaunch Edge with remote debugging (requires closing the current Edge first):
+
+```powershell
+Start-Process msedge.exe "--remote-debugging-port=9222 --user-data-dir=`"$env:LOCALAPPDATA\Microsoft\Edge\User Data`" --profile-directory=Default --no-first-run https://<host>.staging.<domain>"
+```
+
+Then connect and capture:
+
+```powershell
+node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain> --cdp
+```
+
+### What is saved
+
+Both options write to `scripts/ui-harness/.auth/` (git-ignored):
+
+- `staging.storageState.json` — Playwright cookies + localStorage
+- `staging.storageState.json.sessionStorage.json` — sessionStorage seed (Agentweaver token)
+- `session-token.txt` — plain-text token for `AGENTWEAVER_TOKEN` (API harness only)
+
+Treat these files as credentials: never print, commit, log, or attach them. The harness
+never automates reauthentication. On `AUTH_EXPIRED`, run the login script again
+(or pass `--storage-state <local-path>` consistently).
+
 `init` validates that the selected storage-state file exists and has a usable
 Playwright shape before it creates a scenario session. It starts that session's
 headless browser worker, but it does not launch or automate the login flow.
+
+> **Legacy note**: `login-capture-edge.mjs` and the `tools.mjs login` command use plain
+> Chromium (channel `msedge` without the Default profile user-data-dir). They may fail
+> Conditional Access. Prefer `login-edge-default.mjs` for Entra-protected staging.
 
 ## Run a persona flow
 
