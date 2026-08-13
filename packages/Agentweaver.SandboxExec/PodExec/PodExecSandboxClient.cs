@@ -253,7 +253,7 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
             try
             {
                 if (!process.HasExited)
-                    process.Kill();
+                    process.Kill(entireProcessTree: true);
             }
             catch { }
             process.Dispose();
