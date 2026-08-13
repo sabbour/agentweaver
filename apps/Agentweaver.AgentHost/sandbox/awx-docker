@@ -14,8 +14,14 @@
 # built image is an artifact in the workspace, not something that can be run or pushed from here.
 #
 # Default output is an OCI archive in the workspace, named after -t. Nothing is ever pushed: the
-# builder holds no registry credentials, and registry exporters are refused below so that
-# `--output type=image,push=true` cannot walk around the `--push` refusal.
+# builder holds no registry credentials, and registry exporters are refused below. That refusal is
+# ergonomics, not a boundary -- `buildctl` is on PATH and BUILDKIT_HOST is exported, so a caller can
+# reach the daemon directly. What actually prevents publishing is the absent credential.
+#
+# Build steps run in an empty network namespace (loopback only), so `RUN apt-get install`,
+# `RUN npm install` and any other network-dependent build step fail. Install dependencies in the
+# sandbox shell, which has normal pod networking, and COPY the result in. Base images still pull,
+# because the daemon fetches them itself. See docs/deep-dive/sandbox-pod-execution.md.
 set -eu
 
 usage_error() {

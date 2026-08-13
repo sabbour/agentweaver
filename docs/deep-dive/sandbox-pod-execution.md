@@ -907,7 +907,7 @@ Because a sandbox pod **is** a Kata VM, the builder, its cache, its history and 
 live and die inside that one run's VM. There is no shared daemon, no network endpoint, and no
 credential to hand to untrusted code.
 
-Five findings shaped it, each of which breaks builds if reverted:
+Eight findings shaped it, each of which breaks builds — or breaks isolation — if reverted:
 
 - **Rootful, not rootless**, for the reason above. Rootless *does* work on ordinary AKS nodes, but
   only with seccomp **and** AppArmor `Unconfined` — `baseline` forbids both, and an escape would
@@ -921,6 +921,20 @@ Five findings shaped it, each of which breaks builds if reverted:
 - **The 14 default container capabilities must be present.** `runc` cannot raise a build step's
   capabilities above its own bounding set, so dropping them produces
   `unable to apply caps: operation not permitted` on every `RUN`.
+- **The container must override the pod's `runAsNonRoot` *and* `runAsGroup`.** The base template
+  sets `runAsNonRoot: true`, `runAsUser: 1000`, `runAsGroup: 1000` at pod level and each line is
+  inherited unless overridden. Without `runAsNonRoot: false` the kubelet refuses to start the
+  container at all (`CreateContainerConfigError: container's runAsUser breaks non-root policy`);
+  with it but without `runAsGroup: 0` the daemon runs as uid 0 / gid 1000 and every build step dies
+  in `runc` with `open container mntns: open /proc/N/ns/mnt: permission denied`. Neither shows up in
+  a standalone probe pod that omits the pod-level `securityContext` — both were found by patching
+  the real template.
+- **`CAP_SYS_PTRACE` is required in CNI network mode.** `runc` opens `/proc/<pid>/ns/mnt` of its own
+  init process to join the prepared namespace; without it, build steps fail with the same
+  `open container mntns` error. It does not appear under host networking. It is scoped to the
+  builder's own PID namespace — the pod does not set `shareProcessNamespace`, so the builder cannot
+  see, let alone trace, a process in the sandbox container, and build steps do not inherit it
+  (measured `CapEff: 00000000a80425fb`, identical with and without it on the daemon).
 - **BuildKit state must be tmpfs.** A default `emptyDir` in a Kata pod is **virtiofs**, which does
   not implement xattrs, so the OCI exporter fails at the final step with
   `failed to get xattr …: operation not supported` *after* every layer has already built. `tmpfs`
@@ -935,6 +949,68 @@ The socket is published under `/run`, deliberately **not** under `/mnt`: the per
 system root mounts a tmpfs over `/mnt`, which would mask anything published there and break every
 sandboxed command, not just builds.
 
+#### Build steps do not run in the pod's network namespace
+
+This is the one place where the first working version of this design was not safe, so it is worth
+being explicit about what changed and why.
+
+Under `--oci-worker-net host` a `RUN` step joins the **pod's** network namespace. `runc` grants
+build steps the default capability set, and `CAP_NET_RAW` is in it — and it cannot be dropped,
+because `runc` refuses to start any step whose capabilities exceed the daemon's bounding set. So a
+Dockerfile could open an `AF_PACKET` socket on the pod's interfaces. Demonstrated on the live
+cluster before this change:
+
+```
+#6 CapEff:  00000000a80425fb
+#6 2: eth0    inet 10.244.2.183/32 ... scope global eth0
+#6 tcpdump: listening on any, link-type LINUX_SLL2 ...
+```
+
+That is a real escalation rather than a theoretical one, because not all in-pod traffic is
+encrypted: `AgentHost__McpEndpoint` is plain `http://`, and the run owner's GitHub token and turn
+bearer token arrive over the in-pod `POST /configure` call. Model-controlled code is specifically
+designed **not** to hold those credentials, so a build step that can sniff them would obtain
+something the sandbox is built to withhold.
+
+The builder therefore runs with `--oci-worker-net cni` and a CNI configuration that attaches
+nothing: each build step gets a fresh network namespace containing only a `lo` interface. Measured
+after the change, on the same cluster, from the unprivileged uid-1000 container:
+
+| Property | Evidence |
+| --- | --- |
+| Build steps are in a different netns from the pod | `RUN_NETNS=net:[4026532186]` vs caller/pod `net:[4026531840]`. |
+| Nothing but loopback is attached | `IFACES=lo`, and `/sys/class/net/lo/flags` is `0x9` (`IFF_UP｜IFF_LOOPBACK`). |
+| No name resolution in a build step | `DNS_BLOCKED_GOOD`. |
+| No network egress in a build step | `NET_IN_RUN_BLOCKED_GOOD`, `IMDS_BLOCKED_GOOD`. |
+| Builds still work end to end | `BUILD_EXIT=0` and a 28,738,560-byte OCI tar containing `blobs/sha256/…`. |
+
+Two consequences, stated plainly rather than buried:
+
+- **A `RUN` step has no network.** `RUN apt-get install …`, `RUN npm install` and any other
+  network-dependent build step do **not** work. Package installation from the run's allowed egress
+  is unaffected *in the sandbox shell itself*, which keeps normal pod networking; only in-build
+  networking is removed.
+- **Base images still pull.** The daemon resolves and fetches them itself from the pod's netns,
+  under the pod's NetworkPolicy, which is why the build above succeeded at all.
+
+`--oci-worker-net bridge` was tried as a middle ground and does not work here. The CNI bridge plugin
+must write `/proc/sys/net/ipv4/ip_forward`; `/proc/sys` is read-only
+(`failed to enable forwarding: … read-only file system`), a `mount -o remount,rw /proc/sys` makes
+every build step fail with `open container mntns: permission denied`, and pod-level `sysctls` are
+rejected (`SysctlForbidden: net.ipv4.ip_forward not allowlisted`), which would require a kubelet
+change on the node. Re-enabling in-build networking by returning to host networking would put
+attacker-controlled `RUN` steps back on the pod's netns with `NET_RAW`, so it is deliberately not
+offered as a flag.
+
+#### The builder holds no identity
+
+`buildkitd` is added to `azure.workload.identity/skip-containers` and mounts an empty `emptyDir`
+over `/var/run/secrets/kubernetes.io/serviceaccount`, exactly as the executor sidecar already does.
+Measured in the builder container: the service-account directory contains only `.` and `..`, no
+`token` file exists, and `env | grep -c ^AZURE_` returns `0`. The socket it publishes is
+`srw-rw---- root 1000`, which is what lets the uid-1000 sandbox container connect without granting
+it anything else.
+
 #### What was measured, and the trade-off
 
 On the live AKS Kata cluster, from a sandbox-shaped pod (agent container `runAsUser: 1000`,
@@ -943,7 +1019,7 @@ On the live AKS Kata cluster, from a sandbox-shaped pod (agent container `runAsU
 | Property | Evidence |
 | --- | --- |
 | Build runs **inside the run's VM**, not on the node | The `RUN` step reports kernel `6.6.137.mshv1-1.azl3`; the node runs `6.6.137.mshv2-1.azl3`. |
-| Full build incl. `RUN` and OCI export | `BUILD_EXIT=0`; `RUN` output and an in-build `tdnf install` recovered from the exported layers. |
+| Full build incl. `RUN` and OCI export | `BUILD_EXIT=0`; `RUN` output recovered from the exported layers, and a 28,738,560-byte OCI tar whose entries begin `blobs/sha256/…`. |
 | Cross-run isolation | A second run's `buildctl debug histories` and `du` are **empty** while the first run shows 2 histories and 617 MB of cache. The shared-broker leak is structurally gone. |
 | No host/node access | No docker or containerd socket; no service-account token; kubelet `10250` unreachable. |
 | Strict NetworkPolicy holds | IMDS blocked from **both** containers. Adding a route to `169.254.169.254` from inside the guest *succeeds* and IMDS stays blocked — Cilium enforces on the host side of the VM boundary, so in-guest `NET_ADMIN` cannot defeat it. Builds still succeed through the DNS + 443 allowance. |
@@ -965,19 +1041,27 @@ could silently remove them:
 2. The pod must **never** set `shareProcessNamespace: true`, which would merge the PID namespaces
    and expose `/proc/<pid>/root` of the container holding the workspace.
 
-**Pod Security Admission.** `SYS_ADMIN`/`NET_ADMIN` are outside the `baseline` allow-list, so
-build-enabled sandbox pods need a namespace whose PSA level admits them for that one container.
-Do **not** relax `agentweaver` itself — it hosts the control plane. On a stock cluster the sidecar
-is absent, the socket does not exist, and the capability contract reports `image_build` as
-`RequiresExternalService`; availability is probed from the socket, never inferred from an
+**Pod Security Admission.** `SYS_ADMIN`/`NET_ADMIN`/`SYS_PTRACE` are outside the `baseline`
+allow-list, so build-enabled sandbox pods need a namespace whose PSA level admits them for that one
+container. Do **not** relax `agentweaver` itself — it hosts the control plane. On a stock cluster
+the sidecar is absent, the socket does not exist, and the capability contract reports `image_build`
+as `RequiresExternalService`; availability is probed from the socket, never inferred from an
 environment variable.
 
-**Registry publishing is refused server-agnostically.** The builder holds no registry credentials,
-and `awx-docker` refuses `--push` *and* validates `--output`, so
-`--output type=image,name=…,push=true` and `type=registry` are rejected (exit 2) rather than
-quietly bypassing the refusal. Only `type=oci|docker|tar|local` — artifacts written into the run's
-own filesystem — are allowed. With no socket present the shim exits 3 with the contract's
-explanation instead of a connection error.
+**Registry publishing: what actually stops it, and what merely helps.** The real reason a build
+cannot publish is that **there is no credential to publish with** — the builder holds no registry
+credentials, no service-account token and no workload identity (measured above), so an authenticated
+push has nothing to authenticate with.
+
+`awx-docker` refuses `--push` and validates `--output`, rejecting
+`--output type=image,name=…,push=true` and `type=registry` with exit 2 while allowing
+`type=oci|docker|tar|local`; with no socket present it exits 3 with the contract's explanation
+instead of a connection error. That is **ergonomics and defence-in-depth, not a boundary** —
+`buildctl` ships in the AgentHost image and `BUILDKIT_HOST` is exported, so a run can call the
+daemon directly and skip the shim entirely. This is the same reasoning that ruled out the shared
+broker above: the shim is not in the trust path, so no property may rest on it. Stated as an
+invariant: *every* guarantee in this section must hold when the shim is bypassed, and each one
+listed here does — they rest on the absent credential, the empty build netns, and the per-run VM.
 
 Per-run builders were tracked as issue #761; this design closes it.
 

@@ -20,7 +20,8 @@
 # supported") and `newuidmap` ships with neither a setuid bit nor file caps, so no uid
 # *range* can be mapped and rootlesskit fails with "No subuid ranges found".
 #
-# So the sidecar runs as uid 0 with SYS_ADMIN + NET_ADMIN. What that does and does not buy:
+# So the sidecar runs as uid 0 with SYS_ADMIN + NET_ADMIN + SYS_PTRACE. What that does and
+# does not buy:
 #
 #   * It is NOT privileged, has no host namespaces, no hostPath and RuntimeDefault seccomp.
 #   * The capabilities are confined to the pod's Kata guest kernel, which is a different
@@ -31,9 +32,53 @@
 #   * In-guest NET_ADMIN does NOT defeat NetworkPolicy. Measured: adding a route to
 #     169.254.169.254 inside the guest succeeds, yet IMDS stays blocked, because Cilium
 #     enforces on the host side of the VM boundary.
+#   * SYS_PTRACE is scoped to this container's own PID namespace. `shareProcessNamespace`
+#     is not set, so the sidecar cannot see, let alone ptrace, a process in the sandbox
+#     container. Build steps do not inherit it (measured below).
 #   * Build steps are not privileged. runc confines them to the default capability set
-#     (measured `CapEff: 00000000a80425fb`) and the daemon refuses the escape hatch:
+#     (measured `CapEff: 00000000a80425fb`, identical with and without SYS_PTRACE on the
+#     daemon) and the daemon refuses the escape hatch:
 #     `granting entitlement security.insecure is not allowed by build daemon configuration`.
+#
+# BUILD STEPS DO NOT RUN IN THE POD NETWORK NAMESPACE
+# ---------------------------------------------------
+# This is a deliberate, measured correction to an earlier `--oci-worker-net host` shape.
+# Under host networking a `RUN` step joins the pod's netns, and because runc grants build
+# steps the default capability set — which includes NET_RAW — a Dockerfile could open an
+# AF_PACKET socket on the pod's interfaces. Demonstrated on AKS Kata before this change:
+#
+#   #6 CapEff: 00000000a80425fb
+#   #6 2: eth0    inet 10.244.2.183/32 ... scope global eth0
+#   #6 tcpdump: listening on any, link-type LINUX_SLL2 ...
+#
+# That matters because the pod's own traffic is not all encrypted: `AgentHost__McpEndpoint`
+# is plain `http://`, and the run owner's GitHub token and turn bearer token arrive over the
+# in-pod `POST /configure` call. Model-controlled code is specifically designed NOT to hold
+# those credentials, so letting a build step sniff them would be a privilege escalation.
+#
+# The builder therefore uses `--oci-worker-net cni` with a config that attaches nothing.
+# Each build step gets a fresh, empty network namespace. Measured after this change, same
+# cluster, same image:
+#
+#   RUN step netns net:[4026532186]   daemon/pod netns net:[4026531840]   (different)
+#   DNS_BLOCKED_GOOD   NET_IN_RUN_BLOCKED   BUILD_EXIT=0   28736000-byte OCI tar
+#
+# Two consequences, stated plainly rather than buried:
+#
+#   * `RUN` steps have loopback only. A Dockerfile line that installs packages from the
+#     network (`RUN apt-get install`, `RUN npm install`) does NOT work. Package installs
+#     from the run's allowed egress are still available in the sandbox shell itself, which
+#     keeps its normal pod networking; only in-build network is removed.
+#   * Base image pulls still work, because the daemon resolves and fetches them itself from
+#     the pod netns, under the pod's NetworkPolicy. Proven by the successful build above.
+#
+# Restoring in-build networking means putting attacker-controlled `RUN` steps back on the
+# pod's netns with NET_RAW, so it is not offered as a flag. `--oci-worker-net bridge` was
+# tried as a middle ground and does not work here: the CNI bridge plugin needs to write
+# `/proc/sys/net/ipv4/ip_forward`, `/proc/sys` is read-only, a `mount -o remount,rw
+# /proc/sys` makes every build step fail with `open container mntns: permission denied`,
+# and pod `sysctls` are rejected (`SysctlForbidden: net.ipv4.ip_forward not allowlisted`),
+# which would need a node-level kubelet change.
 #
 # Residual risk for reviewers: a run that reaches this socket can drive a root-capable
 # daemon inside its own VM. A buildkitd vulnerability would therefore be a root-in-guest
@@ -43,8 +88,9 @@
 #
 # POD SECURITY ADMISSION
 # ----------------------
-# SYS_ADMIN and NET_ADMIN are outside the PSA `baseline` capability allow-list. Applying
-# this patch to a template whose pods land in a `baseline`-enforced namespace is rejected:
+# SYS_ADMIN, NET_ADMIN and SYS_PTRACE are outside the PSA `baseline` capability allow-list.
+# Applying this patch to a template whose pods land in a `baseline`-enforced namespace is
+# rejected:
 #
 #   pods "..." is forbidden: violates PodSecurity "baseline:latest":
 #   non-default capabilities (container "buildkitd" must not include "NET_ADMIN",
@@ -88,16 +134,44 @@
         # needs to create a cgroup per build step (measured: EROFS without this). Inside
         # Kata this remounts the guest VM's own cgroup tree, not the node's.
         mount -o remount,rw /sys/fs/cgroup
+        # Give every build step its own empty network namespace instead of the pod's.
+        # BuildKit reads a single CNI *conf* (not a conflist) from this exact path, and it
+        # always invokes a plugin named `loopback` in addition to the configured one, so
+        # both files below are required for the daemon to reach a ready state.
+        mkdir -p /etc/buildkit /opt/cni/bin
+        echo '{"cniVersion":"1.0.0","name":"buildkit-isolated","type":"loopback"}' \
+          > /etc/buildkit/cni.json
+        # The whole point is to attach nothing: no veth, no bridge, no route off the
+        # namespace. `lo` is brought up so a build step can still talk to itself.
+        cat > /opt/cni/bin/loopback <<'CNI'
+        #!/bin/sh
+        if [ "$CNI_COMMAND" = "ADD" ]; then
+          nsenter --net="$CNI_NETNS" ip link set lo up || exit 1
+        fi
+        echo '{"cniVersion":"1.0.0"}'
+        CNI
+        chmod 0755 /opt/cni/bin/loopback
         # --group 1000 makes the socket srw-rw---- root:1000 so the uid-1000 sandbox
         # container can connect to it. Without it the socket is root-only and every build
         # fails with "permission denied" on connect.
         exec buildkitd \
           --addr unix:///run/buildkit/buildkitd.sock \
           --group 1000 \
-          --oci-worker-net host
+          --oci-worker-net cni
     securityContext:
       privileged: false
       runAsUser: 0
+      # Both of these are load-bearing, and both were found by deploying this patch against
+      # the real template rather than a standalone pod. The pod-level securityContext in
+      # k8s/base/sandbox-template-agenthost.yaml sets runAsNonRoot: true, runAsUser: 1000,
+      # runAsGroup: 1000, and each line is inherited unless the container overrides it:
+      #   * without runAsNonRoot: false the kubelet refuses to start the container at all —
+      #     `CreateContainerConfigError: container's runAsUser breaks non-root policy`;
+      #   * without runAsGroup: 0 the daemon starts as uid 0 / gid 1000 and every build step
+      #     dies in runc with `error spawning mount remapping thread: mount source thread:
+      #     open container mntns: open /proc/N/ns/mnt: permission denied`.
+      runAsGroup: 0
+      runAsNonRoot: false
       allowPrivilegeEscalation: true
       capabilities:
         drop: ["ALL"]
@@ -107,9 +181,16 @@
           # Required by bpf_prog_query(BPF_CGROUP_DEVICE). CAP_BPF does NOT substitute:
           # the kernel gates this query on CAP_NET_ADMIN specifically (measured).
           - NET_ADMIN
+          # Required only in `--oci-worker-net cni` mode: runc opens /proc/<pid>/ns/mnt of
+          # its own init process to join the prepared namespace, and without SYS_PTRACE
+          # that open is denied and every build step fails (measured — the same
+          # `open container mntns` error, which does NOT occur under host networking).
+          - SYS_PTRACE
           # runc cannot raise a build step's capabilities above its own bounding set, so
           # the 14 default container capabilities must be present or every RUN fails with
-          # "unable to apply caps: operation not permitted" (measured).
+          # "unable to apply caps: operation not permitted" (measured). NET_RAW is in that
+          # default set and cannot be dropped here — which is exactly why build steps are
+          # given their own empty network namespace above.
           - SYS_CHROOT
           - MKNOD
           - SETUID
@@ -140,6 +221,27 @@
         mountPath: /var/lib/buildkit
       - name: buildkit-tmp
         mountPath: /tmp
+      # Mask the projected ServiceAccount token, exactly as the base template already does
+      # for the executor sidecar. The ServiceAccount admission plugin skips injecting its
+      # own mount when the container already declares one at this path, so this empty
+      # overlay wins and the builder holds no cluster identity. Paired with the
+      # skip-containers patch below, which keeps the AAD workload-identity token and
+      # AZURE_* environment out of it too.
+      - name: exec-no-serviceaccount
+        mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        readOnly: true
+# Add the builder to the workload-identity opt-out list. The webhook only mutates
+# containers that are NOT named here, so this keeps the AAD token volume and the AZURE_*
+# environment out of buildkitd. `add` rather than `replace`, because `add` on an object
+# member is defined to overwrite an existing value AND to create a missing one, so this
+# works whichever revision of the annotation is live. It does require the annotations map
+# itself to exist — it is declared in k8s/base/sandbox-template-agenthost.yaml, so apply
+# the base template before this patch. Against an older template that predates that map
+# the patch fails loudly rather than silently dropping the opt-out; a cluster checked while
+# writing this was in exactly that state, with `podTemplate.metadata` carrying labels only.
+- op: add
+  path: /spec/podTemplate/metadata/annotations/azure.workload.identity~1skip-containers
+  value: "agentweaver-exec,buildkitd"
 # Both of these MUST be tmpfs. A default emptyDir in a Kata pod is virtiofs, which does not
 # support xattrs, so every layer builds and then the OCI export dies with
 # "failed to get xattr ... operation not supported" (measured). Cost: build state is RAM,

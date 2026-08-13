@@ -149,6 +149,13 @@ public class SandboxCapabilityContractTests
         // must be told that the boundary is the Kata VM, and told the residual risk that remains.
         withBuilder.Detail.Should().Contain("not reachable from any other run");
         withBuilder.Detail.Should().Contain("Residual risk");
+
+        // A capability that is "Supported" but silently drops network from every RUN step would
+        // strand an agent mid-task on `RUN apt-get install`, which is precisely the failure the
+        // contract exists to prevent. The limit must be part of the declaration, not just the docs.
+        withBuilder.Detail.Should().Contain("RUN apt-get install");
+        withBuilder.Detail.Should().Contain("loopback only");
+        withBuilder.Detail.Should().Contain("Base images still pull");
     }
 
     /// <summary>

@@ -45,10 +45,71 @@ public sealed class SandboxBuildkitSidecarPatchTests
             "a merge-shaped patch replaces the container and volume lists instead of appending to them");
 
         Regex.Matches(body, @"(?m)^- op: add$").Should().HaveCount(
-            3,
-            "the patch appends exactly one container and two tmpfs volumes");
+            4,
+            "the patch appends one container and two tmpfs volumes, and sets the workload-identity opt-out");
         body.Should().Contain("path: /spec/podTemplate/spec/containers/-");
         body.Should().Contain("path: /spec/podTemplate/spec/volumes/-");
+    }
+
+    /// <summary>
+    /// Both of these were found by patching the real template rather than a standalone probe pod.
+    /// The base template sets <c>runAsNonRoot: true</c> / <c>runAsUser: 1000</c> /
+    /// <c>runAsGroup: 1000</c> at pod level, and every line is inherited unless overridden:
+    /// without <c>runAsNonRoot: false</c> the kubelet refuses to start the container
+    /// (<c>CreateContainerConfigError: container's runAsUser breaks non-root policy</c>), and
+    /// without <c>runAsGroup: 0</c> the daemon runs as uid 0 / gid 1000 and every build step dies in
+    /// runc with <c>open container mntns: … permission denied</c>. Dropping either line ships a
+    /// builder that cannot build.
+    /// </summary>
+    [Fact]
+    public void Patch_OverridesThePodLevelNonRootAndGroupThatWouldOtherwiseBreakTheBuilder()
+    {
+        var body = PatchBody();
+
+        body.Should().Contain("runAsUser: 0");
+        body.Should().Contain("runAsGroup: 0");
+        body.Should().Contain("runAsNonRoot: false");
+    }
+
+    /// <summary>
+    /// Build steps must not share the pod's network namespace. Under <c>--oci-worker-net host</c> a
+    /// <c>RUN</c> step joins it, and runc grants build steps the default capability set — which
+    /// includes NET_RAW and cannot be reduced — so a Dockerfile could sniff the pod's plaintext
+    /// traffic, including the <c>POST /configure</c> call that carries the run owner's GitHub token.
+    /// Demonstrated on AKS Kata before the change (<c>tcpdump: listening on any</c> against
+    /// <c>eth0 10.244.2.183</c>). CNI mode with a config that attaches nothing gives each step an
+    /// empty namespace instead.
+    /// </summary>
+    [Fact]
+    public void Patch_GivesBuildStepsAnEmptyNetworkNamespaceRatherThanThePods()
+    {
+        var body = PatchBody();
+
+        body.Should().Contain("--oci-worker-net cni");
+        body.Should().NotContain("--oci-worker-net host");
+        body.Should().NotContain("--oci-worker-net bridge");
+
+        // BuildKit reads a single CNI *conf* from this exact path and always also invokes a plugin
+        // named `loopback`, so both files are required for the daemon to become ready.
+        body.Should().Contain("/etc/buildkit/cni.json");
+        body.Should().Contain("/opt/cni/bin/loopback");
+    }
+
+    /// <summary>
+    /// The builder must hold no cluster or cloud identity, for the same reason the executor sidecar
+    /// does not: it runs code that untrusted input reaches. Verified on-cluster — the
+    /// service-account directory contains only <c>.</c> and <c>..</c>, and <c>env | grep -c ^AZURE_</c>
+    /// returns 0.
+    /// </summary>
+    [Fact]
+    public void Patch_LeavesTheBuilderWithoutAServiceAccountTokenOrWorkloadIdentity()
+    {
+        var body = PatchBody();
+
+        body.Should().Contain("/var/run/secrets/kubernetes.io/serviceaccount");
+        body.Should().Contain("name: exec-no-serviceaccount");
+        body.Should().Contain("azure.workload.identity~1skip-containers");
+        body.Should().Contain("agentweaver-exec,buildkitd");
     }
 
     /// <summary>

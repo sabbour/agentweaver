@@ -128,18 +128,24 @@ public static class SandboxCapabilityProbe
                 + "capabilities, which the Kata guest filesystem cannot store (setcap reports 'Not supported').",
                 "Patch the optional builder sidecar into the sandbox template "
                 + "(k8s/optional/sandbox-buildkit-sidecar.yaml). It requires a namespace whose PodSecurity level "
-                + "admits CAP_SYS_ADMIN and CAP_NET_ADMIN for that one container; 'baseline' does not.")
+                + "admits CAP_SYS_ADMIN, CAP_NET_ADMIN and CAP_SYS_PTRACE for that one container; 'baseline' does "
+                + "not.")
             : new SandboxCapability(
                 SandboxCapabilityIds.ImageBuild,
                 SandboxCapabilityState.Supported,
                 $"Builds run on a BuildKit sidecar in this pod, reached over the pod-local socket {imageBuildEndpoint}. "
                 + "Because the builder is inside the run's own Kata VM, its cache, history and content store are "
                 + "scoped to this pod and are not reachable from any other run — there is no shared daemon and no "
-                + "network credential to hand out. The sidecar is rootful (uid 0, CAP_SYS_ADMIN + CAP_NET_ADMIN) "
-                + "because rootless BuildKit cannot work under Kata, but it is not privileged, has no host "
-                + "namespaces and runs under RuntimeDefault seccomp, and its capabilities are confined to the "
-                + "guest kernel. Build steps themselves are runc-confined to the default capability set, and the "
-                + "daemon refuses the security.insecure entitlement. Residual risk: a run reaching this socket "
+                + "network credential to hand out. IMPORTANT LIMIT: build steps get their own empty network "
+                + "namespace (loopback only), so a Dockerfile line that needs the network — RUN apt-get install, "
+                + "RUN npm install — will fail with a DNS or connection error. Install dependencies in the sandbox "
+                + "shell, which has normal pod networking, and COPY the result into the image. Base images still "
+                + "pull, because the daemon fetches them itself. The sidecar is rootful (uid 0, CAP_SYS_ADMIN + "
+                + "CAP_NET_ADMIN + CAP_SYS_PTRACE) because rootless BuildKit cannot work under Kata, but it is not "
+                + "privileged, has no host namespaces, holds no service-account token or workload identity, and "
+                + "runs under RuntimeDefault seccomp, and its capabilities are confined to the guest kernel. Build "
+                + "steps themselves are runc-confined to the default capability set, and the daemon refuses the "
+                + "security.insecure entitlement. Residual risk: a run reaching this socket "
                 + "drives a root-capable daemon inside its own VM, so a buildkitd vulnerability would be a "
                 + "root-in-guest compromise — bounded by the Kata VM, with no node access and no other run."));
 
