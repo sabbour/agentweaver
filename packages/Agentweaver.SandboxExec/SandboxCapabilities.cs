@@ -30,7 +30,7 @@ public enum SandboxCapabilityState
 
     /// <summary>
     /// Not performed by this executor by design; a separate, differently-privileged component is
-    /// required (image builds need a BuildKit builder outside the sandbox pod).
+    /// required (image builds need a BuildKit sidecar, which the sandbox container is not).
     /// </summary>
     RequiresExternalService,
 }
@@ -120,21 +120,28 @@ public static class SandboxCapabilityProbe
             ? new SandboxCapability(
                 SandboxCapabilityIds.ImageBuild,
                 SandboxCapabilityState.RequiresExternalService,
-                "BuildKit cannot run inside this sandbox pod. buildkitd needs to create cgroups and perform mounts "
-                + "for every build step, which requires CAP_SYS_ADMIN and CAP_NET_ADMIN; the sandbox pod holds no "
-                + "capabilities at all (CapEff=0) and its namespace enforces PodSecurity 'baseline', which admits "
-                + "neither. Rootless buildkitd is not an escape hatch here either: it needs a sub-UID range, and "
-                + "mapping a range requires newuidmap to carry file capabilities, which the Kata guest filesystem "
-                + "cannot store (setcap reports 'Not supported').",
-                "Deploy k8s/optional/buildkit-broker.yaml and set the image-build endpoint on the executor.")
+                "No build daemon socket is present in this sandbox pod, so image builds are unavailable. "
+                + "buildkitd cannot run in the sandbox container itself: it must create cgroups and perform "
+                + "mounts for every build step, which requires CAP_SYS_ADMIN and CAP_NET_ADMIN, and the sandbox "
+                + "container holds no capabilities at all (CapEff=0). Rootless buildkitd is not an escape hatch "
+                + "here either: it needs a sub-UID range, and mapping a range requires newuidmap to carry file "
+                + "capabilities, which the Kata guest filesystem cannot store (setcap reports 'Not supported').",
+                "Patch the optional builder sidecar into the sandbox template "
+                + "(k8s/optional/sandbox-buildkit-sidecar.yaml). It requires a namespace whose PodSecurity level "
+                + "admits CAP_SYS_ADMIN and CAP_NET_ADMIN for that one container; 'baseline' does not.")
             : new SandboxCapability(
                 SandboxCapabilityIds.ImageBuild,
                 SandboxCapabilityState.Supported,
-                $"Builds are delegated to the external BuildKit endpoint {imageBuildEndpoint} over mTLS; the sandbox "
-                + "streams the build context and never gains build privileges itself. The broker runs in its own "
-                + "Kata VM, unprivileged and under RuntimeDefault seccomp. Note that the broker is shared across "
-                + "runs, so its build cache is a cross-run channel; the per-run boundary the sandbox enforces does "
-                + "not extend to it."));
+                $"Builds run on a BuildKit sidecar in this pod, reached over the pod-local socket {imageBuildEndpoint}. "
+                + "Because the builder is inside the run's own Kata VM, its cache, history and content store are "
+                + "scoped to this pod and are not reachable from any other run — there is no shared daemon and no "
+                + "network credential to hand out. The sidecar is rootful (uid 0, CAP_SYS_ADMIN + CAP_NET_ADMIN) "
+                + "because rootless BuildKit cannot work under Kata, but it is not privileged, has no host "
+                + "namespaces and runs under RuntimeDefault seccomp, and its capabilities are confined to the "
+                + "guest kernel. Build steps themselves are runc-confined to the default capability set, and the "
+                + "daemon refuses the security.insecure entitlement. Residual risk: a run reaching this socket "
+                + "drives a root-capable daemon inside its own VM, so a buildkitd vulnerability would be a "
+                + "root-in-guest compromise — bounded by the Kata VM, with no node access and no other run."));
 
         capabilities.Add(linux
             ? new SandboxCapability(

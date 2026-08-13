@@ -271,14 +271,14 @@ spec:
               value: "/var/run/agentweaver-exec/exec.sock"
             - name: HOME
               value: "/home/appuser"
-            # Image builds are delegated to the BuildKit broker (k8s/optional/buildkit-broker.yaml).
-            # When the broker is not deployed, the client certificate Secret is absent, the endpoint
-            # resolves to nothing, and the capability contract keeps reporting image_build as
-            # RequiresExternalService — the sandbox never silently degrades into a build failure.
-            - name: AGENTWEAVER_IMAGE_BUILD_ENDPOINT
-              value: "tcp://agentweaver-buildkit.agentweaver-build.svc.cluster.local:1234"
-            - name: AGENTWEAVER_IMAGE_BUILD_TLS_DIR
-              value: "/mnt/buildkit-client-tls"
+            # Image builds are served by an OPTIONAL BuildKit sidecar in this same pod, reached over
+            # a pod-local unix socket (k8s/optional/sandbox-buildkit-sidecar.yaml). The base
+            # template does NOT deploy that sidecar, so on a stock cluster the socket is absent, the
+            # executor reports image_build as unsupported, and `docker build` fails with the
+            # contract's explanation instead of a connection error. Availability is probed from the
+            # socket itself, never inferred from this variable.
+            - name: AGENTWEAVER_IMAGE_BUILD_SOCKET
+              value: "/run/buildkit/buildkitd.sock"
           # The model-controlled build/test/preview working set lives here now. Pod-level totals are
           # deliberately UNCHANGED versus the single-container layout (requests 1000m/2Gi, limits
           # 2000m/4Gi) so katapool scheduling density and burst ceiling stay exactly as documented
@@ -309,13 +309,11 @@ spec:
             - name: exec-no-serviceaccount
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
-            # Client certificate authorising build submission to the BuildKit broker. Optional, so
-            # a cluster without the broker starts unchanged. It is reachable by sandboxed code by
-            # design — it buys a build and nothing else, since the broker has no registry
-            # credentials, no cluster token and no workspace access.
-            - name: buildkit-client-tls
-              mountPath: /mnt/buildkit-client-tls
-              readOnly: true
+            # Build daemon socket, published by the optional in-pod BuildKit sidecar. Deliberately
+            # under /run and NOT under /mnt: the per-run writable system root mounts a tmpfs over
+            # /mnt, which would mask anything published there and break every sandboxed command.
+            - name: buildkit-socket
+              mountPath: /run/buildkit
       volumes:
         - name: workspace
           persistentVolumeClaim:
@@ -345,11 +343,11 @@ spec:
         - name: exec-no-serviceaccount
           emptyDir:
             sizeLimit: "1Mi"
-        - name: buildkit-client-tls
-          secret:
-            secretName: agentweaver-buildkit-client-tls
-            defaultMode: 0444
-            optional: true
+        # Empty on a stock cluster: the socket only appears when the optional BuildKit sidecar is
+        # patched in. An empty directory here means "no builder", which is what the executor probes.
+        - name: buildkit-socket
+          emptyDir:
+            sizeLimit: "1Mi"
         - name: a2a-tls
           secret:
             secretName: agentweaver-a2a-server-tls

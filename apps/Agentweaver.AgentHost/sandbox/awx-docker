@@ -1,9 +1,10 @@
 #!/bin/sh
-# awx-docker -- `docker build` for the sandbox, executed by the external BuildKit broker.
+# awx-docker -- `docker build` for the sandbox, executed by the in-pod BuildKit sidecar.
 #
-# Image builds cannot happen inside the sandbox (see docs/deep-dive/sandbox-pod-execution.md), so
-# this shim translates the docker CLI surface an agent actually reaches for into a `buildctl` call
-# against the broker. It exists because the alternative -- telling the agent "docker is not
+# Image builds cannot happen inside the sandbox container (see
+# docs/deep-dive/sandbox-pod-execution.md), so this shim translates the docker CLI surface an agent
+# actually reaches for into a `buildctl` call against the builder sidecar over a pod-local unix
+# socket. It exists because the alternative -- telling the agent "docker is not
 # installed" -- is indistinguishable from a broken environment and produces worse behaviour than an
 # explicit, actionable message.
 #
@@ -13,13 +14,14 @@
 # built image is an artifact in the workspace, not something that can be run or pushed from here.
 #
 # Default output is an OCI archive in the workspace, named after -t. Nothing is ever pushed: the
-# broker holds no registry credentials by design.
+# builder holds no registry credentials, and registry exporters are refused below so that
+# `--output type=image,push=true` cannot walk around the `--push` refusal.
 set -eu
 
 usage_error() {
     echo "awx-docker: $1" >&2
     echo >&2
-    echo "This sandbox builds images through an external BuildKit broker. Supported form:" >&2
+    echo "This sandbox builds images through an in-pod BuildKit sidecar. Supported form:" >&2
     echo "  docker build [-t name:tag] [-f Dockerfile] [--build-arg K=V] [--target stage] CONTEXT" >&2
     echo >&2
     echo "The result is written to the workspace as an OCI archive. The sandbox has no container" >&2
@@ -44,7 +46,7 @@ case "$subcommand" in
         fi
         ;;
     version)
-        echo "awx-docker shim (BuildKit broker: ${BUILDKIT_HOST:-not configured})"
+        echo "awx-docker shim (BuildKit sidecar socket: ${AGENTWEAVER_IMAGE_BUILD_SOCKET:-/run/buildkit/buildkitd.sock})"
         exit 0
         ;;
     *)
@@ -52,20 +54,13 @@ case "$subcommand" in
         ;;
 esac
 
-if [ -z "${BUILDKIT_HOST:-}" ]; then
-    echo "awx-docker: no BuildKit broker is configured for this deployment, so image builds are unavailable." >&2
-    echo "            The capability contract reports image_build as RequiresExternalService with the" >&2
-    echo "            remediation; ask the operator to deploy k8s/optional/buildkit-broker.yaml." >&2
+socket="${AGENTWEAVER_IMAGE_BUILD_SOCKET:-/run/buildkit/buildkitd.sock}"
+if [ ! -S "$socket" ]; then
+    echo "awx-docker: no build daemon socket at $socket. This sandbox has no builder sidecar," >&2
+    echo "            so image builds are not available here. See the sandbox capability" >&2
+    echo "            contract for how to enable one." >&2
     exit 3
 fi
-
-tls_dir="${AGENTWEAVER_BUILDKIT_TLS_DIR:-/mnt/buildkit-client-tls}"
-for f in ca.crt tls.crt tls.key; do
-    [ -r "$tls_dir/$f" ] || {
-        echo "awx-docker: build credential $tls_dir/$f is missing or unreadable; the broker requires mTLS." >&2
-        exit 3
-    }
-done
 
 tag=""
 dockerfile=""
@@ -99,11 +94,13 @@ while [ "$#" -gt 0 ]; do
             add_frontend_arg "platform=$2"; shift 2 ;;
         --output|-o)
             [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+            # Validated below. Accepting this verbatim would let `--output type=image,push=true`
+            # walk straight past the --push refusal, so the value is checked, not trusted.
             output="$2"; shift 2 ;;
         --no-cache)
             no_cache="--no-cache"; shift ;;
         --push)
-            echo "awx-docker: --push is refused. The broker holds no registry credentials, so a build" >&2
+            echo "awx-docker: --push is refused. The builder holds no registry credentials, so a build" >&2
             echo "            cannot publish from the sandbox. Export the archive and push it from a" >&2
             echo "            trusted job that owns the credential." >&2
             exit 2 ;;
@@ -141,7 +138,26 @@ if [ -z "$output" ]; then
     [ -n "$tag" ] && output="$output,name=$tag"
 fi
 
-echo "awx-docker: building via BuildKit broker $BUILDKIT_HOST" >&2
+# Validate the exporter. `--push` is refused above, but BuildKit also publishes via
+# `--output type=image,push=true` / `type=registry`, which would bypass that refusal entirely.
+# Only exporters that write an artifact into the run's own filesystem are permitted.
+output_type=$(printf '%s' "$output" | sed -n 's/.*\btype=\([a-zA-Z]*\).*/\1/p')
+case "$output_type" in
+    oci|docker|tar|local) ;;
+    "")
+        usage_error "--output must specify a type= (oci, docker, tar or local)" ;;
+    *)
+        echo "awx-docker: --output type='$output_type' is refused. The sandbox may only export a" >&2
+        echo "            build artifact into its own workspace (type=oci, docker, tar or local)." >&2
+        echo "            Publishing to a registry from a run is not permitted." >&2
+        exit 2 ;;
+esac
+if printf '%s' "$output" | grep -qiE '(^|,)push=(true|1)'; then
+    echo "awx-docker: --output push=true is refused; see --push." >&2
+    exit 2
+fi
+
+echo "awx-docker: building via the in-pod BuildKit sidecar at $socket" >&2
 
 # buildctl writes a registry-auth config before resolving `FROM`, and falls back to $HOME/.docker
 # when DOCKER_CONFIG is unset. If HOME is unset or read-only it tries to create /.docker and the
@@ -154,11 +170,7 @@ mkdir -p "$DOCKER_CONFIG"
 # shellcheck disable=SC2086  # frontend_args is a deliberately pre-quoted argument list.
 eval set -- "$frontend_args"
 exec buildctl \
-    --addr "$BUILDKIT_HOST" \
-    --tlscacert "$tls_dir/ca.crt" \
-    --tlscert "$tls_dir/tls.crt" \
-    --tlskey "$tls_dir/tls.key" \
-    --tlsservername "${AGENTWEAVER_BUILDKIT_SERVER_NAME:-agentweaver-buildkit}" \
+    --addr "unix://$socket" \
     build \
     --frontend dockerfile.v0 \
     --local context="$context_dir" \

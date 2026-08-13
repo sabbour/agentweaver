@@ -127,25 +127,28 @@ public class SandboxCapabilityContractTests
 
     /// <summary>
     /// Image builds are not "unsupported": they are performed by a separate, differently-privileged
-    /// builder. The distinction matters because the remediation is a deployment change, not a
-    /// different operating system — and because the sandbox pod itself must never gain the
+    /// builder sidecar. The distinction matters because the remediation is a deployment change, not
+    /// a different operating system — and because the sandbox container itself must never gain the
     /// privileges BuildKit needs.
     /// </summary>
     [Fact]
-    public void ImageBuild_RequiresAnExternalBuilderUntilAnEndpointIsConfigured()
+    public void ImageBuild_RequiresABuilderSidecarUntilOneIsPresent()
     {
-        var withoutBroker = Capability(SandboxCapabilityIds.ImageBuild);
-        withoutBroker.State.Should().Be(SandboxCapabilityState.RequiresExternalService);
-        withoutBroker.Detail.Should().Contain("CAP_SYS_ADMIN");
-        withoutBroker.Detail.Should().Contain("CAP_NET_ADMIN");
-        withoutBroker.Remediation.Should().Contain("k8s/optional/buildkit-broker.yaml");
+        var withoutBuilder = Capability(SandboxCapabilityIds.ImageBuild);
+        withoutBuilder.State.Should().Be(SandboxCapabilityState.RequiresExternalService);
+        withoutBuilder.Detail.Should().Contain("CAP_SYS_ADMIN");
+        withoutBuilder.Detail.Should().Contain("CAP_NET_ADMIN");
+        withoutBuilder.Remediation.Should().Contain("k8s/optional/sandbox-buildkit-sidecar.yaml");
 
-        var withBroker = Capability(SandboxCapabilityIds.ImageBuild, imageBuildEndpoint: "tcp://builder:1234");
-        withBroker.State.Should().Be(SandboxCapabilityState.Supported);
+        var withBuilder = Capability(
+            SandboxCapabilityIds.ImageBuild,
+            imageBuildEndpoint: "unix:///run/buildkit/buildkitd.sock");
+        withBuilder.State.Should().Be(SandboxCapabilityState.Supported);
 
-        // The broker is shared across runs, so its cache is a cross-run channel. Callers must be
-        // told that rather than inferring the sandbox's per-run boundary extends to it.
-        withBroker.Detail.Should().Contain("shared across");
+        // The builder is per-pod, so the cross-run channel the shared broker had is gone. Callers
+        // must be told that the boundary is the Kata VM, and told the residual risk that remains.
+        withBuilder.Detail.Should().Contain("not reachable from any other run");
+        withBuilder.Detail.Should().Contain("Residual risk");
     }
 
     /// <summary>

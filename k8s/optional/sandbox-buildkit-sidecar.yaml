@@ -1,0 +1,137 @@
+# Optional: in-pod BuildKit builder sidecar for Kata sandbox pods
+#
+# WHY THIS SHAPE
+# --------------
+# Image builds need a build daemon. The rejected alternative was a single shared BuildKit
+# broker reached over mTLS: because the sandbox has to hold a client certificate and the
+# `buildctl` binary, any run could bypass the `docker` shim and call the daemon directly,
+# and BuildKit's `debug histories` / `debug logs <ref>` / `debug get <digest>` APIs then
+# expose *other runs'* build logs and content blobs. A shared daemon cannot be a boundary
+# between mutually untrusted runs.
+#
+# This runs the builder as a sidecar in the sandbox pod instead. The pod is a Kata VM, so
+# the builder, its cache and its state live and die inside the run's own VM. There is no
+# shared daemon, no network endpoint and no credential to hand to untrusted code.
+#
+# THE TRADE-OFF, STATED PLAINLY
+# -----------------------------
+# buildkitd needs to be rootful here: rootless BuildKit is not possible inside Kata. The
+# Kata guest filesystem rejects `security.capability` xattrs (`setcap` returns "Not
+# supported") and `newuidmap` ships with neither a setuid bit nor file caps, so no uid
+# *range* can be mapped and rootlesskit fails with "No subuid ranges found".
+#
+# So the sidecar runs as uid 0 with SYS_ADMIN + NET_ADMIN. What that does and does not buy:
+#
+#   * It is NOT privileged, has no host namespaces, no hostPath and RuntimeDefault seccomp.
+#   * The capabilities are confined to the pod's Kata guest kernel, which is a different
+#     kernel from the node's. Measured: guest `6.6.137.mshv1-1.azl3` vs node
+#     `6.6.137.mshv2-1.azl3`.
+#   * The *untrusted* container is unchanged: uid 1000, `drop: ["ALL"]`, measured
+#     `CapEff: 0000000000000000`. Only this trusted, upstream-maintained sidecar is elevated.
+#   * In-guest NET_ADMIN does NOT defeat NetworkPolicy. Measured: adding a route to
+#     169.254.169.254 inside the guest succeeds, yet IMDS stays blocked, because Cilium
+#     enforces on the host side of the VM boundary.
+#   * Build steps are not privileged. runc confines them to the default capability set
+#     (measured `CapEff: 00000000a80425fb`) and the daemon refuses the escape hatch:
+#     `granting entitlement security.insecure is not allowed by build daemon configuration`.
+#
+# Residual risk for reviewers: a run that reaches this socket can drive a root-capable
+# daemon inside its own VM. A buildkitd vulnerability would therefore be a root-in-guest
+# compromise. It is bounded by the Kata VM — no node access, no other run, no credential —
+# but it is a real reduction in defence-in-depth versus a sandbox with no builder at all.
+# That is why this file is opt-in and not part of the base template.
+#
+# POD SECURITY ADMISSION
+# ----------------------
+# SYS_ADMIN and NET_ADMIN are outside the PSA `baseline` capability allow-list. Applying
+# this patch to a template whose pods land in a `baseline`-enforced namespace is rejected:
+#
+#   pods "..." is forbidden: violates PodSecurity "baseline:latest":
+#   non-default capabilities (container "buildkitd" must not include "NET_ADMIN",
+#   "SYS_ADMIN" in securityContext.capabilities.add)
+#
+# Build-enabled sandbox pods therefore need their own namespace whose PSA level permits
+# these two capabilities. Do NOT relax `agentweaver` itself — it hosts the control plane.
+#
+# APPLY
+# -----
+#   kubectl patch sandboxtemplate agentweaver-agent-host -n <sandbox-ns> \
+#     --type merge --patch-file k8s/optional/sandbox-buildkit-sidecar.yaml
+#
+spec:
+  podTemplate:
+    spec:
+      containers:
+        - name: buildkitd
+          image: agentweaverasabbour.azurecr.io/moby/buildkit:v0.32.2
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Kubernetes mounts /sys/fs/cgroup read-only for unprivileged containers, and runc
+              # needs to create a cgroup per build step (measured: EROFS without this). Inside
+              # Kata this remounts the guest VM's own cgroup tree, not the node's.
+              mount -o remount,rw /sys/fs/cgroup
+              exec buildkitd \
+                --addr unix:///run/buildkit/buildkitd.sock \
+                --group 1000 \
+                --oci-worker-net host
+          securityContext:
+            privileged: false
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+            capabilities:
+              drop: ["ALL"]
+              add:
+                # Required to remount the cgroup tree read-write.
+                - SYS_ADMIN
+                # Required by bpf_prog_query(BPF_CGROUP_DEVICE). CAP_BPF does NOT substitute:
+                # the kernel gates this query on CAP_NET_ADMIN specifically (measured).
+                - NET_ADMIN
+                # runc cannot raise a build step's capabilities above its own bounding set, so
+                # the 14 default container capabilities must be present or every RUN fails with
+                # "unable to apply caps: operation not permitted" (measured).
+                - SYS_CHROOT
+                - MKNOD
+                - SETUID
+                - SETGID
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+                - FSETID
+                - KILL
+                - SETPCAP
+                - SETFCAP
+                - NET_RAW
+                - NET_BIND_SERVICE
+                - AUDIT_WRITE
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "6Gi"
+          volumeMounts:
+            - name: buildkit-socket
+              mountPath: /run/buildkit
+            - name: buildkit-state
+              mountPath: /var/lib/buildkit
+            - name: buildkit-tmp
+              mountPath: /tmp
+      volumes:
+        # Both of these MUST be tmpfs. A default emptyDir in a Kata pod is virtiofs, which does
+        # not support xattrs, so every layer builds and then the OCI export dies with
+        # "failed to get xattr ... operation not supported" (measured). Cost: build state is
+        # RAM, charged against this container's memory limit.
+        - name: buildkit-state
+          emptyDir:
+            medium: Memory
+            sizeLimit: 3Gi
+        - name: buildkit-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi

@@ -2,8 +2,37 @@
 
 **Issue:** [#582](https://github.com/sabbour/agentweaver/issues/582)
 **Area:** Agent execution & sandbox
-**Status:** Implementation-ready design. The capability remains disabled and unimplemented until
-the security review and cluster compatibility gates in this spec pass.
+**Status:** Superseded in part. The trust-boundary analysis below still holds and still governs the
+implementation, but the *rootless* BuildKit mechanism it specifies was measured to be structurally
+impossible under Kata and has been replaced. See "What was measured, and what changed" immediately
+below, and `docs/deep-dive/sandbox-pod-execution.md` ("Image builds need a separate builder, in this
+pod's own VM") for the design that shipped.
+
+## What was measured, and what changed
+
+This spec was written before the capability was attempted on a real Kata cluster. Implementation
+measured three things that contradict its mechanism, so the mechanism changed while its security
+requirements did not:
+
+1. **Rootless BuildKit cannot run under Kata at all.** `setcap` returns `Not supported` on the guest
+   filesystem, `newuidmap` therefore carries neither setuid nor file capabilities, and `rootlesskit`
+   fails with `No subuid ranges found`. `moby/buildkit:rootless` is not a usable image here, so
+   every part of this spec that depends on it is unimplementable rather than merely unbuilt.
+2. **A shared broker breaks the per-run boundary this project exists to hold.** A broker reachable
+   by every run exposes BuildKit's debug APIs across runs, so one run could read another run's build
+   logs and blobs. That is a worse trade than the one it was meant to avoid.
+3. **The build daemon does not need cluster access to be isolated.** Running it as a sidecar inside
+   the run's own Kata VM confines it to that VM's guest kernel, which removes the broker, the
+   ephemeral Deployment, the `pods/exec` path, and the entire Kubernetes RBAC surface this spec
+   spends most of its length constraining.
+
+What shipped instead: an opt-in, rootful-but-VM-confined `buildkitd` sidecar in the sandbox pod
+(`k8s/optional/sandbox-buildkit-sidecar.yaml`), reached over a pod-local unix socket by the
+`awx-docker` shim. The sandbox container itself gains nothing — measured `CapEff: 0000000000000000`
+— and holds no registry credential, so the shim refuses every publishing exporter rather than
+authorizing a push. The sections below are retained as the recorded design history and for the
+threat analysis, which the shipped design still answers; treat their component list, RBAC and
+namespace names as historical.
 
 ## User story
 

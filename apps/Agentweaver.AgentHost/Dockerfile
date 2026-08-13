@@ -214,11 +214,13 @@ RUN echo "appuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/appuser \
 
 RUN mkdir -p /workspace /app/config /app/logs && chown -R 1000:1000 /workspace /app
 
-# ── Image builds via the external BuildKit broker ─────────────────────────────
-# Only the *client* lives here. buildkitd itself cannot run in this pod: it needs to create cgroups
-# and mounts per build step, which requires CAP_SYS_ADMIN and CAP_NET_ADMIN, and this container
-# holds no capabilities at all. So `docker build` inside a run is translated by `awx-docker` into a
-# buildctl call against the broker deployed from k8s/optional/buildkit-broker.yaml. `docker` is a
+# ── Image builds via the in-pod BuildKit sidecar ──────────────────────────────
+# Only the *client* lives here. buildkitd itself cannot run in this container: it needs to create
+# cgroups and mounts per build step, which requires CAP_SYS_ADMIN and CAP_NET_ADMIN, and this
+# container holds no capabilities at all. So `docker build` inside a run is translated by
+# `awx-docker` into a buildctl call against the optional builder sidecar patched in from
+# k8s/optional/sandbox-buildkit-sidecar.yaml, over a pod-local unix socket that never leaves the
+# run's own Kata VM. `docker` is a
 # symlink because an agent reaches for `docker build`, and a missing binary is indistinguishable
 # from a broken image; the shim answers every other subcommand with the reason it cannot work here.
 # Keep BUILDCTL_VERSION current: buildctl is a Go binary, so its embedded stdlib is what the Trivy

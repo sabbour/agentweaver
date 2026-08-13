@@ -798,7 +798,7 @@ omitted from the list, and never reported as supported.
 | `nuget_restore` | **Supported** | `dotnet restore`/`run` write to the run's workspace and per-run NuGet cache. |
 | `preview_port_binding` | **Supported** | The app binds loopback inside the sandbox; AgentHost forwards it to the preview Gateway, because both containers of the run's pod share one network namespace. |
 | `apt_install` | **Supported** (via the per-run writable system root, below) | `apt-get install` needs a writable `/usr`, `/var` and `/etc`; the run gets a private overlay of them. |
-| `image_build` | **RequiresExternalService** | BuildKit cannot run in this pod at all — see below. Builds are delegated to the opt-in broker, which runs in its own Kata VM. |
+| `image_build` | **RequiresExternalService** until a builder sidecar is present | BuildKit cannot run in the sandbox container at all — see below. An opt-in builder sidecar in the run's own Kata VM provides it; availability is probed from the socket, not assumed. |
 | `winget_install` | **UnsupportedOnPlatform** | winget is Windows-only; see "winget and the Windows executor". |
 
 `Unavailable` and `RequiresExternalService` mean "a deployment change would fix this".
@@ -868,78 +868,118 @@ performs that rename when the directory does not already exist, so
 hook — pre-creates the directories of the packages apt is about to install, which is an ordinary
 `mkdir` in the overlay's upper layer. It creates directories and nothing else.
 
-### Image builds need an external builder
+### Image builds need a separate builder, in this pod's own VM
 
-Building container images **inside the sandbox pod** is not a policy choice we can relax, and every
-step below was measured on the live cluster rather than assumed:
+Building container images **in the sandbox container** is not a policy choice we can relax, and
+every step below was measured on the live cluster rather than assumed:
 
 1. `buildkitd` must create a cgroup and perform mounts for every build step, which needs
-   `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`. The sandbox pod holds **no** capabilities (`CapEff=0`).
-2. `CAP_SYS_ADMIN` is **rejected by the namespace's PodSecurity `baseline` policy**.
+   `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`. The sandbox container holds **no** capabilities
+   (measured `CapEff: 0000000000000000`).
+2. `CAP_SYS_ADMIN` is **rejected by PodSecurity `baseline`**, which the `agentweaver` namespace
+   enforces. Measured verbatim:
+   `pods "…" is forbidden: violates PodSecurity "baseline:latest": non-default capabilities
+   (container "…" must not include "NET_ADMIN", "SYS_ADMIN" in securityContext.capabilities.add)`.
 3. Rootless `buildkitd` is not an escape hatch: it needs a sub-UID *range*, and mapping a range
    requires `newuidmap` to carry file capabilities. The Kata guest filesystem cannot store
    `security.capability` xattrs at all — `setcap` returns **`Not supported`** — so `newuidmap`
    fails with "Could not set caps". `rootlesskit` has no single-id fallback either; it exits with
    `No subuid ranges found`.
 
-An *in-pod* elevated builder would also be worse than useless: the exec sidecar mounts the shared
-workspace PVC, and a root + `CAP_SYS_ADMIN` container in the same Kata VM could mount the guest's
-virtiofs share and cross the run boundary. Keeping the builder outside the sandbox pod is the
-security property, not a limitation of it.
+So the builder is a **separate container**. The question is *where*.
 
-#### The broker that does work
+#### Why not a shared broker
 
-`k8s/optional/buildkit-broker.yaml` is opt-in and off by default. It was derived from measurement,
-and three findings shaped it — each of which breaks builds if reverted:
+The first implementation was one shared BuildKit broker reached over mTLS. It was rejected in
+review, correctly. The sandbox must hold a client certificate and the `buildctl` binary for
+`docker build` to work at all, so a run can ignore the `awx-docker` shim and call the daemon
+directly — and BuildKit exposes `debug histories`, `debug logs <ref>` and `debug get <digest>` to
+any authenticated client. One run could therefore enumerate another run's build references and
+download its logs and content blobs. **A daemon shared between mutually untrusted runs cannot be
+the boundary between them**, and no amount of shim hardening fixes that, because the shim is not
+in the trust path.
 
-- **Rootful, not rootless.** Rootless is impossible under Kata for the reason above. Rootless *does*
-  work on ordinary AKS nodes, but only with seccomp **and** AppArmor `Unconfined` — `baseline`
-  forbids both, and an escape would land beside the API and worker pods on a shared kernel. The
-  broker instead runs rootful in **its own Kata VM**, so the VM is the boundary and an escape lands
-  in a disposable guest with no service-account token, no PVC and no registry credentials. It is
-  still `privileged: false` under `seccompProfile: RuntimeDefault`.
+#### The builder sidecar that does work
+
+`k8s/optional/sandbox-buildkit-sidecar.yaml` is opt-in and off by default. It puts `buildkitd` in
+the sandbox pod itself, reached over a pod-local unix socket at `/run/buildkit/buildkitd.sock`.
+Because a sandbox pod **is** a Kata VM, the builder, its cache, its history and its content store
+live and die inside that one run's VM. There is no shared daemon, no network endpoint, and no
+credential to hand to untrusted code.
+
+Five findings shaped it, each of which breaks builds if reverted:
+
+- **Rootful, not rootless**, for the reason above. Rootless *does* work on ordinary AKS nodes, but
+  only with seccomp **and** AppArmor `Unconfined` — `baseline` forbids both, and an escape would
+  land beside the API and worker pods on a shared kernel. Rootful inside a per-run Kata VM is the
+  stronger position: the VM is the boundary.
 - **`CAP_NET_ADMIN` is required, and `CAP_BPF` does not substitute.** `runc` attaches a
   `BPF_CGROUP_DEVICE` program for the cgroup v2 device controller, and the kernel gates
   `BPF_PROG_QUERY` on `CAP_NET_ADMIN`. Without it every `RUN` fails with
   `bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted`. Adding `CAP_BPF` instead was
   tested and does not help.
+- **The 14 default container capabilities must be present.** `runc` cannot raise a build step's
+  capabilities above its own bounding set, so dropping them produces
+  `unable to apply caps: operation not permitted` on every `RUN`.
 - **BuildKit state must be tmpfs.** A default `emptyDir` in a Kata pod is **virtiofs**, which does
   not implement xattrs, so the OCI exporter fails at the final step with
-  `failed to get xattr for /tmp/containerd-mount…/bin: operation not supported` *after* every layer
-  has already built. `tmpfs` lives in the guest and supports xattrs. The cost is that build state is
-  RAM, charged against the container's memory limit.
+  `failed to get xattr …: operation not supported` *after* every layer has already built. `tmpfs`
+  lives in the guest and supports xattrs. The cost is that build state is RAM, charged against the
+  container's memory limit.
+- **`/sys/fs/cgroup` must be remounted read-write.** Kubernetes mounts it read-only for
+  unprivileged containers (`EROFS` otherwise). Inside a Kata guest that tree is the VM's own, so
+  the remount cannot reach the node's cgroups — which is why this is acceptable here and would not
+  be on a shared-kernel node.
 
-Kubernetes also mounts `/sys/fs/cgroup` read-only for unprivileged containers, so the entrypoint
-remounts it read-write before exec'ing `buildkitd`. Inside a Kata guest that tree is the VM's own,
-so the remount cannot reach the node's cgroups — which is why this is acceptable here and would not
-be on a shared-kernel node.
+The socket is published under `/run`, deliberately **not** under `/mnt`: the per-run writable
+system root mounts a tmpfs over `/mnt`, which would mask anything published there and break every
+sandboxed command, not just builds.
 
-Verified end-to-end on the live cluster from a sandbox-shaped client pod (unprivileged, non-root,
-`CapEff=0`, no service-account token) through the `agentweaver-buildkit` Service over mTLS: a build
-of `FROM alpine:3.20` with `RUN apk add --no-cache jq` exits 0 and produces a 4,138,496-byte OCI
-tarball whose index digest is `sha256:df749f0f…` and whose extracted layers contain `jq-1.7.1` and
-the expected marker file. The same client is refused without a client certificate
-(`tls: certificate required`), refused without TLS (`EOF`), and — once its `app.kubernetes.io/component`
-label is removed — cannot reach the port at all (`i/o timeout`), which is the NetworkPolicy doing its
-job. Note that Cilium takes roughly 30–60s to propagate a pod label change into a new identity, so a
-freshly relabelled pod keeps its old access for a short window; that is a property of the CNI, not of
-this policy.
+#### What was measured, and the trade-off
 
-Two smaller things this shook out, both of which break builds if reverted:
+On the live AKS Kata cluster, from a sandbox-shaped pod (agent container `runAsUser: 1000`,
+`drop: ["ALL"]`, measured `CapEff: 0000000000000000`, no service-account token):
 
-- **The readiness probe needs its own client certificate.** buildkitd's only real health signal is an
-  mTLS gRPC call, and it rejects the server's own certificate as a client credential
-  (`tls: bad certificate`) because that one is `extendedKeyUsage=serverAuth`. Rather than widen the
-  server certificate, `gen-buildkit-mtls-certs.mjs` issues a third `clientAuth` certificate held only
-  by the broker, so the key that proves the broker's identity to sandboxes still cannot submit builds.
-- **`buildctl` needs a writable Docker config directory.** It writes registry auth before resolving
-  `FROM`, and with `DOCKER_CONFIG` and `HOME` unset it tries to create `/.docker` and dies at "load
-  metadata" with `permission denied`. The `awx-docker` shim points `DOCKER_CONFIG` at the run's own
-  workspace.
+| Property | Evidence |
+| --- | --- |
+| Build runs **inside the run's VM**, not on the node | The `RUN` step reports kernel `6.6.137.mshv1-1.azl3`; the node runs `6.6.137.mshv2-1.azl3`. |
+| Full build incl. `RUN` and OCI export | `BUILD_EXIT=0`; `RUN` output and an in-build `tdnf install` recovered from the exported layers. |
+| Cross-run isolation | A second run's `buildctl debug histories` and `du` are **empty** while the first run shows 2 histories and 617 MB of cache. The shared-broker leak is structurally gone. |
+| No host/node access | No docker or containerd socket; no service-account token; kubelet `10250` unreachable. |
+| Strict NetworkPolicy holds | IMDS blocked from **both** containers. Adding a route to `169.254.169.254` from inside the guest *succeeds* and IMDS stays blocked — Cilium enforces on the host side of the VM boundary, so in-guest `NET_ADMIN` cannot defeat it. Builds still succeed through the DNS + 443 allowance. |
+| Build steps are not privileged | `RUN` steps get the runc default set (`CapEff: 00000000a80425fb`), and the daemon refuses the escape hatch: `granting entitlement security.insecure is not allowed by build daemon configuration`. |
+| The builder cannot reach the shared workspace | With `CAP_SYS_ADMIN`, the builder still cannot see the RWX workspace: it is not in its mount table, sibling PIDs are invisible (the pod does **not** set `shareProcessNamespace`), `/proc/<pid>/root` traversal finds nothing, and no guest block devices are exposed. |
+| Deterministic cleanup | Deleting the pod destroys the VM and its RAM-backed build state in 8s; the sibling run is unaffected. |
 
-**Known limitation, deliberately not hidden:** the broker is **shared across runs**, so its build
-cache is a cross-run channel. The per-run boundary the sandbox enforces does not extend to it. That
-is why it is opt-in; per-run builders would close it and are tracked as issue #761.
+**The trade-off, stated plainly for review.** A run that can reach this socket can drive a
+root-capable build daemon inside its own VM. `security.insecure` is refused and build steps are
+runc-confined, so this is not a direct privilege grant — but a `buildkitd` vulnerability would be a
+root-in-guest compromise. It is bounded by the Kata VM: no node access, no other run's data, no
+credential. Compared with a sandbox that has no builder at all, this is a real reduction in
+defence-in-depth, which is exactly why it is **opt-in** and not part of the base template.
+
+**Two invariants this design depends on.** Both are properties of the manifest, so a future edit
+could silently remove them:
+
+1. The builder container must **never** mount the workspace volume.
+2. The pod must **never** set `shareProcessNamespace: true`, which would merge the PID namespaces
+   and expose `/proc/<pid>/root` of the container holding the workspace.
+
+**Pod Security Admission.** `SYS_ADMIN`/`NET_ADMIN` are outside the `baseline` allow-list, so
+build-enabled sandbox pods need a namespace whose PSA level admits them for that one container.
+Do **not** relax `agentweaver` itself — it hosts the control plane. On a stock cluster the sidecar
+is absent, the socket does not exist, and the capability contract reports `image_build` as
+`RequiresExternalService`; availability is probed from the socket, never inferred from an
+environment variable.
+
+**Registry publishing is refused server-agnostically.** The builder holds no registry credentials,
+and `awx-docker` refuses `--push` *and* validates `--output`, so
+`--output type=image,name=…,push=true` and `type=registry` are rejected (exit 2) rather than
+quietly bypassing the refusal. Only `type=oci|docker|tar|local` — artifacts written into the run's
+own filesystem — are allowed. With no socket present the shim exits 3 with the contract's
+explanation instead of a connection error.
+
+Per-run builders were tracked as issue #761; this design closes it.
 
 ### How the preview hop was verified
 

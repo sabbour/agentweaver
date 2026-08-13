@@ -72,20 +72,6 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
-    # BuildKit broker in agentweaver-build (k8s/optional/buildkit-broker.yaml). Same Cilium
-    # identity reasoning as the API/MCP rules above: the broker's ClusterIP is in 10.0.0.0/8, which
-    # the operator-generated policy excepts, so only an identity-based allow authorises it. Harmless
-    # when the broker is not deployed — the selector simply matches nothing.
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: agentweaver-build
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: agentweaver-buildkit
-      ports:
-        - protocol: TCP
-          port: 1234
     # DNS: kube-dns for hostname resolution (needed for GitHub/Copilot API FQDNs).
     - to:
         - namespaceSelector:

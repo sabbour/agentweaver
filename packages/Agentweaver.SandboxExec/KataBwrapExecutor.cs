@@ -42,8 +42,13 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     /// <summary>System trees a run may write to when it owns a per-run writable system root.</summary>
     private static readonly string[] WritableSystemRoots = ["/usr", "/etc", "/var"];
 
-    /// <summary>Default location of the mTLS material authorising build submission to the broker.</summary>
-    private const string DefaultImageBuildTlsDirectory = "/mnt/buildkit-client-tls";
+    /// <summary>
+    /// Default location of the build daemon socket. The builder is a sidecar in this pod, so the
+    /// socket never leaves the pod's own Kata VM and there is no network credential to hand out.
+    /// <c>/run</c> is deliberate: the per-run writable system root mounts a tmpfs over
+    /// <c>/mnt</c>, which would mask anything published there.
+    /// </summary>
+    private const string DefaultImageBuildSocket = "/run/buildkit/buildkitd.sock";
 
     /// <summary>At most this many runs may hold a writable system root at once (each costs tmpfs).</summary>
     private const int MaxWritableSystemRoots = 8;
@@ -58,8 +63,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         new(StringComparer.Ordinal);
     private readonly bool _writableSystemRootEnabled;
     private readonly string _writableSystemRootSize;
-    private readonly string? _imageBuildEndpoint;
-    private readonly string _imageBuildTlsDirectory;
+    private readonly string _imageBuildSocket;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kata-sidecar-bwrap-fs";
@@ -78,26 +82,40 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             .ToArray();
         _writableSystemRootSize = ResolveWritableSystemRootSize();
         _writableSystemRootEnabled = ResolveWritableSystemRootEnabled();
-        _imageBuildEndpoint = ResolveImageBuildEndpoint();
-        _imageBuildTlsDirectory = ResolveImageBuildTlsDirectory();
+        _imageBuildSocket = ResolveImageBuildSocket();
+    }
+
+    private static string ResolveImageBuildSocket()
+    {
+        var configured = Environment.GetEnvironmentVariable("AGENTWEAVER_IMAGE_BUILD_SOCKET");
+        return string.IsNullOrWhiteSpace(configured) ? DefaultImageBuildSocket : configured.Trim();
     }
 
     /// <summary>
-    /// The BuildKit broker this deployment delegates image builds to, or <c>null</c> when no broker
-    /// is configured. Nothing is inferred: a build is offered only when an operator has wired an
-    /// endpoint, so an unconfigured cluster reports the capability honestly instead of failing at
-    /// the moment a run tries to build.
+    /// The build endpoint offered to runs, or <c>null</c> when this pod has no builder sidecar.
+    ///
+    /// This probes the socket itself rather than trusting configuration. An environment variable
+    /// only records an operator's intent; a deployment that sets it without deploying the sidecar
+    /// would otherwise advertise <c>image_build</c> on a cluster where every build fails at connect
+    /// time. Availability is therefore evidence-based, and the capability contract degrades to
+    /// "unsupported" honestly.
     /// </summary>
-    private static string? ResolveImageBuildEndpoint()
-    {
-        var configured = Environment.GetEnvironmentVariable("AGENTWEAVER_IMAGE_BUILD_ENDPOINT");
-        return string.IsNullOrWhiteSpace(configured) ? null : configured.Trim();
-    }
+    private string? ResolveImageBuildEndpoint() =>
+        ImageBuildSocketAvailable() ? $"unix://{_imageBuildSocket}" : null;
 
-    private static string ResolveImageBuildTlsDirectory()
+    private bool ImageBuildSocketAvailable()
     {
-        var configured = Environment.GetEnvironmentVariable("AGENTWEAVER_IMAGE_BUILD_TLS_DIR");
-        return string.IsNullOrWhiteSpace(configured) ? DefaultImageBuildTlsDirectory : configured.Trim();
+        try
+        {
+            // A unix socket is neither a regular file nor a directory; File.Exists covers the
+            // socket inode, and the directory check keeps a partially-wired pod from claiming it.
+            return File.Exists(_imageBuildSocket)
+                && Directory.Exists(Path.GetDirectoryName(_imageBuildSocket));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -108,7 +126,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         SandboxCapabilityProbe.Describe(
             BackendName,
             _writableSystemRootEnabled,
-            _imageBuildEndpoint);
+            ResolveImageBuildEndpoint());
 
     private static string ResolveWritableSystemRootSize()
     {
@@ -724,11 +742,12 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         foreach (var mount in _trustedWorkspaces[trustedWorkspace])
             AddMount(mounts, mount.Source, mount.ReadOnly);
 
-        // The build client certificate is bound read-only when a broker is configured. It authorises
-        // build submission and nothing else — the broker holds no registry credentials — so a run
-        // reading it gains the ability to build, which is exactly the capability being offered.
-        if (_imageBuildEndpoint is not null && Directory.Exists(_imageBuildTlsDirectory))
-            AddMount(mounts, _imageBuildTlsDirectory, readOnly: true);
+        // The build socket is bound read-write: connecting to a unix socket requires write access.
+        // It is a pod-local endpoint, not a credential — there is nothing to exfiltrate, and a run
+        // that reaches it gains exactly the build capability being offered and nothing else.
+        var socketDirectory = Path.GetDirectoryName(_imageBuildSocket);
+        if (ImageBuildSocketAvailable() && socketDirectory is not null)
+            AddMount(mounts, socketDirectory, readOnly: false);
 
         return CollapseMounts(mounts);
     }
@@ -738,15 +757,13 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         var (_, runtimeHome) = ResolveExecutionRegistration(command.WorkingDirectory);
         var environment = DefaultEnvironment(runtimeHome);
 
-        // Point buildctl (and the `docker` shim in front of it) at the broker. Set before the
-        // caller's own environment so a run can still override the endpoint for a local builder,
-        // and absent entirely when no broker is configured, which keeps `docker build` failing with
-        // the contract's explanation instead of a connection error.
-        if (_imageBuildEndpoint is not null)
-        {
-            environment["BUILDKIT_HOST"] = _imageBuildEndpoint;
-            environment["AGENTWEAVER_BUILDKIT_TLS_DIR"] = _imageBuildTlsDirectory;
-        }
+        // Point buildctl (and the `docker` shim in front of it) at the in-pod builder. Set before
+        // the caller's own environment so a run can still override it, and absent entirely when no
+        // builder sidecar is present, which keeps `docker build` failing with the contract's
+        // explanation instead of a connection error.
+        var endpoint = ResolveImageBuildEndpoint();
+        if (endpoint is not null)
+            environment["BUILDKIT_HOST"] = endpoint;
 
         if (command.Environment is not null)
         {
