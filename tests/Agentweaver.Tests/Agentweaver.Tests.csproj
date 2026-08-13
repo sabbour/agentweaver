@@ -12,6 +12,26 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      GHSA-q939-rpr3-3284 (NU1903): SSH.NET 2025.1.0 arrives transitively through
+      Testcontainers.PostgreSql. Upstream has not shipped a fixed release yet - 2025.1.0 is
+      still the latest published version - so there is nothing to upgrade to, and
+      TreatWarningsAsErrors turns the audit warning into a restore failure that blocks every
+      .NET job in CI.
+
+      The advisory is a path-traversal in ScpClient.Download's recursive SCP download, which
+      only bites a client that downloads a directory tree from an untrusted SCP server. This
+      is a test-only dependency: no product project resolves SSH.NET (it appears in exactly
+      one lock file, this project's) and nothing in the repository references ScpClient or
+      Renci.SshNet. Testcontainers pulls it in for its optional "remote Docker over SSH"
+      transport, which the suite never configures.
+
+      Tracked by #762 - remove this suppression as soon as a patched SSH.NET is released.
+    -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-q939-rpr3-3284" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
     <PackageReference Include="FluentAssertions" Version="8.10.0" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.*" />
