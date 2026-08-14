@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   MessageBarTitle,
   Spinner,
@@ -1207,7 +1208,9 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
 
   for (const evt of events) {
     if (evt.type !== 'tool.approval_resolved' && evt.type !== 'coordinator.child_approval_resolved') continue;
-    const requestId = readString(evt.payload, ['requestId', 'request_id']);
+    // Shell approvals use commandHash as their identifier; tool approvals use requestId.
+    const requestId = readString(evt.payload, ['requestId', 'request_id'])
+      ?? readString(evt.payload, ['commandHash', 'command_hash']);
     if (!requestId) continue;
     if (evt.payload['expired']) resolvedApprovals.set(requestId, 'expired');
     else if (evt.payload['approved']) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
@@ -1318,7 +1321,10 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
       continue;
     }
     if (evt.type === 'tool.approval_required' || evt.type === 'shell.approval_required') {
-      const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
+      // Shell approvals may only have commandHash (no requestId); look up by either.
+      const requestId = readString(evt.payload, ['requestId', 'request_id'])
+        ?? readString(evt.payload, ['commandHash', 'command_hash'])
+        ?? '';
       const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
       ensureTurn().approvals.push({
         event: evt,
@@ -1552,6 +1558,13 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       return `Child question from ${subtaskDescription(p, subtasks)}: ${question}`;
     }
     case 'coordinator.child_approval_required': {
+      // Shell approvals are bubbled as coordinator.child_approval_required with a commandHash.
+      const commandHash = readString(p, ['commandHash', 'command_hash']);
+      if (commandHash) {
+        const command = readString(p, ['command']) ?? 'shell command';
+        const intention = readString(p, ['intention', 'message']);
+        return `Command approval required from ${subtaskDescription(p, subtasks)}: ${command}${intention ? ` — ${intention}` : ''}`;
+      }
       const tool = readString(p, ['toolName', 'tool_name']) ?? 'tool';
       const message = readString(p, ['message', 'url']);
       return `Tool approval required from ${subtaskDescription(p, subtasks)}: ${tool}${message ? ` — ${message}` : ''}`;
@@ -1675,7 +1688,9 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
       gateLabelBySequence.set(evt.sequence, latestGateLabel);
     }
     if (evt.type === 'tool.approval_resolved' || evt.type === 'coordinator.child_approval_resolved') {
-      const requestId = readString(evt.payload, ['requestId', 'request_id']);
+      // Shell approvals use commandHash as their identifier; tool approvals use requestId.
+      const requestId = readString(evt.payload, ['requestId', 'request_id'])
+        ?? readString(evt.payload, ['commandHash', 'command_hash']);
       if (!requestId) continue;
       if (evt.payload['expired']) resolvedApprovals.set(requestId, 'expired');
       else if (evt.payload['approved']) resolvedApprovals.set(requestId, readString(evt.payload, ['scope']) ?? 'approved');
@@ -1704,7 +1719,9 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   for (const evt of events) {
     const line = coordinatorActivityLine(evt, subtasks, gateLabelBySequence);
     if (!line) continue;
-    const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
+    const requestId = readString(evt.payload, ['requestId', 'request_id'])
+      ?? readString(evt.payload, ['commandHash', 'command_hash'])
+      ?? '';
     const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
     const isApprovalRequest = evt.type === 'coordinator.child_approval_required'
       || evt.type === 'tool.approval_required'
@@ -1857,6 +1874,10 @@ export function AgentSessionPanel({
   }, []);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const timelineApprovalsRef = useRef<HTMLDivElement>(null);
+  const scrollToApprovals = useCallback(() => {
+    timelineApprovalsRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, []);
   const docked = variant === 'docked';
   const [isVisible, setIsVisible] = useState(open);
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
@@ -2442,7 +2463,7 @@ export function AgentSessionPanel({
                     />
                     {selectedItem.nodeId === 'work-plan' && workPlanTopologyThumbnail}
                     {timelineApprovals.length > 0 && (
-                      <div className={styles.timelineApprovals}>
+                      <div ref={timelineApprovalsRef} className={styles.timelineApprovals}>
                         {timelineApprovals.map((approval) => (
                           <InThreadApprovalGate
                             key={`approval-${approval.event.sequence}`}
@@ -2484,6 +2505,13 @@ export function AgentSessionPanel({
                     Needs input: {pendingApprovalCount} approval{pendingApprovalCount === 1 ? '' : 's'}
                     {pendingQuestionCount > 0 ? `, ${pendingQuestionCount} question${pendingQuestionCount === 1 ? '' : 's'}` : ''}.
                   </MessageBarBody>
+                  {pendingApprovalCount > 0 && (
+                    <MessageBarActions>
+                      <Button appearance="transparent" size="small" onClick={scrollToApprovals}>
+                        Review
+                      </Button>
+                    </MessageBarActions>
+                  )}
                 </MessageBar>
               )}
               {followUpError && (
@@ -2595,9 +2623,12 @@ function InThreadApprovalGate({
   // holds the optimistic outcome of a click. This avoids a set-state-in-effect sync.
   const resolution = localResolution ?? (isResolved ? (resolvedScope ?? 'expired') : null);
 
-  const isShell = event.type === 'shell.approval_required';
-  const requestId = readString(event.payload, ['requestId', 'request_id']) ?? '';
+  // coordinator.child_approval_required can bubble shell approvals when the child run
+  // required a shell gate. Detect by presence of commandHash rather than event type alone.
   const commandHash = readString(event.payload, ['commandHash', 'command_hash']) ?? '';
+  const isShell = event.type === 'shell.approval_required'
+    || (event.type === 'coordinator.child_approval_required' && commandHash.length > 0);
+  const requestId = readString(event.payload, ['requestId', 'request_id']) ?? '';
   const toolName = readString(event.payload, ['toolName', 'tool_name']) ?? (isShell ? 'run_command' : 'tool');
   const rawUrl = readString(event.payload, ['url']) ?? null;
   const url = rawUrl && rawUrl.length > 80 ? `${rawUrl.slice(0, 80)}…` : rawUrl;
@@ -2668,6 +2699,7 @@ function InThreadApprovalGate({
         riskText={riskText}
         approveLabel="Allow once"
         denyLabel="Deny"
+        disabled={busy || !targetRunId}
         additionalActions={!isShell ? (
           <>
             <Button appearance="secondary" size="small" disabled={busy || !targetRunId} onClick={() => handleApprove('run')}>

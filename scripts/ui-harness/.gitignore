@@ -1,4 +1,5 @@
 .auth/
+session-token.txt
 sessions/
 transcripts-ui/
 verdicts/

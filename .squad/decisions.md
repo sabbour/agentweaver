@@ -355,3 +355,134 @@
 - The merged SHA was then deployed to the operator's staging AKS environment via `npm run azure:deploy-from-commit -- origin/dev` using deployment tag `60699a3`; all four images (`api`, `frontend`, `mcp`, `agent-host`) provenance-matched the source commit.
 - Post-deploy verification passed cleanly: `npm run azure:verify` reported 25/25 checks green against `https://agentweaver.6a67c46fa5c83b0001c97c7c.westus2.staging.aksapp.io/`.
 - Treat this as the closure checkpoint for the Entra ID dual-mode authn/authz overhaul: implementation, CI repair, merge, staging deploy, and live verification all completed on the merged `dev` SHA.
+
+
+---
+
+## Morpheus decision: project GitHub identity is durable execution context
+
+- Context: PR #719 originally selected a linked GitHub identity through `HttpContext.Items`.
+  That protected request-local consumers but disappeared when coordinator, runtime, assistant,
+  skill, repository, or remote AgentHost work continued after the request.
+- Decision: carry both the authenticated user subject and project ID into every project-scoped
+  GitHub token consumer, then resolve the user's project override from durable storage. Preserve
+  request-local selection only as a validated fast path after project RBAC. Backlog tasks persist
+  the capture display login separately from the durable authentication subject used at pickup.
+- Boundaries: missing project context keeps the user's global default; overrides remain keyed by
+  `(project_id, entra_user_id)`; unlinked identities cannot be selected; webhook/schedule
+  automation keeps its fail-closed automation principal; project roles are checked before request
+  context is recorded or project-scoped assistant work is created.
+- Rationale: explicit execution context prevents background work from silently reverting to another
+  linked account without introducing reverse login-to-user lookup, cross-user credential borrowing,
+  or global-default behavior changes.
+
+---
+
+## Morpheus decision: plural triggers with singular compatibility
+
+- Context: workflow automation was persisted and dispatched through one `WorkflowDefinition.Trigger`,
+  so configuring a schedule and GitHub event on the same workflow was impossible.
+- Decision: make the ordered `Triggers` collection canonical. Accept and preserve the legacy singular
+  `trigger:` YAML shape for one trigger, serialize multiple triggers as `triggers:`, and retain the
+  API's singular `trigger` field as a first-trigger compatibility alias alongside the complete
+  `triggers` list.
+- Rationale: this evolves the existing trigger abstraction instead of creating a parallel model,
+  requires no data migration, preserves existing clients and workflow files, and lets schedule and
+  event dispatch evaluate the same definition independently.
+- Related issue #716 does not share the singular-model root: webhook dispatch already emits and
+  matches `github.issues.labeled`. Its failure boundary is the event editor hiding the action suffix
+  of an existing `github.issues.opened` trigger. It is included in the same PR because this change
+  already owns that editor surface; an explicit Issues action selector fixes it without altering
+  webhook or predicate semantics.
+
+---
+
+## #579 — consolidate preview retention behind a run lifecycle
+
+**Date:** 2026-08-10
+**Owner:** Morpheus
+
+## Decision
+
+Keep HTTPRoute annotations as the replica-safe durable source of truth, but model their
+run-level consequence explicitly as `Previewable` or `PreviewActive`. A single transition
+handler owns both SandboxClaim TTL and pod eviction policy.
+
+## Evidence
+
+The linked fixes remained split across `StartPreviewAsync`, `KeepAliveAsync`,
+`ReleaseAgentHostPodAsync`, and `AgentHostReaperService`: each caller independently invoked
+TTL renewal and/or `safe-to-evict` updates. Final teardown only reset eviction state and
+stopping one of multiple routes could unpin a still-previewed pod. No newer abstraction
+consolidated the invariant.
+
+The implemented lifecycle now covers:
+
+- start and active-use keepalive entering/reasserting `PreviewActive`;
+- turn-end release and orphan reaping deriving state from durable routes before deletion;
+- TTL extension and eviction protection in one idempotent handler;
+- final stop/expiry restoring normal TTL and eviction policy;
+- multi-route cleanup retaining protection until the final route is gone.
+
+This is intentionally a focused consolidation, not a new persisted state machine: durable
+HTTPRoutes already provide replica-safe state and expiry, so duplicating them in a database
+would introduce reconciliation risk without improving the lifecycle invariant.
+
+---
+
+## Tank decision: recover and rotate preview credential tombstones
+
+- Context: preview-runner credential names are deterministic per run, while terminal cleanup
+  soft-deletes the Key Vault secret. An immediate retry therefore receives
+  `ObjectIsDeletedButRecoverable`.
+- Decision: preserve soft delete and purge protection. On that provider-specific conflict, recover
+  the deterministic key, poll its active state for at most 30 seconds, then replace the recovered
+  value with the retry's fresh credential. Treat a recovery `409` as a concurrent creator and join
+  the same bounded poll.
+- Rationale: purging would weaken the vault's retention policy, reusing the recovered credential
+  would violate the fresh-on-launch policy, and randomizing the key would break replica-safe reads
+  and deterministic cleanup. The recovery path requires no new role beyond the API identity's
+  existing Key Vault Secrets Officer assignment and never includes secret values in logs or errors.
+
+---
+
+## Link decision: broker rootless BuildKit instead of granting AgentHost Kubernetes RBAC
+
+- Context: Issue #582 asks for AgentHost image builds through Buildx's rootless Kubernetes driver.
+  Agent-controlled shell commands run in the AgentHost pod, so any Kubernetes token or registry
+  credential mounted there is reachable by untrusted code. Upstream rootless Buildx also emits an
+  unconfined seccomp/AppArmor pod template that cannot pass the existing baseline Pod Security
+  policy without a narrowly-contained exception.
+- Decision: keep AgentHost's service account and identity unchanged. Add the future capability
+  through a trusted build broker, a dedicated build namespace, exact namespace-scoped RBAC,
+  validating admission policies, one ephemeral Kata-isolated rootless BuildKit Deployment per
+  build, and broker-only short-lived registry authorization.
+- Rationale: this preserves the existing sandbox trust boundary, avoids privileged DinD and
+  `docker.sock`, prevents shared builder/cache state across tenants, and makes the unavoidable
+  upstream unconfined security profile explicit and auditable rather than silently widening the
+  AgentHost namespace.
+
+---
+
+## Tank decision: legacy AllowedTeam overlap stays warn-and-continue
+
+- Context: PR #631 changed GitHub org authorization from legacy `AllowedOrg` + `AllowedTeam`
+  AND semantics to a mixed OR rule list. If operators configure `AllowedOrg=org` and the legacy
+  `AllowedTeam=org/team`, appending the team as an extra OR rule silently widens access to the
+  full org.
+- Decision: keep startup as warn-and-continue, but detect the overlap and emit a prominent warning
+  that names the exact org/team and the effective rule set. Do not append the legacy team as an
+  independent OR rule in that overlap case.
+- Rationale: this preserves runtime compatibility while making the widened access impossible to miss
+  in logs. It also matches existing auth/config handling here: the codebase hard-fails for
+  production-breaking or auth-disabling misconfiguration (for example `OAuthConfigGuard` and
+  `TestingBypassGuard`), but uses warnings for deprecated/ambiguous auth rule inputs that still have
+  a deterministic fail-closed or operator-actionable interpretation.
+
+---
+
+## 2026-08-14 — Staging harness auth and PR #766 selection invariants
+
+- Edge Default profile plus CDP is the required Entra CA login path for staging harness/auth; do not use device-code or plain Chromium there.
+- Non-`.staging.` `*.aksapp.io` targets require `--allow-prod` plus `--i-understand-this-targets-production` because the guard pattern currently lags known deploy host naming.
+- Create-from-GitHub must preserve `selectedAccount` after accessible-repos load (PR #766).

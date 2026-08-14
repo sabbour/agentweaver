@@ -9,3 +9,5 @@
 - Staging evidence: `v0.9.19-rc1`, API desired 2/ready 1, one pod CrashLoopBackOff with 65 restarts and last `OOMKilled`; AgentHost warm pool 2/2; PostgreSQL; pod-per-run.
 - Preserved north-star checkpoint: deleted project `805e6ee4-54ee-46c4-9224-297bc1dcad5e`, coordinator `f3f7cff1-026c-4e83-bac3-f238d4086fc3`, last parent sequence 885 / child sequence 856; no cleanup obligations remain.
 - Next action: after blocker deployment, create a fresh public-API-only project and restart the complete PM-to-preview baseline.
+
+- 2026-08-14: PR #766, Edge Default + CDP staging auth, and the API harness seam PASS on v0.18.1 were captured during the hygiene pass.

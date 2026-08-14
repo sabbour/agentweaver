@@ -39,6 +39,22 @@ Read-only plan based on issue #641 and its comments only. Use this as the accept
 - Payload variants: valid signed JSON, duplicate delivery ids, malformed JSON, oversized body, unexpected review state, empty/huge label arrays, exact vs near-match refs, slash-command and long non-match comments.
 - Evidence surfaces to inspect during execution: API logs, telemetry, stored YAML, created webhook config, backlog tasks, and any model prompt/validation traces.
 
+## 2026-07-14T15:15:00Z — LinkVault stall finding + HabitLoop success
+Smith's LinkVaultE2E-v1 run produced enough evidence to file #317 around child `agent_stall_timeout` after real work completed, while HabitLoopE2E-v1 became the first full lifecycle success of the session and reached a live preview plus final completion.
+
+- 2026-07-29: Tank's Entra-first design settled the core shape for QA planning (single-tenant Entra login, Tier-1 platform roles, Tier-2 project RBAC, GitHub as linked secondary capability, explicit relink migration). Your remaining endpoint/precedence/revocation questions stay open follow-ups.
+
+
+## 2026-07-29 — Issue #641 QA test plan: event trigger predicates, webhook provisioning, and NL generation
+
+Read-only plan based on issue #641 and its comments only. Use this as the acceptance/reviewer matrix for API, UI, OAuth, webhook receiver, and workflow-generation changes.
+
+### Suggested fixtures / evidence
+- Repo A connected to Agentweaver and Repo B unconfigured.
+- Workflows covering each curated event, including one `event` trigger with no `if:`.
+- Payload variants: valid signed JSON, duplicate delivery ids, malformed JSON, oversized body, unexpected review state, empty/huge label arrays, exact vs near-match refs, slash-command and long non-match comments.
+- Evidence surfaces to inspect during execution: API logs, telemetry, stored YAML, created webhook config, backlog tasks, and any model prompt/validation traces.
+
 ### 1) Predicate evaluation correctness
 
 | ID | Scenario | Expected result |
@@ -129,3 +145,5 @@ Read-only plan based on issue #641 and its comments only. Use this as the accept
 - YAML/UI round-trip changing boolean trigger semantics.
 - Auto-create OAuth or hook-creation failures leaving the user without a manual fallback.
 - Predicate-aware webhook handling regressing existing idempotency/dedupe behavior.
+
+- 2026-08-14: API harness since-0.16 seam PASS on v0.18.1, with PR #766 `selectedAccount` preservation and Edge Default + CDP staging auth captured.
