@@ -19,3 +19,5 @@
 - Updated the frontend to refresh coordinator artifacts from run-stream events and added typed notification badges for human-review and tool-approval actions.
 
 - 2026-07-29: Verified `trinity-4` via combined full build + batch validation (solution build 0 errors; backend tests 3082 passed / 108 skipped / 7 pre-existing Docker-env failures; frontend lint clean; frontend tests 929/930 passed with 1 pre-existing unrelated `SkillsPage.test.tsx` failure). Work remains pending final security review before commit/PR.
+
+- 2026-08-14: PR #766 keeps `selectedAccount` stable after accessible-repos load, and Edge Default + CDP is now the documented staging login path.
