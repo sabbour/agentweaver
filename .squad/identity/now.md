@@ -37,3 +37,5 @@ Branch `003-projects`. Implementation plan complete:
 8. Foundry credential separation
 
 **Ready for Implementation:** All architectural decisions locked. Phase 1 (project lifecycle), Phase 2 (run lifecycle + hosted-cloud), and Phase 7 (comprehensive tests) awaiting Phase 0 domain layer. Security spike (FR-005 dual-grant validation) planned early in Phase 2.
+
+- Current focus: land/merge PR #766; finish API harness since-0.16 coverage; keep Edge Default login as standard.

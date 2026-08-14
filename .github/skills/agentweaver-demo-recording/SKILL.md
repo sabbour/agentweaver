@@ -15,12 +15,21 @@ This skill connects two previously-disconnected tools:
   `video-chapter`, `video-show-actions`, `run-code` + `page.screencast.*`). See
   `.copilot/skills/agentweaver-playwright-cli/references/video-recording.md` for the
   complete recording API — do not duplicate it here.
-- **The UI-harness's staging login** — a human completes GitHub OAuth once via
-  `node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url <staging-url>`,
-  which persists auth to `scripts/ui-harness/.auth/staging.storageState.json` (+ a
+- **The UI-harness's staging login** — the human must run the Edge Default login script
+  once (see `scripts/ui-harness/SKILL.md` — Authentication section). Agentweaver
+  staging uses Entra Conditional Access, which blocks plain Chromium and device-code
+  flow. The managed Edge Default profile (`%LOCALAPPDATA%\Microsoft\Edge\User Data`)
+  is required. Close all Edge windows, then:
+
+  ```powershell
+  node scripts/ui-harness/login-edge-default.mjs --base-url <staging-url>
+  ```
+
+  If Edge is already open with remote debugging on port 9222, use `--cdp`. This
+  persists auth to `scripts/ui-harness/.auth/staging.storageState.json` (+ a
   sessionStorage sidecar, see below). See `scripts/ui-harness/SKILL.md` and
-  `scripts/ui-harness/README.md` for the full login/auth contract — do not duplicate it
-  here, and **never** run the login flow yourself; it requires a human in the loop.
+  `scripts/ui-harness/README.md` for the full login/auth contract — do not duplicate
+  it here, and **never** run the login flow yourself; it requires a human in the loop.
 
 `playwright-cli` has no awareness of the ui-harness's auth files, and the ui-harness has
 no video recording. The recipe below is the verified bridge between them.
@@ -32,8 +41,13 @@ A human must have already run the ui-harness login once, so both of these exist:
 - `scripts/ui-harness/.auth/staging.storageState.json`
 - `scripts/ui-harness/.auth/staging.storageState.json.sessionStorage.json`
 
-If either is missing, **stop and ask the human to run the login command** — do not
-fabricate these files or attempt to automate GitHub OAuth yourself.
+If either is missing, **stop and ask the human to run the Edge Default login script**:
+
+```powershell
+node scripts/ui-harness/login-edge-default.mjs --base-url <staging-url>
+```
+
+Do not fabricate these files or attempt to complete Entra/GitHub OAuth yourself.
 
 ## Why this is non-obvious: two different storages
 
@@ -156,8 +170,9 @@ Notes specific to this app:
   cookies) into chat, logs, or committed files.
 - If the session has expired (`AUTH_EXPIRED` from the ui-harness, or the recipe above
   still shows the sign-in page after seeding), ask the human to re-run
-  `node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url <staging-url>` —
-  do not attempt to complete GitHub OAuth yourself.
+  `node scripts/ui-harness/login-edge-default.mjs --base-url <staging-url>` (with the
+  Edge Default profile, as Conditional Access blocks plain Chromium) — do not attempt
+  to complete Entra/GitHub OAuth yourself.
 - Close the playwright-cli session (`playwright-cli -s=demo close`) and delete any
   scratch seed script when done, so the plaintext token doesn't linger on disk longer
   than necessary.

@@ -1,11 +1,10 @@
-﻿import { apiClient } from '../api/apiClient';
+import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import {
   Badge,
   Button,
   Combobox,
   DialogTitle,
-  DialogTrigger,
   Field,
   Input,
   makeStyles,
@@ -358,6 +357,10 @@ function CreateProjectDialogShell({
       onOpenChange={onOpenChange}
       trigger={trigger}
       maxWidth="1180px"
+      // Keep open across in-dialog account/repo filter clicks. Default Fluent
+      // `modal` closes when focus briefly leaves the surface during re-render
+      // (reproduced: re-clicking the selected GitHub account dismissed the dialog).
+      modalType="alert"
     >
       <div className={styles.dialogHeader}>
         <div className={styles.titleBlock}>
@@ -394,7 +397,7 @@ function CreateProjectDialogShell({
             </Text>
           </div>
           <div className={styles.footerActions}>
-            <DialogTrigger disableButtonEnhancement><Button appearance="transparent" disabled={saving}>Cancel</Button></DialogTrigger>
+            <Button appearance="transparent" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={onCreate}>
               {saving ? 'Creating' : 'Create project'}
             </Button>
@@ -608,7 +611,8 @@ function useGitHubData(open: boolean) {
           source_is_default: repo.source_is_default,
         })));
         setCrossAccount(true);
-        setSelectedAccount(null);
+        // Do NOT reset selectedAccount — keep the default/chosen account so the
+        // client-side filter in filteredRepos can apply immediately.
       } catch (err: unknown) {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
@@ -760,7 +764,9 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         </Combobox>
         <Text className={styles.tipLine}>
           {crossAccount
-            ? 'Browsing repositories reachable across all linked GitHub accounts. Start typing to narrow the list.'
+            ? selectedAccount
+              ? `Showing repositories reachable via @${selectedAccount.login}. Start typing to narrow the list.`
+              : 'Showing repositories reachable across all linked GitHub accounts. Start typing to narrow the list.'
             : 'Start typing to search any owner/repository on GitHub. Import succeeds only if one of your linked GitHub identities can actually access it.'}
         </Text>
       </div>
@@ -810,7 +816,11 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
               key={acc.login}
               className={styles.orgRow}
               type="button"
-              onClick={() => { changeAccount(selectedAccount?.login === acc.login ? null : acc); setRepoFilter(''); if (!crossAccount) d.setSourceRepository(''); }}
+              onClick={() => {
+                changeAccount(selectedAccount?.login === acc.login ? null : acc);
+                setRepoFilter('');
+                if (!crossAccount) d.setSourceRepository('');
+              }}
             >
               <span className={styles.accountOption}>
                 <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />

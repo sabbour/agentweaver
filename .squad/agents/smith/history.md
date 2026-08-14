@@ -129,3 +129,5 @@ Read-only plan based on issue #641 and its comments only. Use this as the accept
 - YAML/UI round-trip changing boolean trigger semantics.
 - Auto-create OAuth or hook-creation failures leaving the user without a manual fallback.
 - Predicate-aware webhook handling regressing existing idempotency/dedupe behavior.
+
+- 2026-08-14: API harness since-0.16 seam PASS on v0.18.1, with PR #766 `selectedAccount` preservation and Edge Default + CDP staging auth captured.

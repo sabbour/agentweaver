@@ -20,7 +20,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
-import type { ReactElement, ReactNode } from 'react';
+import { useEffect, useRef, type ReactElement, type ReactNode } from 'react';
 
 export interface AppDialogPrimaryAction {
   label: string;
@@ -49,6 +49,12 @@ export interface AppDialogProps {
   maxWidth?: string;
   /** Show the absolute-positioned close button (default: true). */
   showClose?: boolean;
+  /**
+   * Fluent dialog modality. Default `modal` closes when focus leaves the surface
+   * (e.g. mid-re-render after an in-dialog control click). Use `alert` for dense
+   * multi-control dialogs that must stay open across internal state updates.
+   */
+  modalType?: 'modal' | 'non-modal' | 'alert';
 }
 
 const useStyles = makeStyles({
@@ -129,24 +135,67 @@ export function AppDialog({
   footer,
   maxWidth = '480px',
   showClose = true,
+  modalType = 'modal',
 }: AppDialogProps) {
   const styles = useStyles();
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const wasOpenRef = useRef(open);
+
+  const handleOpenChange = (
+    _event: unknown,
+    data: { open: boolean; type?: string },
+  ) => {
+    if (data.open) {
+      onOpenChange(true);
+      return;
+    }
+    // Dense multi-control dialogs (modalType=alert) must only dismiss via
+    // Escape or an explicit close control. Ignore backdrop light-dismiss and
+    // synthetic triggerClick (seen under full-suite Tabster focus repair and
+    // after in-dialog account-filter re-renders).
+    if (modalType === 'alert') {
+      if (data.type === 'escapeKeyDown') onOpenChange(false);
+      return;
+    }
+    onOpenChange(false);
+  };
+
+  // Tabster Modalizer sets aria-hidden=true on DialogSurface ~100ms after open when
+  // focus sits on the non-focusable surface root (common with fireEvent opens and
+  // some controlled open paths). Move focus into the first focusable child so the
+  // modalizer stays active and role queries keep working.
+  useEffect(() => {
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (!justOpened) return;
+    const id = window.requestAnimationFrame(() => {
+      const root = surfaceRef.current;
+      if (!root) return;
+      const active = document.activeElement;
+      if (active && root.contains(active) && active !== root) return;
+      const focusable = root.querySelector<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      focusable?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open]);
 
   const surfaceNode = (
     <DialogSurface
+      ref={surfaceRef}
       className={styles.surface}
       style={{ maxWidth, width: `min(${maxWidth}, calc(100vw - 48px))` }}
       backdrop={{ className: styles.backdrop }}
     >
       {showClose && (
-        <DialogTrigger disableButtonEnhancement>
-          <Button
-            className={styles.closeButton}
-            appearance="subtle"
-            icon={<DismissRegular />}
-            aria-label="Close"
-          />
-        </DialogTrigger>
+        <Button
+          className={styles.closeButton}
+          appearance="subtle"
+          icon={<DismissRegular />}
+          aria-label="Close"
+          onClick={() => onOpenChange(false)}
+        />
       )}
       <div className={styles.body}>
         {title && (
@@ -186,20 +235,29 @@ export function AppDialog({
   );
 
   // Dialog requires children to be exactly `JSXElement` (surface only) or
-  // `[JSXElement, JSXElement]` (trigger + surface). Conditional rendering
-  // inside a single return would produce `undefined | JSXElement` for the
-  // trigger slot, which fails that union — so we use two explicit render paths.
+  // `[JSXElement, JSXElement]` (trigger + surface). For alert dialogs, force
+  // action="open" so the external trigger cannot toggle closed (default
+  // DialogTrigger toggles; synthetic triggerClick under suite load was
+  // dismissing Create-from-GitHub mid account-filter click).
   if (trigger) {
     return (
-      <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
-        <DialogTrigger disableButtonEnhancement>{trigger}</DialogTrigger>
+      <Dialog open={open} modalType={modalType} onOpenChange={handleOpenChange}>
+        {modalType === 'alert' ? (
+          <DialogTrigger disableButtonEnhancement action="open">
+            {trigger}
+          </DialogTrigger>
+        ) : (
+          <DialogTrigger disableButtonEnhancement>
+            {trigger}
+          </DialogTrigger>
+        )}
         {surfaceNode}
       </Dialog>
     );
   }
 
   return (
-    <Dialog open={open} onOpenChange={(_, state) => onOpenChange(state.open)}>
+    <Dialog open={open} modalType={modalType} onOpenChange={handleOpenChange}>
       {surfaceNode}
     </Dialog>
   );
