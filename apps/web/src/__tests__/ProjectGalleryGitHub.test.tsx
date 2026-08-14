@@ -165,14 +165,20 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.listAccessibleGitHubRepos).toHaveBeenCalled());
 
     // Clicking the already-selected default account (octocat) deselects it → show all.
+    // Focus first: Tabster Modalizer aria-hides the surface if a click lands without
+    // moving focus into a focusable child (fireEvent.click does not focus).
     const octocatRow = await screen.findByRole('button', { name: /octocat/i });
+    octocatRow.focus();
     fireEvent.click(octocatRow);
 
     await waitFor(() =>
       expect(screen.getAllByText((content) => content.includes('Showing repositories reachable across all linked GitHub accounts.')).length).toBeGreaterThan(0),
     );
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
+    // findBy* — full-suite CI can settle the combobox one tick after the filter text updates.
+    // alert-modal dialogs use role=alertdialog, so assert via the combobox staying mounted.
+    const repoCombobox = await screen.findByRole('combobox', { name: 'Repository' });
+    fireEvent.click(repoCombobox);
     await waitFor(() => expect(screen.getAllByText('octocat / hello-world').length).toBeGreaterThan(0));
     expect(screen.getAllByText(/via @altcat/i).length).toBeGreaterThan(0);
   });
@@ -187,14 +193,18 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.listAccessibleGitHubRepos).toHaveBeenCalled());
 
     // Click altcat account row to switch filter.
+    // Focus first — see deselect test: fireEvent.click alone leaves Tabster confused.
     const altcatRow = await screen.findByRole('button', { name: /altcat/i });
+    altcatRow.focus();
     fireEvent.click(altcatRow);
 
     await waitFor(() =>
       expect(screen.getAllByText((content) => content.includes('Showing repositories reachable via @altcat')).length).toBeGreaterThan(0),
     );
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
+    // findBy* + longer timeout: under full-suite CI load the combobox can settle after filter re-render.
+    const repoCombobox = await screen.findByRole('combobox', { name: 'Repository' }, { timeout: 5000 });
+    fireEvent.click(repoCombobox);
     await waitFor(() => expect(screen.getAllByText('octocat / aardvark').length).toBeGreaterThan(0));
     expect(screen.queryByText('octocat / hello-world')).toBeNull();
   });

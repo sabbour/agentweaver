@@ -1,11 +1,10 @@
-﻿import { apiClient } from '../api/apiClient';
+import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import {
   Badge,
   Button,
   Combobox,
   DialogTitle,
-  DialogTrigger,
   Field,
   Input,
   makeStyles,
@@ -398,7 +397,7 @@ function CreateProjectDialogShell({
             </Text>
           </div>
           <div className={styles.footerActions}>
-            <DialogTrigger disableButtonEnhancement><Button appearance="transparent" disabled={saving}>Cancel</Button></DialogTrigger>
+            <Button appearance="transparent" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button aria-label="Create" appearance="primary" disabled={!canCreate} onClick={onCreate}>
               {saving ? 'Creating' : 'Create project'}
             </Button>
@@ -817,10 +816,11 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
               key={acc.login}
               className={styles.orgRow}
               type="button"
-              // preventDefault on mousedown keeps focus from leaving the dialog
-              // surface during the controlled re-render of the repo filter.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => { changeAccount(selectedAccount?.login === acc.login ? null : acc); setRepoFilter(''); if (!crossAccount) d.setSourceRepository(''); }}
+              onClick={() => {
+                changeAccount(selectedAccount?.login === acc.login ? null : acc);
+                setRepoFilter('');
+                if (!crossAccount) d.setSourceRepository('');
+              }}
             >
               <span className={styles.accountOption}>
                 <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />
