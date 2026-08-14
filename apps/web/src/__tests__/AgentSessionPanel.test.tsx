@@ -1773,4 +1773,177 @@ describe('AgentSessionPanel', () => {
     expect(vi.mocked(apiClient.getRunEvents)).not.toHaveBeenCalled();
     expect(vi.mocked(apiClient.getRun)).not.toHaveBeenCalled();
   });
+
+  // ── Shell approval regression tests ──────────────────────────────────────────
+  // These tests must restore the getRunEvents mock because the "reuses cached session
+  // data" test above overrides it with a custom implementation. vi.clearAllMocks()
+  // only clears call history, not implementations, so the override persists.
+  describe('shell approvals', () => {
+    beforeEach(() => {
+      vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+      vi.mocked(apiClient.getRun).mockResolvedValue({
+        run_id: 'coord-run-1',
+        status: 'in_progress',
+        model_source: 'github-copilot',
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        result: null,
+        diff: null,
+        step_count: 0,
+        tree_hash: null,
+      });
+    });
+
+  it('routes a shell approval Allow once to approveShell when bubbled via coordinator view', async () => {
+    // The coordinator receives coordinator.child_approval_required with commandHash
+    // when a child subtask raises a shell gate. Allow once must call approveShell
+    // against the child run, not approveTool.
+    currentEvents = [
+    {
+      sequence: 1,
+      type: 'coordinator.child_approval_required',
+      payload: {
+        childRunId: 'child-run-1',
+        subtaskId: '1',
+        commandHash: 'hash-abc',
+        command: 'rm -rf node_modules',
+      },
+    },
+    ];
+
+    render(
+    <Wrapper>
+      <AgentSessionPanel
+        open
+        onClose={vi.fn()}
+        tree={tree}
+        selectedNodeId="coordinator"
+        onSelectNode={vi.fn()}
+        coordinatorRunId="coord-run-1"
+        projectId="p1"
+      />
+    </Wrapper>,
+    );
+
+    await waitFor(() => screen.getByTestId('approval-gate-approve-btn'), { timeout: 4000 });
+    await userEvent.click(screen.getByTestId('approval-gate-approve-btn'));
+
+    expect(vi.mocked(apiClient.approveShell)).toHaveBeenCalledWith('child-run-1', 'hash-abc');
+    expect(vi.mocked(apiClient.approveTool)).not.toHaveBeenCalled();
+  });
+
+  it('routes a shell approval Deny to denyShell when bubbled via coordinator view', async () => {
+    currentEvents = [
+    {
+      sequence: 1,
+      type: 'coordinator.child_approval_required',
+      payload: {
+        childRunId: 'child-run-1',
+        subtaskId: '1',
+        commandHash: 'hash-abc',
+        command: 'npm install --save-dev',
+      },
+    },
+    ];
+
+    render(
+    <Wrapper>
+      <AgentSessionPanel
+        open
+        onClose={vi.fn()}
+        tree={tree}
+        selectedNodeId="coordinator"
+        onSelectNode={vi.fn()}
+        coordinatorRunId="coord-run-1"
+        projectId="p1"
+      />
+    </Wrapper>,
+    );
+
+    await waitFor(() => screen.getByTestId('approval-gate-deny-btn'), { timeout: 4000 });
+    await userEvent.click(screen.getByTestId('approval-gate-deny-btn'));
+
+    expect(vi.mocked(apiClient.denyShell)).toHaveBeenCalledWith('child-run-1', 'hash-abc');
+    expect(vi.mocked(apiClient.denyTool)).not.toHaveBeenCalled();
+  });
+
+  it('routes a shell approval bubbled via coordinator.child_approval_required to approveShell on the child run', async () => {
+    // When a child subtask raises a shell gate the coordinator bubbles it as
+    // coordinator.child_approval_required with commandHash instead of requestId.
+    // The UI must detect this as a shell approval and call approveShell (not approveTool).
+    currentEvents = [
+    {
+      sequence: 1,
+      type: 'coordinator.child_approval_required',
+      payload: {
+        childRunId: 'child-run-1',
+        subtaskId: '1',
+        commandHash: 'hash-xyz',
+        command: 'npm install --save-dev',
+      },
+    },
+    ];
+
+    render(
+    <Wrapper>
+      <AgentSessionPanel
+        open
+        variant="docked"
+        onClose={vi.fn()}
+        tree={tree}
+        selectedNodeId="coordinator"
+        onSelectNode={vi.fn()}
+        coordinatorRunId="coord-run-1"
+        projectId="p1"
+      />
+    </Wrapper>,
+    );
+
+    await waitFor(() => screen.getByTestId('approval-gate-approve-btn'), { timeout: 4000 });
+    await userEvent.click(screen.getByTestId('approval-gate-approve-btn'));
+
+    // Must call approveShell (not approveTool) targeting the child run.
+    expect(vi.mocked(apiClient.approveShell)).toHaveBeenCalledWith('child-run-1', 'hash-xyz');
+    expect(vi.mocked(apiClient.approveTool)).not.toHaveBeenCalled();
+    expect(vi.mocked(apiClient.approveShell)).not.toHaveBeenCalledWith('coord-run-1', expect.anything());
+  });
+
+  it('disables Allow once while a shell approval request is in flight', async () => {
+    let resolveApprove!: () => void;
+    vi.mocked(apiClient.approveShell).mockReturnValueOnce(new Promise<void>((res) => { resolveApprove = res; }));
+
+    currentEvents = [
+    {
+      sequence: 1,
+      type: 'coordinator.child_approval_required',
+      payload: { childRunId: 'child-run-1', subtaskId: '1', commandHash: 'hash-busy', command: 'echo hello' },
+    },
+    ];
+
+    render(
+    <Wrapper>
+      <AgentSessionPanel
+        open
+        onClose={vi.fn()}
+        tree={tree}
+        selectedNodeId="coordinator"
+        onSelectNode={vi.fn()}
+        coordinatorRunId="coord-run-1"
+        projectId="p1"
+      />
+    </Wrapper>,
+    );
+
+    await waitFor(() => screen.getByTestId('approval-gate-approve-btn'), { timeout: 4000 });
+    const btn = screen.getByTestId('approval-gate-approve-btn');
+
+    // Start the approval — button should become disabled while in-flight.
+    await userEvent.click(btn);
+    expect(btn).toHaveProperty('disabled', true);
+
+    resolveApprove();
+    // After resolution the gate should show resolved state, not a re-enabled button.
+    await waitFor(() => expect(screen.queryByTestId('approval-gate-approve-btn')).toBeNull(), { timeout: 4000 });
+  });
+  }); // end describe('shell approvals')
 });

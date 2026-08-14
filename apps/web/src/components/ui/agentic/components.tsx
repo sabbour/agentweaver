@@ -57,6 +57,8 @@ export interface ApprovalGateProps {
   approveLabel?: ReactNode;
   denyLabel?: ReactNode;
   additionalActions?: ReactNode;
+  /** Disables the primary Approve and Deny buttons (e.g. while an async request is in flight). */
+  disabled?: boolean;
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
 }
@@ -69,6 +71,7 @@ export function ApprovalGate({
   approveLabel = 'Approve',
   denyLabel = 'Deny',
   additionalActions,
+  disabled,
   onApprove,
   onDeny,
 }: ApprovalGateProps) {
@@ -85,11 +88,11 @@ export function ApprovalGate({
         <Text className={styles.approvalDisclaimer}>{disclaimer}</Text>
       )}
       <div className={styles.approvalActions}>
-        <Button appearance="primary" onClick={() => onApprove?.(stepId)}>
+        <Button appearance="primary" disabled={disabled} data-testid="approval-gate-approve-btn" onClick={() => onApprove?.(stepId)}>
           {approveLabel}
         </Button>
         {additionalActions}
-        <Button appearance="secondary" onClick={() => onDeny?.(stepId)}>
+        <Button appearance="secondary" disabled={disabled} data-testid="approval-gate-deny-btn" onClick={() => onDeny?.(stepId)}>
           {denyLabel}
         </Button>
       </div>
