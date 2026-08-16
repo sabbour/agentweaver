@@ -145,6 +145,8 @@ task) is documented separately in [workflow-selection.md](workflow-selection.md)
   `wasCorrected = true`.
 - Both passes invalid → `WorkflowGenerationException`.
 - Missing id → derived from the description slug.
+- A peer-review approval that continues to a report-producing agent turn → a runnable
+  draft without a correction pass.
 - The endpoint returns `200` with `yaml` + `workflowId` (driven through a stub
   `IWorkflowGenerator`), and `400` for a missing description.
 
