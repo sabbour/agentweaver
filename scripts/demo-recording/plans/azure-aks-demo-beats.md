@@ -15,6 +15,17 @@ Every beat below is intended to be captured **live** against the deployed stagin
 previous beat unless its `On screen:` line explicitly calls for a navigation. Do not
 restart the same flow from scratch just to reach a later screen.
 
+### Capture handoff — 2026-08-17
+
+Staging is running project-clone fix commit `12dcf52a29d0499035c70fe54da4903c61d29582`
+(deployment tag `12dcf52`); health checks and image provenance passed.
+
+**Exact Azure retry:** in the already-open GitHub project dialog, select `Azure/AKS`,
+keep the fixture name `Agentweaver Demo S2 - Azure AKS`, select the generated blueprint,
+then choose **Create project once** and wait for the project page to load before doing
+anything else. Do not click Create again while it is pending and do not delete a shared
+staging project. If that fixture already exists, open it rather than creating another.
+
 Beat ids below preserve the coordinator's final locked numbering, so some retired beats
 remain folded rather than renumbered.
 
