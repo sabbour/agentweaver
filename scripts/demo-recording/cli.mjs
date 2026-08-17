@@ -22,6 +22,7 @@ import {
   parseRecordingCommandOptions,
   prepareCaptureScripts,
   refreshRecordingAuthentication,
+  resolvePlanAuthentication,
   recordingStatus,
 } from './lib/recording-session.mjs';
 
@@ -35,11 +36,11 @@ Usage:
 
 Recording session commands:
   signin   Refresh protected auth from the literal Microsoft Edge Default work profile.
-  open     Refresh Default-profile sign-in, then start or restore the recording session.
-  start    Refresh Default-profile sign-in, open the session, and optionally prepare a capture plan.
+  open     Restore protected recording auth into the named recording session.
+  start    Restore the recording session and optionally prepare a capture plan.
   prepare  Validate a capture plan and create playwright-cli scripts.
-  capture  Refresh Default-profile sign-in, then capture one beat or every beat.
-  status   Check the Edge profile, protected auth, and recording session.
+  capture  Restore protected recording auth, then capture one beat or every beat.
+  status   Check protected auth and the recording session.
   close    Close the named persistent recording session.
   help     Show this help.
 
@@ -47,17 +48,20 @@ Common options:
   --session <name>       Persistent session name. Default: agentweaver-demo
   --base-url <url>       Agentweaver HTTPS URL.
   --auth-root <path>     Git-ignored protected auth directory.
+  --auth-mode <mode>     auto (default), github-legacy, or entra.
 
 Plan options:
   --plan <path>          Capture JSON plan.
   --beat-plan <path>     Optional Markdown beat plan to join and validate.
   --beat <id>            Prepare or capture one beat.
   --all                  Capture every beat.
+  --resume               Capture from the already-open, verified session without resetting its UI state.
   --out-dir <path>       Generated script directory.
 
 Examples:
   npm run demo:record -- signin
   npm run demo:record -- start --plan scripts\\demo-recording\\plans\\blueprint-demo.capture.json
+  npm run demo:record -- signin --auth-mode github-legacy
   npm run demo:record -- capture --plan scripts\\demo-recording\\plans\\blueprint-demo.capture.json --beat 1.1
   npm run demo:record -- status
 `;
@@ -216,6 +220,7 @@ async function assembleFinal(options) {
 async function analyzeCapturedTake(options) {
   const capturePlan = options.capturePlan ?? options['capture-plan'];
   const activityLog = options.activityLog ?? options['activity-log'];
+  const gateManifest = options.gateManifest ?? options['gate-manifest'];
   const beatId = options.beatId ?? options['beat-id'];
   const draftDirection = options.draftDirection ?? options['draft-direction'];
   const required = ['video', 'capturePlan', 'cues', 'out'];
@@ -229,6 +234,7 @@ async function analyzeCapturedTake(options) {
     capturePlanPath: capturePlan,
     cueManifestPath: options.cues,
     activityLogPath: activityLog,
+    gateManifestPath: gateManifest,
     beatId,
     outputPath: options.out,
     draftDirectionPath: draftDirection,
@@ -278,7 +284,7 @@ async function printPrepared(result) {
 export async function runRecordingCommand(command, argv, {
   refreshAuthentication = refreshRecordingAuthentication,
 } = {}) {
-  const options = parseRecordingCommandOptions(command, argv);
+  const options = await resolvePlanAuthentication(parseRecordingCommandOptions(command, argv));
   if (command === 'signin') {
     await refreshAuthentication(options);
   } else if (command === 'open') {
@@ -293,7 +299,6 @@ export async function runRecordingCommand(command, argv, {
   } else if (command === 'status') {
     const status = await recordingStatus(options);
     process.stdout.write([
-      `Microsoft Edge Default profile: ${status.edgeDefaultProfile ? 'found' : 'missing'}`,
       `Protected auth directory: ${status.authIgnored ? 'Git-ignored' : 'not Git-ignored'}`,
       `Recording authentication: ${status.authReady ? 'ready' : 'missing'}`,
       `Session "${options.session}": ${status.sessionOpen ? 'open' : 'closed'}`,
