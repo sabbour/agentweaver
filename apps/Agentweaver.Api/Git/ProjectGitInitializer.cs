@@ -4,6 +4,12 @@ using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Git;
 
+public enum GitClonePurpose
+{
+    ProjectCreation,
+    SkillImport,
+}
+
 /// <summary>
 /// Creates or clones a git repository for a newly created project.
 /// For blank projects: initializes a new repo and creates an initial empty commit on the
@@ -13,6 +19,12 @@ namespace Agentweaver.Api.Git;
 /// </summary>
 public class ProjectGitInitializer
 {
+    /// <summary>
+    /// A project creation only needs the default branch tip: Agentweaver creates run branches and
+    /// worktrees from that tip rather than inspecting or rewriting repository history.
+    /// </summary>
+    internal const int ProjectCreationCloneDepth = 1;
+
     private readonly ILogger<ProjectGitInitializer> _logger;
 
     /// <summary>
@@ -142,24 +154,24 @@ public class ProjectGitInitializer
     }
 
 
-    /// https://github.com/owner/repo) into <paramref name="workingDirectory"/> using
-    /// the provided <paramref name="accessToken"/> as an ephemeral credential.
+    /// Clones <paramref name="sourceRepository"/> into <paramref name="workingDirectory"/> using
+    /// the provided <paramref name="accessToken"/> as an ephemeral credential. The explicit
+    /// <paramref name="purpose"/> selects the required history depth: project creation fetches
+    /// only the default branch tip, while skill imports retain refs such as historical tags.
     /// The token is NEVER logged or stored. Returns the default branch name.
     /// </summary>
-    public virtual string Clone(string workingDirectory, string sourceRepository, string accessToken)
+    public virtual string Clone(
+        string workingDirectory,
+        string sourceRepository,
+        string accessToken,
+        GitClonePurpose purpose)
     {
         // Normalize "owner/repo" -> full HTTPS URL
         var url = sourceRepository.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
             ? sourceRepository
             : $"https://github.com/{sourceRepository}";
 
-        var cloneOptions = new CloneOptions();
-        cloneOptions.FetchOptions.CredentialsProvider = (_, _, _) =>
-            new UsernamePasswordCredentials
-            {
-                Username = "x-access-token",
-                Password = accessToken   // ephemeral; never stored or logged
-            };
+        var cloneOptions = CreateCloneOptions(accessToken, purpose);
 
         _logger.LogInformation(
             "Cloning repository {Repository} into {Path}",
@@ -173,6 +185,20 @@ public class ProjectGitInitializer
         _logger.LogInformation(
             "Clone complete; default branch is {Branch}", defaultBranch);
         return defaultBranch;
+    }
+
+    internal static CloneOptions CreateCloneOptions(string accessToken, GitClonePurpose purpose)
+    {
+        var options = new CloneOptions();
+        if (purpose == GitClonePurpose.ProjectCreation)
+            options.FetchOptions.Depth = ProjectCreationCloneDepth;
+
+        options.FetchOptions.CredentialsProvider = (_, _, _) => new UsernamePasswordCredentials
+        {
+            Username = "x-access-token",
+            Password = accessToken // ephemeral; never stored or logged
+        };
+        return options;
     }
 
     /// <summary>
