@@ -598,7 +598,11 @@ public sealed class LinkedGitHubAccountsApiTests
             return defaultBranch;
         }
 
-        public override string Clone(string workingDirectory, string sourceRepository, string accessToken)
+        public override string Clone(
+            string workingDirectory,
+            string sourceRepository,
+            string accessToken,
+            GitClonePurpose purpose)
         {
             Directory.CreateDirectory(workingDirectory);
             return "main";

@@ -1256,7 +1256,9 @@ public sealed class SkillCatalogService
         var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
         // Clone runs synchronously in LibGit2Sharp; offload so we don't block the request thread.
-        await Task.Run(() => _gitInit.Clone(dir, repoUrl, token ?? string.Empty), ct).ConfigureAwait(false);
+        await Task.Run(
+            () => _gitInit.Clone(dir, repoUrl, token ?? string.Empty, GitClonePurpose.SkillImport),
+            ct).ConfigureAwait(false);
         return dir;
     }
 
