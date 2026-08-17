@@ -19,6 +19,47 @@ An optional `On screen:` line after a beat's `Narration:` records the concrete o
 actions the capture plan must perform (it is ignored by the narration parser, which only
 reads the `Narration:` line).
 
+## Clean-run capture readiness
+
+This is a 21-beat **live-product** narrative.  A closed GitHub issue, a seeded UI
+state, or a successful HTTP delivery alone is not capture evidence.  Before recording,
+the capture owner records the following redacted evidence; no cookie, bearer token, or
+webhook secret belongs in the plan, narration, screenshots, or capture artifacts.
+
+1. **Staging build:** verify the deployed immutable build/release contains the fixes from
+   #721 (task-linked run authorization), #722 (automatic webhook provisioning), #723
+   (Assistant/MCP Entra identity propagation), and #724 (issue-label event actions).
+   Those PRs being merged into `dev` is not enough; the running build must be shown to
+   contain them.  Beats 2.4–2.7, 3.2, and 4.1–4.7 are not clean-run eligible otherwise.
+2. **Run and trace:** use one fresh project and retain the project-local run URL/ID for
+   the board, topology, review, and trace beats.  Evidence is an owner opening the
+   task-linked run and its transaction trace without a 401/403.
+3. **Webhook (Beat 3.2):** the project's effective linked GitHub identity needs
+   repository-hook administration for the automatic path.  Evidence is the Settings
+   action reporting **Created** or **Updated**, followed by a redacted GitHub
+   `issues.labeled` delivery and the resulting `github.issues.labeled` run in the same
+   project.  If that permission is unavailable, do not click or describe the automatic
+   action as successful.  Use this exact fallback narration instead: “The workflow is
+   ready for an `issues.labeled` event. A repository administrator can use these
+   project-specific details to finish the signed GitHub hook; Agentweaver starts triage
+   when that delivery arrives.”  Showing that fallback is truthful, but does **not**
+   satisfy the live-trigger portion of Beat 3.2; an administrator must complete the
+   manual setup before the full 21-beat clean run.
+4. **Assistant/MCP (Beats 4.1–4.3):** evidence is a newly opened Assistant session
+   reading the current linked GitHub identity and project, then presenting an approval
+   before its state-changing workflow start.  Browser sign-in by itself is not evidence.
+   If this fails, do not substitute a UI-started workflow while narrating assistant
+   parity.  The only safe fallback narration is: “The project UI can start this workflow;
+   the Assistant path will be shown after its authenticated connection is available.”
+   Resequence later beats only after that evidence exists; this does not qualify as a
+   complete 21-beat Assistant capture.
+5. **Preview and PR (Beats 2.5, 4.5, and 4.7):** evidence is an actually rendered,
+   interactive preview URL after approval and a real pull-request URL linked from the
+   completed run/topology.  If preview infrastructure or repository write/PR permission
+   is unavailable, show neither a mock preview nor a placeholder PR.  Narrate the
+   completed review/diff only, and mark the affected beat pending rather than claiming
+   shipment.  A full clean run requires both real artifacts.
+
 ## Beat 1.1 — Create the project
 
 Narration: "First, I'll create a new project. I'll give it a name and a short description of what we're building."
