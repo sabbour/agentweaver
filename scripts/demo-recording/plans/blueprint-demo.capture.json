@@ -15,14 +15,50 @@
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
       "videoPath": "recordings/blueprint-demo/0.0-entra-sign-in-handoff.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 3500, "preferred": 5000, "maximum": 7000 },
-      "expectedCues": ["s1.0.0.entra-handoff-dialog"],
-      "cueOrder": ["s1.0.0.entra-handoff-dialog"],
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 3500,
+        "preferred": 5000,
+        "maximum": 7000
+      },
+      "expectedCues": [
+        "s1.0.0.entra-handoff-dialog"
+      ],
+      "cueOrder": [
+        "s1.0.0.entra-handoff-dialog"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 0.0", "title": "Hand off to secure sign-in", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByRole('heading', { name: 'Sign in with Microsoft Entra ID', exact: true })", "timeout": 30000, "cue": { "name": "s1.0.0.entra-handoff-dialog", "stableForMs": 500, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "Sign in with Microsoft Entra ID" }, "rect": { "mode": "matched-element" } } },
-        { "type": "pause", "ms": 2200 }
+        {
+          "type": "badge",
+          "label": "Beat 0.0",
+          "title": "Hand off to secure sign-in",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Sign in with Microsoft Entra ID', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "s1.0.0.entra-handoff-dialog",
+            "stableForMs": 500,
+            "deadlineMs": 30000,
+            "source": {
+              "kind": "text",
+              "selector": "body",
+              "includes": "Sign in with Microsoft Entra ID"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "pause",
+          "ms": 2200
+        }
       ]
     },
     {
@@ -502,18 +538,96 @@
         }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.2", "title": "Review and confirm the plan", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()", "timeout": 180000, "cue": { "name": "2.2.confirm-ready", "rect": { "mode": "matched-element" } } },
-        { "type": "waitFor", "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })", "timeout": 180000 },
-        { "type": "click", "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })", "scale": 1.5, "after": 600 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()", "scale": 1.62, "after": 1200 },
-        { "type": "waitText", "text": "Work plan", "timeout": 180000, "cue": { "name": "2.2.plan-confirmed", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "waitFor", "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })", "timeout": 30000 },
-        { "type": "click", "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })", "scale": 1.35, "after": 600 },
-        { "type": "waitFor", "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })", "timeout": 30000, "cue": { "name": "2.2.autopilot-enabled", "rect": { "mode": "matched-element" } } },
-        { "type": "waitFor", "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })", "timeout": 30000 },
-        { "type": "click", "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })", "scale": 1.35, "after": 600 },
-        { "type": "waitFor", "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })", "timeout": 30000, "cue": { "name": "2.2.auto-approve-enabled", "rect": { "mode": "matched-element" } } }
+        {
+          "type": "badge",
+          "label": "Beat 2.2",
+          "title": "Review and confirm the plan",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
+          "timeout": 180000,
+          "cue": {
+            "name": "2.2.confirm-ready",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })",
+          "timeout": 180000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })",
+          "scale": 1.5,
+          "after": 600
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
+          "scale": 1.62,
+          "after": 1200
+        },
+        {
+          "type": "waitText",
+          "text": "Work plan",
+          "timeout": 180000,
+          "cue": {
+            "name": "2.2.plan-confirmed",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })",
+          "scale": 1.35,
+          "after": 600
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "2.2.autopilot-enabled",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
+          "scale": 1.35,
+          "after": 600
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "2.2.auto-approve-enabled",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        }
       ]
     },
     {
@@ -1695,7 +1809,7 @@
     },
     {
       "id": "4.6",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_BUGFIX_RUN_URL}}",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.6-approve-bug-fix.webm",
       "viewport": {
@@ -1717,13 +1831,13 @@
           "stableForMs": 500,
           "deadlineMs": 300000,
           "source": {
-            "kind": "text",
-            "selector": "body",
-            "includes": "Approve & merge"
+            "kind": "selector",
+            "selector": "[aria-label='Approvals and gates'] button[aria-label='Approve human review and continue to merge']",
+            "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "main"
+            "selector": "[aria-label='Approvals and gates']"
           }
         }
       ],
@@ -1735,8 +1849,14 @@
           "duration": 1800
         },
         {
+          "type": "resolveBugFixPullRequest",
+          "runUrl": "{{AGENTWEAVER_DEMO_BUGFIX_RUN_URL}}",
+          "projectUrl": "{{AGENTWEAVER_DEMO_BUGFIX_PROJECT_URL}}",
+          "expectedPullRequestUrl": "{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}"
+        },
+        {
           "type": "waitFor",
-          "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()",
+          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
           "timeout": 300000,
           "cue": {
             "name": "4.6.merge-action",
@@ -1747,15 +1867,33 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()",
+          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
           "scale": 1.55,
           "hold": 1800
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()",
+          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
           "scale": 1.62,
           "after": 1200
+        }
+      ],
+      "requiresPriorBeat": "4.5",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
+          "kind": "app-url",
+          "message": "Set it to the current Bug Fix run route that produced this pull request."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set it to the project route that owns the current Bug Fix run."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL",
+          "kind": "github-pr-url",
+          "message": "Set it to the PR created by this same Bug Fix run; it is checked against run, topology, and project evidence before approval."
         }
       ]
     },
@@ -1803,13 +1941,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('topology-graph-canvas')",
-          "timeout": 180000,
-          "cue": {
-            "name": "4.7.pr-open",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
+          "timeout": 180000
         },
         {
           "type": "hover",
@@ -1818,10 +1950,37 @@
           "hold": 1600
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('link', { name: /pull request|open.*pr/i }).first()",
-          "scale": 1.45,
-          "after": 1800
+          "type": "gotoResolvedBugFixPullRequest",
+          "after": 1000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('main').getByRole('heading').first()",
+          "timeout": 60000,
+          "cue": {
+            "name": "4.7.pr-open",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        }
+      ],
+      "requiresPriorBeat": "4.6",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
+          "kind": "app-url",
+          "message": "Set it to the current Bug Fix run route that produced this pull request."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set it to the project route that owns the current Bug Fix run."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL",
+          "kind": "github-pr-url",
+          "message": "Set it to the PR created by this same Bug Fix run; it is checked against run, topology, and project evidence before approval."
         }
       ]
     },

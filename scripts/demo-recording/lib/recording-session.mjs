@@ -601,13 +601,63 @@ function planName(planPath) {
   return path.basename(planPath).replace(/\.capture\.json$/i, '').replace(/\.json$/i, '');
 }
 
-export async function prepareCaptureScripts(options) {
+function prerequisiteError(prerequisite) {
+  return new Error(`Capture prerequisite ${prerequisite.environment} is unavailable. ${prerequisite.message}`);
+}
+
+function validatePrerequisite(prerequisite, environment, baseUrl) {
+  const value = environment[prerequisite.environment]?.trim();
+  if (!value) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'github-issue-number' && !/^[1-9][0-9]*$/.test(value)) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'github-issue-url'
+    && !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/[1-9][0-9]*\/?$/u.test(value)) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'github-issue-url' && prerequisite.matchesEnvironment) {
+    const issueNumber = /\/issues\/([1-9][0-9]*)\/?$/u.exec(value)?.[1];
+    if (!issueNumber || environment[prerequisite.matchesEnvironment]?.trim() !== issueNumber) throw prerequisiteError(prerequisite);
+  }
+  if (prerequisite.kind === 'github-pr-url'
+    && !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/[1-9][0-9]*\/?$/u.test(value)) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'app-url'
+    && (!URL.canParse(value) || new URL(value).origin !== new URL(baseUrl).origin)) throw prerequisiteError(prerequisite);
+  return value;
+}
+
+function replaceRuntimeTemplates(value, environment) {
+  if (typeof value === 'string') {
+    return value.replace(/\{\{([A-Z][A-Z0-9_]+)\}\}/gu, (_template, name) => {
+      const replacement = environment[name];
+      if (!replacement) throw new Error(`Capture plan references ${name}, but it is not configured as a satisfied prerequisite.`);
+      return replacement;
+    });
+  }
+  if (Array.isArray(value)) return value.map((item) => replaceRuntimeTemplates(item, environment));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceRuntimeTemplates(item, environment)]));
+  return value;
+}
+
+export function resolveCaptureBeatPrerequisites(beat, {
+  environment = process.env,
+  baseUrl = DEFAULT_RECORDING_BASE_URL,
+} = {}) {
+  const values = {};
+  for (const prerequisite of beat.prerequisites ?? []) {
+    values[prerequisite.environment] = validatePrerequisite(prerequisite, environment, baseUrl);
+  }
+  return replaceRuntimeTemplates(beat, values);
+}
+
+export async function prepareCaptureScripts(options, {
+  resolvePrerequisites = true,
+  writeScripts = true,
+} = {}) {
   const paths = recordingAuthPaths(options.authRoot);
   const repositoryRoot = await assertProtectedAuthRoot(paths.root);
   const planPath = path.resolve(options.plan);
   const loadedCaptureConfig = await loadCaptureConfig(planPath);
   const targetBeatIds = options.beat ? [options.beat] : loadedCaptureConfig.beats.map((beat) => beat.id);
-  const captureConfig = resolveCapturePreflight(loadedCaptureConfig, targetBeatIds);
+  const captureConfig = resolvePrerequisites
+    ? resolveCapturePreflight(loadedCaptureConfig, targetBeatIds)
+    : loadedCaptureConfig;
   const configuredBeatIds = new Set(captureConfig.beats.map((beat) => beat.id));
   const beats = options.beatPlan
     ? joinCaptureConfig(await loadBeatPlan(path.resolve(options.beatPlan)), captureConfig)
@@ -628,37 +678,50 @@ export async function prepareCaptureScripts(options) {
   }
   await fs.mkdir(outputDirectory, { recursive: true, mode: 0o700 });
   const scripts = [];
-  for (const beat of selected) {
+  for (const configuredBeat of selected) {
+    const beat = resolvePrerequisites
+      ? resolveCaptureBeatPrerequisites(configuredBeat, { baseUrl: options.baseUrl })
+      : configuredBeat;
     const scriptPath = path.join(outputDirectory, `beat-${beat.id.replace(/\./g, '-')}.cjs`);
-    if (protectedOutput) {
+    if (writeScripts && protectedOutput) {
       await assertProtectedAuthDestination(scriptPath, paths.root, repositoryRoot);
     }
-    await fs.writeFile(scriptPath, renderCaptureScript(beat), { encoding: 'utf8', mode: 0o600 });
+    if (writeScripts) {
+      await fs.writeFile(scriptPath, renderCaptureScript(beat), { encoding: 'utf8', mode: 0o600 });
+    }
     scripts.push({ beatId: beat.id, scriptPath, videoPath: beat.videoPath });
   }
   return { outputDirectory, scripts };
 }
 
 export async function captureRecordingPlan(options) {
-  const prepared = await prepareCaptureScripts(options);
+  const queue = await prepareCaptureScripts(options, {
+    resolvePrerequisites: false,
+    writeScripts: false,
+  });
   if (options.unauthenticated) {
     openUnauthenticatedRecordingSession(options);
   } else {
     await openRecordingSession(options);
   }
   try {
-    for (const item of prepared.scripts) {
+    const prepared = [];
+    for (const queued of queue.scripts) {
+      const current = await prepareCaptureScripts({ ...options, beat: queued.beatId, all: false });
+      const item = current.scripts[0];
+      if (!item) throw new Error(`Capture preparation did not produce beat ${queued.beatId}.`);
       if (item.videoPath) await fs.mkdir(path.dirname(path.resolve(item.videoPath)), { recursive: true });
       process.stdout.write(`Capturing beat ${item.beatId}.\n`);
       runPlaywrightCli(
         sessionArgs(options.session, '--raw', 'run-code', `--filename=${item.scriptPath}`),
         { output: 'inherit' },
       );
+      prepared.push(item);
     }
+    return { outputDirectory: queue.outputDirectory, scripts: prepared };
   } finally {
     if (options.unauthenticated) closeRecordingSession(options.session);
   }
-  return prepared;
 }
 
 export async function recordingStatus(options) {

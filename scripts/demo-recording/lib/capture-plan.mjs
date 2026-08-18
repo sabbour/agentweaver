@@ -1,5 +1,6 @@
 import { browserZoomBootstrapSource } from './zoom.mjs';
 import { browserDomCueBootstrapSource } from './dom-cues.mjs';
+import { browserBugFixPullRequestResolverSource } from './bugfix-pr.mjs';
 
 // buildInstallSource used to be a hand-duplicated copy of zoom.mjs's bootstrap
 // (with the same '#root'-only transform bug). Now delegates to the single
@@ -219,6 +220,37 @@ export function renderCaptureScript(plan) {
       const evalBody = step.expression ?? step.code ?? '';
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('eval'));`);
       lines.push(`    await page.evaluate(async () => { ${evalBody} });`);
+      if (step.after) lines.push(`    await pause(${step.after});`);
+    } else if (step.type === 'resolveBugFixPullRequest') {
+      lines.push(`    { const evidence = ${JSON.stringify({
+        runUrl: step.runUrl,
+        projectUrl: step.projectUrl,
+        expectedPullRequestUrl: step.expectedPullRequestUrl,
+      })};`);
+      lines.push(`      const resolveEvidenceSource = ${JSON.stringify(browserBugFixPullRequestResolverSource())};`);
+      lines.push(`      const resolved = await page.evaluate(async ({ evidence, resolveEvidenceSource }) => {`);
+      lines.push(`        const resolve = (0, eval)(resolveEvidenceSource);`);
+      lines.push(`        const run = new URL(evidence.runUrl);`);
+      lines.push(`        if (location.href !== run.href) throw new Error('Bug Fix pull-request resolution failed: the active page is not the configured current Bug Fix run.');`);
+      lines.push(`        const runId = run.pathname.split('/').filter(Boolean).at(-1);`);
+      lines.push(`        const request = async (path) => { const response = await fetch(path, { credentials: 'same-origin' }); if (!response.ok) throw new Error(\`Bug Fix pull-request resolution failed: unable to load \${path} (\${response.status}).\`); return response.json(); };`);
+      lines.push(`        const [topology, events] = await Promise.all([request(\`/api/runs/\${encodeURIComponent(runId)}/graph\`), request(\`/api/runs/\${encodeURIComponent(runId)}/events\`)]);`);
+      lines.push(`        const projectId = new URL(evidence.projectUrl).pathname.split('/').filter(Boolean).at(-1);`);
+      lines.push(`        const project = await request(\`/api/projects/\${encodeURIComponent(projectId)}\`);`);
+      lines.push(`        return resolve({ ...evidence, topology, events, project });`);
+      lines.push(`      }, { evidence, resolveEvidenceSource });`);
+      lines.push(`      const response = await page.goto(resolved.url, { waitUntil: 'domcontentloaded' });`);
+      lines.push(`      if (!response || response.status() !== 200 || page.url() !== resolved.url) throw new Error('Bug Fix pull-request resolution failed: the resolved GitHub pull request is missing or no longer has the expected repository/number identity.');`);
+      lines.push(`      await page.goto(evidence.runUrl, { waitUntil: 'domcontentloaded' });`);
+      lines.push('      await page.evaluate(installSource);');
+      lines.push('      await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
+      lines.push('      await page.evaluate((url) => sessionStorage.setItem("__demoResolvedBugFixPullRequestUrl", url), resolved.url);');
+      lines.push('    }');
+    } else if (step.type === 'gotoResolvedBugFixPullRequest') {
+      lines.push(`    { const url = await page.evaluate(() => sessionStorage.getItem('__demoResolvedBugFixPullRequestUrl')); if (!url) throw new Error('Bug Fix pull-request resolution failed: no resolved pull request is available for Beat 4.7 navigation.'); await page.goto(url, { waitUntil: 'domcontentloaded' }); }`);
+      lines.push('    await page.evaluate(installSource);');
+      lines.push('    await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
+      lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('goto'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'waitFor') {
       // Wait for a real element (e.g. a rendered dashboard chart / topology node) to be
