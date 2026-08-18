@@ -7,20 +7,27 @@ end-to-end validation; use the UI or MCP harness for those surfaces.
 
 Run all commands below from the repository root. The harness requires Node 18 or
 newer. It resolves an access token from `--token`, then `AGENTWEAVER_TOKEN`, then
-`gh auth token`.
+`gh auth token`. The GitHub CLI fallback applies only to GitHubLegacy deployments.
 
 ### Token acquisition for staging (Entra Conditional Access)
 
 Agentweaver staging uses Entra Conditional Access. The token cannot be retrieved via
-device-code flow or plain browser. Use the Edge Default login script to capture a
-session token, then export it for the API harness:
+device-code flow or plain browser. With an already authenticated demo-recording
+session, use the recorder-session provider. It reads the protected session token only
+in memory for each request; never export it to an environment variable, CLI argument,
+transcript, finding, verdict, or log:
 
 ```powershell
-node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain>
-$env:AGENTWEAVER_TOKEN = Get-Content scripts\ui-harness\.auth\session-token.txt -Raw
+node scripts/api-harness/run-persona.mjs `
+  --scenario generated-artifacts-seam `
+  --target https://<host>.staging.<domain> `
+  --auth-provider recorder-session
 ```
 
-`session-token.txt` is git-ignored. Never print its value in conversation or logs.
+The provider uses `scripts/demo-recording/.auth/` by default; use
+`--recorder-auth-root` only for an existing protected recording-auth root. Verify the
+recording session first with `npm run demo:record -- status`. If its bearer is expired,
+the human-only recording sign-in flow must refresh it.
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 

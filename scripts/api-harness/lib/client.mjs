@@ -3,8 +3,9 @@
 // Every persona scenario drives Agentweaver exclusively through these calls —
 // the same surface a human user's browser talks to. No browser automation.
 //
-// Auth: a bearer token (on staging, a GitHub token from `gh auth token`) is sent
-// on every /api request, matching apps/Agentweaver.Api/API.md.
+// Auth: a bearer token is sent on every /api request, matching apps/Agentweaver.Api/API.md.
+// GitHubLegacy deployments accept a GitHub token from `gh auth token`; Entra deployments
+// require an Entra bearer token supplied through --token or AGENTWEAVER_TOKEN.
 
 /**
  * @typedef {Object} ApiCall
@@ -40,13 +41,17 @@ export class AgentweaverClient {
   /**
    * @param {Object} opts
    * @param {string} opts.baseUrl   e.g. https://agentweaver.<zone>.westus2.staging.aksapp.io
-   * @param {string} opts.token     bearer token
+   * @param {string} [opts.token]   bearer token
+   * @param {{getAuthorization: () => Promise<string>}} [opts.authProvider] in-memory authorization provider
    * @param {boolean} [opts.insecure] skip TLS verification (staging self-signed / SAN drift)
    */
-  constructor({ baseUrl, token, insecure = false, allowProd = false, confirmProduction = false }) {
+  constructor({ baseUrl, token, authProvider, insecure = false, allowProd = false, confirmProduction = false }) {
     assertTargetAllowed(baseUrl, { allowProd, confirmProduction });
+    if (!authProvider && !token) throw new Error('An auth provider or bearer token is required.');
     this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.token = token;
+    this.authProvider = authProvider ?? {
+      getAuthorization: async () => `Bearer ${token}`,
+    };
     /** @type {ApiCall[]} */
     this.calls = [];
     if (insecure) {
@@ -63,24 +68,27 @@ export class AgentweaverClient {
   async call(method, path, body) {
     const url = path.startsWith('http') ? path : `${this.baseUrl}${path}`;
     const started = Date.now();
-    /** @type {RequestInit} */
-    const init = {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        Accept: 'application/json',
-      },
-    };
-    if (body !== undefined) {
-      init.headers['Content-Type'] = 'application/json';
-      init.body = JSON.stringify(body);
-    }
-
     let status = 0;
     let responseBody = null;
     let traceId = null;
     let upstreamMs = null;
     try {
+      const authorization = await this.authProvider.getAuthorization();
+      if (typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) {
+        throw new Error('Auth provider did not return a Bearer authorization value.');
+      }
+      /** @type {RequestInit} */
+      const init = {
+        method,
+        headers: {
+          Authorization: authorization,
+          Accept: 'application/json',
+        },
+      };
+      if (body !== undefined) {
+        init.headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(body);
+      }
       const res = await fetch(url, init);
       status = res.status;
       for (const h of CORRELATION_HEADERS) {
