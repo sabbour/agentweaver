@@ -443,6 +443,14 @@ export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositor
   }
 }
 
+export async function presentAgentweaverEntraSignIn(page) {
+  await page.evaluate(() => window.sessionStorage.removeItem('agentweaver.sessionToken'));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const signInButton = page.getByRole('button', { name: 'Sign in with Microsoft Entra ID', exact: true });
+  await signInButton.waitFor({ state: 'visible', timeout: 30_000 });
+  await signInButton.click();
+}
+
 export async function signInRecordingSession(options) {
   const paths = recordingAuthPaths(options.authRoot);
   const edgeProfile = resolveLiteralEdgeDefaultProfile();
@@ -463,23 +471,13 @@ export async function signInRecordingSession(options) {
     await page.goto(options.baseUrl, { waitUntil: 'commit' });
     await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
 
-    let hasSession = await page.evaluate(() => window.sessionStorage.getItem('agentweaver.sessionToken') !== null).catch(() => false);
-    if (!hasSession) {
-      const signInButton = page.getByRole('button', { name: 'Sign in with Microsoft Entra ID', exact: true });
-      await signInButton.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {});
-      if (await signInButton.isVisible().catch(() => false)) await signInButton.click();
-      process.stdout.write(
-        'Complete sign-in in Microsoft Edge. It uses a freshly refreshed disposable copy of the literal Default work profile.\n',
-      );
-      await page.waitForFunction(
-        () => window.sessionStorage.getItem('agentweaver.sessionToken') !== null,
-        undefined,
-        { timeout: 900_000 },
-      );
-      hasSession = true;
-    }
-
-    if (!hasSession) throw new Error('Agentweaver did not create an authenticated session.');
+    await presentAgentweaverEntraSignIn(page);
+    process.stdout.write('Waiting for cached Microsoft Entra SSO in the refreshed recording session.\n');
+    await page.waitForFunction(
+      () => window.sessionStorage.getItem('agentweaver.sessionToken') !== null,
+      undefined,
+      { timeout: 900_000 },
+    );
     const origin = await page.evaluate(() => window.location.origin);
     if (origin !== new URL(options.baseUrl).origin) {
       throw new Error('Sign-in did not return to the configured Agentweaver origin.');

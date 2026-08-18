@@ -15,13 +15,11 @@ npm run demo:record -- signin
 
 ## Microsoft Entra boundary for agents
 
-An agent may click Agentweaver's own **Sign in with Microsoft Entra ID** button to
-start its redirect. Cached SSO may complete authentication after that click. Once the
-redirect reaches Microsoft Entra, the agent must not interact with that UI: no account
-selection, credentials, MFA, consent, or access to tokens, cookies, session storage,
-browser profiles, or account data. If cached SSO does not complete authentication, stop
-and have a human complete sign-in privately and off camera. Agents must not run `signin`
-or inspect authentication artifacts to work around this boundary.
+The recorder clears only the current Agentweaver session token in its disposable
+recording context to surface the foreground app sign-in page, then waits for and clicks
+the visible **Sign in with Microsoft Entra ID** button. It relies on the existing cached
+SSO behavior after that click and never selects an account, enters credentials,
+interacts with MFA, or grants consent in Microsoft Entra.
 
 The command uses **only** the literal Microsoft Edge `Default` work profile at
 `%LOCALAPPDATA%\Microsoft\Edge\User Data\Default`. Chrome and every other Edge
@@ -29,7 +27,8 @@ profile are refused. Close all Edge windows when prompted. The command then:
 
 1. Validates that `Local State` identifies that exact `Default` profile, then copies
    it into a freshly created disposable, Git-ignored directory.
-2. Opens that copy in Microsoft Edge for the human Entra sign-in.
+2. Opens that copy in Microsoft Edge at the Agentweaver app sign-in page, then clicks
+   only the app-owned Entra sign-in button.
 3. Saves the Playwright storage state and Agentweaver `sessionStorage` sidecar.
 4. Closes and deletes the disposable Edge profile.
 

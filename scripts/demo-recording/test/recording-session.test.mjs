@@ -17,6 +17,7 @@ import {
   resolveSafeAuthDestination,
   selectCaptureBeats,
   shouldCopyEdgeProfileEntry,
+  presentAgentweaverEntraSignIn,
   validateLiteralEdgeDefaultProfile,
   waitForEdgeToClose,
 } from '../lib/recording-session.mjs';
@@ -194,6 +195,29 @@ test('auth refresh closes only the owned Playwright session before inspecting Ed
     },
   );
   assert.deepEqual(events, ['close:agentweaver-demo', 'refresh-default']);
+});
+
+test('sign-in surfaces the Agentweaver page before clicking its visible Entra button', async () => {
+  const events = [];
+  const button = {
+    waitFor: async (options) => events.push(['waitFor', options]),
+    click: async () => events.push(['click']),
+  };
+  await presentAgentweaverEntraSignIn({
+    evaluate: async () => events.push(['clear-session-token']),
+    reload: async (options) => events.push(['reload', options]),
+    getByRole: (role, options) => {
+      events.push(['getByRole', role, options]);
+      return button;
+    },
+  });
+  assert.deepEqual(events, [
+    ['clear-session-token'],
+    ['reload', { waitUntil: 'domcontentloaded' }],
+    ['getByRole', 'button', { name: 'Sign in with Microsoft Entra ID', exact: true }],
+    ['waitFor', { state: 'visible', timeout: 30_000 }],
+    ['click'],
+  ]);
 });
 
 test('signin CLI routing cannot bypass the close-first authentication helper', async () => {
