@@ -14,7 +14,7 @@ async function readCapturePlan(name) {
   return JSON.parse(await fs.readFile(new URL(`../plans/${name}`, import.meta.url), 'utf8'));
 }
 
-test('all Beat 0 narratives stop at the human-only Entra handoff', async () => {
+test("all Beat 0 narratives permit only Agentweaver's redirect before the Entra boundary", async () => {
   const plans = await Promise.all([
     readMarkdownPlan('blueprint-demo-beats.md'),
     readMarkdownPlan('azure-aks-demo-beats.md'),
@@ -25,14 +25,17 @@ test('all Beat 0 narratives stop at the human-only Entra handoff', async () => {
     const beat = parseBeatPlan(source).find((candidate) => candidate.id === '0.0');
     assert.ok(beat, 'expected Beat 0.0');
     assert.equal(beat.narrationSource, 'Agentweaver hands sign-in to Microsoft Entra.');
-    assert.match(beat.markdown, /before any identity-provider\s+action/i);
-    assert.match(beat.markdown, /do not select an\s+account, type credentials, interact with MFA or consent/i);
-    assert.match(beat.markdown, /tokens, cookies, or\s+profile data/i);
+    assert.match(beat.markdown, /may click Agentweaver's/i);
+    assert.match(beat.markdown, /own\s+button to start the\s+redirect/i);
+    assert.match(beat.markdown, /cached SSO may complete it/i);
+    assert.match(beat.markdown, /Cut as soon as Microsoft\s+Entra is reached/i);
+    assert.match(beat.markdown, /do not\s+select an account, type credentials, interact with MFA or\s+consent/i);
+    assert.match(beat.markdown, /tokens,\s+cookies,\s+profile data/i);
     assert.match(beat.markdown, /privately\s+and off camera/i);
   }
 });
 
-test('Beat 0 plans are unauthenticated, passive, and excluded from authenticated all capture', async () => {
+test('Beat 0 plans are isolated, unauthenticated, and excluded from authenticated all capture', async () => {
   const plans = [
     ['blueprint-demo-beats.md', 'blueprint-demo.capture.json'],
     ['azure-aks-demo-beats.md', 'azure-aks-demo.capture.json'],

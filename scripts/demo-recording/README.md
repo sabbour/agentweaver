@@ -13,6 +13,16 @@ npm run demo:record -- help
 npm run demo:record -- signin
 ```
 
+## Microsoft Entra boundary for agents
+
+An agent may click Agentweaver's own **Sign in with Microsoft Entra ID** button to
+start its redirect. Cached SSO may complete authentication after that click. Once the
+redirect reaches Microsoft Entra, the agent must not interact with that UI: no account
+selection, credentials, MFA, consent, or access to tokens, cookies, session storage,
+browser profiles, or account data. If cached SSO does not complete authentication, stop
+and have a human complete sign-in privately and off camera. Agents must not run `signin`
+or inspect authentication artifacts to work around this boundary.
+
 The command uses **only** the literal Microsoft Edge `Default` work profile at
 `%LOCALAPPDATA%\Microsoft\Edge\User Data\Default`. Chrome and every other Edge
 profile are refused. Close all Edge windows when prompted. The command then:
@@ -72,9 +82,10 @@ npm run demo:record -- capture `
 ```
 
 This starts a dedicated non-persistent session without loading recording storage state
-and captures only the Agentweaver handoff dialog. The plan has no IdP interaction:
-do not select accounts, enter credentials, interact with MFA/consent, or record account
-content. Complete any sign-in manually and privately after the command exits.
+and captures only the Agentweaver handoff dialog. An agent may click that Agentweaver
+button; cached SSO may then complete the redirect. Cut immediately when Microsoft Entra
+is reached and do not interact with its UI or record account content. A human completes
+any unfinished sign-in privately and off camera.
 
 Capture the complete plan:
 
