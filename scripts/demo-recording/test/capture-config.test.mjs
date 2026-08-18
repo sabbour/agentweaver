@@ -175,11 +175,14 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   ));
   assert.doesNotThrow(() => validateCaptureConfig(plan));
   const byId = (id) => plan.beats.find((beat) => beat.id === id);
+  const confirm = byId('2.2');
   const board = byId('2.4');
   const review = byId('2.6');
   const traces = byId('2.7');
   const decisions = byId('2.8');
 
+  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })";
+  assert.equal(confirm.steps.filter((step) => step.selector === promotionCheckbox).length, 2);
   assert.ok(board.steps.some((step) => step.cue?.name === '2.4.promoted-task'));
   assert.equal(board.steps.some((step) => step.selector?.includes('New task title')), false);
   assert.ok(review.cueWatchers.some((cue) => cue.source?.selector === "[data-testid='coordinator-review-changes']"));

@@ -117,8 +117,8 @@
       "steps": [
         { "type": "badge", "label": "Beat 2.2", "title": "Review and confirm the plan", "duration": 1800 },
         { "type": "waitFor", "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()", "timeout": 180000, "cue": { "name": "2.2.confirm-ready", "rect": { "mode": "matched-element" } } },
-        { "type": "waitFor", "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })", "timeout": 180000 },
-        { "type": "click", "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })", "scale": 1.5, "after": 600 },
+        { "type": "waitFor", "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })", "timeout": 180000 },
+        { "type": "click", "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })", "scale": 1.5, "after": 600 },
         { "type": "click", "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()", "scale": 1.62, "after": 1200 },
         { "type": "waitText", "text": "Work plan", "timeout": 180000, "cue": { "name": "2.2.plan-confirmed", "rect": { "mode": "element", "selector": "main" } } },
         { "type": "waitFor", "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })", "timeout": 30000 },
