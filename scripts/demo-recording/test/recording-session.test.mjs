@@ -65,8 +65,8 @@ test('capture requires an explicit beat selection or all', () => {
 test('authenticated all capture skips handoff beats and modes cannot mix', () => {
   const beats = [
     { id: '0.0', captureMode: 'unauthenticated' },
-    { id: '1.1' },
-    { id: '1.2', captureMode: 'authenticated' },
+    { id: '1.1', requiresPriorBeat: '0.0' },
+    { id: '1.2', captureMode: 'authenticated', requiresPriorBeat: '1.1' },
   ];
   assert.deepEqual(
     selectCaptureBeats(beats, { all: true }).map((beat) => beat.id),
@@ -83,6 +83,10 @@ test('authenticated all capture skips handoff beats and modes cannot mix', () =>
   assert.throws(
     () => selectCaptureBeats(beats, { beat: '1.1', unauthenticated: true }),
     /declared with captureMode "unauthenticated"/,
+  );
+  assert.throws(
+    () => selectCaptureBeats(beats, { beat: '1.2' }),
+    /Beat 1.2 requires prior beat 1.1.*--all/,
   );
 });
 
