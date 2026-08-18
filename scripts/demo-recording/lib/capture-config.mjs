@@ -52,6 +52,21 @@ export function validateCaptureConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) fail('root must be an object');
   if (config.schemaVersion !== 1) fail('schemaVersion must be 1');
   if (!Array.isArray(config.beats)) fail('beats must be an array');
+  if (config.preflight !== undefined) {
+    if (!config.preflight || typeof config.preflight !== 'object' || Array.isArray(config.preflight)) fail('preflight must be an object');
+    for (const [index, artifact] of (config.preflight.externalArtifacts ?? []).entries()) {
+      const location = `preflight.externalArtifacts[${index}]`;
+      if (!Array.isArray(artifact?.beats) || artifact.beats.some((id) => !/^[0-9]+\.[0-9]+$/.test(id))) fail(`${location}.beats must contain markdown beat IDs`);
+      if (!/^[A-Z][A-Z0-9_]+$/.test(artifact.environment ?? '')) fail(`${location}.environment must be an environment variable name`);
+      if (typeof artifact.instruction !== 'string' || !artifact.instruction.trim()) fail(`${location}.instruction is required`);
+      if (artifact.host !== undefined && (typeof artifact.host !== 'string' || !artifact.host)) fail(`${location}.host must be a host name`);
+      if (artifact.origin !== undefined && (typeof artifact.origin !== 'string' || !/^https:\/\//u.test(artifact.origin))) fail(`${location}.origin must be an HTTPS origin`);
+    }
+    const requirement = config.preflight.workflowRequirements;
+    if (requirement !== undefined && (!Array.isArray(requirement.beats) || requirement.beats.some((id) => !/^[0-9]+\.[0-9]+$/.test(id)) || !Array.isArray(requirement.workflowIds) || requirement.workflowIds.some((id) => typeof id !== 'string' || !id.trim()))) {
+      fail('preflight.workflowRequirements must contain beat IDs and workflow IDs');
+    }
+  }
 
   const beatIds = new Set();
   const cueNames = new Set();
