@@ -85,7 +85,7 @@
       "freshNavigation": true,
       "videoPath": "recordings/blueprint-demo/2.1-frame-product.webm",
       "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 12000, "preferred": 20000, "maximum": 28550 },
+      "outputBudgetMs": { "minimum": 12000, "preferred": 20000, "maximum": 32000 },
       "expectedCues": ["2.1.task-dialog", "2.1.goal-ready", "2.1.outcome-drafting"],
       "cueWatchers": [
         { "name": "2.1.task-dialog", "stableForMs": 300, "deadlineMs": 20000, "source": { "kind": "text", "selector": "body", "includes": "Start a task" }, "rect": { "mode": "element", "selector": "[role=dialog]" } }
