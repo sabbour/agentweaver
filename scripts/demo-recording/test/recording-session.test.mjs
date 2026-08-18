@@ -209,6 +209,19 @@ test('signin CLI routing cannot bypass the close-first authentication helper', a
   assert.equal(calls[0].session, 'owned-session');
 });
 
+test('open routes directly to the Agentweaver sign-in recovery session', async () => {
+  const calls = [];
+  await runRecordingCommand(
+    'open',
+    [],
+    {
+      openSession: async (options) => calls.push(options),
+    },
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].session, 'agentweaver-demo');
+});
+
 test('auth destinations reject a junction that escapes the ignored auth root', async () => {
   const id = `${process.pid}-${Date.now()}`;
   const authRoot = path.join(packageRoot, '.auth', `junction-test-${id}`);

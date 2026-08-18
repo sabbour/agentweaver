@@ -89,7 +89,12 @@ export function resolveCapturePreflight(config, selectedBeatIds, environment = p
     }
     validateExternalUrl(requirement.environment, value.trim(), requirement);
   }
-  return resolvePlaceholders(config, environment);
+  return {
+    ...config,
+    beats: config.beats.map((beat) => (
+      selected.has(beat.id) ? resolvePlaceholders(beat, environment) : beat
+    )),
+  };
 }
 
 export async function verifyFixtureWorkflowRequirements(options, dependencies = {}) {

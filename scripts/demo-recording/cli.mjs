@@ -279,14 +279,15 @@ async function printPrepared(result) {
 
 export async function runRecordingCommand(command, argv, {
   refreshAuthentication = refreshRecordingAuthentication,
+  openSession = openRecordingSession,
 } = {}) {
   const options = parseRecordingCommandOptions(command, argv);
   if (command === 'signin') {
     await refreshAuthentication(options);
   } else if (command === 'open') {
-    await openRecordingSession(options);
+    await openSession(options);
   } else if (command === 'start') {
-    await openRecordingSession(options);
+    await openSession(options);
     if (options.plan) await printPrepared(await prepareCaptureScripts(options));
   } else if (command === 'prepare') {
     await printPrepared(await prepareCaptureScripts(options));

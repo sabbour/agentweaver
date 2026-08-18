@@ -100,6 +100,13 @@ generated script with `playwright-cli --raw`. `capture --all` automatically skip
 unauthenticated handoff beats and begins with the first authenticated beat; it never
 waits for their unauthenticated dialog.
 
+Capture-plan prerequisites are evaluated only for selected beats. Thus Beat 0.0 can
+capture its safe unauthenticated Agentweaver handoff without external GitHub-triage
+variables, while `--all` or a later beat still requires that beat's declared
+prerequisites. `open` performs only the normal Agentweaver sign-in recovery flow, so it
+can reach the Agentweaver **Sign in** affordance for cached SSO recovery without capture
+plan validation. It does not interact with the identity provider beyond that button.
+
 ## Clean Blueprint fixture
 
 At an inactive recording boundary, remove only the plan's explicitly named demo fixture:
