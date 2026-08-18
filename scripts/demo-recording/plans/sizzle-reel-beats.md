@@ -31,10 +31,12 @@ Source: Scenario 1 Beat 0.0 or Scenario 2 Beat 0.0
 DOM cue: Cut in only once the Agentweaver **Sign in with Microsoft Entra ID** handoff
 dialog is visible.
 
-On screen: Show only the Agentweaver handoff dialog. Cut before any identity-provider
-action. Do not select an account, type credentials, interact with MFA or consent, export
-tokens, cookies, or profile data, or capture sensitive account content. A human completes
-sign-in privately and off camera before the authenticated source footage begins.
+On screen: Show only the Agentweaver handoff dialog. An agent may click Agentweaver's
+own button to start the redirect; cached SSO may complete it. Cut as soon as Microsoft
+Entra is reached. Do not select an account, type credentials, interact with MFA or
+consent, or access tokens, cookies, profile data, or sensitive account content. A human
+completes any unfinished sign-in privately and off camera before the authenticated source
+footage begins.
 
 Continuity: This is captured in the isolated unauthenticated mode, then hard-cuts to the
 first authenticated source beat. It is never part of an authenticated `capture --all`.

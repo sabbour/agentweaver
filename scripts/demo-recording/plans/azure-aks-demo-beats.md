@@ -49,10 +49,11 @@ Narration: "Agentweaver hands sign-in to Microsoft Entra."
 Fresh navigation: true
 
 On screen: Show only the Agentweaver **Sign in with Microsoft Entra ID** handoff dialog
-and hold for the narration. Cut before any identity-provider action. Do not select an
-account, type credentials, interact with MFA or consent, export tokens, cookies, or
-profile data, or capture sensitive account content. A human completes sign-in privately
-and off camera before the authenticated beats begin.
+and hold for the narration. An agent may click Agentweaver's own button to start the
+redirect; cached SSO may complete it. Cut as soon as Microsoft Entra is reached. Do not
+select an account, type credentials, interact with MFA or consent, or access tokens,
+cookies, profile data, or sensitive account content. A human completes any unfinished
+sign-in privately and off camera before the authenticated beats begin.
 
 ## Beat 0.1 — Introduce the repo and the job to automate
 
