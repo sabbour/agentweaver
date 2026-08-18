@@ -265,7 +265,9 @@ test('Bug Fix PR resolution binds an exact run artifact to its project repositor
     runUrl: 'https://demo.test/projects/project-1/runs/run-1',
     projectUrl: 'https://demo.test/projects/project-1',
     expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42',
-    topology: { nodes: [{ type: 'open_pull_request' }] },
+    topology: {
+      nodes: [{ id: 'push-pr', role: 'action', kind: 'live', node_type: 'action' }],
+    },
     events: [{ payload: { message: 'Opened pull request #42: https://github.com/octo/widgets/pull/42' } }],
     project: { source_repository: 'octo/widgets' },
   });
@@ -277,8 +279,17 @@ test('Bug Fix PR resolution binds an exact run artifact to its project repositor
 test('Bug Fix PR resolution rejects missing and mismatched external pull requests', () => {
   const evidence = {
     runUrl: 'https://demo.test/projects/project-1/runs/run-1', projectUrl: 'https://demo.test/projects/project-1',
-    topology: { nodes: [{ type: 'open_pull_request' }] }, project: { source_repository: 'octo/widgets' },
+    topology: {
+      nodes: [{ id: 'push-pr', role: 'action', kind: 'live', node_type: 'action' }],
+    },
+    project: { source_repository: 'octo/widgets' },
   };
+  assert.throws(() => resolveBugFixPullRequestEvidence({
+    ...evidence,
+    topology: { nodes: [{ id: 'push-pr', role: 'action', kind: 'live', node_type: 'gate' }] },
+    expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42',
+    events: [{ url: 'https://github.com/octo/widgets/pull/42' }],
+  }), /does not contain the live push-pr action/);
   assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42', events: [] }), /has not reported a pull request/);
   assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/41', events: [{ url: 'https://github.com/octo/widgets/pull/42' }] }), /stale or does not match/);
   assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/other/pull/42', events: [{ url: 'https://github.com/octo/widgets/pull/42' }] }), /stale or does not match/);
