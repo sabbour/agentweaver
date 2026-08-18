@@ -1,11 +1,39 @@
 import { getSessionToken } from './auth.mjs';
 
-export function createAgentweaverApi({ baseUrl, token }) {
+function pageItems(response, expectedPage, resource) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)
+    || !Array.isArray(response.items)
+    || !Number.isInteger(response.page)
+    || !Number.isInteger(response.total_pages)
+    || !Number.isInteger(response.total_count)
+    || response.page !== expectedPage
+    || response.total_pages < 0
+    || response.total_count < 0) {
+    throw new Error(`${resource} pagination response is incomplete; refusing to treat a partial page as a complete list.`);
+  }
+  return response.items;
+}
+
+async function listAllPages(loadPage, resource) {
+  const items = [];
+  for (let page = 1; ; page += 1) {
+    const response = await loadPage(page);
+    items.push(...pageItems(response, page, resource));
+    if (page >= response.total_pages) {
+      if (items.length !== response.total_count) {
+        throw new Error(`${resource} pagination changed or is incomplete; refusing to treat a partial list as complete.`);
+      }
+      return items;
+    }
+  }
+}
+
+export function createAgentweaverApi({ baseUrl, token, fetchImpl = fetch }) {
   const root = new URL(baseUrl);
   const apiRoot = new URL('/api/', root);
 
   async function request(path, init = {}) {
-    const response = await fetch(new URL(path, apiRoot), {
+    const response = await fetchImpl(new URL(path, apiRoot), {
       ...init,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -21,8 +49,11 @@ export function createAgentweaverApi({ baseUrl, token }) {
   }
 
   return {
-    listProjects(pageSize = 100) {
-      return request(`projects?page_size=${pageSize}`);
+    listProjects(pageSize = 100, page = 1) {
+      return request(`projects?page=${page}&page_size=${pageSize}`);
+    },
+    listAllProjects() {
+      return listAllPages((page) => this.listProjects(100, page), 'Project');
     },
     deleteProject(projectId) {
       return request(`projects/${encodeURIComponent(projectId)}?confirm=true`, { method: 'DELETE' });
@@ -57,6 +88,15 @@ export function createAgentweaverApi({ baseUrl, token }) {
         include_children: includeChildren ? 'true' : 'false',
       });
       return request(`projects/${encodeURIComponent(projectId)}/runs?${query.toString()}`);
+    },
+    listProjectSessions(projectId, pageSize = 100, page = 1) {
+      return request(`projects/${encodeURIComponent(projectId)}/sessions?page=${page}&page_size=${pageSize}`);
+    },
+    listAllProjectSessions(projectId) {
+      return listAllPages(
+        (page) => this.listProjectSessions(projectId, 100, page),
+        `Project ${projectId} session`,
+      );
     },
     getRunEvents(runId) {
       return request(`runs/${encodeURIComponent(runId)}/events`);
