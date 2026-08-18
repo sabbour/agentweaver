@@ -104,6 +104,45 @@ describe('DashboardPage', () => {
     expect(headers).toEqual(['Agent', 'Role', 'Runs this week', 'Runs total', 'Success rate', 'Avg duration', 'Cost']);
   });
 
+  it('formats latency percentile cells in readable units without changing their numeric sort values', async () => {
+    vi.mocked(apiClient.getProjectDashboard).mockResolvedValue(dto);
+    vi.mocked(apiClient.getProjectMetrics).mockResolvedValue({
+      ...metricsDto,
+      responseDuration: [
+        { label: 'first', p50Ms: 130450, p95Ms: 4537 },
+        { label: 'second', p50Ms: 4537, p95Ms: 130450 },
+        { label: 'just-below-minute', p50Ms: 59949, p95Ms: 59950 },
+        { label: 'one-minute', p50Ms: 60000, p95Ms: null },
+      ],
+      timeToFirstToken: [
+        { label: 'first-token', p50Ms: 4537, p95Ms: 130450 },
+      ],
+    });
+
+    renderPage();
+
+    const latencyTables = await screen.findAllByRole('table', { name: 'Latency percentiles' });
+    const responseTable = latencyTables[0]!;
+    const firstTokenTable = latencyTables[1]!;
+    const firstResponseRow = within(responseTable).getByText('first').closest('tr')!;
+    const secondResponseRow = within(responseTable).getByText('second').closest('tr')!;
+    const justBelowMinuteRow = within(responseTable).getByText('just-below-minute').closest('tr')!;
+    const oneMinuteRow = within(responseTable).getByText('one-minute').closest('tr')!;
+    const firstTokenRow = within(firstTokenTable).getByText('first-token').closest('tr')!;
+    expect(within(firstResponseRow).getByText('2m 10s')).toBeDefined();
+    expect(within(firstResponseRow).getByText('4.5s')).toBeDefined();
+    expect(within(secondResponseRow).getByText('2m 10s')).toBeDefined();
+    expect(within(secondResponseRow).getByText('4.5s')).toBeDefined();
+    expect(within(justBelowMinuteRow).getByText('59.9s')).toBeDefined();
+    expect(within(justBelowMinuteRow).getByText('1m 0s')).toBeDefined();
+    expect(within(oneMinuteRow).getByText('1m 0s')).toBeDefined();
+    expect(within(firstTokenRow).getByText('2m 10s')).toBeDefined();
+    expect(within(firstTokenRow).getByText('4.5s')).toBeDefined();
+
+    fireEvent.click(within(responseTable).getByRole('button', { name: 'P50' }));
+    expect(within(responseTable).getAllByRole('row')[1]!.textContent).toContain('second');
+  });
+
   it('keeps summary activity visible when quality telemetry is missing', async () => {
     vi.mocked(apiClient.getProjectDashboard).mockResolvedValue({
       ...dto,
