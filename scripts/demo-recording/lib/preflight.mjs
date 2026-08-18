@@ -50,6 +50,66 @@ export function isScenarioFixtureProject(project, fixture) {
     && validated.patterns.some((pattern) => pattern.test(project.name));
 }
 
+function preflightError(message) {
+  throw new Error(`Demo capture preflight: ${message}`);
+}
+
+function resolvePlaceholders(value, environment) {
+  if (typeof value === 'string') {
+    return value.replace(/\{\{([A-Z][A-Z0-9_]+)\}\}/gu, (_match, name) => {
+      const resolved = environment[name];
+      if (typeof resolved !== 'string' || !resolved.trim()) {
+        preflightError(`set ${name} to the real, pre-created GitHub artifact URL before preparing this beat.`);
+      }
+      return resolved.trim();
+    });
+  }
+  if (Array.isArray(value)) return value.map((item) => resolvePlaceholders(item, environment));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolvePlaceholders(item, environment)]));
+  }
+  return value;
+}
+
+function validateExternalUrl(name, value, requirement) {
+  let url;
+  try { url = new URL(value); } catch { preflightError(`${name} must be an absolute HTTPS URL.`); }
+  if (url.protocol !== 'https:') preflightError(`${name} must be an HTTPS URL.`);
+  if (requirement.host && url.hostname !== requirement.host) preflightError(`${name} must point to ${requirement.host}, not ${url.hostname}.`);
+  if (requirement.origin && url.origin !== requirement.origin) preflightError(`${name} must point to ${requirement.origin}, not ${url.origin}.`);
+}
+
+export function resolveCapturePreflight(config, selectedBeatIds, environment = process.env) {
+  const selected = new Set(selectedBeatIds);
+  for (const requirement of (config.preflight?.externalArtifacts ?? [])) {
+    if (!requirement.beats?.some((beatId) => selected.has(beatId))) continue;
+    const value = environment[requirement.environment];
+    if (typeof value !== 'string' || !value.trim()) {
+      preflightError(`${requirement.environment} is required for beat ${requirement.beats.join(', ')}. ${requirement.instruction}`);
+    }
+    validateExternalUrl(requirement.environment, value.trim(), requirement);
+  }
+  return resolvePlaceholders(config, environment);
+}
+
+export async function verifyFixtureWorkflowRequirements(options, dependencies = {}) {
+  const workflowIds = options.workflowIds ?? [];
+  if (workflowIds.length === 0) return;
+  const fixture = validateScenarioFixture(options.fixture);
+  const api = dependencies.api ?? await createApiFromSession({ baseUrl: options.baseUrl, sessionStoragePath: options.sessionStoragePath ?? DEFAULT_SESSION_STORAGE_PATH, fetchImpl: dependencies.fetchImpl });
+  const projects = await api.listAllProjects();
+  const matches = projects.filter((project) => project?.name === fixture.projectName);
+  if (matches.length !== 1 || typeof matches[0]?.project_id !== 'string') {
+    preflightError(`expected exactly one active fixture named "${fixture.projectName}" after beat 2.x; found ${matches.length}.`);
+  }
+  const response = await api.listProjectWorkflows(matches[0].project_id);
+  const foundIds = new Set((response?.workflows ?? []).map((workflow) => workflow?.id).filter((id) => typeof id === 'string'));
+  const missing = workflowIds.filter((id) => !foundIds.has(id));
+  if (missing.length) {
+    preflightError(`fixture "${fixture.projectName}" is missing required project workflows: ${missing.join(', ')}. Create these project-owned workflows during the 2.x setup; built-in workflows are read-only and cannot be scheduled or event-configured.`);
+  }
+}
+
 export async function cleanScenarioFixtures(options, dependencies = {}) {
   const fixture = validateScenarioFixture(options.fixture);
   const api = dependencies.api ?? await createApiFromSession({
