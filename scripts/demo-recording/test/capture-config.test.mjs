@@ -182,7 +182,18 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const decisions = byId('2.8');
 
   const promotionCheckbox = "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })";
-  assert.equal(confirm.steps.filter((step) => step.selector === promotionCheckbox).length, 2);
+  const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
+    && step.selector === promotionCheckbox);
+  assert.ok(promotionWait >= 0, 'expected the actual promotion checkbox to be ready before confirmation');
+  assert.deepEqual(
+    confirm.steps.slice(promotionWait, promotionWait + 3).map(({ type, selector }) => ({ type, selector })),
+    [
+      { type: 'waitFor', selector: promotionCheckbox },
+      { type: 'click', selector: promotionCheckbox },
+      { type: 'click', selector: "page.getByRole('button', { name: 'Confirm plan' }).first()" },
+    ],
+    'the promotion checkbox must be waited for, selected, then immediately confirmed',
+  );
   assert.ok(board.steps.some((step) => step.cue?.name === '2.4.promoted-task'));
   assert.equal(board.steps.some((step) => step.selector?.includes('New task title')), false);
   assert.ok(review.cueWatchers.some((cue) => cue.source?.selector === "[data-testid='coordinator-review-changes']"));
