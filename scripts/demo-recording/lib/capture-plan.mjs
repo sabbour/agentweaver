@@ -53,6 +53,7 @@ export function renderCaptureScript(plan) {
 
   lines.push(
     `  const planStartUrl = ${JSON.stringify(plan.startUrl)};`,
+    '  const navigationTimeoutMs = 120_000;',
     `  const freshNavigation = ${plan.freshNavigation ? 'true' : 'false'};`,
     '  const shouldNavigate = (() => {',
     "    const currentUrl = page.url?.() ?? '';",
@@ -65,7 +66,7 @@ export function renderCaptureScript(plan) {
     '    }',
     '  })();',
     '  if (shouldNavigate) {',
-    "    await page.goto(planStartUrl, { waitUntil: 'domcontentloaded' });",
+    "    await page.goto(planStartUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });",
     '  }',
     "  await page.evaluate(() => { try { sessionStorage.removeItem('__demoCaptureEpoch'); sessionStorage.removeItem('__demoActivityLog'); } catch (e) {} });",
     '  await page.evaluate(installSource);',
