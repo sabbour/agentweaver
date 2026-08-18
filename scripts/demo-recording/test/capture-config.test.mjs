@@ -182,7 +182,7 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const traces = byId('2.7');
   const decisions = byId('2.8');
 
-  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })";
+  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })";
   const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
     && step.selector === promotionCheckbox);
   assert.ok(promotionWait >= 0, 'expected the actual promotion checkbox to be ready before confirmation');
@@ -221,10 +221,12 @@ test('final demo plans isolate their takes and use polished plan-scoped fixtures
   for (const plan of [blueprint, aks]) {
     assert.doesNotThrow(() => validateCaptureConfig(plan));
     assert.doesNotThrow(() => validateFinalTake(plan));
-    assert.match(plan.fixture.projectName, /^Agentweaver Demo — /u);
-    assert.ok(plan.beats.every((beat) => beat.videoPath.startsWith(`${plan.finalTake.outputDirectory}/`)));
+    assert.match(plan.fixture.projectName, /^Agentweaver Demo(?: S2)? — /u);
+    assert.ok(plan.beats
+      .filter((beat) => beat.captureMode !== 'unauthenticated')
+      .every((beat) => beat.videoPath.startsWith(`${plan.finalTake.outputDirectory}/`)));
   }
   assert.equal(blueprint.fixture.projectName, 'Agentweaver Demo — Trailhead Travel Studio');
-  assert.equal(aks.fixture.projectName, 'Agentweaver Demo — AKS Product Operations');
+  assert.equal(aks.fixture.projectName, 'Agentweaver Demo S2 — sabbour/AKS');
   assert.ok(aks.beats.some((beat) => JSON.stringify(beat).includes('sabbour/AKS')));
 });

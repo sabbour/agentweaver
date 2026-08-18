@@ -137,8 +137,13 @@ export function validateFinalTake(captureConfig) {
     throw new Error('A final capture plan must declare at least one beat.');
   }
 
+  const finalTakeBeats = captureConfig.beats.filter((beat) => beat.captureMode !== 'unauthenticated');
+  if (finalTakeBeats.length === 0) {
+    throw new Error('A final capture plan must declare at least one authenticated final-take beat.');
+  }
+
   const outputDirectory = path.resolve(finalTake.outputDirectory);
-  const videoPaths = captureConfig.beats.map((beat, index) => {
+  const videoPaths = finalTakeBeats.map((beat, index) => {
     if (typeof beat?.videoPath !== 'string' || !beat.videoPath.trim()) {
       throw new Error(`A final capture plan requires beats[${index}].videoPath.`);
     }

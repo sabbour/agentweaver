@@ -2,15 +2,15 @@
   "$schema": "../schemas/capture.schema.json",
   "schemaVersion": 1,
   "requireAllBeats": true,
-  "authentication": {
-    "mode": "entra",
-    "repository": "sabbour/AKS"
-  },
   "fixture": {
-    "projectName": "Agentweaver Demo — AKS Product Operations",
+    "projectName": "Agentweaver Demo S2 \u2014 sabbour/AKS",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo — AKS Product Operations(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo S2 \u2014 sabbour/AKS$"
     ]
+  },
+  "finalTake": {
+    "id": "aks-product-operations",
+    "outputDirectory": "recordings/final-takes/aks-product-operations"
   },
   "beats": [
     {
@@ -19,7 +19,7 @@
       "freshNavigation": true,
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
-      "videoPath": "recordings/final-takes/aks-product-operations/beat-0-0-entra-sign-in-handoff.webm",
+      "videoPath": "recordings/azure-aks/beat-0-0-entra-sign-in-handoff.webm",
       "viewport": {
         "width": 1920,
         "height": 1080
@@ -68,7 +68,6 @@
     },
     {
       "id": "0.1",
-      "requiresPriorBeat": "0.0",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-0-1.webm",
       "viewport": {
         "width": 1920,
@@ -142,11 +141,11 @@
           "to": "s2.0.1.project-shell",
           "category": "action"
         }
-      ]
+      ],
+      "requiresPriorBeat": "0.0"
     },
     {
       "id": "1.1",
-      "requiresPriorBeat": "0.1",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-1-1.webm",
       "viewport": {
         "width": 1920,
@@ -234,14 +233,14 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Go →', exact: true })",
+          "selector": "page.getByRole('button', { name: 'Go \u2192', exact: true })",
           "scale": 1.45,
           "after": 600
         },
         {
           "type": "type",
           "selector": "page.getByLabel('Project name')",
-          "text": "Agentweaver Demo — AKS Product Operations",
+          "text": "Agentweaver Demo S2 \u2014 sabbour/AKS",
           "scale": 1.55,
           "delay": 25,
           "after": 300
@@ -326,11 +325,11 @@
           "to": "s2.1.1.project-created",
           "category": "action"
         }
-      ]
+      ],
+      "requiresPriorBeat": "0.1"
     },
     {
       "id": "1.2",
-      "requiresPriorBeat": "1.1",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-1-2.webm",
       "viewport": {
         "width": 1920,
@@ -382,6 +381,11 @@
               "selector": "main"
             }
           }
+        },
+        {
+          "type": "eval",
+          "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { await fetch('/api/projects/' + m[1] + '/provider-settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_model_github_copilot: 'claude-sonnet-4.6' }) }); }",
+          "after": 600
         },
         {
           "type": "click",
@@ -471,11 +475,11 @@
           "to": "s2.1.2.assignments-visible",
           "category": "action"
         }
-      ]
+      ],
+      "requiresPriorBeat": "1.1"
     },
     {
       "id": "2.2",
-      "requiresPriorBeat": "1.2",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-2-2.webm",
       "viewport": {
         "width": 1920,
@@ -715,11 +719,11 @@
           "to": "s2.2.2.event-saved",
           "category": "action"
         }
-      ]
+      ],
+      "requiresPriorBeat": "1.2"
     },
     {
       "id": "2.3",
-      "requiresPriorBeat": "2.2",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-2-3.webm",
       "viewport": {
         "width": 1920,
@@ -875,11 +879,11 @@
           "to": "s2.2.3.writer-assignment",
           "category": "action"
         }
-      ]
+      ],
+      "requiresPriorBeat": "2.2"
     },
     {
       "id": "3.1",
-      "requiresPriorBeat": "2.3",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-3-1.webm",
       "viewport": {
         "width": 1920,
@@ -1053,11 +1057,11 @@
           "to": "s2.3.1.triage-artifacts",
           "category": "wait"
         }
-      ]
+      ],
+      "requiresPriorBeat": "2.3"
     },
     {
       "id": "3.2",
-      "requiresPriorBeat": "3.1",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-3-2.webm",
       "viewport": {
         "width": 1920,
@@ -1181,11 +1185,11 @@
           "to": "s2.3.2.pr-approval-visible",
           "category": "wait"
         }
-      ]
+      ],
+      "requiresPriorBeat": "3.1"
     },
     {
       "id": "4.4",
-      "requiresPriorBeat": "3.2",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-4-4.webm",
       "viewport": {
         "width": 1920,
@@ -1310,11 +1314,11 @@
           "to": "s2.4.4.refresh-visible",
           "category": "action"
         }
-      ]
+      ],
+      "requiresPriorBeat": "3.2"
     },
     {
       "id": "5.1",
-      "requiresPriorBeat": "4.4",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-5-1.webm",
       "viewport": {
         "width": 1920,
@@ -1400,11 +1404,12 @@
           "to": "s2.5.1.mcp-url-visible",
           "category": "action"
         }
-      ]
+      ],
+      "requiresPriorBeat": "4.4"
     }
   ],
-  "finalTake": {
-    "id": "aks-product-operations",
-    "outputDirectory": "recordings/final-takes/aks-product-operations"
+  "authentication": {
+    "mode": "entra",
+    "repository": "sabbour/AKS"
   }
 }

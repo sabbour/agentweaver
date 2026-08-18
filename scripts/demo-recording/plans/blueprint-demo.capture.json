@@ -1,10 +1,48 @@
 {
   "schemaVersion": 1,
   "requireAllBeats": true,
+  "authentication": {
+    "mode": "entra",
+    "repository": "sabbour/agentweaver-demo-dryrun"
+  },
   "fixture": {
     "projectName": "Agentweaver Demo — Trailhead Travel Studio",
     "safeProjectNamePatterns": [
       "^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+    ]
+  },
+  "finalTake": {
+    "id": "trailhead-travel-studio",
+    "outputDirectory": "recordings/final-takes/trailhead-travel-studio"
+  },
+  "preflight": {
+    "workflowRequirements": {
+      "beats": [
+        "3.1",
+        "3.2"
+      ],
+      "workflowIds": [
+        "dependency-sweep",
+        "bug-triage"
+      ]
+    },
+    "externalArtifacts": [
+      {
+        "beats": [
+          "3.2"
+        ],
+        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
+        "host": "github.com",
+        "instruction": "A repository administrator must manually create the disposable demo issue, add agentweaver:triage, and verify the signed issues.labeled delivery before capture. The capture plan never creates issues, labels, or webhooks."
+      },
+      {
+        "beats": [
+          "3.2"
+        ],
+        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_RUN_URL",
+        "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
+        "instruction": "Set this to the resulting same-project github.issues.labeled run URL after a repository administrator has verified delivery."
+      }
     ]
   },
   "beats": [
@@ -14,7 +52,7 @@
       "freshNavigation": true,
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
-      "videoPath": "recordings/final-takes/trailhead-travel-studio/0.0-entra-sign-in-handoff.webm",
+      "videoPath": "recordings/blueprint-demo/0.0-entra-sign-in-handoff.webm",
       "viewport": {
         "width": 1920,
         "height": 1080
@@ -139,7 +177,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('My project')",
-          "text": "Agentweaver Demo S1 - Trailhead",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "scale": 1.6,
           "delay": 36,
           "after": 900
@@ -177,7 +215,7 @@
         {
           "name": "1.2.blueprint-picker",
           "stableForMs": 300,
-          "deadlineMs": 15000,
+          "deadlineMs": 90000,
           "source": {
             "kind": "selector",
             "selector": "[role=radiogroup][aria-label='Blueprint templates']",
@@ -195,6 +233,11 @@
           "label": "Beat 1.2",
           "title": "Choose a blueprint",
           "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[role=radiogroup][aria-label=\"Blueprint templates\"]')",
+          "timeout": 90000
         },
         {
           "type": "click",
@@ -221,7 +264,7 @@
         },
         {
           "type": "waitText",
-          "text": "Agentweaver Demo S1 - Trailhead",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "timeout": 60000,
           "cue": {
             "name": "1.2.project-created",
@@ -230,6 +273,11 @@
               "selector": "main"
             }
           }
+        },
+        {
+          "type": "eval",
+          "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { await fetch('/api/projects/' + m[1] + '/provider-settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_model_github_copilot: 'claude-sonnet-4.6' }) }); }",
+          "after": 600
         }
       ]
     },
@@ -289,7 +337,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo S1 - Trailhead' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
           "scale": 1.45,
           "after": 900
         },
@@ -297,6 +345,11 @@
           "type": "waitFor",
           "selector": "page.getByRole('link', { name: 'Agents', exact: true })",
           "timeout": 20000
+        },
+        {
+          "type": "eval",
+          "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { await fetch('/api/projects/' + m[1] + '/provider-settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_model_github_copilot: 'claude-sonnet-4.6' }) }); }",
+          "after": 500
         },
         {
           "type": "click",
@@ -404,8 +457,7 @@
       },
       "expectedCues": [
         "2.1.task-dialog",
-        "2.1.goal-ready",
-        "2.1.outcome-drafting"
+        "2.1.goal-ready"
       ],
       "cueWatchers": [
         {
@@ -443,7 +495,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo S1 - Trailhead' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
           "scale": 1.45,
           "after": 900
         },
@@ -476,28 +528,20 @@
         {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Goal' })",
-          "text": "Planning a weekend trip with friends turns into a mess of group chats, links, and half-made plans, and everyone ends up on a different page. I want to launch Trailhead: shape the first experience, write the product brief and UX notes as part of this run, and create one independent, separately shippable work item titled Create Trailhead landing page. That landing page needs a welcome banner, three value props, and one primary Plan my first trip button. Before completing the orchestration, the Coordinator must submit an architectural decision through the native decision tool that records the chosen first-release scope and why.",
+          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'. Create one work item titled 'Create Trailhead landing page'.",
           "scale": 1.72,
           "delay": 6,
           "after": 900
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Define Outcome' })",
+          "selector": "page.getByRole('button', { name: 'Direct' })",
           "scale": 1.62,
           "after": 1000
         },
         {
-          "type": "waitText",
-          "text": "Outcome plan",
-          "timeout": 180000,
-          "cue": {
-            "name": "2.1.outcome-drafting",
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
+          "type": "pause",
+          "ms": 5000
         }
       ]
     },
@@ -516,66 +560,25 @@
         "maximum": 210000
       },
       "expectedCues": [
-        "2.2.confirm-ready",
-        "2.2.outcome-spec",
         "2.2.plan-confirmed",
         "2.2.autopilot-enabled",
         "2.2.auto-approve-enabled"
       ],
-      "cueWatchers": [
-        {
-          "name": "2.2.outcome-spec",
-          "stableForMs": 500,
-          "deadlineMs": 180000,
-          "source": {
-            "kind": "text",
-            "selector": "body",
-            "includes": "Confirm plan"
-          },
-          "rect": {
-            "mode": "matched-element"
-          }
-        }
-      ],
+      "cueWatchers": [],
       "steps": [
         {
           "type": "badge",
           "label": "Beat 2.2",
-          "title": "Review and confirm the plan",
+          "title": "Work plan ready",
           "duration": 1800
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
-          "timeout": 180000,
-          "cue": {
-            "name": "2.2.confirm-ready",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })",
-          "timeout": 180000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })",
-          "scale": 1.5,
-          "after": 600
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
-          "scale": 1.62,
-          "after": 1200
+          "type": "reload"
         },
         {
           "type": "waitText",
           "text": "Work plan",
-          "timeout": 180000,
+          "timeout": 300000,
           "cue": {
             "name": "2.2.plan-confirmed",
             "rect": {
@@ -653,7 +656,7 @@
         {
           "name": "2.3.topology-ready",
           "stableForMs": 500,
-          "deadlineMs": 240000,
+          "deadlineMs": 600000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='topology-graph-canvas']",
@@ -675,7 +678,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('open-topology-minimap').first()",
-          "timeout": 240000
+          "timeout": 600000
         },
         {
           "type": "click",
@@ -686,7 +689,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('topology-graph-canvas')",
-          "timeout": 240000,
+          "timeout": 600000,
           "cue": {
             "name": "2.3.topology-open",
             "rect": {
@@ -708,7 +711,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('coordinator-review-changes')",
-          "timeout": 300000
+          "timeout": 600000
         },
         {
           "type": "click",
@@ -719,7 +722,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
-          "timeout": 60000
+          "timeout": 600000
         },
         {
           "type": "click",
@@ -855,7 +858,7 @@
         {
           "name": "2.5.preview-approval",
           "stableForMs": 350,
-          "deadlineMs": 300000,
+          "deadlineMs": 600000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']",
@@ -876,7 +879,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
           "scale": 1.5,
           "after": 700
         },
@@ -894,7 +897,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))",
-          "timeout": 300000
+          "timeout": 600000
         },
         {
           "type": "pause",
@@ -950,7 +953,7 @@
         {
           "name": "2.6.review-gate",
           "stableForMs": 500,
-          "deadlineMs": 300000,
+          "deadlineMs": 600000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='coordinator-review-changes']",
@@ -972,7 +975,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('coordinator-review-changes')",
-          "timeout": 300000
+          "timeout": 600000
         },
         {
           "type": "click",
@@ -1128,7 +1131,7 @@
         {
           "name": "2.8.decisions-visible",
           "stableForMs": 350,
-          "deadlineMs": 30000,
+          "deadlineMs": 300000,
           "source": {
             "kind": "text",
             "selector": "body",
@@ -1161,7 +1164,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('accepted-decision').first()",
-          "timeout": 180000,
+          "timeout": 300000,
           "cue": {
             "name": "2.8.accepted-decision",
             "rect": {
@@ -1281,6 +1284,13 @@
       "id": "3.2",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
+          "kind": "github-issue-url",
+          "message": "Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4."
+        }
+      ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/3.2-github-triage.webm",
       "viewport": {
         "width": 1920,
@@ -1322,7 +1332,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'bug-triage' }).getByRole('button', { name: 'Add event', exact: true })",
+          "selector": "page.getByText(/bug.*triage/i).first()",
           "scale": 1.48,
           "after": 700
         },
@@ -1343,15 +1353,6 @@
               "selector": "[role=dialog]"
             }
           }
-        },
-        {
-          "type": "select",
-          "selector": "page.getByRole('combobox', { name: 'Issue action' })",
-          "option": {
-            "label": "Labeled"
-          },
-          "scale": 1.38,
-          "after": 350
         },
         {
           "type": "select",
@@ -1395,12 +1396,6 @@
           "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
           "scale": 1.42,
           "after": 800
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('tab', { name: 'Webhooks', exact: true })",
-          "scale": 1.42,
-          "after": 600
         },
         {
           "type": "waitFor",
@@ -1462,13 +1457,13 @@
           "stableForMs": 350,
           "deadlineMs": 60000,
           "source": {
-            "kind": "text",
-            "selector": "body",
-            "includes": "Issue"
+            "kind": "selector",
+            "selector": "#issue-title",
+            "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "main"
+            "selector": "#issue-title"
           }
         }
       ],
@@ -1485,8 +1480,8 @@
           "after": 800
         },
         {
-          "type": "waitText",
-          "text": "Issue",
+          "type": "waitFor",
+          "selector": "page.locator('#issue-title')",
           "timeout": 60000
         },
         {
@@ -1518,6 +1513,25 @@
           "key": "Enter",
           "after": 1000
         }
+      ],
+      "requiresPriorBeat": "3.2",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL",
+          "kind": "github-issue-url",
+          "message": "Set it to the manually prepared, unlabelled demo issue URL; the capture will only open it.",
+          "matchesEnvironment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER"
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER",
+          "kind": "github-issue-number",
+          "message": "Set it to the issue number from AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
       ]
     },
     {
@@ -1540,7 +1554,7 @@
       ],
       "cueWatchers": [
         {
-          "name": "4.2.triage-response",
+          "name": "4.2.transcript-ready",
           "stableForMs": 500,
           "deadlineMs": 180000,
           "source": {
@@ -1563,7 +1577,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript')",
+          "selector": "page.getByTestId('assistant-approval-gate')",
           "timeout": 180000,
           "cue": {
             "name": "4.2.approval-gate",
@@ -1574,8 +1588,14 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 180000
+          "selector": "page.getByTestId('assistant-transcript')",
+          "timeout": 180000,
+          "cue": {
+            "name": "4.2.triage-response",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
         },
         {
           "type": "hover",
@@ -1583,7 +1603,8 @@
           "scale": 1.25,
           "hold": 2400
         }
-      ]
+      ],
+      "requiresPriorBeat": "4.1"
     },
     {
       "id": "4.3",
@@ -1628,7 +1649,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript')",
+          "selector": "page.getByTestId('assistant-approval-gate')",
           "timeout": 180000,
           "cue": {
             "name": "4.3.scope-visible",
@@ -1639,23 +1660,24 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: /^(Allow once|Approve)$/ }).first()",
+          "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
           "scale": 1.55,
           "after": 1100,
           "force": true
         },
         {
-          "type": "waitText",
-          "text": "Bug Fix",
+          "type": "waitFor",
+          "selector": "page.getByTestId('assistant-transcript').getByText('Bug Fix', { exact: false })",
           "timeout": 180000
         },
         {
           "type": "hover",
-          "selector": "page.getByText(/current behavior|smallest safe fix/i).first()",
+          "selector": "page.getByTestId('assistant-transcript').getByText(/current behavior|smallest safe fix/i).first()",
           "scale": 1.28,
           "hold": 1800
         }
-      ]
+      ],
+      "requiresPriorBeat": "4.2"
     },
     {
       "id": "4.4",
@@ -1682,12 +1704,12 @@
           "deadlineMs": 240000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='topology-graph-canvas'], [data-testid='assistant-transcript']",
+            "selector": "[data-testid='topology-graph-canvas']",
             "state": "visible"
           },
           "rect": {
-            "mode": "first-matching",
-            "selector": "[data-testid='topology-graph-canvas'], [data-testid='assistant-transcript']"
+            "mode": "element",
+            "selector": "[data-testid='topology-graph-canvas']"
           }
         }
       ],
@@ -1699,36 +1721,30 @@
           "duration": 1800
         },
         {
-          "type": "waitText",
-          "text": "Work plan",
+          "type": "waitFor",
+          "selector": "page.getByTestId('topology-graph-canvas')",
           "timeout": 240000,
           "cue": {
             "name": "4.4.validation-visible",
             "rect": {
-              "mode": "element",
-              "selector": "main"
+              "mode": "matched-element"
             }
           }
         },
         {
           "type": "click",
-          "selector": "page.getByText(/investigate|implement|test/i).first()",
-          "scale": 1.36,
+          "selector": "page.getByTestId('toggle-run-tree')",
+          "scale": 1.25,
           "after": 800
         },
         {
-          "type": "click",
-          "selector": "page.getByText(/implement|test/i).nth(1)",
-          "scale": 1.36,
-          "after": 800
-        },
-        {
-          "type": "click",
-          "selector": "page.getByText(/validation|test/i).last()",
-          "scale": 1.36,
-          "after": 1000
+          "type": "hover",
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "scale": 1.18,
+          "hold": 1800
         }
-      ]
+      ],
+      "requiresPriorBeat": "4.3"
     },
     {
       "id": "4.5",
@@ -1755,12 +1771,12 @@
           "deadlineMs": 300000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']",
+            "selector": "[data-testid='session-approval-gate']",
             "state": "visible"
           },
           "rect": {
-            "mode": "first-matching",
-            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']"
+            "mode": "element",
+            "selector": "[data-testid='session-approval-gate']"
           }
         }
       ],
@@ -1773,7 +1789,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))",
+          "selector": "page.getByTestId('session-approval-gate')",
           "timeout": 300000
         },
         {
@@ -1782,34 +1798,34 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()",
+          "selector": "page.getByTestId('session-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
           "scale": 1.58,
           "after": 1000,
           "force": true
         },
         {
-          "type": "waitText",
-          "text": "Preview",
+          "type": "waitFor",
+          "selector": "page.getByTestId('human-review-preview-status')",
           "timeout": 300000,
           "cue": {
             "name": "4.5.repaired-preview",
             "rect": {
-              "mode": "element",
-              "selector": "main"
+              "mode": "matched-element"
             }
           }
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()",
+          "selector": "page.getByTestId('human-review-preview-status').getByRole('button', { name: 'Open preview', exact: true })",
           "scale": 1.5,
           "after": 1800
         }
-      ]
+      ],
+      "requiresPriorBeat": "4.4"
     },
     {
       "id": "4.6",
-      "startUrl": "{{AGENTWEAVER_DEMO_BUGFIX_RUN_URL}}",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.6-approve-bug-fix.webm",
       "viewport": {
@@ -2008,13 +2024,13 @@
           "stableForMs": 350,
           "deadlineMs": 30000,
           "source": {
-            "kind": "text",
-            "selector": "body",
-            "includes": "MCP server URL"
+            "kind": "selector",
+            "selector": "[data-testid='mcp-server-url']",
+            "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "main"
+            "selector": "[data-testid='mcp-server-url']"
           }
         }
       ],
@@ -2027,7 +2043,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByLabel('MCP server URL')",
+          "selector": "page.getByTestId('mcp-server-url')",
           "timeout": 30000,
           "cue": {
             "name": "5.1.mcp-url",
@@ -2038,57 +2054,11 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByLabel('MCP server URL')",
+          "selector": "page.getByTestId('mcp-server-url')",
           "scale": 1.42,
           "hold": 2200
-        },
-        {
-          "type": "press",
-          "selector": "page.getByLabel('MCP server URL')",
-          "key": "Control+A",
-          "after": 300
-        },
-        {
-          "type": "press",
-          "selector": "page.getByLabel('MCP server URL')",
-          "key": "Control+C",
-          "after": 900
         }
       ]
     }
-  ],
-  "preflight": {
-    "workflowRequirements": {
-      "beats": [
-        "3.1",
-        "3.2"
-      ],
-      "workflowIds": [
-        "dependency-sweep",
-        "bug-triage"
-      ]
-    },
-    "externalArtifacts": [
-      {
-        "beats": [
-          "3.2"
-        ],
-        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
-        "host": "github.com",
-        "instruction": "A repository administrator must manually create the disposable demo issue, add agentweaver:triage, and verify the signed issues.labeled delivery before capture. The capture plan never creates issues, labels, or webhooks."
-      },
-      {
-        "beats": [
-          "3.2"
-        ],
-        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_RUN_URL",
-        "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
-        "instruction": "Set this to the resulting same-project github.issues.labeled run URL after a repository administrator has verified delivery."
-      }
-    ]
-  },
-  "finalTake": {
-    "id": "trailhead-travel-studio",
-    "outputDirectory": "recordings/final-takes/trailhead-travel-studio"
-  }
+  ]
 }
