@@ -62,6 +62,20 @@ npm run demo:record -- capture `
   --beat 1.1
 ```
 
+Capture the pre-IdP sign-in handoff only:
+
+```powershell
+npm run demo:record -- capture `
+  --plan scripts\demo-recording\plans\blueprint-demo.capture.json `
+  --beat 0.0 `
+  --unauthenticated
+```
+
+This starts a dedicated non-persistent session without loading recording storage state
+and captures only the Agentweaver handoff dialog. The plan has no IdP interaction:
+do not select accounts, enter credentials, interact with MFA/consent, or record account
+content. Complete any sign-in manually and privately after the command exits.
+
 Capture the complete plan:
 
 ```powershell
@@ -70,8 +84,10 @@ npm run demo:record -- capture `
   --all
 ```
 
-The capture command restores and verifies the persistent session before it runs the
-generated script with `playwright-cli --raw`.
+Authenticated capture restores and verifies the persistent session before it runs the
+generated script with `playwright-cli --raw`. `capture --all` automatically skips
+unauthenticated handoff beats and begins with the first authenticated beat; it never
+waits for their unauthenticated dialog.
 
 ## Clean Blueprint fixture
 

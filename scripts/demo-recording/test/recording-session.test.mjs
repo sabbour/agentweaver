@@ -15,6 +15,7 @@ import {
   recordingAuthPaths,
   resolveLiteralEdgeDefaultProfile,
   resolveSafeAuthDestination,
+  selectCaptureBeats,
   shouldCopyEdgeProfileEntry,
   validateLiteralEdgeDefaultProfile,
   waitForEdgeToClose,
@@ -44,6 +45,44 @@ test('capture requires an explicit beat selection or all', () => {
   assert.equal(
     parseRecordingCommandOptions('capture', ['--plan', 'demo.capture.json', '--all']).all,
     true,
+  );
+  const unauthenticated = parseRecordingCommandOptions(
+    'capture',
+    ['--plan', 'demo.capture.json', '--beat', '0.0', '--unauthenticated'],
+  );
+  assert.equal(unauthenticated.unauthenticated, true);
+  assert.equal(unauthenticated.session, 'agentweaver-demo-unauthenticated');
+  assert.throws(
+    () => parseRecordingCommandOptions('capture', ['--plan', 'demo.capture.json', '--all', '--unauthenticated']),
+    /do not use --all/,
+  );
+  assert.throws(
+    () => parseRecordingCommandOptions('capture', ['--plan', 'demo.capture.json', '--beat', '0.0', '--unauthenticated', '--session', 'other']),
+    /own isolated recording session/,
+  );
+});
+
+test('authenticated all capture skips handoff beats and modes cannot mix', () => {
+  const beats = [
+    { id: '0.0', captureMode: 'unauthenticated' },
+    { id: '1.1' },
+    { id: '1.2', captureMode: 'authenticated' },
+  ];
+  assert.deepEqual(
+    selectCaptureBeats(beats, { all: true }).map((beat) => beat.id),
+    ['1.1', '1.2'],
+  );
+  assert.deepEqual(
+    selectCaptureBeats(beats, { beat: '0.0', unauthenticated: true }).map((beat) => beat.id),
+    ['0.0'],
+  );
+  assert.throws(
+    () => selectCaptureBeats(beats, { beat: '0.0' }),
+    /requires --unauthenticated/,
+  );
+  assert.throws(
+    () => selectCaptureBeats(beats, { beat: '1.1', unauthenticated: true }),
+    /declared with captureMode "unauthenticated"/,
   );
 });
 

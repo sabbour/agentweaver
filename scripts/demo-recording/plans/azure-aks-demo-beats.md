@@ -42,6 +42,18 @@ What makes this scenario different from the blueprint demo:
 - It keeps the triage side local and read-only, and only shows the blog post's
   approve-to-open-PR gate rather than actually opening anything on `Azure/AKS`.
 
+## Beat 0.0 — Hand off to secure sign-in
+
+Narration: "Agentweaver hands sign-in to Microsoft Entra."
+
+Fresh navigation: true
+
+On screen: Show only the Agentweaver **Sign in with Microsoft Entra ID** handoff dialog
+and hold for the narration. Cut before any identity-provider action. Do not select an
+account, type credentials, interact with MFA or consent, export tokens, cookies, or
+profile data, or capture sensitive account content. A human completes sign-in privately
+and off camera before the authenticated beats begin.
+
 ## Beat 0.1 — Introduce the repo and the job to automate
 
 Narration: "This repo runs an engineering blog, ships release notes, tracks issues, and owns a product roadmap. A lot of that work is manual right now. We're going to automate some of it."

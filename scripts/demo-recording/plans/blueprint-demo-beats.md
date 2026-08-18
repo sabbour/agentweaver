@@ -21,7 +21,8 @@ reads the `Narration:` line).
 
 ## Clean-run capture readiness
 
-This is a 21-beat **live-product** narrative.  A closed GitHub issue, a seeded UI
+This is a 22-beat capture plan: one isolated unauthenticated handoff plus a 21-beat
+**live-product** narrative. A closed GitHub issue, a seeded UI
 state, or a successful HTTP delivery alone is not capture evidence.  Before recording,
 the capture owner records the following redacted evidence; no cookie, bearer token, or
 webhook secret belongs in the plan, narration, screenshots, or capture artifacts.
@@ -44,7 +45,7 @@ webhook secret belongs in the plan, narration, screenshots, or capture artifacts
    project-specific details to finish the signed GitHub hook; Agentweaver starts triage
    when that delivery arrives.”  Showing that fallback is truthful, but does **not**
    satisfy the live-trigger portion of Beat 3.2; an administrator must complete the
-   manual setup before the full 21-beat clean run.
+   manual setup before the full authenticated 21-beat clean run.
 4. **Assistant/MCP (Beats 4.1–4.3):** evidence is a newly opened Assistant session
    reading the current linked GitHub identity and project, then presenting an approval
    before its state-changing workflow start.  Browser sign-in by itself is not evidence.
@@ -52,13 +53,25 @@ webhook secret belongs in the plan, narration, screenshots, or capture artifacts
    parity.  The only safe fallback narration is: “The project UI can start this workflow;
    the Assistant path will be shown after its authenticated connection is available.”
    Resequence later beats only after that evidence exists; this does not qualify as a
-   complete 21-beat Assistant capture.
+   complete authenticated 21-beat Assistant capture.
 5. **Preview and PR (Beats 2.5, 4.5, and 4.7):** evidence is an actually rendered,
    interactive preview URL after approval and a real pull-request URL linked from the
    completed run/topology.  If preview infrastructure or repository write/PR permission
    is unavailable, show neither a mock preview nor a placeholder PR.  Narrate the
    completed review/diff only, and mark the affected beat pending rather than claiming
    shipment.  A full clean run requires both real artifacts.
+
+## Beat 0.0 — Hand off to secure sign-in
+
+Narration: "Agentweaver hands sign-in to Microsoft Entra."
+
+Fresh navigation: true
+
+On screen: Show only the Agentweaver **Sign in with Microsoft Entra ID** handoff dialog
+and hold for the narration. Cut before any identity-provider action. Do not select an
+account, type credentials, interact with MFA or consent, export tokens, cookies, or
+profile data, or capture sensitive account content. A human completes sign-in privately
+and off camera before the authenticated beats begin.
 
 ## Beat 1.1 — Create the project
 

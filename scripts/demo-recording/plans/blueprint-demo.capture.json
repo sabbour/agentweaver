@@ -7,6 +7,23 @@
   },
   "beats": [
     {
+      "id": "0.0",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "freshNavigation": true,
+      "captureMode": "unauthenticated",
+      "disableApprovalWatcher": true,
+      "videoPath": "recordings/blueprint-demo/0.0-entra-sign-in-handoff.webm",
+      "viewport": { "width": 1920, "height": 1080 },
+      "outputBudgetMs": { "minimum": 3500, "preferred": 5000, "maximum": 7000 },
+      "expectedCues": ["s1.0.0.entra-handoff-dialog"],
+      "cueOrder": ["s1.0.0.entra-handoff-dialog"],
+      "steps": [
+        { "type": "badge", "label": "Beat 0.0", "title": "Hand off to secure sign-in", "duration": 1800 },
+        { "type": "waitFor", "selector": "page.getByRole('heading', { name: 'Sign in with Microsoft Entra ID', exact: true })", "timeout": 30000, "cue": { "name": "s1.0.0.entra-handoff-dialog", "stableForMs": 500, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "Sign in with Microsoft Entra ID" }, "rect": { "mode": "matched-element" } } },
+        { "type": "pause", "ms": 2200 }
+      ]
+    },
+    {
       "id": "1.1",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": true,
