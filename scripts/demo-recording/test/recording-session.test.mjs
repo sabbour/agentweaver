@@ -17,6 +17,8 @@ import {
   resolveSafeAuthDestination,
   selectCaptureBeats,
   shouldCopyEdgeProfileEntry,
+  presentInteractiveSignInShell,
+  waitForInteractiveSignInCompletion,
   validateLiteralEdgeDefaultProfile,
   waitForEdgeToClose,
 } from '../lib/recording-session.mjs';
@@ -194,6 +196,63 @@ test('auth refresh closes only the owned Playwright session before inspecting Ed
     },
   );
   assert.deepEqual(events, ['close:agentweaver-demo', 'refresh-default']);
+});
+
+test('signin foregrounds, waits for, and clicks the Agentweaver Entra button', async () => {
+  const events = [];
+  const button = {
+    async waitFor(options) {
+      events.push(['waitFor', options]);
+    },
+    async isVisible() {
+      events.push(['isVisible']);
+      return true;
+    },
+    async click() {
+      events.push(['click']);
+    },
+  };
+  const page = {
+    async bringToFront() {
+      events.push(['bringToFront']);
+    },
+    getByRole(role, options) {
+      events.push(['getByRole', role, options]);
+      return button;
+    },
+  };
+
+  await presentInteractiveSignInShell(page);
+
+  assert.deepEqual(events, [
+    ['bringToFront'],
+    ['getByRole', 'button', { name: 'Sign in with Microsoft Entra ID', exact: true }],
+    ['waitFor', { state: 'visible', timeout: 30_000 }],
+    ['isVisible'],
+    ['click'],
+  ]);
+});
+
+test('signin detects the post-click Entra boundary without inspecting IdP data', async () => {
+  let evaluations = 0;
+  let output = '';
+  await assert.rejects(
+    () => waitForInteractiveSignInCompletion({
+      url: () => 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+      evaluate: async () => {
+        evaluations += 1;
+        return false;
+      },
+    }, {
+      baseUrl: 'https://agentweaver.example.test',
+      timeoutMs: 5,
+      pollMs: 1,
+      write: (message) => { output += message; },
+    }),
+    /sign-in did not complete/,
+  );
+  assert.equal(evaluations, 0);
+  assert.match(output, /human-only step/);
 });
 
 test('signin CLI routing cannot bypass the close-first authentication helper', async () => {
