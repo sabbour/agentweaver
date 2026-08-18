@@ -10,6 +10,8 @@ import {
   assertIgnoredAuthRoot,
   buildEdgeLaunchOptions,
   openRecordingSession,
+  captureRecordingPlan,
+  openRecordingSession,
   parsePlaywrightSessionList,
   parseRecordingCommandOptions,
   refreshRecordingAuthentication,
@@ -92,6 +94,49 @@ test('authenticated all capture skips handoff beats and modes cannot mix', () =>
     () => selectCaptureBeats(beats, { beat: '1.2' }),
     /Beat 1.2 requires prior beat 1.1.*--all/,
   );
+});
+
+test('full capture defers Bug Fix PR preparation until the preceding beats create it', async () => {
+  const beats = ['4.1', '4.2', '4.3', '4.4', '4.5', '4.6', '4.7'];
+  const preparations = [];
+  const executions = [];
+  let pullRequestExists = false;
+
+  await captureRecordingPlan(
+    { session: 'demo', all: true },
+    {
+      openSession: async () => {},
+      prepareScripts: async (options, preparation = {}) => {
+        preparations.push({ beat: options.beat, ...preparation });
+        if (preparation.resolvePrerequisites === false) {
+          assert.equal(pullRequestExists, false, 'global preparation must happen before the Bug Fix run');
+          return {
+            outputDirectory: 'generated',
+            scripts: beats.map((beatId) => ({ beatId, scriptPath: `generated/beat-${beatId}.cjs` })),
+          };
+        }
+        if (options.beat === '4.6') {
+          assert.equal(pullRequestExists, true, 'Beat 4.6 must resolve the PR after Beats 4.1–4.5');
+        }
+        return {
+          outputDirectory: 'generated',
+          scripts: [{ beatId: options.beat, scriptPath: `generated/beat-${options.beat}.cjs` }],
+        };
+      },
+      runScript: (args) => {
+        const filename = args.find((arg) => arg.startsWith('--filename='));
+        executions.push(filename);
+        if (filename.endsWith('beat-4.5.cjs')) pullRequestExists = true;
+      },
+      write: () => {},
+    },
+  );
+
+  assert.deepEqual(executions, beats.map((beat) => `--filename=generated/beat-${beat}.cjs`));
+  assert.deepEqual(preparations, [
+    { beat: undefined, resolvePrerequisites: false, writeScripts: false },
+    ...beats.map((beat) => ({ beat, })),
+  ]);
 });
 
 test('capture prerequisites resolve only current GitHub issue and staging routes', () => {

@@ -8,6 +8,7 @@ import {
 } from '../lib/capture-config.mjs';
 import { renderCaptureScript } from '../lib/capture-plan.mjs';
 import { browserDomCueBootstrapSource } from '../lib/dom-cues.mjs';
+import { resolveBugFixPullRequestEvidence } from '../lib/bugfix-pr.mjs';
 import { validateFinalTake } from '../lib/preflight.mjs';
 
 const beats = [
@@ -250,7 +251,35 @@ test('Blueprint triage beats declare a serial, fixture-safe route through previe
   }
   assert.equal(byId.get('4.1').prerequisites.find((item) => item.kind === 'github-issue-url')?.matchesEnvironment, 'AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER');
   assert.equal(byId.get('4.5').steps[1].selector, "page.getByTestId('session-approval-gate')");
-  assert.equal(byId.get('4.6').steps[1].selector, "page.getByRole('button', { name: 'Approve & merge', exact: true })");
-  assert.equal(byId.get('4.7').steps.at(-2).url, '{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}');
+  assert.equal(byId.get('4.6').steps[1].type, 'resolveBugFixPullRequest');
+  assert.equal(
+    byId.get('4.6').steps.find((step) => step.type === 'waitFor').selector,
+    "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+  );
+  assert.equal(byId.get('4.7').steps.at(-2).type, 'gotoResolvedBugFixPullRequest');
   assert.equal(byId.get('5.1').steps[1].selector, "page.getByTestId('mcp-server-url')");
+});
+
+test('Bug Fix PR resolution binds an exact run artifact to its project repository', () => {
+  const resolved = resolveBugFixPullRequestEvidence({
+    runUrl: 'https://demo.test/projects/project-1/runs/run-1',
+    projectUrl: 'https://demo.test/projects/project-1',
+    expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42',
+    topology: { nodes: [{ type: 'open_pull_request' }] },
+    events: [{ payload: { message: 'Opened pull request #42: https://github.com/octo/widgets/pull/42' } }],
+    project: { source_repository: 'octo/widgets' },
+  });
+  assert.deepEqual(resolved, {
+    url: 'https://github.com/octo/widgets/pull/42', repository: 'octo/widgets', number: '42', runId: 'run-1', projectId: 'project-1',
+  });
+});
+
+test('Bug Fix PR resolution rejects missing and mismatched external pull requests', () => {
+  const evidence = {
+    runUrl: 'https://demo.test/projects/project-1/runs/run-1', projectUrl: 'https://demo.test/projects/project-1',
+    topology: { nodes: [{ type: 'open_pull_request' }] }, project: { source_repository: 'octo/widgets' },
+  };
+  assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42', events: [] }), /has not reported a pull request/);
+  assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/41', events: [{ url: 'https://github.com/octo/widgets/pull/42' }] }), /stale or does not match/);
+  assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/other/pull/42', events: [{ url: 'https://github.com/octo/widgets/pull/42' }] }), /stale or does not match/);
 });
