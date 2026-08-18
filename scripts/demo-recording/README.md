@@ -83,9 +83,10 @@ node scripts\demo-recording\clean-staging.mjs `
   --confirm-demo-cleanup
 ```
 
-Cleanup refuses an open recording session, a plan targeting another origin, or fixture
-names that are not fully anchored `Agentweaver Demo` patterns. It lists every project
-page and verifies that no matching fixture remains; unrelated projects are never deleted.
+Cleanup refuses while any persistent `playwright-cli` session is open, a plan targeting
+another origin, or a fixture pattern that differs from the declared fixture name (apart
+from the deterministic UTC timestamp suffix). It lists every project page and verifies
+that no matching fixture remains; unrelated projects are never deleted.
 
 ## Other commands
 

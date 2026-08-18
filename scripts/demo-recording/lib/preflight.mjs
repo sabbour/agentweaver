@@ -1,16 +1,24 @@
 import { createApiFromSession } from './api.mjs';
 import { DEFAULT_SESSION_STORAGE_PATH } from './auth.mjs';
 
-function compileSafeProjectPatterns(patterns) {
+const TIMESTAMPED_FIXTURE_SUFFIX = '(?: - [0-9]{8}T[0-9]{6}Z)?';
+
+function escapeRegularExpression(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function compileSafeProjectPatterns(patterns, projectName) {
   if (!Array.isArray(patterns) || patterns.length === 0) {
     throw new Error('Scenario fixture cleanup requires at least one explicit safeProjectNamePatterns entry.');
   }
+  const escapedProjectName = escapeRegularExpression(projectName);
+  const exactPattern = `^${escapedProjectName}$`;
+  const timestampedPattern = `^${escapedProjectName}${TIMESTAMPED_FIXTURE_SUFFIX}$`;
   return patterns.map((pattern) => {
-    if (typeof pattern !== 'string'
-      || !pattern.startsWith('^Agentweaver Demo')
-      || !pattern.endsWith('$')
-      || pattern.length > 200) {
-      throw new Error('Every fixture project-name pattern must be a short, fully anchored Agentweaver Demo regular expression.');
+    if (pattern !== exactPattern && pattern !== timestampedPattern) {
+      throw new Error(
+        'Every fixture project-name pattern must match only the declared fixture name, optionally with the deterministic UTC timestamp suffix.',
+      );
     }
     return new RegExp(pattern, 'u');
   });
@@ -26,7 +34,7 @@ export function validateScenarioFixture(fixture) {
   if (!fixture.projectName.trim().startsWith('Agentweaver Demo')) {
     throw new Error('The fixture projectName must use the unmistakable "Agentweaver Demo" ownership marker.');
   }
-  const patterns = compileSafeProjectPatterns(fixture.safeProjectNamePatterns);
+  const patterns = compileSafeProjectPatterns(fixture.safeProjectNamePatterns, fixture.projectName.trim());
   if (!patterns.some((pattern) => pattern.test(fixture.projectName))) {
     throw new Error('The fixture projectName must match an explicit safe project-name pattern.');
   }

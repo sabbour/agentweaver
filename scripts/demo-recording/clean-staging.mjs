@@ -80,8 +80,12 @@ export async function cleanStaging(options, dependencies = {}) {
   const fixture = validateScenarioFixture(captureConfig.fixture);
 
   const sessions = (dependencies.listSessions ?? listPlaywrightSessions)();
-  if (sessions.get(options.session)?.status === 'open') {
-    throw new Error(`Cleanup refused: recording session "${options.session}" is open. Close it and verify no capture is active first.`);
+  // playwright-cli does not expose session ownership, so every open session is unsafe.
+  const openSessions = [...sessions.entries()]
+    .filter(([, session]) => session.status === 'open')
+    .map(([name]) => name);
+  if (openSessions.length > 0) {
+    throw new Error(`Cleanup refused: recorder session(s) ${openSessions.map((name) => `"${name}"`).join(', ')} are open. Close all sessions and verify no capture is active first.`);
   }
 
   const authPaths = recordingAuthPaths(options.authRoot);

@@ -11,10 +11,10 @@ const fixture = {
   safeProjectNamePatterns: ['^Agentweaver Demo S1 - Trailhead(?: - [0-9]{8}T[0-9]{6}Z)?$'],
 };
 
-test('fixture cleanup requires anchored patterns that match the declared project name', () => {
+test('fixture cleanup requires patterns constrained to the declared project name', () => {
   assert.throws(
     () => validateScenarioFixture({ ...fixture, safeProjectNamePatterns: ['Trailhead'] }),
-    /fully anchored/,
+    /must match only the declared fixture name/,
   );
   assert.throws(
     () => validateScenarioFixture({ ...fixture, projectName: 'Trailhead' }),
@@ -22,7 +22,11 @@ test('fixture cleanup requires anchored patterns that match the declared project
   );
   assert.throws(
     () => validateScenarioFixture({ ...fixture, safeProjectNamePatterns: ['^.*$'] }),
-    /Agentweaver Demo regular expression/,
+    /must match only the declared fixture name/,
+  );
+  assert.throws(
+    () => validateScenarioFixture({ ...fixture, safeProjectNamePatterns: ['^Agentweaver Demo.*$'] }),
+    /must match only the declared fixture name/,
   );
   assert.equal(isScenarioFixtureProject({ name: 'Agentweaver Demo S1 - Trailhead' }, fixture), true);
   assert.equal(isScenarioFixtureProject({ name: 'Trailhead' }, fixture), false);

@@ -31,7 +31,23 @@ test('staging cleanup refuses to run while its recording session is open', async
       loadCaptureConfig: async () => captureConfig,
       listSessions: () => new Map([['agentweaver-demo', { status: 'open' }]]),
     }),
-    /session "agentweaver-demo" is open/,
+    /recorder session\(s\) "agentweaver-demo" are open/,
+  );
+});
+
+test('staging cleanup refuses any open recorder session despite a different --session', async () => {
+  await assert.rejects(
+    cleanStaging({
+      confirmed: true,
+      plan: 'demo.capture.json',
+      baseUrl: 'https://staging.example',
+      authRoot: '.auth',
+      session: 'other-session',
+    }, {
+      loadCaptureConfig: async () => captureConfig,
+      listSessions: () => new Map([['agentweaver-demo', { status: 'open' }]]),
+    }),
+    /recorder session\(s\) "agentweaver-demo" are open/,
   );
 });
 
