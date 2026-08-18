@@ -555,6 +555,51 @@ function planName(planPath) {
   return path.basename(planPath).replace(/\.capture\.json$/i, '').replace(/\.json$/i, '');
 }
 
+function prerequisiteError(prerequisite) {
+  return new Error(`Capture prerequisite ${prerequisite.environment} is unavailable. ${prerequisite.message}`);
+}
+
+function validatePrerequisite(prerequisite, environment, baseUrl) {
+  const value = environment[prerequisite.environment]?.trim();
+  if (!value) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'github-issue-number' && !/^[1-9][0-9]*$/.test(value)) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'github-issue-url'
+    && !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/[1-9][0-9]*\/?$/u.test(value)) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'github-issue-url' && prerequisite.matchesEnvironment) {
+    const issueNumber = /\/issues\/([1-9][0-9]*)\/?$/u.exec(value)?.[1];
+    if (!issueNumber || environment[prerequisite.matchesEnvironment]?.trim() !== issueNumber) throw prerequisiteError(prerequisite);
+  }
+  if (prerequisite.kind === 'github-pr-url'
+    && !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/[1-9][0-9]*\/?$/u.test(value)) throw prerequisiteError(prerequisite);
+  if (prerequisite.kind === 'app-url'
+    && (!URL.canParse(value) || new URL(value).origin !== new URL(baseUrl).origin)) throw prerequisiteError(prerequisite);
+  return value;
+}
+
+function replaceRuntimeTemplates(value, environment) {
+  if (typeof value === 'string') {
+    return value.replace(/\{\{([A-Z][A-Z0-9_]+)\}\}/gu, (_template, name) => {
+      const replacement = environment[name];
+      if (!replacement) throw new Error(`Capture plan references ${name}, but it is not configured as a satisfied prerequisite.`);
+      return replacement;
+    });
+  }
+  if (Array.isArray(value)) return value.map((item) => replaceRuntimeTemplates(item, environment));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceRuntimeTemplates(item, environment)]));
+  return value;
+}
+
+export function resolveCaptureBeatPrerequisites(beat, {
+  environment = process.env,
+  baseUrl = DEFAULT_RECORDING_BASE_URL,
+} = {}) {
+  const values = {};
+  for (const prerequisite of beat.prerequisites ?? []) {
+    values[prerequisite.environment] = validatePrerequisite(prerequisite, environment, baseUrl);
+  }
+  return replaceRuntimeTemplates(beat, values);
+}
+
 export async function prepareCaptureScripts(options) {
   const paths = recordingAuthPaths(options.authRoot);
   const repositoryRoot = await assertProtectedAuthRoot(paths.root);
@@ -579,7 +624,8 @@ export async function prepareCaptureScripts(options) {
   }
   await fs.mkdir(outputDirectory, { recursive: true, mode: 0o700 });
   const scripts = [];
-  for (const beat of selected) {
+  for (const configuredBeat of selected) {
+    const beat = resolveCaptureBeatPrerequisites(configuredBeat, { baseUrl: options.baseUrl });
     const scriptPath = path.join(outputDirectory, `beat-${beat.id.replace(/\./g, '-')}.cjs`);
     if (protectedOutput) {
       await assertProtectedAuthDestination(scriptPath, paths.root, repositoryRoot);

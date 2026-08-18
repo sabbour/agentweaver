@@ -13,6 +13,7 @@ const predicateOperators = new Set([
 ]);
 const rectModes = new Set(['matched-element', 'element', 'first-matching', 'union', 'none']);
 const intervalCategories = new Set(['action', 'wait', 'dead-time']);
+const prerequisiteKinds = new Set(['app-url', 'github-issue-number', 'github-issue-url', 'github-pr-url']);
 
 function fail(message) {
   throw new Error(`Invalid demo capture plan: ${message}`);
@@ -48,6 +49,26 @@ function validateCue(cue, location) {
   }
 }
 
+function validatePrerequisites(prerequisites, location) {
+  if (prerequisites === undefined) return;
+  if (!Array.isArray(prerequisites)) fail(`${location}.prerequisites must be an array`);
+  for (const [index, prerequisite] of prerequisites.entries()) {
+    const item = `${location}.prerequisites[${index}]`;
+    if (!prerequisite || typeof prerequisite !== 'object' || Array.isArray(prerequisite)) fail(`${item} must be an object`);
+    if (!/^[A-Z][A-Z0-9_]*$/.test(prerequisite.environment ?? '')) {
+      fail(`${item}.environment must be an uppercase environment variable name`);
+    }
+    if (!prerequisiteKinds.has(prerequisite.kind)) fail(`${item}.kind is unsupported`);
+    if (prerequisite.matchesEnvironment !== undefined
+      && !/^[A-Z][A-Z0-9_]*$/.test(prerequisite.matchesEnvironment)) {
+      fail(`${item}.matchesEnvironment must be an uppercase environment variable name`);
+    }
+    if (typeof prerequisite.message !== 'string' || !prerequisite.message.trim()) {
+      fail(`${item}.message must explain how to satisfy the prerequisite`);
+    }
+  }
+}
+
 export function validateCaptureConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) fail('root must be an object');
   if (config.schemaVersion !== 1) fail('schemaVersion must be 1');
@@ -72,6 +93,10 @@ export function validateCaptureConfig(config) {
       && (!Number.isInteger(beat.approvalWatcherGraceMs) || beat.approvalWatcherGraceMs < 0)) {
       fail(`${location}.approvalWatcherGraceMs must be a non-negative integer`);
     }
+    if (beat.requiresPriorBeat !== undefined && !/^[0-9]+\.[0-9]+$/.test(beat.requiresPriorBeat)) {
+      fail(`${location}.requiresPriorBeat must reference a markdown beat ID`);
+    }
+    validatePrerequisites(beat.prerequisites, location);
     for (const [cueIndex, name] of (beat.expectedCues ?? []).entries()) {
       if (typeof name !== 'string' || !name) fail(`${location}.expectedCues[${cueIndex}] must be a cue name`);
     }
@@ -108,6 +133,11 @@ export function validateCaptureConfig(config) {
       validateCue(item.cue, item.location);
       if (cueNames.has(item.cue.name)) fail(`duplicate semantic cue name ${item.cue.name}`);
       cueNames.add(item.cue.name);
+    }
+  }
+  for (const beat of config.beats) {
+    if (beat.requiresPriorBeat && !beatIds.has(beat.requiresPriorBeat)) {
+      fail(`beat ${beat.id} requires missing prior beat ${beat.requiresPriorBeat}`);
     }
   }
   return config;

@@ -312,152 +312,595 @@
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.1-chat-triage.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8000, "preferred": 12000, "maximum": 19000 },
-      "expectedCues": ["4.1.issue-open", "4.1.assistant-ready"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 8000,
+            "preferred": 12000,
+            "maximum": 19000
+      },
+      "expectedCues": [
+            "4.1.issue-open",
+            "4.1.assistant-ready"
+      ],
       "cueWatchers": [
-        { "name": "4.1.issue-open", "stableForMs": 350, "deadlineMs": 60000, "source": { "kind": "text", "selector": "body", "includes": "Issue" }, "rect": { "mode": "element", "selector": "main" } }
+            {
+                  "name": "4.1.issue-open",
+                  "stableForMs": 350,
+                  "deadlineMs": 60000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "#issue-title",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "#issue-title"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.1", "title": "Triage the next issue from chat", "duration": 1800 },
-        { "type": "goto", "url": "{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL}}", "after": 800 },
-        { "type": "waitText", "text": "Issue", "timeout": 60000 },
-        { "type": "goto", "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}", "after": 800 },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-run-page')", "timeout": 30000, "cue": { "name": "4.1.assistant-ready", "rect": { "mode": "matched-element" } } },
-        { "type": "type", "selector": "page.getByPlaceholder('Message the assistant...')", "text": "Triage issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}}.", "scale": 1.55, "after": 500 },
-        { "type": "press", "selector": "page.getByPlaceholder('Message the assistant...')", "key": "Enter", "after": 1000 }
+            {
+                  "type": "badge",
+                  "label": "Beat 4.1",
+                  "title": "Triage the next issue from chat",
+                  "duration": 1800
+            },
+            {
+                  "type": "goto",
+                  "url": "{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL}}",
+                  "after": 800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.locator('#issue-title')",
+                  "timeout": 60000
+            },
+            {
+                  "type": "goto",
+                  "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+                  "after": 800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('assistant-run-page')",
+                  "timeout": 30000,
+                  "cue": {
+                        "name": "4.1.assistant-ready",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "type",
+                  "selector": "page.getByPlaceholder('Message the assistant...')",
+                  "text": "Triage issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}}.",
+                  "scale": 1.55,
+                  "after": 500
+            },
+            {
+                  "type": "press",
+                  "selector": "page.getByPlaceholder('Message the assistant...')",
+                  "key": "Enter",
+                  "after": 1000
+            }
+      ],
+      "requiresPriorBeat": "3.2",
+      "prerequisites": [
+            {
+                  "environment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL",
+                  "kind": "github-issue-url",
+                  "message": "Set it to the manually prepared, unlabelled demo issue URL; the capture will only open it.",
+                  "matchesEnvironment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER"
+            },
+            {
+                  "environment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER",
+                  "kind": "github-issue-number",
+                  "message": "Set it to the issue number from AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL."
+            },
+            {
+                  "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+                  "kind": "app-url",
+                  "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+            }
       ]
-    },
+},
     {
       "id": "4.2",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.2-assistant-triage.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8000, "preferred": 12500, "maximum": 20000 },
-      "expectedCues": ["4.2.triage-response", "4.2.approval-gate"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 8000,
+            "preferred": 12500,
+            "maximum": 20000
+      },
+      "expectedCues": [
+            "4.2.triage-response",
+            "4.2.approval-gate"
+      ],
       "cueWatchers": [
-        { "name": "4.2.triage-response", "stableForMs": 500, "deadlineMs": 180000, "source": { "kind": "selector", "selector": "[data-testid='assistant-transcript']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='assistant-transcript']" } }
+            {
+                  "name": "4.2.transcript-ready",
+                  "stableForMs": 500,
+                  "deadlineMs": 180000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "[data-testid='assistant-transcript']",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "[data-testid='assistant-transcript']"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.2", "title": "Ask the assistant to triage", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-transcript')", "timeout": 180000, "cue": { "name": "4.2.approval-gate", "rect": { "mode": "matched-element" } } },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-approval-gate')", "timeout": 180000 },
-        { "type": "hover", "selector": "page.getByTestId('assistant-approval-gate')", "scale": 1.25, "hold": 2400 }
-      ]
-    },
+            {
+                  "type": "badge",
+                  "label": "Beat 4.2",
+                  "title": "Ask the assistant to triage",
+                  "duration": 1800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('assistant-approval-gate')",
+                  "timeout": 180000,
+                  "cue": {
+                        "name": "4.2.approval-gate",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('assistant-transcript')",
+                  "timeout": 180000,
+                  "cue": {
+                        "name": "4.2.triage-response",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "hover",
+                  "selector": "page.getByTestId('assistant-approval-gate')",
+                  "scale": 1.25,
+                  "hold": 2400
+            }
+      ],
+      "requiresPriorBeat": "4.1"
+},
     {
       "id": "4.3",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.3-scope-bug.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7000, "preferred": 10000, "maximum": 16000 },
-      "expectedCues": ["4.3.run-timeline", "4.3.scope-visible"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 7000,
+            "preferred": 10000,
+            "maximum": 16000
+      },
+      "expectedCues": [
+            "4.3.run-timeline",
+            "4.3.scope-visible"
+      ],
       "cueWatchers": [
-        { "name": "4.3.run-timeline", "stableForMs": 350, "deadlineMs": 180000, "source": { "kind": "selector", "selector": "[data-testid='assistant-transcript']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='assistant-transcript']" } }
+            {
+                  "name": "4.3.run-timeline",
+                  "stableForMs": 350,
+                  "deadlineMs": 180000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "[data-testid='assistant-transcript']",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "[data-testid='assistant-transcript']"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.3", "title": "Read and scope the bug", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-transcript')", "timeout": 180000, "cue": { "name": "4.3.scope-visible", "rect": { "mode": "matched-element" } } },
-        { "type": "click", "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: /^(Allow once|Approve)$/ }).first()", "scale": 1.55, "after": 1100, "force": true },
-        { "type": "waitText", "text": "Bug Fix", "timeout": 180000 },
-        { "type": "hover", "selector": "page.getByText(/current behavior|smallest safe fix/i).first()", "scale": 1.28, "hold": 1800 }
-      ]
-    },
+            {
+                  "type": "badge",
+                  "label": "Beat 4.3",
+                  "title": "Read and scope the bug",
+                  "duration": 1800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('assistant-approval-gate')",
+                  "timeout": 180000,
+                  "cue": {
+                        "name": "4.3.scope-visible",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "click",
+                  "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
+                  "scale": 1.55,
+                  "after": 1100,
+                  "force": true
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('assistant-transcript').getByText('Bug Fix', { exact: false })",
+                  "timeout": 180000
+            },
+            {
+                  "type": "hover",
+                  "selector": "page.getByTestId('assistant-transcript').getByText(/current behavior|smallest safe fix/i).first()",
+                  "scale": 1.28,
+                  "hold": 1800
+            }
+      ],
+      "requiresPriorBeat": "4.2"
+},
     {
       "id": "4.4",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.4-implement-test.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8500, "preferred": 13000, "maximum": 20000 },
-      "expectedCues": ["4.4.work-plan", "4.4.validation-visible"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 8500,
+            "preferred": 13000,
+            "maximum": 20000
+      },
+      "expectedCues": [
+            "4.4.work-plan",
+            "4.4.validation-visible"
+      ],
       "cueWatchers": [
-        { "name": "4.4.work-plan", "stableForMs": 350, "deadlineMs": 240000, "source": { "kind": "selector", "selector": "[data-testid='topology-graph-canvas'], [data-testid='assistant-transcript']", "state": "visible" }, "rect": { "mode": "first-matching", "selector": "[data-testid='topology-graph-canvas'], [data-testid='assistant-transcript']" } }
+            {
+                  "name": "4.4.work-plan",
+                  "stableForMs": 350,
+                  "deadlineMs": 240000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "[data-testid='topology-graph-canvas']",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "[data-testid='topology-graph-canvas']"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.4", "title": "Implement and test the repair", "duration": 1800 },
-        { "type": "waitText", "text": "Work plan", "timeout": 240000, "cue": { "name": "4.4.validation-visible", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "click", "selector": "page.getByText(/investigate|implement|test/i).first()", "scale": 1.36, "after": 800 },
-        { "type": "click", "selector": "page.getByText(/implement|test/i).nth(1)", "scale": 1.36, "after": 800 },
-        { "type": "click", "selector": "page.getByText(/validation|test/i).last()", "scale": 1.36, "after": 1000 }
-      ]
-    },
+            {
+                  "type": "badge",
+                  "label": "Beat 4.4",
+                  "title": "Implement and test the repair",
+                  "duration": 1800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('topology-graph-canvas')",
+                  "timeout": 240000,
+                  "cue": {
+                        "name": "4.4.validation-visible",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "click",
+                  "selector": "page.getByTestId('toggle-run-tree')",
+                  "scale": 1.25,
+                  "after": 800
+            },
+            {
+                  "type": "hover",
+                  "selector": "page.getByTestId('topology-graph-canvas')",
+                  "scale": 1.18,
+                  "hold": 1800
+            }
+      ],
+      "requiresPriorBeat": "4.3"
+},
     {
       "id": "4.5",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.5-preview-repair.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 9000, "preferred": 14000, "maximum": 22000 },
-      "expectedCues": ["4.5.preview-approval", "4.5.repaired-preview"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 9000,
+            "preferred": 14000,
+            "maximum": 22000
+      },
+      "expectedCues": [
+            "4.5.preview-approval",
+            "4.5.repaired-preview"
+      ],
       "cueWatchers": [
-        { "name": "4.5.preview-approval", "stableForMs": 350, "deadlineMs": 300000, "source": { "kind": "selector", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']", "state": "visible" }, "rect": { "mode": "first-matching", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']" } }
+            {
+                  "name": "4.5.preview-approval",
+                  "stableForMs": 350,
+                  "deadlineMs": 300000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "[data-testid='session-approval-gate']",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "[data-testid='session-approval-gate']"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.5", "title": "Preview the repaired behavior", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))", "timeout": 300000 },
-        { "type": "pause", "ms": 1800 },
-        { "type": "click", "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()", "scale": 1.58, "after": 1000, "force": true },
-        { "type": "waitText", "text": "Preview", "timeout": 300000, "cue": { "name": "4.5.repaired-preview", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()", "scale": 1.5, "after": 1800 }
-      ]
-    },
+            {
+                  "type": "badge",
+                  "label": "Beat 4.5",
+                  "title": "Preview the repaired behavior",
+                  "duration": 1800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('session-approval-gate')",
+                  "timeout": 300000
+            },
+            {
+                  "type": "pause",
+                  "ms": 1800
+            },
+            {
+                  "type": "click",
+                  "selector": "page.getByTestId('session-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
+                  "scale": 1.58,
+                  "after": 1000,
+                  "force": true
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('human-review-preview-status')",
+                  "timeout": 300000,
+                  "cue": {
+                        "name": "4.5.repaired-preview",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "click",
+                  "selector": "page.getByTestId('human-review-preview-status').getByRole('button', { name: 'Open preview', exact: true })",
+                  "scale": 1.5,
+                  "after": 1800
+            }
+      ],
+      "requiresPriorBeat": "4.4"
+},
     {
       "id": "4.6",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.6-approve-bug-fix.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7000, "preferred": 10000, "maximum": 16000 },
-      "expectedCues": ["4.6.final-review", "4.6.merge-action"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 7000,
+            "preferred": 10000,
+            "maximum": 16000
+      },
+      "expectedCues": [
+            "4.6.final-review",
+            "4.6.merge-action"
+      ],
       "cueWatchers": [
-        { "name": "4.6.final-review", "stableForMs": 500, "deadlineMs": 300000, "source": { "kind": "text", "selector": "body", "includes": "Approve & merge" }, "rect": { "mode": "element", "selector": "main" } }
+            {
+                  "name": "4.6.final-review",
+                  "stableForMs": 500,
+                  "deadlineMs": 300000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "[aria-label='Approvals and gates'] button[aria-label='Approve human review and continue to merge']",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "[aria-label='Approvals and gates']"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.6", "title": "Approve the bug fix", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()", "timeout": 300000, "cue": { "name": "4.6.merge-action", "rect": { "mode": "matched-element" } } },
-        { "type": "hover", "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()", "scale": 1.55, "hold": 1800 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()", "scale": 1.62, "after": 1200 }
-      ]
-    },
+            {
+                  "type": "badge",
+                  "label": "Beat 4.6",
+                  "title": "Approve the bug fix",
+                  "duration": 1800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+                  "timeout": 300000,
+                  "cue": {
+                        "name": "4.6.merge-action",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "hover",
+                  "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+                  "scale": 1.55,
+                  "hold": 1800
+            },
+            {
+                  "type": "click",
+                  "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+                  "scale": 1.62,
+                  "after": 1200
+            }
+      ],
+      "requiresPriorBeat": "4.5"
+},
     {
       "id": "4.7",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/blueprint-demo/4.7-close-issue-loop.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7500, "preferred": 11000, "maximum": 18000 },
-      "expectedCues": ["4.7.pr-topology", "4.7.pr-open"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 7500,
+            "preferred": 11000,
+            "maximum": 18000
+      },
+      "expectedCues": [
+            "4.7.pr-topology",
+            "4.7.pr-open"
+      ],
       "cueWatchers": [
-        { "name": "4.7.pr-topology", "stableForMs": 350, "deadlineMs": 180000, "source": { "kind": "selector", "selector": "[data-testid='topology-graph-canvas']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='topology-graph-canvas']" } }
+            {
+                  "name": "4.7.pr-topology",
+                  "stableForMs": 350,
+                  "deadlineMs": 180000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "[data-testid='topology-graph-canvas']",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "[data-testid='topology-graph-canvas']"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.7", "title": "Close the loop on the issue", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('topology-graph-canvas')", "timeout": 180000, "cue": { "name": "4.7.pr-open", "rect": { "mode": "matched-element" } } },
-        { "type": "hover", "selector": "page.getByTestId('topology-graph-canvas')", "scale": 1.15, "hold": 1600 },
-        { "type": "click", "selector": "page.getByRole('link', { name: /pull request|open.*pr/i }).first()", "scale": 1.45, "after": 1800 }
+            {
+                  "type": "badge",
+                  "label": "Beat 4.7",
+                  "title": "Close the loop on the issue",
+                  "duration": 1800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('topology-graph-canvas')",
+                  "timeout": 180000
+            },
+            {
+                  "type": "hover",
+                  "selector": "page.getByTestId('topology-graph-canvas')",
+                  "scale": 1.15,
+                  "hold": 1600
+            },
+            {
+                  "type": "goto",
+                  "url": "{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}",
+                  "after": 1000
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByRole('main').getByRole('heading').first()",
+                  "timeout": 60000,
+                  "cue": {
+                        "name": "4.7.pr-open",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            }
+      ],
+      "requiresPriorBeat": "4.6",
+      "prerequisites": [
+            {
+                  "environment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL",
+                  "kind": "github-pr-url",
+                  "message": "Set it to the PR created by this same Bug Fix run; the capture will only open it for review."
+            }
       ]
-    },
+},
     {
       "id": "5.1",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/settings",
       "freshNavigation": true,
       "videoPath": "recordings/blueprint-demo/5.1-drive-from-tools.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 6500, "preferred": 9500, "maximum": 15000 },
-      "expectedCues": ["5.1.settings-visible", "5.1.mcp-url"],
+      "viewport": {
+            "width": 1920,
+            "height": 1080
+      },
+      "outputBudgetMs": {
+            "minimum": 6500,
+            "preferred": 9500,
+            "maximum": 15000
+      },
+      "expectedCues": [
+            "5.1.settings-visible",
+            "5.1.mcp-url"
+      ],
       "cueWatchers": [
-        { "name": "5.1.settings-visible", "stableForMs": 350, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "MCP server URL" }, "rect": { "mode": "element", "selector": "main" } }
+            {
+                  "name": "5.1.settings-visible",
+                  "stableForMs": 350,
+                  "deadlineMs": 30000,
+                  "source": {
+                        "kind": "selector",
+                        "selector": "[data-testid='mcp-server-url']",
+                        "state": "visible"
+                  },
+                  "rect": {
+                        "mode": "element",
+                        "selector": "[data-testid='mcp-server-url']"
+                  }
+            }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 5.1", "title": "Drive it from your own tools", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByLabel('MCP server URL')", "timeout": 30000, "cue": { "name": "5.1.mcp-url", "rect": { "mode": "matched-element" } } },
-        { "type": "hover", "selector": "page.getByLabel('MCP server URL')", "scale": 1.42, "hold": 2200 },
-        { "type": "press", "selector": "page.getByLabel('MCP server URL')", "key": "Control+A", "after": 300 },
-        { "type": "press", "selector": "page.getByLabel('MCP server URL')", "key": "Control+C", "after": 900 }
+            {
+                  "type": "badge",
+                  "label": "Beat 5.1",
+                  "title": "Drive it from your own tools",
+                  "duration": 1800
+            },
+            {
+                  "type": "waitFor",
+                  "selector": "page.getByTestId('mcp-server-url')",
+                  "timeout": 30000,
+                  "cue": {
+                        "name": "5.1.mcp-url",
+                        "rect": {
+                              "mode": "matched-element"
+                        }
+                  }
+            },
+            {
+                  "type": "hover",
+                  "selector": "page.getByTestId('mcp-server-url')",
+                  "scale": 1.42,
+                  "hold": 2200
+            }
       ]
-    }
+}
   ]
 }
