@@ -25,7 +25,7 @@ const COMMAND_OPTIONS = {
   close: new Set(['session']),
 };
 
-const BOOLEAN_OPTIONS = new Set(['all', 'unauthenticated', 'resume']);
+const BOOLEAN_OPTIONS = new Set(['all', 'unauthenticated']);
 const PROFILE_COPY_EXCLUDED_DIRECTORIES = new Set([
   'BrowserMetrics',
   'Cache',
@@ -44,9 +44,6 @@ const PROFILE_COPY_EXCLUDED_FILES = new Set([
   'SingletonLock',
   'SingletonSocket',
 ]);
-const PROFILE_COPY_EXCLUDED_SUFFIXES = ['.tmp'];
-const PROFILE_COPY_MAX_ATTEMPTS = 3;
-const PROFILE_COPY_RETRY_DELAY_MS = 250;
 
 function toCamelCase(value) {
   return value.replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
@@ -104,86 +101,6 @@ export function parseRecordingCommandOptions(command, argv) {
     options.session = UNAUTHENTICATED_RECORDING_SESSION;
   }
   return options;
-}
-
-function resolveCapturePlanPath(plan) {
-  const workingDirectoryPath = path.resolve(plan);
-  if (existsSync(workingDirectoryPath) || path.isAbsolute(plan)) return workingDirectoryPath;
-
-  try {
-    const repositoryRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    }).trim();
-    const repositoryPath = path.resolve(repositoryRoot, plan);
-    if (existsSync(repositoryPath)) return repositoryPath;
-  } catch {
-    // Preserve the working-directory path so the loader reports the original failure.
-  }
-
-  return workingDirectoryPath;
-}
-
-export async function resolvePlanAuthentication(options) {
-  if (!options.plan) return options;
-
-  const planPath = resolveCapturePlanPath(options.plan);
-  let captureConfig;
-  try {
-    captureConfig = await loadCaptureConfig(planPath);
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      throw new Error(
-        `Capture plan "${options.plan}" was not found. Use a path relative to the repository root or an absolute path.`,
-      );
-    }
-    throw error;
-  }
-  const planAuthMode = captureConfig.authentication?.mode;
-  if (!planAuthMode) return { ...options, plan: planPath };
-  if (options.authMode !== 'auto' && options.authMode !== planAuthMode) {
-    throw new Error(
-      `--auth-mode ${options.authMode} conflicts with the ${planAuthMode} authentication required by ${options.plan}.`,
-    );
-  }
-  return { ...options, plan: planPath, authMode: planAuthMode };
-}
-
-export async function waitForAuthenticatedSnapshot(
-  getSnapshot,
-  {
-    attempts = 5,
-    retryDelayMs = 500,
-    wait = delay,
-  } = {},
-) {
-  let lastError;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      const snapshot = await getSnapshot();
-      assertAuthenticatedSnapshot(snapshot);
-      return snapshot;
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt + 1 < attempts) await wait(retryDelayMs);
-  }
-  throw lastError;
-}
-
-function recordingAuthRequiredError() {
-  return new Error(
-    'Protected recording authentication is missing or expired. '
-    + 'Run "npm run demo:record -- signin", then run open again.',
-  );
-}
-
-async function verifyRecordingSession(getSnapshot, waitForAuthentication) {
-  try {
-    await waitForAuthentication(getSnapshot);
-  } catch {
-    throw recordingAuthRequiredError();
-  }
 }
 
 export function recordingAuthPaths(authRoot = DEFAULT_RECORDING_AUTH_ROOT) {
@@ -265,9 +182,7 @@ export function shouldCopyEdgeProfileEntry(sourcePath, profileRoot) {
   if (!relative || relative.startsWith('..')) return true;
   const segments = relative.split(path.sep);
   if (segments.some((segment) => PROFILE_COPY_EXCLUDED_DIRECTORIES.has(segment))) return false;
-  const basename = path.basename(sourcePath);
-  return !PROFILE_COPY_EXCLUDED_FILES.has(basename)
-    && !PROFILE_COPY_EXCLUDED_SUFFIXES.some((suffix) => basename.toLowerCase().endsWith(suffix));
+  return !PROFILE_COPY_EXCLUDED_FILES.has(path.basename(sourcePath));
 }
 
 export function assertIgnoredAuthRoot(authRoot, checkIgnore) {
@@ -377,6 +292,29 @@ export function assertAuthenticatedSnapshot(snapshot) {
   }
   if (!/\b(Overview|Projects|Sessions|Settings)\b/i.test(snapshot)) {
     throw new Error('The recording session opened, but Agentweaver authentication could not be verified.');
+  }
+}
+
+export async function waitForAuthenticatedSnapshot(session, {
+  timeoutMs = 120_000,
+  pollMs = 500,
+  snapshot = () => runPlaywrightCli(sessionArgs(session, 'snapshot'), { sensitive: true }),
+  delayFn = delay,
+  now = () => Date.now(),
+} = {}) {
+  const deadline = now() + timeoutMs;
+  let lastError;
+  while (true) {
+    try {
+      assertAuthenticatedSnapshot(snapshot());
+      return;
+    } catch (error) {
+      if (/authentication has expired/i.test(error.message)) throw error;
+      lastError = error;
+    }
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) throw lastError;
+    await delayFn(Math.min(pollMs, remainingMs));
   }
 }
 
@@ -505,18 +443,37 @@ export async function waitForEdgeToClose({
 }
 
 export async function presentInteractiveSignInShell(page, {
-  timeoutMs = 30_000,
+  timeoutMs = 120_000,
+  pollMs = 5_000,
+  write = (message) => process.stdout.write(message),
 } = {}) {
   await page.bringToFront();
   const signInButton = page.getByRole('button', {
     name: 'Sign in with Microsoft Entra ID',
     exact: true,
   });
-  await signInButton.waitFor({ state: 'visible', timeout: timeoutMs });
-  if (!await signInButton.isVisible()) {
-    throw new Error('The Agentweaver Sign in with Microsoft Entra ID button was not visible.');
+
+  const deadline = Date.now() + timeoutMs;
+  write(`Waiting up to ${Math.ceil(timeoutMs / 1_000)} seconds for Agentweaver's visible Sign in with Microsoft Entra ID button.\n`);
+  while (Date.now() < deadline) {
+    try {
+      await signInButton.waitFor({
+        state: 'visible',
+        timeout: Math.min(pollMs, deadline - Date.now()),
+      });
+    } catch {
+      if (Date.now() >= deadline) break;
+      write('Agentweaver sign-in button is not visible yet; continuing to wait for the app shell.\n');
+      continue;
+    }
+
+    if (await signInButton.isVisible()) {
+      await signInButton.click();
+      return;
+    }
   }
-  await signInButton.click();
+
+  throw new Error('The Agentweaver Sign in with Microsoft Entra ID button did not become visible before the bounded wait elapsed.');
 }
 
 export async function waitForInteractiveSignInCompletion(page, {
@@ -555,81 +512,28 @@ export async function waitForInteractiveSignInCompletion(page, {
   throw new Error('Agentweaver sign-in did not complete before the interactive sign-in window timed out.');
 }
 
-function isRetryableProfileCopyError(error) {
-  return ['EACCES', 'EBUSY', 'EPERM'].includes(error?.code);
-}
-
-function profileCopyError(error, edgeProfile, attempt) {
-  const failedPath = String(error?.path ?? error?.dest ?? '');
-  const sourceRoot = path.resolve(edgeProfile.profilePath);
-  const localState = path.resolve(edgeProfile.localStatePath);
-  const failedPathResolved = failedPath ? path.resolve(failedPath) : '';
-  const pathClass = failedPathResolved === localState
-    ? 'Microsoft Edge Local State source'
-    : isPathWithin(failedPathResolved, sourceRoot, { allowEqual: true })
-      ? 'Microsoft Edge Default-profile source'
-      : 'disposable recording-profile destination';
-  const operation = error?.syscall ?? 'copy';
-  return new Error(
-    `Could not refresh the disposable Microsoft Edge Default profile: ${pathClass} `
-    + `was unavailable during ${operation} (attempt ${attempt}/${PROFILE_COPY_MAX_ATTEMPTS}; `
-    + `${error?.code ?? 'copy failed'}). The protected recording authentication was not changed. `
-    + 'Close Edge and any profile-inspecting tool, then run signin again.',
-  );
-}
-
-function disposableProfileRoot(paths, attempt) {
-  return `${paths.automationUserDataDir}.refresh-${process.pid}-${Date.now()}-${attempt}`;
-}
-
-async function removeDisposableProfile(root, remove = fs.rm) {
-  await remove(root, {
-    recursive: true,
-    force: true,
-    maxRetries: PROFILE_COPY_MAX_ATTEMPTS,
-    retryDelay: PROFILE_COPY_RETRY_DELAY_MS,
-  });
-}
-
-export async function refreshDisposableEdgeProfile(
-  paths,
-  edgeProfile,
-  repositoryRoot,
-  {
-    copyFile = fs.copyFile,
-    copy = fs.cp,
-    createDirectory = fs.mkdir,
-    remove = removeDisposableProfile,
-    wait = delay,
-  } = {},
-) {
-  let lastError;
-  for (let attempt = 1; attempt <= PROFILE_COPY_MAX_ATTEMPTS; attempt += 1) {
-    const refreshRoot = disposableProfileRoot(paths, attempt);
-    const refreshDefault = path.join(refreshRoot, EDGE_DEFAULT_PROFILE_DIRECTORY);
-    try {
-      await assertProtectedAuthDestination(refreshRoot, paths.root, repositoryRoot);
-      await assertProtectedAuthDestination(refreshDefault, paths.root, repositoryRoot);
-      await assertProtectedAuthDestination(path.join(refreshRoot, 'Local State'), paths.root, repositoryRoot);
-      await createDirectory(refreshDefault, { recursive: true, mode: 0o700 });
-      await assertProtectedAuthDestination(refreshDefault, paths.root, repositoryRoot);
-      await copyFile(edgeProfile.localStatePath, path.join(refreshRoot, 'Local State'));
-      await copy(edgeProfile.profilePath, refreshDefault, {
-        recursive: true,
-        force: true,
-        filter: (sourcePath) => shouldCopyEdgeProfileEntry(sourcePath, edgeProfile.profilePath),
-      });
-      return refreshRoot;
-    } catch (error) {
-      lastError = error;
-      await remove(refreshRoot).catch(() => {});
-      if (!isRetryableProfileCopyError(error) || attempt === PROFILE_COPY_MAX_ATTEMPTS) {
-        throw profileCopyError(error, edgeProfile, attempt);
-      }
-      await wait(PROFILE_COPY_RETRY_DELAY_MS * attempt);
-    }
+export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositoryRoot) {
+  const refreshRoot = `${paths.automationUserDataDir}.refresh-${process.pid}-${Date.now()}`;
+  const refreshDefault = path.join(refreshRoot, EDGE_DEFAULT_PROFILE_DIRECTORY);
+  try {
+    await assertProtectedAuthDestination(refreshRoot, paths.root, repositoryRoot);
+    await assertProtectedAuthDestination(refreshDefault, paths.root, repositoryRoot);
+    await assertProtectedAuthDestination(path.join(refreshRoot, 'Local State'), paths.root, repositoryRoot);
+    await assertProtectedAuthDestination(paths.automationUserDataDir, paths.root, repositoryRoot);
+    await fs.mkdir(refreshDefault, { recursive: true, mode: 0o700 });
+    await assertProtectedAuthDestination(refreshDefault, paths.root, repositoryRoot);
+    await fs.copyFile(edgeProfile.localStatePath, path.join(refreshRoot, 'Local State'));
+    await fs.cp(edgeProfile.profilePath, refreshDefault, {
+      recursive: true,
+      force: true,
+      filter: (sourcePath) => shouldCopyEdgeProfileEntry(sourcePath, edgeProfile.profilePath),
+    });
+    await fs.rm(paths.automationUserDataDir, { recursive: true, force: true });
+    await fs.rename(refreshRoot, paths.automationUserDataDir);
+  } catch (error) {
+    await fs.rm(refreshRoot, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`Could not refresh the disposable Microsoft Edge Default profile from the exact Default source. Close Edge and run signin again. (${error.code ?? 'copy failed'})`);
   }
-  throw profileCopyError(lastError, edgeProfile, PROFILE_COPY_MAX_ATTEMPTS);
 }
 
 export async function signInRecordingSession(options) {
@@ -656,7 +560,7 @@ export async function signInRecordingSession(options) {
     if (!hasSession) {
       await presentInteractiveSignInShell(page);
       process.stdout.write(
-        'Agentweaver sign-in is ready in Microsoft Edge. The recorder clicked Agentweaverâ€™s Sign in with Microsoft Entra ID button and will not interact with Microsoft Entra.\n',
+        'Agentweaver sign-in is ready in Microsoft Edge. The recorder clicked Agentweaver’s Sign in with Microsoft Entra ID button and will not interact with Microsoft Entra.\n',
       );
       await waitForInteractiveSignInCompletion(page, { baseUrl: options.baseUrl });
       hasSession = true;
@@ -711,55 +615,76 @@ export async function refreshRecordingAuthentication(options, {
   await signIn(options);
 }
 
-export async function openRecordingSession(options, {
-  resolveAuthentication = resolvePlanAuthentication,
-  getAuth = hasRecordingAuth,
-  getSessions = listPlaywrightSessions,
-  run = runPlaywrightCli,
-  writeSeed = writeSeedScript,
-  waitForAuthentication = waitForAuthenticatedSnapshot,
-  fileSystem = fs,
-  getRepositoryRoot = assertProtectedAuthRoot,
-  assertDestination = assertProtectedAuthDestination,
-  write = (message) => process.stdout.write(message),
+export async function restoreRecordingAuthentication(options, {
+  listSessions = listPlaywrightSessions,
+  closeSession = closeRecordingSession,
+  verifyAuthenticatedSnapshot = waitForAuthenticatedSnapshot,
 } = {}) {
-  options = await resolveAuthentication(options);
   const paths = recordingAuthPaths(options.authRoot);
-  const repositoryRoot = await getRepositoryRoot(paths.root);
-  if (!await getAuth(paths.root)) throw recordingAuthRequiredError();
-
-  const sessions = getSessions();
-  if (sessions.get(options.session)?.status === 'open') {
-    await verifyRecordingSession(
-      () => run(sessionArgs(options.session, 'snapshot'), { sensitive: true }),
-      waitForAuthentication,
-    );
-    write(`Recording session "${options.session}" is authenticated and ready.\n`);
-    return;
+  const repositoryRoot = await assertProtectedAuthRoot(paths.root);
+  if (!await hasRecordingAuth(paths.root)) {
+    throw new Error('Protected recording authentication is unavailable.');
   }
 
-  await fileSystem.mkdir(paths.root, { recursive: true, mode: 0o700 });
-  run(sessionArgs(options.session, 'open', '--persistent', '--browser=msedge'));
+  if (listSessions().get(options.session)?.status === 'open') {
+    closeSession(options.session);
+  }
+  runPlaywrightCli(sessionArgs(options.session, 'open', '--persistent', '--browser=msedge'));
+
   const seedScriptPath = path.join(paths.root, `.seed-${options.session}.cjs`);
   try {
-    await assertDestination(seedScriptPath, paths.root, repositoryRoot);
-    run(sessionArgs(options.session, 'state-load', paths.storageStatePath), { sensitive: true });
-    run(sessionArgs(options.session, 'goto', options.baseUrl), { sensitive: true });
-    await writeSeed(seedScriptPath, {
+    await assertProtectedAuthDestination(seedScriptPath, paths.root, repositoryRoot);
+    runPlaywrightCli(sessionArgs(options.session, 'state-load', paths.storageStatePath), { sensitive: true });
+    runPlaywrightCli(sessionArgs(options.session, 'goto', options.baseUrl), { sensitive: true });
+    await writeSeedScript(seedScriptPath, {
       sessionStoragePath: paths.sessionStoragePath,
       targetOrigin: options.baseUrl,
     });
-    await fileSystem.chmod(seedScriptPath, 0o600).catch(() => {});
-    run(sessionArgs(options.session, '--raw', 'run-code', `--filename=${seedScriptPath}`), { sensitive: true });
-    run(sessionArgs(options.session, 'reload'), { sensitive: true });
-    await verifyRecordingSession(
-      () => run(sessionArgs(options.session, 'snapshot'), { sensitive: true }),
-      waitForAuthentication,
-    );
-    write(`Recording session "${options.session}" is authenticated and ready.\n`);
+    await fs.chmod(seedScriptPath, 0o600).catch(() => {});
+    runPlaywrightCli(sessionArgs(options.session, '--raw', 'run-code', `--filename=${seedScriptPath}`), { sensitive: true });
+    runPlaywrightCli(sessionArgs(options.session, 'reload'), { sensitive: true });
+    await verifyAuthenticatedSnapshot(options.session);
+    process.stdout.write(`Recording session "${options.session}" is authenticated and ready.\n`);
   } finally {
-    await fileSystem.rm(seedScriptPath, { force: true }).catch(() => {});
+    await fs.rm(seedScriptPath, { force: true }).catch(() => {});
   }
+}
+
+export async function openRecordingSession(options, {
+  listSessions = listPlaywrightSessions,
+  verifyAuthenticatedSnapshot = waitForAuthenticatedSnapshot,
+  refreshAuthentication = refreshRecordingAuthentication,
+  hasAuthentication = hasRecordingAuth,
+  restoreAuthentication = restoreRecordingAuthentication,
+} = {}) {
+  const paths = recordingAuthPaths(options.authRoot);
+  await assertProtectedAuthRoot(paths.root);
+  const existingSessions = listSessions();
+  if (existingSessions.get(options.session)?.status === 'open') {
+    try {
+      await verifyAuthenticatedSnapshot(options.session);
+      process.stdout.write(`Recording session "${options.session}" is already authenticated and ready.\n`);
+      return;
+    } catch {
+      // The owned session is not usable, so use the existing close-first recovery flow.
+    }
+  }
+
+  if (await hasAuthentication(paths.root)) {
+    try {
+      await restoreAuthentication(options);
+      return;
+    } catch {
+      // Expired or otherwise unverifiable protected auth must be refreshed safely.
+    }
+  }
+
+  process.stdout.write(
+    'Protected recording authentication is unavailable or expired. Starting the safe interactive sign-in path; Microsoft Entra interaction, if shown, requires a human.\n',
+  );
+  await refreshAuthentication(options);
+  if (!await hasAuthentication(paths.root)) throw new Error('The refreshed Microsoft Edge Default sign-in could not be verified.');
+  await restoreAuthentication(options);
 }
 
 export function selectCaptureBeats(beats, options) {
@@ -853,21 +778,16 @@ export async function prepareCaptureScripts(options, {
   const paths = recordingAuthPaths(options.authRoot);
   const repositoryRoot = await assertProtectedAuthRoot(paths.root);
   const planPath = path.resolve(options.plan);
-  const loadedCaptureConfig = await loadCaptureConfig(planPath);
-  const targetBeatIds = options.beat ? [options.beat] : loadedCaptureConfig.beats.map((beat) => beat.id);
-  const captureConfig = resolvePrerequisites
-    ? resolveCapturePreflight(loadedCaptureConfig, targetBeatIds)
-    : loadedCaptureConfig;
+  const captureConfig = await loadCaptureConfig(planPath);
   const configuredBeatIds = new Set(captureConfig.beats.map((beat) => beat.id));
   const beats = options.beatPlan
-    ? joinCaptureConfig(await loadBeatPlan(path.resolve(options.beatPlan)), captureConfig)
-      .filter((beat) => configuredBeatIds.has(beat.id))
+    ? (await loadJoinedCapturePlan({
+      beatPlanPath: path.resolve(options.beatPlan),
+      capturePlanPath: planPath,
+    })).filter((beat) => configuredBeatIds.has(beat.id))
     : captureConfig.beats;
-  const selected = selectCaptureBeats(beats, options);
-  const workflowRequirements = captureConfig.preflight?.workflowRequirements;
-  if (workflowRequirements?.beats?.some((beatId) => selected.some((beat) => beat.id === beatId))) {
-    await verifyFixtureWorkflowRequirements({ fixture: captureConfig.fixture, workflowIds: workflowRequirements.workflowIds, baseUrl: options.baseUrl, sessionStoragePath: paths.sessionStoragePath });
-  }
+  const selected = options.beat ? beats.filter((beat) => beat.id === options.beat) : beats;
+  if (options.beat && selected.length === 0) throw new Error(`Capture plan does not contain beat ${options.beat}.`);
 
   const outputDirectory = path.resolve(
     options.outDir ?? path.join(paths.generatedScriptsRoot, planName(planPath)),
@@ -894,44 +814,50 @@ export async function prepareCaptureScripts(options, {
   return { outputDirectory, scripts };
 }
 
-export async function captureRecordingPlan(options) {
-  const queue = await prepareCaptureScripts(options, {
+export async function captureRecordingPlan(options, {
+  openSession = openRecordingSession,
+  openUnauthenticatedSession = openUnauthenticatedRecordingSession,
+  prepareScripts = prepareCaptureScripts,
+  runScript = runPlaywrightCli,
+  makeDirectory = fs.mkdir,
+  write = (message) => process.stdout.write(message),
+} = {}) {
+  await (options.unauthenticated ? openUnauthenticatedSession : openSession)(options);
+  // Discover the ordered beat list without resolving its runtime prerequisites.
+  // In particular, Blueprint 4.1–4.5 create the Bug Fix PR that 4.6 verifies,
+  // so an --all preparation must not demand that identity before those beats run.
+  const queue = await prepareScripts(options, {
     resolvePrerequisites: false,
     writeScripts: false,
   });
-  if (options.unauthenticated) {
-    openUnauthenticatedRecordingSession(options);
-  } else {
-    await openRecordingSession(options);
+  let lastPrepared;
+  for (const queued of queue.scripts) {
+    const prepared = await prepareScripts({ ...options, beat: queued.beatId, all: false });
+    const item = prepared.scripts[0];
+    if (!item) throw new Error(`Capture preparation did not produce beat ${queued.beatId}.`);
+    if (item.videoPath) await makeDirectory(path.dirname(path.resolve(item.videoPath)), { recursive: true });
+    write(`Capturing beat ${item.beatId}.\n`);
+    runScript(
+      sessionArgs(options.session, '--raw', 'run-code', `--filename=${item.scriptPath}`),
+      { output: 'inherit' },
+    );
+    lastPrepared = { outputDirectory: prepared.outputDirectory, scripts: [...(lastPrepared?.scripts ?? []), item] };
   }
-  try {
-    const prepared = [];
-    for (const queued of queue.scripts) {
-      const current = await prepareCaptureScripts({ ...options, beat: queued.beatId, all: false });
-      const item = current.scripts[0];
-      if (!item) throw new Error(`Capture preparation did not produce beat ${queued.beatId}.`);
-      if (item.videoPath) await fs.mkdir(path.dirname(path.resolve(item.videoPath)), { recursive: true });
-      process.stdout.write(`Capturing beat ${item.beatId}.\n`);
-      runPlaywrightCli(
-        sessionArgs(options.session, '--raw', 'run-code', `--filename=${item.scriptPath}`),
-        { output: 'inherit' },
-      );
-      prepared.push(item);
-    }
-    return { outputDirectory: queue.outputDirectory, scripts: prepared };
-  } finally {
-    if (options.unauthenticated) closeRecordingSession(options.session);
-  }
+  return lastPrepared ?? { outputDirectory: queue.outputDirectory, scripts: [] };
 }
 
 export async function recordingStatus(options) {
   const paths = recordingAuthPaths(options.authRoot);
+  const edgeProfile = resolveLiteralEdgeDefaultProfile();
   const status = {
+    edgeDefaultProfile: false,
     authIgnored: false,
     authReady: false,
     sessionOpen: false,
     sessionAuthenticated: false,
   };
+  status.edgeDefaultProfile = await validateLiteralEdgeDefaultProfile(edgeProfile)
+    .then(() => true, () => false);
   status.authIgnored = await assertProtectedAuthRoot(paths.root).then(() => true, () => false);
   status.authReady = status.authIgnored && await hasRecordingAuth(paths.root);
   const sessions = listPlaywrightSessions();

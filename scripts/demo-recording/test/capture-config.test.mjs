@@ -230,3 +230,27 @@ test('final demo plans isolate their takes and use polished plan-scoped fixtures
   assert.equal(aks.fixture.projectName, 'Agentweaver Demo S2 — sabbour/AKS');
   assert.ok(aks.beats.some((beat) => JSON.stringify(beat).includes('sabbour/AKS')));
 });
+
+test('capture config requires actionable, typed capture prerequisites', () => {
+  assert.doesNotThrow(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{ id: '4.1', prerequisites: [{ environment: 'AGENTWEAVER_DEMO_GITHUB_ISSUE_URL', kind: 'github-issue-url', matchesEnvironment: 'AGENTWEAVER_DEMO_GITHUB_ISSUE_NUMBER', message: 'Set this to the prepared demo issue.' }] }],
+  }));
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{ id: '4.1', prerequisites: [{ environment: 'issue', kind: 'github-issue-url', message: 'Set it.' }] }],
+  }), /uppercase environment variable/);
+});
+
+test('Blueprint triage beats declare a serial, fixture-safe route through preview, review, PR, and MCP settings', async () => {
+  const plan = JSON.parse(await fs.readFile(new URL('../plans/blueprint-demo.capture.json', import.meta.url), 'utf8'));
+  const byId = new Map(plan.beats.map((beat) => [beat.id, beat]));
+  for (const [id, predecessor] of new Map([['4.1', '3.2'], ['4.2', '4.1'], ['4.3', '4.2'], ['4.4', '4.3'], ['4.5', '4.4'], ['4.6', '4.5'], ['4.7', '4.6']])) {
+    assert.equal(byId.get(id)?.requiresPriorBeat, predecessor);
+  }
+  assert.equal(byId.get('4.1').prerequisites.find((item) => item.kind === 'github-issue-url')?.matchesEnvironment, 'AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER');
+  assert.equal(byId.get('4.5').steps[1].selector, "page.getByTestId('session-approval-gate')");
+  assert.equal(byId.get('4.6').steps[1].selector, "page.getByRole('button', { name: 'Approve & merge', exact: true })");
+  assert.equal(byId.get('4.7').steps.at(-2).url, '{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}');
+  assert.equal(byId.get('5.1').steps[1].selector, "page.getByTestId('mcp-server-url')");
+});

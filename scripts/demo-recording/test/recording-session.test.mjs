@@ -14,6 +14,7 @@ import {
   parseRecordingCommandOptions,
   refreshRecordingAuthentication,
   recordingAuthPaths,
+  resolveCaptureBeatPrerequisites,
   resolveLiteralEdgeDefaultProfile,
   resolveSafeAuthDestination,
   selectCaptureBeats,
@@ -91,6 +92,27 @@ test('authenticated all capture skips handoff beats and modes cannot mix', () =>
     () => selectCaptureBeats(beats, { beat: '1.2' }),
     /Beat 1.2 requires prior beat 1.1.*--all/,
   );
+});
+
+test('capture prerequisites resolve only current GitHub issue and staging routes', () => {
+  const beat = {
+    prerequisites: [
+      { environment: 'ISSUE_NUMBER', kind: 'github-issue-number', message: 'Set issue number.' },
+      { environment: 'ISSUE_URL', kind: 'github-issue-url', matchesEnvironment: 'ISSUE_NUMBER', message: 'Set matching issue URL.' },
+      { environment: 'ASSISTANT_URL', kind: 'app-url', message: 'Set staging assistant route.' },
+    ],
+    steps: [{ url: '{{ISSUE_URL}}' }],
+  };
+  const environment = {
+    ISSUE_NUMBER: '42',
+    ISSUE_URL: 'https://github.com/example/demo/issues/42',
+    ASSISTANT_URL: 'https://staging.example/assistant',
+  };
+  assert.equal(resolveCaptureBeatPrerequisites(beat, { environment, baseUrl: 'https://staging.example' }).steps[0].url, environment.ISSUE_URL);
+  assert.throws(() => resolveCaptureBeatPrerequisites(beat, {
+    environment: { ...environment, ISSUE_NUMBER: '43' },
+    baseUrl: 'https://staging.example',
+  }), /matching issue URL/);
 });
 
 test('recording commands reject unsafe sessions, insecure URLs, and unknown options', () => {
