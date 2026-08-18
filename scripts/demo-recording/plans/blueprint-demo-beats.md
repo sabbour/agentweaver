@@ -2,8 +2,9 @@
 
 This is the **single committed source of truth** for the Agentweaver "Trailhead" demo
 narrative, parsed by `lib/beats.mjs`'s `loadBeatPlan`. It replaces the informal,
-never-committed script that only ever existed as rendered narration `.txt` output under
-`recordings/blueprint-demo-final/`.
+never-committed script that only ever existed as rendered narration `.txt` output in a
+legacy recording location. Final takes use the isolated output directory declared in the
+capture plan and must pass final-take preflight before capture.
 
 Each `## Beat X.Y — Title` heading starts a beat. `Narration: "..."` is the voiceover
 script for that beat. Optional `Fresh navigation: true` and `Start URL: ...` metadata
