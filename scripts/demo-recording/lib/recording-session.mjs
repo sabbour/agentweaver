@@ -419,6 +419,57 @@ export async function waitForEdgeToClose({
   }
 }
 
+export async function presentInteractiveSignInShell(page, {
+  timeoutMs = 30_000,
+} = {}) {
+  await page.bringToFront();
+  const signInButton = page.getByRole('button', {
+    name: 'Sign in with Microsoft Entra ID',
+    exact: true,
+  });
+  await signInButton.waitFor({ state: 'visible', timeout: timeoutMs });
+  if (!await signInButton.isVisible()) {
+    throw new Error('The Agentweaver Sign in with Microsoft Entra ID button was not visible.');
+  }
+  await signInButton.click();
+}
+
+export async function waitForInteractiveSignInCompletion(page, {
+  baseUrl,
+  timeoutMs = 900_000,
+  pollMs = 250,
+  delayFn = delay,
+  write = (message) => process.stdout.write(message),
+} = {}) {
+  const expectedOrigin = new URL(baseUrl).origin;
+  const deadline = Date.now() + timeoutMs;
+  let reachedIdentityProvider = false;
+
+  while (Date.now() < deadline) {
+    const currentUrl = page.url();
+    if (currentUrl !== 'about:blank' && currentUrl !== '') {
+      const currentOrigin = new URL(currentUrl).origin;
+      if (currentOrigin !== expectedOrigin) {
+        if (!reachedIdentityProvider) {
+          reachedIdentityProvider = true;
+          write('Microsoft Entra sign-in is now a human-only step. Complete it privately in the displayed Edge window.\n');
+        }
+        await delayFn(pollMs);
+        continue;
+      }
+    }
+
+    const hasSession = await page.evaluate(
+      () => window.sessionStorage.getItem('agentweaver.sessionToken') !== null,
+    ).catch(() => false);
+    if (hasSession) return;
+
+    await delayFn(pollMs);
+  }
+
+  throw new Error('Agentweaver sign-in did not complete before the interactive sign-in window timed out.');
+}
+
 export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositoryRoot) {
   const refreshRoot = `${paths.automationUserDataDir}.refresh-${process.pid}-${Date.now()}`;
   const refreshDefault = path.join(refreshRoot, EDGE_DEFAULT_PROFILE_DIRECTORY);
@@ -465,17 +516,11 @@ export async function signInRecordingSession(options) {
 
     let hasSession = await page.evaluate(() => window.sessionStorage.getItem('agentweaver.sessionToken') !== null).catch(() => false);
     if (!hasSession) {
-      const signInButton = page.getByRole('button', { name: 'Sign in with Microsoft Entra ID', exact: true });
-      await signInButton.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {});
-      if (await signInButton.isVisible().catch(() => false)) await signInButton.click();
+      await presentInteractiveSignInShell(page);
       process.stdout.write(
-        'Complete sign-in in Microsoft Edge. It uses a freshly refreshed disposable copy of the literal Default work profile.\n',
+        'Agentweaver sign-in is ready in Microsoft Edge. The recorder clicked Agentweaver’s Sign in with Microsoft Entra ID button and will not interact with Microsoft Entra.\n',
       );
-      await page.waitForFunction(
-        () => window.sessionStorage.getItem('agentweaver.sessionToken') !== null,
-        undefined,
-        { timeout: 900_000 },
-      );
+      await waitForInteractiveSignInCompletion(page, { baseUrl: options.baseUrl });
       hasSession = true;
     }
 

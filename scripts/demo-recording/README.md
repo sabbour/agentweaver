@@ -29,9 +29,34 @@ profile are refused. Close all Edge windows when prompted. The command then:
 
 1. Validates that `Local State` identifies that exact `Default` profile, then copies
    it into a freshly created disposable, Git-ignored directory.
-2. Opens that copy in Microsoft Edge for the human Entra sign-in.
+2. Opens and foregrounds the Agentweaver shell in that copy, waits until its **Sign in with
+   Microsoft Entra ID** button is visible, then clicks that Agentweaver-owned button. Cached
+   SSO may return directly to Agentweaver. When the redirect reaches Microsoft Entra, the
+   recorder stops automation there; account selection, credentials, MFA, and consent remain
+   human-only.
 3. Saves the Playwright storage state and Agentweaver `sessionStorage` sidecar.
 4. Closes and deletes the disposable Edge profile.
+
+## Safe sign-in recovery
+
+After a recorder-owned session closes or authentication expires, keep any planned media
+and fixtures unchanged, then close only the named recording session:
+
+```powershell
+npm run demo:record -- close
+```
+
+Close any remaining Microsoft Edge windows through their normal UI. Then run:
+
+```powershell
+npm run demo:record -- signin
+npm run demo:record -- open
+npm run demo:record -- status
+```
+
+Proceed only after `status` reports that the recording session is authenticated. Do not
+use another tool's auth artifacts, terminate Edge by name, or clean fixtures as part of
+this recovery.
 
 The live Default directory is never automated. Microsoft Edge requires Edge instances
 to be closed for DevTools attachment, and current Chromium releases reject remote
