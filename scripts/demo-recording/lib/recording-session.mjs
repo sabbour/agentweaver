@@ -3,8 +3,10 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { loadCaptureConfig, loadJoinedCapturePlan } from './capture-config.mjs';
+import { joinCaptureConfig, loadCaptureConfig } from './capture-config.mjs';
+import { loadBeatPlan } from './beats.mjs';
 import { renderCaptureScript } from './capture-plan.mjs';
+import { resolveCapturePreflight, verifyFixtureWorkflowRequirements } from './preflight.mjs';
 import { writeSeedScript } from './auth.mjs';
 
 export const DEFAULT_RECORDING_SESSION = 'agentweaver-demo';
@@ -592,15 +594,19 @@ export async function prepareCaptureScripts(options) {
   const paths = recordingAuthPaths(options.authRoot);
   const repositoryRoot = await assertProtectedAuthRoot(paths.root);
   const planPath = path.resolve(options.plan);
-  const captureConfig = await loadCaptureConfig(planPath);
+  const loadedCaptureConfig = await loadCaptureConfig(planPath);
+  const targetBeatIds = options.beat ? [options.beat] : loadedCaptureConfig.beats.map((beat) => beat.id);
+  const captureConfig = resolveCapturePreflight(loadedCaptureConfig, targetBeatIds);
   const configuredBeatIds = new Set(captureConfig.beats.map((beat) => beat.id));
   const beats = options.beatPlan
-    ? (await loadJoinedCapturePlan({
-      beatPlanPath: path.resolve(options.beatPlan),
-      capturePlanPath: planPath,
-    })).filter((beat) => configuredBeatIds.has(beat.id))
+    ? joinCaptureConfig(await loadBeatPlan(path.resolve(options.beatPlan)), captureConfig)
+      .filter((beat) => configuredBeatIds.has(beat.id))
     : captureConfig.beats;
   const selected = selectCaptureBeats(beats, options);
+  const workflowRequirements = captureConfig.preflight?.workflowRequirements;
+  if (workflowRequirements?.beats?.some((beatId) => selected.some((beat) => beat.id === beatId))) {
+    await verifyFixtureWorkflowRequirements({ fixture: captureConfig.fixture, workflowIds: workflowRequirements.workflowIds, baseUrl: options.baseUrl, sessionStoragePath: paths.sessionStoragePath });
+  }
 
   const outputDirectory = path.resolve(
     options.outDir ?? path.join(paths.generatedScriptsRoot, planName(planPath)),

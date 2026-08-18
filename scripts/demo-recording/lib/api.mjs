@@ -98,6 +98,9 @@ export function createAgentweaverApi({ baseUrl, token, fetchImpl = fetch }) {
         `Project ${projectId} session`,
       );
     },
+    listProjectWorkflows(projectId) {
+      return request(`projects/${encodeURIComponent(projectId)}/workflows`);
+    },
     getRunEvents(runId) {
       return request(`runs/${encodeURIComponent(runId)}/events`);
     },
