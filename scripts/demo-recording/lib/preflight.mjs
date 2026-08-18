@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { createApiFromSession } from './api.mjs';
 import { DEFAULT_SESSION_STORAGE_PATH } from './auth.mjs';
 

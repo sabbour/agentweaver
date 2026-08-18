@@ -17,7 +17,7 @@
       "freshNavigation": true,
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
-      "videoPath": "recordings/azure-aks/beat-0-0-entra-sign-in-handoff.webm",
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-0-0-entra-sign-in-handoff.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 3500, "preferred": 5000, "maximum": 7000 },
       "expectedCues": ["s2.0.0.entra-handoff-dialog"],

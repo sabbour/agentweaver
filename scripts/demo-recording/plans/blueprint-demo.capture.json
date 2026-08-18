@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "requireAllBeats": true,
   "fixture": {
-    "projectName": "Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio",
+    "projectName": "Agentweaver Demo — Trailhead Travel Studio",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
     ]
   },
   "beats": [
@@ -14,7 +14,7 @@
       "freshNavigation": true,
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
-      "videoPath": "recordings/blueprint-demo/0.0-entra-sign-in-handoff.webm",
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/0.0-entra-sign-in-handoff.webm",
       "viewport": {
         "width": 1920,
         "height": 1080

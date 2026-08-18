@@ -8,6 +8,7 @@ import {
 } from '../lib/capture-config.mjs';
 import { renderCaptureScript } from '../lib/capture-plan.mjs';
 import { browserDomCueBootstrapSource } from '../lib/dom-cues.mjs';
+import { validateFinalTake } from '../lib/preflight.mjs';
 
 const beats = [
   { id: '1.1', title: 'Hook', startUrl: '/projects', freshNavigation: false },
