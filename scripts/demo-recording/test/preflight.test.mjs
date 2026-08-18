@@ -265,10 +265,10 @@ test('Blueprint Beat 0 preflight does not require later GitHub-triage artifacts'
   assert.doesNotThrow(() => resolveCapturePreflight(plan, ['0.0'], {}));
   assert.throws(
     () => resolveCapturePreflight(plan, plan.beats.map((beat) => beat.id), {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
   assert.throws(
     () => resolveCapturePreflight(plan, ['3.2'], {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
 });

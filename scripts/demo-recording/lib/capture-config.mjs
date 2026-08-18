@@ -13,6 +13,7 @@ const predicateOperators = new Set([
 ]);
 const rectModes = new Set(['matched-element', 'element', 'first-matching', 'union', 'none']);
 const intervalCategories = new Set(['action', 'wait', 'dead-time']);
+const prerequisiteKinds = new Set(['app-url', 'github-issue-number', 'github-issue-url', 'github-pr-url']);
 
 function fail(message) {
   throw new Error(`Invalid demo capture plan: ${message}`);
@@ -44,6 +45,26 @@ function validateCue(cue, location) {
     if (!rectModes.has(cue.rect?.mode)) fail(`${location}.rect.mode is unsupported`);
     if (['element', 'first-matching', 'union'].includes(cue.rect.mode) && !cue.rect.selector) {
       fail(`${location}.rect.selector is required for ${cue.rect.mode}`);
+    }
+  }
+}
+
+function validatePrerequisites(prerequisites, location) {
+  if (prerequisites === undefined) return;
+  if (!Array.isArray(prerequisites)) fail(`${location}.prerequisites must be an array`);
+  for (const [index, prerequisite] of prerequisites.entries()) {
+    const item = `${location}.prerequisites[${index}]`;
+    if (!prerequisite || typeof prerequisite !== 'object' || Array.isArray(prerequisite)) fail(`${item} must be an object`);
+    if (!/^[A-Z][A-Z0-9_]*$/.test(prerequisite.environment ?? '')) {
+      fail(`${item}.environment must be an uppercase environment variable name`);
+    }
+    if (!prerequisiteKinds.has(prerequisite.kind)) fail(`${item}.kind is unsupported`);
+    if (prerequisite.matchesEnvironment !== undefined
+      && !/^[A-Z][A-Z0-9_]*$/.test(prerequisite.matchesEnvironment)) {
+      fail(`${item}.matchesEnvironment must be an uppercase environment variable name`);
+    }
+    if (typeof prerequisite.message !== 'string' || !prerequisite.message.trim()) {
+      fail(`${item}.message must explain how to satisfy the prerequisite`);
     }
   }
 }
@@ -83,6 +104,7 @@ export function validateCaptureConfig(config) {
       }
       priorBeatIds.set(beat.id, beat.requiresPriorBeat);
     }
+    validatePrerequisites(beat.prerequisites, location);
     if (beat.cueWatchers !== undefined && !Array.isArray(beat.cueWatchers)) fail(`${location}.cueWatchers must be an array`);
     if (beat.steps !== undefined && !Array.isArray(beat.steps)) fail(`${location}.steps must be an array`);
     if (beat.expectedCues !== undefined && !Array.isArray(beat.expectedCues)) fail(`${location}.expectedCues must be an array`);
