@@ -139,6 +139,27 @@ test('full capture defers Bug Fix PR preparation until the preceding beats creat
   ]);
 });
 
+test('unauthenticated capture opens its isolated session without refreshing sign-in', async () => {
+  const opened = [];
+
+  await captureRecordingPlan(
+    { session: 'agentweaver-demo-unauthenticated', beat: '0.0', unauthenticated: true },
+    {
+      openSession: async () => opened.push('authenticated'),
+      openUnauthenticatedSession: async () => opened.push('unauthenticated'),
+      prepareScripts: async (options, preparation = {}) => (
+        preparation.resolvePrerequisites === false
+          ? { outputDirectory: 'generated', scripts: [{ beatId: '0.0', scriptPath: 'generated/beat-0-0.cjs' }] }
+          : { outputDirectory: 'generated', scripts: [{ beatId: options.beat, scriptPath: 'generated/beat-0-0.cjs' }] }
+      ),
+      runScript: () => {},
+      write: () => {},
+    },
+  );
+
+  assert.deepEqual(opened, ['unauthenticated']);
+});
+
 test('capture prerequisites resolve only current GitHub issue and staging routes', () => {
   const beat = {
     prerequisites: [
