@@ -286,7 +286,7 @@ test('Bug Fix PR resolution rejects missing and mismatched external pull request
   };
   assert.throws(() => resolveBugFixPullRequestEvidence({
     ...evidence,
-    topology: { nodes: [{ id: 'push-pr', role: 'action', kind: 'live', node_type: 'gate' }] },
+    topology: { nodes: [{ type: 'open_pull_request' }] },
     expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42',
     events: [{ url: 'https://github.com/octo/widgets/pull/42' }],
   }), /does not contain the live push-pr action/);
