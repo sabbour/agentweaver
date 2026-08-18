@@ -22,7 +22,7 @@ test('Blueprint plan preserves its 21-beat clean-run readiness contract', async 
   assert.match(normalizedPlan, /mock preview nor a placeholder PR/);
 });
 
-test('Blueprint 2.1 capture budget admits the measured outcome-planning duration', async () => {
+test('Blueprint 2.1 capture budget allows bounded staging variance without changing its target', async () => {
   const capturePlan = JSON.parse(await fs.readFile(
     new URL('../plans/blueprint-demo.capture.json', import.meta.url),
     'utf8',
@@ -32,6 +32,6 @@ test('Blueprint 2.1 capture budget admits the measured outcome-planning duration
   assert.deepEqual(frameProduct.outputBudgetMs, {
     minimum: 12000,
     preferred: 20000,
-    maximum: 28550,
+    maximum: 32000,
   });
 });
