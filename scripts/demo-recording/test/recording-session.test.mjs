@@ -290,12 +290,17 @@ test('signin foregrounds, waits for, and clicks the Agentweaver Entra button', a
     },
   };
 
-  await presentInteractiveSignInShell(page);
+  await presentInteractiveSignInShell(page, {
+    timeoutMs: 120_000,
+    pollMs: 5_000,
+    write: (message) => events.push(['write', message]),
+  });
 
   assert.deepEqual(events, [
     ['bringToFront'],
     ['getByRole', 'button', { name: 'Sign in with Microsoft Entra ID', exact: true }],
-    ['waitFor', { state: 'visible', timeout: 30_000 }],
+    ['write', "Waiting up to 120 seconds for Agentweaver's visible Sign in with Microsoft Entra ID button.\n"],
+    ['waitFor', { state: 'visible', timeout: 5_000 }],
     ['isVisible'],
     ['click'],
   ]);

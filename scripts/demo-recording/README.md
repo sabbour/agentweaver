@@ -29,8 +29,9 @@ profile are refused. Close all Edge windows when prompted. The command then:
 
 1. Validates that `Local State` identifies that exact `Default` profile, then copies
    it into a freshly created disposable, Git-ignored directory.
-2. Opens and foregrounds the Agentweaver shell in that copy, waits until its **Sign in with
-   Microsoft Entra ID** button is visible, then clicks that Agentweaver-owned button. Cached
+2. Opens and foregrounds the Agentweaver shell in that copy, reports progress while waiting
+   up to two minutes for its **Sign in with Microsoft Entra ID** button to become visible,
+   then clicks that Agentweaver-owned button. Cached
    SSO may return directly to Agentweaver. When the redirect reaches Microsoft Entra, the
    recorder stops automation there; account selection, credentials, MFA, and consent remain
    human-only.
