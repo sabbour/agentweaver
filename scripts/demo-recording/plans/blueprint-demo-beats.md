@@ -84,33 +84,33 @@ On screen: Open **Agents**, inspect one agent card, and show its role, default m
 
 Narration: "This time I'll describe the product we're building."
 
-Fresh navigation: true
+Fresh navigation: false
 
-On screen: Starting from the existing project context, open the task/assistant entry point, choose the **Product** workflow or prompt path, enter the Trailhead brief, and submit it.
+On screen: Starting from the existing project context, open the task/assistant entry point, choose the **Product** workflow or prompt path, enter the Trailhead brief. Keep the product brief and UX notes in this coordinator run, but request the separately shippable landing-page deliverable as **Create Trailhead landing page**, then submit it.
 
 ## Beat 2.2 — Review and confirm the plan
 
 Narration: "Before any agent starts working, the coordinator writes up an OutcomeSpec — its understanding of the goal, the assumptions it's making, and what it plans to do. I'll ask for one change here, and it updates the spec. Once it looks right, I confirm it."
 
-On screen: Stay on the generated OutcomeSpec view from 2.1, provide one clarification, wait for the revised plan to appear, then confirm it. Do not jump away and come back.
+On screen: Stay on the generated OutcomeSpec view from 2.1, provide one clarification, wait for the revised plan to appear, then confirm it. Once the WorkPlan is visible, enable **Autopilot** and **Auto-approve safe tools** and leave both visibly on. Do not jump away and come back.
 
 ## Beat 2.3 — Watch the work plan run
 
 Narration: "With the spec confirmed, the coordinator breaks the work into subtasks and builds a WorkPlan. This is the topology view — a live graph of every agent involved and how they connect. Each agent runs its own subtask inside an isolated sandbox — its own worktree, cut off from everything else — so nothing collides. The coordinator manages the handoffs between them, so tasks run in the right order. Once the subtasks finish, we get the artifacts — spec, plan, UX notes, even marketing copy. Here they are."
 
-On screen: Stay on the same run. Wait for decomposition into subtasks, approve anything that appears, open the live topology graph once it renders, inspect a few nodes, return to the run view, and show the generated artifacts landing in real time.
+On screen: Stay on the same run. Wait for decomposition into subtasks, approve anything that appears, open the live topology graph once it renders, inspect a few nodes, return to the run view, and show the generated artifacts landing in real time. Complete this parent coordinator run before moving its promoted board item to Ready; otherwise its own collective review can overlap the independent landing-page run.
 
 ## Beat 2.4 — Review the board
 
-Narration: "Let's turn one of those artifacts into work. I'll add a task to the board for a landing page that matches what we just generated, then move it from Backlog to Ready."
+Narration: "Let's turn one of those artifacts into work. The coordinator has promoted the independent landing-page deliverable to the board; I'll move it from Backlog to Ready. Ready is the handoff: the coordinator picks it up as its own run."
 
-On screen: Navigate from the finished run into the **Board**, create the landing-page work item exactly once, then drag it from **Backlog** to **Ready**.
+On screen: Navigate from the finished run into the **Board**, wait for the promoted **Create Trailhead landing page** item to appear in **Backlog**, then drag that same item to **Ready**. Do not create a replacement task: this beat must show the task promoted by the confirmed plan.
 
 ## Beat 2.5 — Ship it
 
-Narration: "I'll break this task down further and watch it split into subtasks. Once one of them starts implementing, I'll follow along — and when it's done, the agent builds and runs the app right there in its sandbox and registers a live preview. I'll open that preview to see the page running for real, not just a mockup."
+Narration: "The Ready task has been picked up as its own coordinator run and split into subtasks. Once one starts implementing, I'll follow along — and when it's done, the agent builds and runs the app right there in its sandbox and registers a live preview. I'll open that preview to see the page running for real, not just a mockup."
 
-On screen: From the board item created in 2.4, choose the breakdown path, follow one implementation subtask, approve the preview gate when it appears, and open the live preview after it actually renders.
+On screen: Open the run for the uniquely titled board item promoted in 2.4, follow one implementation subtask, approve the preview gate when it appears, and open the live preview after it actually renders.
 
 ## Beat 2.6 — Review the diff and approve the merge
 
@@ -134,7 +134,7 @@ On screen: From the same project context, open **Decisions** and show a real, no
 
 Narration: "Not everything should run on a schedule — but some things should. I'll set up a weekly dependency sweep, since checking for outdated or vulnerable dependencies is naturally recurring work, regardless of what we're shipping."
 
-Fresh navigation: true
+Fresh navigation: false
 
 On screen: Open **Workflows**, choose the dependency-sweep workflow, add a weekly schedule, and save it. This beat starts from the project you already created; do not recreate or reclone anything.
 
@@ -148,7 +148,7 @@ On screen: Stay in **Workflows**, open the bug-triage workflow, change its trigg
 
 Narration: "There's more than one way to work with Agentweaver. I'll open a new issue, this time without a label, and just ask for it directly. I'll start a chat and tell the assistant to triage issue #x."
 
-Fresh navigation: true
+Fresh navigation: false
 
 On screen: Starting from the same project, create or open the next issue without the trigger label, open an assistant session, and ask it to triage that issue directly.
 

@@ -73,6 +73,20 @@ npm run demo:record -- capture `
 The capture command restores and verifies the persistent session before it runs the
 generated script with `playwright-cli --raw`.
 
+## Clean Blueprint fixture
+
+At an inactive recording boundary, remove only the plan's explicitly named demo fixture:
+
+```powershell
+node scripts\demo-recording\clean-staging.mjs `
+  --plan scripts\demo-recording\plans\blueprint-demo.capture.json `
+  --confirm-demo-cleanup
+```
+
+Cleanup refuses an open recording session, a plan targeting another origin, or fixture
+names that are not fully anchored `Agentweaver Demo` patterns. It lists every project
+page and verifies that no matching fixture remains; unrelated projects are never deleted.
+
 ## Other commands
 
 ```powershell
