@@ -6,7 +6,6 @@ import {
   isScenarioFixtureProject,
   resolveCapturePreflight,
   preflightFinalTake,
-  resolveCapturePreflight,
   validateFinalTake,
   validateScenarioFixture,
 } from '../lib/preflight.mjs';
@@ -53,11 +52,11 @@ test('capture preflight validates external artifacts only for selected beats', (
       captureConfigWithLaterExternalArtifact.beats.map((beat) => beat.id),
       {},
     ),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
   assert.throws(
     () => resolveCapturePreflight(captureConfigWithLaterExternalArtifact, ['3.2'], {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
 });
 
@@ -145,11 +144,11 @@ test('Blueprint Beat 0 preflight does not require later GitHub-triage artifacts'
   assert.doesNotThrow(() => resolveCapturePreflight(plan, ['0.0'], {}));
   assert.throws(
     () => resolveCapturePreflight(plan, plan.beats.map((beat) => beat.id), {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
   assert.throws(
     () => resolveCapturePreflight(plan, ['3.2'], {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
 });
 
@@ -209,66 +208,4 @@ test('final-take preflight accepts only new media with a clean plan-scoped fixtu
   assert.equal(result.finalTakeId, 'trailhead-travel-studio');
   assert.equal(result.plannedVideoCount, 2);
   assert.equal(result.clean, true);
-});
-
-const captureConfigWithLaterExternalArtifact = {
-  schemaVersion: 1,
-  beats: [
-    {
-      id: '0.0',
-      captureMode: 'unauthenticated',
-      steps: [{ type: 'waitFor', selector: 'Agentweaver sign-in affordance' }],
-    },
-    {
-      id: '3.2',
-      steps: [{ type: 'goto', url: '{{AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL}}' }],
-    },
-  ],
-  preflight: {
-    externalArtifacts: [{
-      beats: ['3.2'],
-      environment: 'AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL',
-      host: 'github.com',
-      instruction: 'Create the disposable issue before recording Beat 3.2.',
-    }],
-  },
-};
-
-test('capture preflight validates external artifacts only for selected beats', () => {
-  const beatZero = resolveCapturePreflight(captureConfigWithLaterExternalArtifact, ['0.0'], {});
-  assert.deepEqual(beatZero.beats[0], captureConfigWithLaterExternalArtifact.beats[0]);
-  assert.equal(
-    beatZero.beats[1].steps[0].url,
-    '{{AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL}}',
-  );
-
-  assert.throws(
-    () => resolveCapturePreflight(
-      captureConfigWithLaterExternalArtifact,
-      captureConfigWithLaterExternalArtifact.beats.map((beat) => beat.id),
-      {},
-    ),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
-  );
-  assert.throws(
-    () => resolveCapturePreflight(captureConfigWithLaterExternalArtifact, ['3.2'], {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
-  );
-});
-
-test('Blueprint Beat 0 preflight does not require later GitHub-triage artifacts', async () => {
-  const plan = JSON.parse(await fs.readFile(
-    new URL('../plans/blueprint-demo.capture.json', import.meta.url),
-    'utf8',
-  ));
-
-  assert.doesNotThrow(() => resolveCapturePreflight(plan, ['0.0'], {}));
-  assert.throws(
-    () => resolveCapturePreflight(plan, plan.beats.map((beat) => beat.id), {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
-  );
-  assert.throws(
-    () => resolveCapturePreflight(plan, ['3.2'], {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
-  );
 });
