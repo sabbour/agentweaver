@@ -8,6 +8,7 @@ import {
 } from '../lib/capture-config.mjs';
 import { renderCaptureScript } from '../lib/capture-plan.mjs';
 import { browserDomCueBootstrapSource } from '../lib/dom-cues.mjs';
+import { resolveCapturePreflight } from '../lib/preflight.mjs';
 
 const beats = [
   { id: '1.1', title: 'Hook', startUrl: '/projects', freshNavigation: false },
@@ -80,6 +81,76 @@ test('capture config validates approval watcher settings', () => {
     schemaVersion: 1,
     beats: [{ id: '1.1', approvalWatcherGraceMs: -1 }],
   }), /approvalWatcherGraceMs must be a non-negative integer/);
+});
+
+test('Bug Fix capture rejects a valid but stale pull request from the current run topology', async () => {
+  const config = {
+    schemaVersion: 1,
+    fixture: { projectName: 'Agentweaver Demo S1 - Trailhead' },
+    preflight: {
+      pullRequest: {
+        beats: ['4.6', '4.7'],
+        instruction: 'Use only the current Bug Fix run pull request.',
+      },
+    },
+    beats: [{ id: '4.7', steps: [{ type: 'goto', url: '{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}' }] }],
+  };
+  const api = {
+    async listAllProjects() {
+      return [{ project_id: 'project-1', name: 'Agentweaver Demo S1 - Trailhead' }];
+    },
+    async listAllProjectRuns() {
+      return [{ execution_id: 'current-run' }];
+    },
+    async getRun() {
+      return {
+        run_id: 'current-run',
+        status: 'awaiting_review',
+        workflow_selection_reason: "Selected 'Bug Fix' because this is a regression.",
+        worktree_branch: 'agentweaver-run-current',
+      };
+    },
+    async getRunEvents() {
+      return [{
+        type: 'workflow.step',
+        payload: {
+          status: 'completed',
+          message: 'Opened pull request #42: https://github.com/example/demo/pull/42',
+        },
+      }];
+    },
+  };
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      number: 42,
+      html_url: 'https://github.com/example/demo/pull/42',
+      state: 'open',
+      head: { ref: 'agentweaver-run-a-previous-run' },
+    }),
+  });
+
+  await assert.rejects(
+    () => resolveCapturePreflight(config, ['4.6'], {}, { api, fetchImpl }),
+    /stale, closed, or belongs to another run/,
+  );
+
+  const resolved = await resolveCapturePreflight(config, ['4.7'], {}, {
+    api,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        number: 42,
+        html_url: 'https://github.com/example/demo/pull/42',
+        state: 'open',
+        head: { ref: 'agentweaver-run-current' },
+      }),
+    }),
+  });
+  assert.equal(
+    resolved.beats[0].steps[0].url,
+    'https://github.com/example/demo/pull/42',
+  );
 });
 
 test('capture config rejects unknown, missing, and duplicate IDs and cue names', () => {
@@ -180,6 +251,8 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const review = byId('2.6');
   const traces = byId('2.7');
   const decisions = byId('2.8');
+  const approval = byId('4.6');
+  const closeLoop = byId('4.7');
 
   const promotionCheckbox = "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })";
   const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
@@ -204,5 +277,14 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   assert.equal(
     decisions.steps.find((step) => step.cue?.name === '2.8.accepted-decision').selector,
     "page.getByTestId('accepted-decision').first()",
+  );
+  assert.deepEqual(plan.preflight.pullRequest.beats, ['4.6', '4.7']);
+  assert.equal(
+    closeLoop.steps.find((step) => step.type === 'goto').url,
+    '{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}',
+  );
+  assert.ok(
+    approval.steps.some((step) => step.type === 'click' && step.selector.includes('Approve.*merge')),
+    'the current-run identity preflight must complete before Beat 4.6 can approve',
   );
 });

@@ -607,7 +607,17 @@ export async function prepareCaptureScripts(options) {
   const planPath = path.resolve(options.plan);
   const loadedCaptureConfig = await loadCaptureConfig(planPath);
   const targetBeatIds = options.beat ? [options.beat] : loadedCaptureConfig.beats.map((beat) => beat.id);
-  const captureConfig = resolveCapturePreflight(loadedCaptureConfig, targetBeatIds);
+  const pullRequestRequired = loadedCaptureConfig.preflight?.pullRequest?.beats
+    ?.some((beatId) => targetBeatIds.includes(beatId));
+  const api = (pullRequestRequired || loadedCaptureConfig.preflight?.workflowRequirements)
+    ? await createApiFromSession({ baseUrl: options.baseUrl, sessionStoragePath: paths.sessionStoragePath })
+    : undefined;
+  const captureConfig = await resolveCapturePreflight(
+    loadedCaptureConfig,
+    targetBeatIds,
+    process.env,
+    { api },
+  );
   const configuredBeatIds = new Set(captureConfig.beats.map((beat) => beat.id));
   const beats = options.beatPlan
     ? joinCaptureConfig(await loadBeatPlan(path.resolve(options.beatPlan)), captureConfig)
@@ -616,7 +626,10 @@ export async function prepareCaptureScripts(options) {
   const selected = selectCaptureBeats(beats, options);
   const workflowRequirements = captureConfig.preflight?.workflowRequirements;
   if (workflowRequirements?.beats?.some((beatId) => selected.some((beat) => beat.id === beatId))) {
-    await verifyFixtureWorkflowRequirements({ fixture: captureConfig.fixture, workflowIds: workflowRequirements.workflowIds, baseUrl: options.baseUrl, sessionStoragePath: paths.sessionStoragePath });
+    await verifyFixtureWorkflowRequirements(
+      { fixture: captureConfig.fixture, workflowIds: workflowRequirements.workflowIds, baseUrl: options.baseUrl, sessionStoragePath: paths.sessionStoragePath },
+      { api },
+    );
   }
 
   const outputDirectory = path.resolve(

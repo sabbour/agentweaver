@@ -82,12 +82,22 @@ export function createAgentweaverApi({ baseUrl, token, fetchImpl = fetch }) {
         body: JSON.stringify({ allowTaskPromotion }),
       });
     },
-    listProjectRuns(projectId, { pageSize = 50, includeChildren = false } = {}) {
+    listProjectRuns(projectId, { pageSize = 100, page = 1, includeChildren = false } = {}) {
       const query = new URLSearchParams({
+        page: String(page),
         page_size: String(pageSize),
         include_children: includeChildren ? 'true' : 'false',
       });
       return request(`projects/${encodeURIComponent(projectId)}/runs?${query.toString()}`);
+    },
+    listAllProjectRuns(projectId, { includeChildren = false } = {}) {
+      return listAllPages(
+        (page) => this.listProjectRuns(projectId, { pageSize: 100, page, includeChildren }),
+        `Project ${projectId} run`,
+      );
+    },
+    getRun(runId) {
+      return request(`runs/${encodeURIComponent(runId)}`);
     },
     listProjectSessions(projectId, pageSize = 100, page = 1) {
       return request(`projects/${encodeURIComponent(projectId)}/sessions?page=${page}&page_size=${pageSize}`);

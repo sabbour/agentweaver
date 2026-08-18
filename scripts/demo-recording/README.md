@@ -89,6 +89,12 @@ generated script with `playwright-cli --raw`. `capture --all` automatically skip
 unauthenticated handoff beats and begins with the first authenticated beat; it never
 waits for their unauthenticated dialog.
 
+Before Blueprint Beats 4.6 and 4.7, preparation reads the fixture's single current
+Bug Fix run from the Agentweaver API. It extracts the PR only from that run's completed
+topology artifact, then verifies the GitHub PR is still open and its head branch matches
+the run. Stale, closed, ambiguous, or unrelated PRs are refused; no PR identity is
+accepted through environment variables and capture never creates or approves one.
+
 ## Clean Blueprint fixture
 
 At an inactive recording boundary, remove only the plan's explicitly named demo fixture:

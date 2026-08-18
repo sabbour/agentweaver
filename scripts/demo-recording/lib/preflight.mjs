@@ -79,17 +79,105 @@ function validateExternalUrl(name, value, requirement) {
   if (requirement.origin && url.origin !== requirement.origin) preflightError(`${name} must point to ${requirement.origin}, not ${url.origin}.`);
 }
 
-export function resolveCapturePreflight(config, selectedBeatIds, environment = process.env) {
+function isSelected(requirement, selected) {
+  return requirement?.beats?.some((beatId) => selected.has(beatId));
+}
+
+function currentFixtureProject(projects, fixture) {
+  const matches = projects.filter((project) => project?.name === fixture?.projectName);
+  if (matches.length !== 1 || typeof matches[0]?.project_id !== 'string') {
+    preflightError(`expected exactly one active fixture named "${fixture?.projectName}" before resolving the Bug Fix pull request; found ${matches.length}.`);
+  }
+  return matches[0];
+}
+
+function isCurrentBugFixRun(run) {
+  return run?.status === 'awaiting_review'
+    && typeof run?.workflow_selection_reason === 'string'
+    && /\bbug(?:\s|-)+fix\b/iu.test(run.workflow_selection_reason);
+}
+
+function pullRequestUrlsFromTopology(events) {
+  const urls = new Set();
+  for (const event of events) {
+    if (event?.type !== 'workflow.step' || event?.payload?.status !== 'completed') continue;
+    const message = event.payload.message;
+    if (typeof message !== 'string') continue;
+    for (const match of message.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*/gu)) {
+      urls.add(match[0]);
+    }
+  }
+  return [...urls];
+}
+
+async function resolveCurrentBugFixPullRequest(config, api, fetchImpl) {
+  if (!api) preflightError('cannot resolve the current Bug Fix pull request without the authenticated Agentweaver run API.');
+  const project = currentFixtureProject(await api.listAllProjects(), config.fixture);
+  const runSummaries = await api.listAllProjectRuns(project.project_id);
+  const inspectedRuns = await Promise.all(runSummaries.map(async (summary) => api.getRun(summary.execution_id)));
+  const currentRuns = inspectedRuns.filter(isCurrentBugFixRun);
+  if (currentRuns.length !== 1) {
+    preflightError(`expected exactly one current Bug Fix run awaiting review; found ${currentRuns.length}. Refusing to use a stale or unrelated pull request.`);
+  }
+
+  const run = currentRuns[0];
+  if (typeof run.worktree_branch !== 'string' || !run.worktree_branch) {
+    preflightError(`current Bug Fix run ${run.run_id} has no worktree branch to attest its pull request.`);
+  }
+  const urls = pullRequestUrlsFromTopology(await api.getRunEvents(run.run_id));
+  if (urls.length !== 1) {
+    preflightError(`current Bug Fix run ${run.run_id} has ${urls.length} pull-request identities in its topology artifact; expected exactly one.`);
+  }
+
+  const artifactUrl = new URL(urls[0]);
+  const [, owner, repository, number] = artifactUrl.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/([1-9][0-9]*)$/u) ?? [];
+  if (!owner || !repository || !number) {
+    preflightError(`current Bug Fix run ${run.run_id} emitted an invalid pull-request identity.`);
+  }
+  let response;
+  try {
+    response = await fetchImpl(`https://api.github.com/repos/${owner}/${repository}/pulls/${number}`, {
+      headers: { Accept: 'application/vnd.github+json' },
+    });
+  } catch {
+    preflightError(`could not verify the pull request emitted by current Bug Fix run ${run.run_id} on GitHub.`);
+  }
+  if (!response?.ok) {
+    preflightError(`the pull request emitted by current Bug Fix run ${run.run_id} does not exist or is not readable on GitHub.`);
+  }
+  const pullRequest = await response.json().catch(() => null);
+  if (
+    pullRequest?.number !== Number(number)
+    || pullRequest?.html_url !== urls[0]
+    || pullRequest?.state !== 'open'
+    || pullRequest?.head?.ref !== run.worktree_branch
+  ) {
+    preflightError(`the pull request emitted by current Bug Fix run ${run.run_id} is stale, closed, or belongs to another run.`);
+  }
+  return urls[0];
+}
+
+export async function resolveCapturePreflight(
+  config,
+  selectedBeatIds,
+  environment = process.env,
+  { api, fetchImpl = fetch } = {},
+) {
   const selected = new Set(selectedBeatIds);
+  const values = { ...environment };
   for (const requirement of (config.preflight?.externalArtifacts ?? [])) {
-    if (!requirement.beats?.some((beatId) => selected.has(beatId))) continue;
+    if (!isSelected(requirement, selected)) continue;
     const value = environment[requirement.environment];
     if (typeof value !== 'string' || !value.trim()) {
       preflightError(`${requirement.environment} is required for beat ${requirement.beats.join(', ')}. ${requirement.instruction}`);
     }
     validateExternalUrl(requirement.environment, value.trim(), requirement);
   }
-  return resolvePlaceholders(config, environment);
+  const pullRequestRequirement = config.preflight?.pullRequest;
+  if (isSelected(pullRequestRequirement, selected)) {
+    values.AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL = await resolveCurrentBugFixPullRequest(config, api, fetchImpl);
+  }
+  return resolvePlaceholders(config, values);
 }
 
 export async function verifyFixtureWorkflowRequirements(options, dependencies = {}) {
