@@ -81,9 +81,9 @@ Narration: "I'll point this at the AKS repo. Instead of picking a pre-built blue
 
 Source: Scenario 2 Beat 1.1
 
-DOM cue: Cut in when the repo-to-project form is visible and `Azure/AKS` is already present or being entered in the target-repo field.
+DOM cue: Cut in when the repo-to-project form is visible and `sabbour/AKS` is already present or being entered in the target-repo field.
 
-On screen: Lift the strongest portion of Scenario 2 Beat 1.1: `Azure/AKS` target, blueprint-generation path, and the custom brief for issue triage, roadmap work, and blog/content management.
+On screen: Lift the strongest portion of Scenario 2 Beat 1.1: `sabbour/AKS` target, blueprint-generation path, and the custom brief for issue triage, roadmap work, and blog/content management.
 
 Continuity: Hard cut out of the marketplace tour into the live-repo setup. Stay on the same rendered repo-to-project flow; do not widen into unrelated setup.
 

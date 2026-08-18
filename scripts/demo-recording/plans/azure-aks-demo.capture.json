@@ -2,6 +2,14 @@
   "$schema": "../schemas/capture.schema.json",
   "schemaVersion": 1,
   "requireAllBeats": true,
+  "authentication": {
+    "mode": "entra",
+    "repository": "sabbour/AKS"
+  },
+  "fixture": {
+    "projectName": "Agentweaver Demo S2 — sabbour/AKS",
+    "safeProjectNamePatterns": ["^Agentweaver Demo S2 — sabbour/AKS$"]
+  },
   "beats": [
     {
       "id": "0.0",
@@ -22,6 +30,7 @@
     },
     {
       "id": "0.1",
+      "requiresPriorBeat": "0.0",
       "videoPath": "recordings/azure-aks/beat-0-1.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 8300, "preferred": 11800, "maximum": 17200 },
@@ -31,13 +40,13 @@
         { "type": "badge", "label": "Beat 0.1", "title": "Introduce the repo and the job", "duration": 1800 },
         {
           "type": "waitText",
-          "text": "Azure/AKS",
+          "text": "sabbour/AKS",
           "timeout": 60000,
           "cue": {
             "name": "s2.0.1.repo-context",
             "stableForMs": 600,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "Azure/AKS" },
+            "source": { "kind": "text", "selector": "main", "includes": "sabbour/AKS" },
             "rect": { "mode": "element", "selector": "main" }
           }
         },
@@ -61,6 +70,7 @@
     },
     {
       "id": "1.1",
+      "requiresPriorBeat": "0.1",
       "videoPath": "recordings/azure-aks/beat-1-1.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 7800, "preferred": 11100, "maximum": 16200 },
@@ -94,13 +104,13 @@
             "rect": { "mode": "matched-element" }
           }
         },
-        { "type": "type", "selector": "page.getByLabel('Or paste any repository').getByRole('textbox')", "text": "Azure/AKS", "scale": 1.55, "delay": 25, "after": 300 },
+        { "type": "type", "selector": "page.getByLabel('Or paste any repository').getByRole('textbox')", "text": "sabbour/AKS", "scale": 1.55, "delay": 25, "after": 300 },
         { "type": "click", "selector": "page.getByRole('button', { name: 'Go →', exact: true })", "scale": 1.45, "after": 600 },
         { "type": "click", "selector": "page.getByRole('button', { name: 'Generate', exact: true })", "scale": 1.42, "after": 500 },
         {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Describe what you want Agentweaver to do' })",
-          "text": "Create an AKS product-operations blueprint for issue triage, duplicate feature-request grouping, roadmap PRDs, PRD review, naming, release-note and engineering-blog content management for the Azure/AKS repository.",
+          "text": "Create an AKS product-operations blueprint for issue triage, duplicate feature-request grouping, roadmap PRDs, PRD review, naming, release-note and engineering-blog content management for the sabbour/AKS repository.",
           "scale": 1.65,
           "delay": 8,
           "after": 700
@@ -140,6 +150,7 @@
     },
     {
       "id": "1.2",
+      "requiresPriorBeat": "1.1",
       "videoPath": "recordings/azure-aks/beat-1-2.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 14800, "preferred": 21100, "maximum": 30600 },
@@ -198,6 +209,7 @@
     },
     {
       "id": "2.2",
+      "requiresPriorBeat": "1.2",
       "videoPath": "recordings/azure-aks/beat-2-2.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 18900, "preferred": 27000, "maximum": 39200 },
@@ -219,7 +231,7 @@
             "rect": { "mode": "matched-element" }
           }
         },
-        { "type": "type", "selector": "page.getByLabel('Describe the workflow you need')", "text": "Weekly AKS issue triage: classify open issues, group duplicate feature requests, identify gaps not already documented, write PRDs, name features, review PRDs, and produce a triage report without writing back to Azure/AKS unless explicitly approved.", "scale": 1.65, "delay": 7, "after": 700 },
+        { "type": "type", "selector": "page.getByLabel('Describe the workflow you need')", "text": "Weekly AKS issue triage: classify open issues, group duplicate feature requests, identify gaps not already documented, write PRDs, name features, review PRDs, and produce a triage report without writing back to sabbour/AKS unless explicitly approved.", "scale": 1.65, "delay": 7, "after": 700 },
         { "type": "click", "selector": "page.getByRole('button', { name: 'Generate', exact: true })", "scale": 1.5, "after": 800 },
         {
           "type": "waitFor",
@@ -279,6 +291,7 @@
     },
     {
       "id": "2.3",
+      "requiresPriorBeat": "2.2",
       "videoPath": "recordings/azure-aks/beat-2-3.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 5700, "preferred": 8150, "maximum": 11800 },
@@ -340,6 +353,7 @@
     },
     {
       "id": "3.1",
+      "requiresPriorBeat": "2.3",
       "videoPath": "recordings/azure-aks/beat-3-1.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 4000, "preferred": 6500, "maximum": 9000 },
@@ -413,6 +427,7 @@
     },
     {
       "id": "3.2",
+      "requiresPriorBeat": "3.1",
       "videoPath": "recordings/azure-aks/beat-3-2.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "disableApprovalWatcher": true,
@@ -469,6 +484,7 @@
     },
     {
       "id": "4.4",
+      "requiresPriorBeat": "3.2",
       "videoPath": "recordings/azure-aks/beat-4-4.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 6200, "preferred": 8900, "maximum": 12900 },
@@ -525,6 +541,7 @@
     },
     {
       "id": "5.1",
+      "requiresPriorBeat": "4.4",
       "videoPath": "recordings/azure-aks/beat-5-1.webm",
       "viewport": { "width": 1920, "height": 1080 },
       "outputBudgetMs": { "minimum": 21800, "preferred": 31100, "maximum": 45100 },
