@@ -22,6 +22,23 @@ This reel is an **editorial highlight cut**, not a third standalone product walk
 Because this is assembled from existing capture plans, every beat preserves the source
 beat's locked intent and only trims for pace.
 
+## Beat 0.0 — Hand off to secure sign-in
+
+Narration: "Agentweaver hands sign-in to Microsoft Entra."
+
+Source: Scenario 1 Beat 0.1 and Scenario 2 Beat 0.0
+
+DOM cue: Cut in only once the **Sign in with Microsoft Entra ID** dialog heading is fully
+visible; cut out before any identity-provider action.
+
+On screen: Show the Agentweaver sign-in dialog only. Do not select an account, enter a
+password, complete MFA or consent, extract a token, cookie, or profile, or capture any
+personal/account content. Do not automate any identity-provider action.
+
+Continuity: This is a human handoff, not a sign-in demonstration. Use a hard cut to the
+next already-authenticated, non-sensitive product surface after the person completes
+sign-in privately off camera.
+
 ## Beat 0.1 — Open on the live graph
 
 Narration: "This is the topology view — a live graph of every agent involved and how they connect."

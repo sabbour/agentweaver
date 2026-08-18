@@ -60,6 +60,17 @@ webhook secret belongs in the plan, narration, screenshots, or capture artifacts
    completed review/diff only, and mark the affected beat pending rather than claiming
    shipment.  A full clean run requires both real artifacts.
 
+## Beat 0.1 — Hand off to secure sign-in
+
+Narration: "Agentweaver hands sign-in to Microsoft Entra."
+
+Fresh navigation: true
+
+On screen: Show only the Agentweaver **Sign in with Microsoft Entra ID** dialog and hold
+for the narration handoff. Cut before any identity-provider action. A human completes any
+account choice, password, MFA, or consent privately and off camera; do not automate those
+actions or capture account, profile, token, cookie, or other personal content.
+
 ## Beat 1.1 — Create the project
 
 Narration: "First, I'll create a new project. I'll give it a name and a short description of what we're building."
