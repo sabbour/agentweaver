@@ -8,6 +8,7 @@ import { renderCaptureScript } from './capture-plan.mjs';
 import { writeSeedScript } from './auth.mjs';
 
 export const DEFAULT_RECORDING_SESSION = 'agentweaver-demo';
+export const UNAUTHENTICATED_RECORDING_SESSION = 'agentweaver-demo-unauthenticated';
 export const DEFAULT_RECORDING_BASE_URL = 'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io';
 export const DEFAULT_RECORDING_AUTH_ROOT = 'scripts/demo-recording/.auth';
 export const EDGE_DEFAULT_PROFILE_DIRECTORY = 'Default';
@@ -17,12 +18,12 @@ const COMMAND_OPTIONS = {
   open: new Set(['session', 'base-url', 'auth-root']),
   start: new Set(['session', 'base-url', 'auth-root', 'wait-for-edge-ms', 'plan', 'beat-plan', 'out-dir', 'beat']),
   prepare: new Set(['auth-root', 'plan', 'beat-plan', 'out-dir', 'beat']),
-  capture: new Set(['session', 'base-url', 'auth-root', 'plan', 'beat-plan', 'out-dir', 'beat', 'all']),
+  capture: new Set(['session', 'base-url', 'auth-root', 'plan', 'beat-plan', 'out-dir', 'beat', 'all', 'unauthenticated']),
   status: new Set(['session', 'base-url', 'auth-root']),
   close: new Set(['session']),
 };
 
-const BOOLEAN_OPTIONS = new Set(['all']);
+const BOOLEAN_OPTIONS = new Set(['all', 'unauthenticated']);
 const PROFILE_COPY_EXCLUDED_DIRECTORIES = new Set([
   'BrowserMetrics',
   'Cache',
@@ -56,12 +57,14 @@ export function parseRecordingCommandOptions(command, argv) {
     authRoot: DEFAULT_RECORDING_AUTH_ROOT,
     waitForEdgeMs: 300_000,
   };
+  let explicitSession = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (!flag.startsWith('--')) throw new Error(`Unexpected argument: ${flag}`);
     const name = flag.slice(2);
     if (!allowed.has(name)) throw new Error(`Unknown option for ${command}: ${flag}`);
+    if (name === 'session') explicitSession = true;
     if (BOOLEAN_OPTIONS.has(name)) {
       options[toCamelCase(name)] = true;
       continue;
@@ -89,6 +92,12 @@ export function parseRecordingCommandOptions(command, argv) {
     throw new Error('capture requires --beat <id> or --all.');
   }
   if (options.beat && options.all) throw new Error('Use either --beat or --all, not both.');
+  if (options.unauthenticated) {
+    if (command !== 'capture') throw new Error('--unauthenticated is supported only by capture.');
+    if (options.all) throw new Error('--unauthenticated captures one explicitly selected unauthenticated beat; do not use --all.');
+    if (explicitSession) throw new Error('--unauthenticated uses its own isolated recording session; do not pass --session.');
+    options.session = UNAUTHENTICATED_RECORDING_SESSION;
+  }
   return options;
 }
 
@@ -551,6 +560,30 @@ export async function openRecordingSession(options) {
   }
 }
 
+export function selectCaptureBeats(beats, options) {
+  const selected = options.beat
+    ? beats.filter((beat) => beat.id === options.beat)
+    : beats.filter((beat) => beat.captureMode !== 'unauthenticated');
+  if (options.beat && selected.length === 0) throw new Error(`Capture plan does not contain beat ${options.beat}.`);
+
+  const hasUnauthenticatedBeat = selected.some((beat) => beat.captureMode === 'unauthenticated');
+  if (options.unauthenticated && (!options.beat || selected.length !== 1 || !hasUnauthenticatedBeat)) {
+    throw new Error('--unauthenticated requires exactly one beat declared with captureMode "unauthenticated".');
+  }
+  if (!options.unauthenticated && hasUnauthenticatedBeat) {
+    throw new Error(`Beat ${selected.find((beat) => beat.captureMode === 'unauthenticated').id} requires --unauthenticated and cannot use restored authentication.`);
+  }
+  return selected;
+}
+
+export function openUnauthenticatedRecordingSession(options) {
+  // This session intentionally has no persistent context or loaded storage state. It is
+  // closed after the one safe handoff beat so no browser data is retained for later runs.
+  closeRecordingSession(options.session);
+  runPlaywrightCli(sessionArgs(options.session, 'open', '--browser=msedge'));
+  process.stdout.write(`Unauthenticated recording session "${options.session}" is ready without restored storage.\n`);
+}
+
 function planName(planPath) {
   return path.basename(planPath).replace(/\.capture\.json$/i, '').replace(/\.json$/i, '');
 }
@@ -567,8 +600,7 @@ export async function prepareCaptureScripts(options) {
       capturePlanPath: planPath,
     })).filter((beat) => configuredBeatIds.has(beat.id))
     : captureConfig.beats;
-  const selected = options.beat ? beats.filter((beat) => beat.id === options.beat) : beats;
-  if (options.beat && selected.length === 0) throw new Error(`Capture plan does not contain beat ${options.beat}.`);
+  const selected = selectCaptureBeats(beats, options);
 
   const outputDirectory = path.resolve(
     options.outDir ?? path.join(paths.generatedScriptsRoot, planName(planPath)),
@@ -591,15 +623,23 @@ export async function prepareCaptureScripts(options) {
 }
 
 export async function captureRecordingPlan(options) {
-  await openRecordingSession(options);
   const prepared = await prepareCaptureScripts(options);
-  for (const item of prepared.scripts) {
-    if (item.videoPath) await fs.mkdir(path.dirname(path.resolve(item.videoPath)), { recursive: true });
-    process.stdout.write(`Capturing beat ${item.beatId}.\n`);
-    runPlaywrightCli(
-      sessionArgs(options.session, '--raw', 'run-code', `--filename=${item.scriptPath}`),
-      { output: 'inherit' },
-    );
+  if (options.unauthenticated) {
+    openUnauthenticatedRecordingSession(options);
+  } else {
+    await openRecordingSession(options);
+  }
+  try {
+    for (const item of prepared.scripts) {
+      if (item.videoPath) await fs.mkdir(path.dirname(path.resolve(item.videoPath)), { recursive: true });
+      process.stdout.write(`Capturing beat ${item.beatId}.\n`);
+      runPlaywrightCli(
+        sessionArgs(options.session, '--raw', 'run-code', `--filename=${item.scriptPath}`),
+        { output: 'inherit' },
+      );
+    }
+  } finally {
+    if (options.unauthenticated) closeRecordingSession(options.session);
   }
   return prepared;
 }

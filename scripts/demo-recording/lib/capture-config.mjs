@@ -68,6 +68,9 @@ export function validateCaptureConfig(config) {
     if (beat.disableApprovalWatcher !== undefined && typeof beat.disableApprovalWatcher !== 'boolean') {
       fail(`${location}.disableApprovalWatcher must be a boolean`);
     }
+    if (beat.captureMode !== undefined && !['authenticated', 'unauthenticated'].includes(beat.captureMode)) {
+      fail(`${location}.captureMode must be authenticated or unauthenticated`);
+    }
     if (beat.approvalWatcherGraceMs !== undefined
       && (!Number.isInteger(beat.approvalWatcherGraceMs) || beat.approvalWatcherGraceMs < 0)) {
       fail(`${location}.approvalWatcherGraceMs must be a non-negative integer`);
