@@ -596,7 +596,7 @@ export async function prepareCaptureScripts(options) {
   const planPath = path.resolve(options.plan);
   const loadedCaptureConfig = await loadCaptureConfig(planPath);
   const targetBeatIds = options.beat ? [options.beat] : loadedCaptureConfig.beats.map((beat) => beat.id);
-  const captureConfig = resolveCapturePreflight(loadedCaptureConfig, targetBeatIds);
+  const captureConfig = await resolveCapturePreflight(loadedCaptureConfig, targetBeatIds);
   const configuredBeatIds = new Set(captureConfig.beats.map((beat) => beat.id));
   const beats = options.beatPlan
     ? joinCaptureConfig(await loadBeatPlan(path.resolve(options.beatPlan)), captureConfig)

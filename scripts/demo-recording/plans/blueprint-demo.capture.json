@@ -1803,13 +1803,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('topology-graph-canvas')",
-          "timeout": 180000,
-          "cue": {
-            "name": "4.7.pr-open",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
+          "timeout": 180000
         },
         {
           "type": "hover",
@@ -1818,10 +1812,20 @@
           "hold": 1600
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('link', { name: /pull request|open.*pr/i }).first()",
-          "scale": 1.45,
-          "after": 1800
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}",
+          "after": 1000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('main').getByRole('heading').first()",
+          "timeout": 60000,
+          "cue": {
+            "name": "4.7.pr-open",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
         }
       ]
     },
@@ -1926,6 +1930,16 @@
         "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
         "instruction": "Set this to the resulting same-project github.issues.labeled run URL after a repository administrator has verified delivery."
       }
-    ]
+    ],
+    "pullRequest": {
+      "beats": [
+        "4.6",
+        "4.7"
+      ],
+      "repositoryEnvironment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_REPOSITORY",
+      "numberEnvironment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_NUMBER",
+      "urlEnvironment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL",
+      "instruction": "Set the repository and number of the pull request produced by the current Bug Fix run. Capture verifies that exact GitHub pull request before the Beat 4.6 approval can run, then uses its verified URL for Beat 4.7 navigation."
+    }
   }
 }

@@ -8,6 +8,7 @@ import {
 } from '../lib/capture-config.mjs';
 import { renderCaptureScript } from '../lib/capture-plan.mjs';
 import { browserDomCueBootstrapSource } from '../lib/dom-cues.mjs';
+import { resolveCapturePreflight } from '../lib/preflight.mjs';
 
 const beats = [
   { id: '1.1', title: 'Hook', startUrl: '/projects', freshNavigation: false },
@@ -80,6 +81,60 @@ test('capture config validates approval watcher settings', () => {
     schemaVersion: 1,
     beats: [{ id: '1.1', approvalWatcherGraceMs: -1 }],
   }), /approvalWatcherGraceMs must be a non-negative integer/);
+});
+
+test('Bug Fix capture resolves one verified current pull-request identity before approval', async () => {
+  const config = {
+    schemaVersion: 1,
+    preflight: {
+      pullRequest: {
+        beats: ['4.6', '4.7'],
+        repositoryEnvironment: 'BUGFIX_REPOSITORY',
+        numberEnvironment: 'BUGFIX_NUMBER',
+        urlEnvironment: 'BUGFIX_URL',
+        instruction: 'Use the current Bug Fix run pull request.',
+      },
+    },
+    beats: [{
+      id: '4.6',
+      steps: [{ type: 'goto', url: '{{BUGFIX_URL}}' }],
+    }],
+  };
+  const environment = {
+    BUGFIX_REPOSITORY: 'example/demo',
+    BUGFIX_NUMBER: '42',
+  };
+
+  await assert.rejects(
+    () => resolveCapturePreflight(config, ['4.6'], { BUGFIX_NUMBER: '42' }),
+    /BUGFIX_REPOSITORY is required/,
+  );
+  await assert.rejects(
+    () => resolveCapturePreflight(config, ['4.6'], { ...environment, BUGFIX_NUMBER: '0' }),
+    /positive pull-request number/,
+  );
+  await assert.rejects(
+    () => resolveCapturePreflight(config, ['4.6'], environment, {
+      fetchImpl: async () => ({ ok: false }),
+    }),
+    /does not exist or is not readable/,
+  );
+  await assert.rejects(
+    () => resolveCapturePreflight(config, ['4.6'], environment, {
+      fetchImpl: async () => ({ ok: true, json: async () => ({ number: 42, html_url: 'https://github.com/example/other/pull/42' }) }),
+    }),
+    /mismatched pull-request identity/,
+  );
+
+  const calls = [];
+  const resolved = await resolveCapturePreflight(config, ['4.6'], environment, {
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return { ok: true, json: async () => ({ number: 42, html_url: 'https://github.com/example/demo/pull/42' }) };
+    },
+  });
+  assert.deepEqual(calls, ['https://api.github.com/repos/example/demo/pulls/42']);
+  assert.equal(resolved.beats[0].steps[0].url, 'https://github.com/example/demo/pull/42');
 });
 
 test('capture config rejects unknown, missing, and duplicate IDs and cue names', () => {
@@ -204,5 +259,19 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   assert.equal(
     decisions.steps.find((step) => step.cue?.name === '2.8.accepted-decision').selector,
     "page.getByTestId('accepted-decision').first()",
+  );
+  const approval = byId('4.6');
+  const closeLoop = byId('4.7');
+  const pullRequest = plan.preflight.pullRequest;
+  assert.deepEqual(pullRequest.beats, ['4.6', '4.7']);
+  assert.equal(pullRequest.repositoryEnvironment, 'AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_REPOSITORY');
+  assert.equal(pullRequest.numberEnvironment, 'AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_NUMBER');
+  assert.equal(
+    closeLoop.steps.find((step) => step.type === 'goto').url,
+    '{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}',
+  );
+  assert.ok(
+    approval.steps.some((step) => step.type === 'click' && step.selector.includes('Approve.*merge')),
+    'the identity preflight must complete before Beat 4.6 can click approval',
   );
 });

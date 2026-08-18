@@ -18,6 +18,23 @@ function fail(message) {
   throw new Error(`Invalid demo capture plan: ${message}`);
 }
 
+function validatePullRequestRequirement(requirement) {
+  if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
+    fail('preflight.pullRequest must be an object');
+  }
+  if (!Array.isArray(requirement.beats) || requirement.beats.some((id) => !/^[0-9]+\.[0-9]+$/.test(id))) {
+    fail('preflight.pullRequest.beats must contain markdown beat IDs');
+  }
+  for (const field of ['repositoryEnvironment', 'numberEnvironment', 'urlEnvironment']) {
+    if (!/^[A-Z][A-Z0-9_]+$/.test(requirement[field] ?? '')) {
+      fail(`preflight.pullRequest.${field} must be an environment variable name`);
+    }
+  }
+  if (typeof requirement.instruction !== 'string' || !requirement.instruction.trim()) {
+    fail('preflight.pullRequest.instruction is required');
+  }
+}
+
 function validateCue(cue, location) {
   if (!cue || typeof cue !== 'object' || Array.isArray(cue)) fail(`${location} must be an object`);
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(cue.name ?? '')) fail(`${location}.name must be a stable lowercase cue name`);
@@ -65,6 +82,9 @@ export function validateCaptureConfig(config) {
     const requirement = config.preflight.workflowRequirements;
     if (requirement !== undefined && (!Array.isArray(requirement.beats) || requirement.beats.some((id) => !/^[0-9]+\.[0-9]+$/.test(id)) || !Array.isArray(requirement.workflowIds) || requirement.workflowIds.some((id) => typeof id !== 'string' || !id.trim()))) {
       fail('preflight.workflowRequirements must contain beat IDs and workflow IDs');
+    }
+    if (config.preflight.pullRequest !== undefined) {
+      validatePullRequestRequirement(config.preflight.pullRequest);
     }
   }
 

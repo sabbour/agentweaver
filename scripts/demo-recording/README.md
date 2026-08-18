@@ -89,6 +89,13 @@ generated script with `playwright-cli --raw`. `capture --all` automatically skip
 unauthenticated handoff beats and begins with the first authenticated beat; it never
 waits for their unauthenticated dialog.
 
+Before capturing Beats 4.6 or 4.7, set
+`AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_REPOSITORY` and
+`AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_NUMBER` to the pull request from the current Bug Fix
+run. Preparation reads GitHub to verify that exact repository and pull-request number
+exist, derives the review URL for Beat 4.7, and fails before Beat 4.6 can approve
+anything if the identity is missing or mismatched.
+
 ## Clean Blueprint fixture
 
 At an inactive recording boundary, remove only the plan's explicitly named demo fixture:

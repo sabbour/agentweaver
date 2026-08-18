@@ -79,17 +79,77 @@ function validateExternalUrl(name, value, requirement) {
   if (requirement.origin && url.origin !== requirement.origin) preflightError(`${name} must point to ${requirement.origin}, not ${url.origin}.`);
 }
 
-export function resolveCapturePreflight(config, selectedBeatIds, environment = process.env) {
+function requiredEnvironmentValue(name, environment, instruction) {
+  const value = environment[name];
+  if (typeof value !== 'string' || !value.trim()) {
+    preflightError(`${name} is required. ${instruction}`);
+  }
+  return value.trim();
+}
+
+function isSelected(requirement, selected) {
+  return requirement?.beats?.some((beatId) => selected.has(beatId));
+}
+
+async function resolvePullRequest(requirement, environment, fetchImpl) {
+  const repository = requiredEnvironmentValue(
+    requirement.repositoryEnvironment,
+    environment,
+    requirement.instruction,
+  );
+  const number = requiredEnvironmentValue(
+    requirement.numberEnvironment,
+    environment,
+    requirement.instruction,
+  );
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
+    preflightError(`${requirement.repositoryEnvironment} must be a GitHub owner/repository value. ${requirement.instruction}`);
+  }
+  if (!/^[1-9][0-9]*$/u.test(number)) {
+    preflightError(`${requirement.numberEnvironment} must be a positive pull-request number. ${requirement.instruction}`);
+  }
+
+  const endpoint = `https://api.github.com/repos/${repository}/pulls/${number}`;
+  let response;
+  try {
+    response = await fetchImpl(endpoint, { headers: { Accept: 'application/vnd.github+json' } });
+  } catch {
+    preflightError(`could not verify ${repository}#${number} on GitHub. ${requirement.instruction}`);
+  }
+  if (!response?.ok) {
+    preflightError(`${repository}#${number} does not exist or is not readable on GitHub. ${requirement.instruction}`);
+  }
+
+  const pullRequest = await response.json().catch(() => null);
+  const expectedUrl = `https://github.com/${repository}/pull/${number}`;
+  if (pullRequest?.number !== Number(number) || pullRequest.html_url !== expectedUrl) {
+    preflightError(`GitHub returned a mismatched pull-request identity for ${repository}#${number}. ${requirement.instruction}`);
+  }
+  return expectedUrl;
+}
+
+export async function resolveCapturePreflight(
+  config,
+  selectedBeatIds,
+  environment = process.env,
+  { fetchImpl = fetch } = {},
+) {
   const selected = new Set(selectedBeatIds);
+  const values = { ...environment };
   for (const requirement of (config.preflight?.externalArtifacts ?? [])) {
-    if (!requirement.beats?.some((beatId) => selected.has(beatId))) continue;
-    const value = environment[requirement.environment];
-    if (typeof value !== 'string' || !value.trim()) {
-      preflightError(`${requirement.environment} is required for beat ${requirement.beats.join(', ')}. ${requirement.instruction}`);
-    }
+    if (!isSelected(requirement, selected)) continue;
+    const value = requiredEnvironmentValue(requirement.environment, environment, requirement.instruction);
     validateExternalUrl(requirement.environment, value.trim(), requirement);
   }
-  return resolvePlaceholders(config, environment);
+  const pullRequestRequirement = config.preflight?.pullRequest;
+  if (isSelected(pullRequestRequirement, selected)) {
+    values[pullRequestRequirement.urlEnvironment] = await resolvePullRequest(
+      pullRequestRequirement,
+      environment,
+      fetchImpl,
+    );
+  }
+  return resolvePlaceholders(config, values);
 }
 
 export async function verifyFixtureWorkflowRequirements(options, dependencies = {}) {
