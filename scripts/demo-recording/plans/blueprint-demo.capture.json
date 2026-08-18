@@ -1136,7 +1136,7 @@
         },
         {
           "type": "select",
-          "selector": "page.getByRole('button', { name: 'Save schedule', exact: true })",
+          "selector": "page.getByRole('combobox', { name: 'Cadence' })",
           "option": {
             "label": "Weekly"
           },

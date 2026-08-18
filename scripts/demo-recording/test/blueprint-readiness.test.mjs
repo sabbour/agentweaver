@@ -36,3 +36,29 @@ test('Blueprint 2.1 capture budget allows bounded staging variance without chang
     maximum: 32000,
   });
 });
+
+test('Blueprint 3.1 selects the Cadence combobox before saving the schedule', async () => {
+  const capturePlan = JSON.parse(await fs.readFile(
+    new URL('../plans/blueprint-demo.capture.json', import.meta.url),
+    'utf8',
+  ));
+  const schedule = capturePlan.beats.find((beat) => beat.id === '3.1');
+  const cadenceIndex = schedule.steps.findIndex((step) => step.type === 'select'
+    && step.selector === "page.getByRole('combobox', { name: 'Cadence' })");
+  const saveScheduleIndex = schedule.steps.findIndex((step) => step.type === 'click'
+    && step.selector === "page.getByRole('button', { name: /Save schedule|Schedule workflow/i }).first()");
+
+  assert.deepEqual(
+    schedule.steps.slice(cadenceIndex, saveScheduleIndex + 1).map(({ type, selector }) => ({ type, selector })),
+    [
+      {
+        type: 'select',
+        selector: "page.getByRole('combobox', { name: 'Cadence' })",
+      },
+      {
+        type: 'click',
+        selector: "page.getByRole('button', { name: /Save schedule|Schedule workflow/i }).first()",
+      },
+    ],
+  );
+});
