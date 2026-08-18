@@ -575,6 +575,17 @@ export function selectCaptureBeats(beats, options) {
   if (!options.unauthenticated && hasUnauthenticatedBeat) {
     throw new Error(`Beat ${selected.find((beat) => beat.captureMode === 'unauthenticated').id} requires --unauthenticated and cannot use restored authentication.`);
   }
+  const selectedIds = new Set(selected.map((beat) => beat.id));
+  const beatById = new Map(beats.map((beat) => [beat.id, beat]));
+  for (const beat of selected) {
+    const priorBeatId = beat.requiresPriorBeat;
+    if (!priorBeatId || selectedIds.has(priorBeatId)) continue;
+    const priorBeat = beatById.get(priorBeatId);
+    if (options.all && priorBeat?.captureMode === 'unauthenticated') continue;
+    throw new Error(
+      `Beat ${beat.id} requires prior beat ${priorBeatId}. Capture the serial sequence with --all before recording this beat.`,
+    );
+  }
   return selected;
 }
 

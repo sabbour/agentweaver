@@ -69,6 +69,7 @@ export function validateCaptureConfig(config) {
   }
 
   const beatIds = new Set();
+  const priorBeatIds = new Map();
   const cueNames = new Set();
   for (const [beatIndex, beat] of config.beats.entries()) {
     const location = `beats[${beatIndex}]`;
@@ -76,6 +77,12 @@ export function validateCaptureConfig(config) {
     if (!/^[0-9]+\.[0-9]+$/.test(beat.id ?? '')) fail(`${location}.id must match a markdown beat ID`);
     if (beatIds.has(beat.id)) fail(`duplicate beat ID ${beat.id}`);
     beatIds.add(beat.id);
+    if (beat.requiresPriorBeat !== undefined) {
+      if (!/^[0-9]+\.[0-9]+$/.test(beat.requiresPriorBeat)) {
+        fail(`${location}.requiresPriorBeat must reference a markdown beat ID`);
+      }
+      priorBeatIds.set(beat.id, beat.requiresPriorBeat);
+    }
     if (beat.cueWatchers !== undefined && !Array.isArray(beat.cueWatchers)) fail(`${location}.cueWatchers must be an array`);
     if (beat.steps !== undefined && !Array.isArray(beat.steps)) fail(`${location}.steps must be an array`);
     if (beat.expectedCues !== undefined && !Array.isArray(beat.expectedCues)) fail(`${location}.expectedCues must be an array`);
@@ -127,6 +134,9 @@ export function validateCaptureConfig(config) {
       if (cueNames.has(item.cue.name)) fail(`duplicate semantic cue name ${item.cue.name}`);
       cueNames.add(item.cue.name);
     }
+  }
+  for (const [beatId, priorBeatId] of priorBeatIds) {
+    if (!beatIds.has(priorBeatId)) fail(`beat ${beatId} requires missing prior beat ${priorBeatId}`);
   }
   return config;
 }

@@ -42,6 +42,11 @@ test('sabbour/AKS capture plan has a complete, gated capture-all sequence', asyn
   ]);
   assert.ok(workflowBeat.steps.some((step) => step.cue?.name === 's2.2.2.workflow-graph'));
 
+  const createProjectBeat = plan.beats.find((beat) => beat.id === '1.1');
+  const projectNameStep = createProjectBeat.steps.find((step) => step.type === 'type'
+    && step.selector === "page.getByLabel('Project name')");
+  assert.equal(projectNameStep?.text, plan.fixture.projectName);
+
   assert.doesNotThrow(() => validateCaptureConfig(plan));
   assert.doesNotThrow(() => joinCaptureConfig(beats, plan, { requireAllBeats: true }));
   assert.doesNotMatch(`${markdown}\n${captureText}`, /\bAzure\/AKS\b/);

@@ -106,6 +106,7 @@
         },
         { "type": "type", "selector": "page.getByLabel('Or paste any repository').getByRole('textbox')", "text": "sabbour/AKS", "scale": 1.55, "delay": 25, "after": 300 },
         { "type": "click", "selector": "page.getByRole('button', { name: 'Go →', exact: true })", "scale": 1.45, "after": 600 },
+        { "type": "type", "selector": "page.getByLabel('Project name')", "text": "Agentweaver Demo S2 — sabbour/AKS", "scale": 1.55, "delay": 25, "after": 300 },
         { "type": "click", "selector": "page.getByRole('button', { name: 'Generate', exact: true })", "scale": 1.42, "after": 500 },
         {
           "type": "type",
