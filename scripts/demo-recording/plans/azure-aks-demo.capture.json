@@ -307,11 +307,6 @@
               "selector": "main"
             }
           }
-        },
-        {
-          "type": "eval",
-          "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { await fetch('/api/projects/' + m[1] + '/provider-settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_model_github_copilot: 'claude-sonnet-4.6' }) }); }",
-          "after": 600
         }
       ],
       "intervalCategories": [
