@@ -45,6 +45,7 @@ public sealed class SquadReaderWriterTests : IDisposable
         var layout = new SquadReader(dir).DetectLayout();
 
         Assert.True(layout.HasCanonical);
+        Assert.False(layout.HasLegacy);
         Assert.False(layout.HasConflict);
     }
 
@@ -56,8 +57,10 @@ public sealed class SquadReaderWriterTests : IDisposable
 
         var layout = new SquadReader(dir).DetectLayout();
 
-        // Legacy layout uses root-level casting files; canonical uses .squad/casting/ subfolder.
         Assert.False(layout.HasCanonical, "Legacy layout should not have canonical files.");
+        Assert.True(layout.HasLegacy);
+        Assert.False(layout.HasConflict);
+        Assert.NotNull(layout.MigrationNote);
     }
 
     [Fact]
@@ -68,10 +71,10 @@ public sealed class SquadReaderWriterTests : IDisposable
 
         var layout = new SquadReader(dir).DetectLayout();
 
-        // The canonical layout is present; ReadTeam should succeed or throw depending on conflict state.
         Assert.True(layout.HasCanonical);
-        if (layout.HasConflict)
-            Assert.Throws<LayoutConflictException>(() => new SquadReader(dir).ReadTeam());
+        Assert.True(layout.HasLegacy);
+        Assert.True(layout.HasConflict);
+        Assert.Throws<LayoutConflictException>(() => new SquadReader(dir).ReadTeam());
     }
 
     [Fact]
