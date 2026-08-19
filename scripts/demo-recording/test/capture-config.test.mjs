@@ -8,6 +8,7 @@ import {
 } from '../lib/capture-config.mjs';
 import { renderCaptureScript } from '../lib/capture-plan.mjs';
 import { browserDomCueBootstrapSource } from '../lib/dom-cues.mjs';
+import { validateFinalTake } from '../lib/preflight.mjs';
 
 const beats = [
   { id: '1.1', title: 'Hook', startUrl: '/projects', freshNavigation: false },
@@ -205,4 +206,25 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
     decisions.steps.find((step) => step.cue?.name === '2.8.accepted-decision').selector,
     "page.getByTestId('accepted-decision').first()",
   );
+});
+
+test('final demo plans isolate their takes and use polished plan-scoped fixtures', async () => {
+  const loadPlan = async (fileName) => JSON.parse(await fs.readFile(
+    new URL(`../plans/${fileName}`, import.meta.url),
+    'utf8',
+  ));
+  const [blueprint, aks] = await Promise.all([
+    loadPlan('blueprint-demo.capture.json'),
+    loadPlan('azure-aks-demo.capture.json'),
+  ]);
+
+  for (const plan of [blueprint, aks]) {
+    assert.doesNotThrow(() => validateCaptureConfig(plan));
+    assert.doesNotThrow(() => validateFinalTake(plan));
+    assert.match(plan.fixture.projectName, /^Agentweaver Demo — /u);
+    assert.ok(plan.beats.every((beat) => beat.videoPath.startsWith(`${plan.finalTake.outputDirectory}/`)));
+  }
+  assert.equal(blueprint.fixture.projectName, 'Agentweaver Demo — Trailhead Travel Studio');
+  assert.equal(aks.fixture.projectName, 'Agentweaver Demo — AKS Product Operations');
+  assert.ok(aks.beats.some((beat) => JSON.stringify(beat).includes('sabbour/AKS')));
 });
