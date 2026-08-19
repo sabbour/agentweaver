@@ -17,8 +17,8 @@ test('sabbour/AKS capture plan has a complete, gated capture-all sequence', asyn
   assert.equal(plan.requireAllBeats, true);
   assert.deepEqual(plan.authentication, { mode: 'entra', repository: 'sabbour/AKS' });
   assert.deepEqual(plan.fixture, {
-    projectName: 'Agentweaver Demo S2 — sabbour/AKS',
-    safeProjectNamePatterns: ['^Agentweaver Demo S2 — sabbour/AKS$'],
+    projectName: 'Agentweaver Demo — AKS Product Operations',
+    safeProjectNamePatterns: ['^Agentweaver Demo — AKS Product Operations(?: - [0-9]{8}T[0-9]{6}Z)?$'],
   });
   assert.deepEqual(beats.map((beat) => beat.id), beatIds);
   assert.deepEqual(plan.beats.map((beat) => beat.id), beatIds);

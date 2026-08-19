@@ -3,8 +3,8 @@ import test from 'node:test';
 import { cleanStaging, parseCleanupOptions } from '../clean-staging.mjs';
 
 const fixture = {
-  projectName: 'Agentweaver Demo S1 - Trailhead',
-  safeProjectNamePatterns: ['^Agentweaver Demo S1 - Trailhead$'],
+  projectName: 'Agentweaver Demo — Trailhead Travel Studio',
+  safeProjectNamePatterns: ['^Agentweaver Demo — Trailhead Travel Studio$'],
 };
 const captureConfig = {
   fixture,
