@@ -40,14 +40,18 @@ profile are refused. Close all Edge windows when prompted. The command then:
 
 ## Safe sign-in recovery
 
-After a recorder-owned session closes or authentication expires, keep any planned media
-and fixtures unchanged, then close only the named recording session:
+`start` and authenticated `capture` self-direct their session setup: they first reuse a
+live verified session, then restore and verify protected recording auth without touching
+the live Default profile. Run `status` only to inspect state; it is not a prerequisite.
+If that protected auth is expired or unavailable, the command safely starts the existing
+interactive sign-in path. Keep any planned media and fixtures unchanged:
 
 ```powershell
 npm run demo:record -- close
 ```
 
-Close any remaining Microsoft Edge windows through their normal UI. Then run:
+Close any remaining Microsoft Edge windows through their normal UI. If a human must complete Microsoft Entra sign-in, close any remaining Microsoft Edge
+windows through their normal UI, then run:
 
 ```powershell
 npm run demo:record -- signin
@@ -82,10 +86,16 @@ npm run demo:record -- start `
   --plan scripts\demo-recording\plans\blueprint-demo.capture.json
 ```
 
-Only `signin` accesses the exact Edge Default source. `open`, `start`, and `capture`
-restore and verify the protected saved authentication for the named `playwright-cli`
-session; they fail closed with sign-in guidance when it is missing or expired. The
-default session name is `agentweaver-demo`.
+`open`, `start`, and authenticated `capture` first reuse the named `playwright-cli`
+session when it is already open and its live Agentweaver shell verifies as authenticated.
+When it is closed, they restore the protected recorder auth into the owned session and
+verify the live shell before considering Default-profile sign-in. This avoids touching
+the live Edge Default profile whenever auth remains valid. Expired or unverifiable
+stored auth falls through to the existing Default-profile sign-in path, which closes
+only the owned recording session before waiting for Edge and never terminates unrelated
+Edge processes. If Microsoft Entra is reached, the displayed sign-in requires a human;
+the CLI does not select an account, enter credentials, MFA, or consent. The default
+session name is `agentweaver-demo`.
 
 ## Capture
 

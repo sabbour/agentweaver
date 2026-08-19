@@ -69,10 +69,39 @@ function validatePrerequisites(prerequisites, location) {
   }
 }
 
+function collectRuntimeTemplateReferences(value, references = new Set()) {
+  if (typeof value === 'string') {
+    for (const [, environment] of value.matchAll(/\{\{([A-Z][A-Z0-9_]+)\}\}/gu)) {
+      references.add(environment);
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectRuntimeTemplateReferences(item, references);
+  } else if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      if (key !== 'prerequisites') collectRuntimeTemplateReferences(item, references);
+    }
+  }
+  return references;
+}
+
+function validateAuthentication(authentication) {
+  if (authentication === undefined) return;
+  if (!authentication || typeof authentication !== 'object' || Array.isArray(authentication)) {
+    fail('authentication must be an object');
+  }
+  if (typeof authentication.mode !== 'string' || !authentication.mode.trim()) {
+    fail('authentication.mode is required');
+  }
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(authentication.repository ?? '')) {
+    fail('authentication.repository must be a GitHub owner/repository');
+  }
+}
+
 export function validateCaptureConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) fail('root must be an object');
   if (config.schemaVersion !== 1) fail('schemaVersion must be 1');
   if (!Array.isArray(config.beats)) fail('beats must be an array');
+  validateAuthentication(config.authentication);
   if (config.preflight !== undefined) {
     if (!config.preflight || typeof config.preflight !== 'object' || Array.isArray(config.preflight)) fail('preflight must be an object');
     for (const [index, artifact] of (config.preflight.externalArtifacts ?? []).entries()) {
@@ -105,6 +134,12 @@ export function validateCaptureConfig(config) {
       priorBeatIds.set(beat.id, beat.requiresPriorBeat);
     }
     validatePrerequisites(beat.prerequisites, location);
+    const declaredPrerequisites = new Set((beat.prerequisites ?? []).map(({ environment }) => environment));
+    for (const environment of collectRuntimeTemplateReferences(beat)) {
+      if (!declaredPrerequisites.has(environment)) {
+        fail(`${location} references ${environment}, but does not declare it as a prerequisite`);
+      }
+    }
     if (beat.cueWatchers !== undefined && !Array.isArray(beat.cueWatchers)) fail(`${location}.cueWatchers must be an array`);
     if (beat.steps !== undefined && !Array.isArray(beat.steps)) fail(`${location}.steps must be an array`);
     if (beat.expectedCues !== undefined && !Array.isArray(beat.expectedCues)) fail(`${location}.expectedCues must be an array`);

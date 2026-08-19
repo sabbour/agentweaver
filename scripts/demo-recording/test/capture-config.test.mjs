@@ -241,11 +241,37 @@ test('capture config requires actionable, typed capture prerequisites', () => {
     schemaVersion: 1,
     beats: [{ id: '4.1', prerequisites: [{ environment: 'issue', kind: 'github-issue-url', message: 'Set it.' }] }],
   }), /uppercase environment variable/);
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{
+      id: '3.2',
+      steps: [{ type: 'goto', url: '{{AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL}}' }],
+    }],
+  }), /references AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL, but does not declare it as a prerequisite/);
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    authentication: { mode: 'entra', repository: 'not a repository' },
+    beats: [],
+  }), /authentication.repository must be a GitHub owner\/repository/);
 });
 
 test('Blueprint triage beats declare a serial, fixture-safe route through preview, review, PR, and MCP settings', async () => {
   const plan = JSON.parse(await fs.readFile(new URL('../plans/blueprint-demo.capture.json', import.meta.url), 'utf8'));
   const byId = new Map(plan.beats.map((beat) => [beat.id, beat]));
+  assert.deepEqual(plan.authentication, {
+    mode: 'entra',
+    repository: 'sabbour/agentweaver-demo-dryrun',
+  });
+  assert.equal(
+    byId.get('1.1').startUrl,
+    'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview',
+  );
+  assert.equal(byId.get('1.1').prerequisites, undefined);
+  assert.deepEqual(byId.get('3.2').prerequisites, [{
+    environment: 'AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL',
+    kind: 'github-issue-url',
+    message: 'Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4.',
+  }]);
   for (const [id, predecessor] of new Map([['4.1', '3.2'], ['4.2', '4.1'], ['4.3', '4.2'], ['4.4', '4.3'], ['4.5', '4.4'], ['4.6', '4.5'], ['4.7', '4.6']])) {
     assert.equal(byId.get(id)?.requiresPriorBeat, predecessor);
   }

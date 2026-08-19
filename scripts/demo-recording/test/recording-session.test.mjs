@@ -14,6 +14,7 @@ import {
   openRecordingSession,
   parsePlaywrightSessionList,
   parseRecordingCommandOptions,
+  openRecordingSession,
   refreshRecordingAuthentication,
   recordingAuthPaths,
   resolveCaptureBeatPrerequisites,
@@ -22,6 +23,7 @@ import {
   selectCaptureBeats,
   shouldCopyEdgeProfileEntry,
   presentInteractiveSignInShell,
+  waitForAuthenticatedSnapshot,
   waitForInteractiveSignInCompletion,
   validateLiteralEdgeDefaultProfile,
   waitForEdgeToClose,
@@ -260,6 +262,33 @@ test('recording session reports expired or unverifiable authentication', () => {
   assert.doesNotThrow(() => assertAuthenticatedSnapshot('- link "Overview"\n- link "Projects"'));
 });
 
+test('recording session waits for the post-reload shell before verifying authentication', async () => {
+  const snapshots = [
+    '- heading "Agentweaver"',
+    '- link "Overview"\n- link "Projects"',
+  ];
+  const delays = [];
+
+  await waitForAuthenticatedSnapshot('agentweaver-demo', {
+    snapshot: () => snapshots.shift(),
+    delayFn: async (milliseconds) => { delays.push(milliseconds); },
+  });
+
+  assert.deepEqual(delays, [500]);
+});
+
+test('recording session does not wait through an expired post-reload authentication state', async () => {
+  const delays = [];
+  await assert.rejects(
+    () => waitForAuthenticatedSnapshot('agentweaver-demo', {
+      snapshot: () => '- heading "Sign in with Microsoft Entra ID"',
+      delayFn: async (milliseconds) => { delays.push(milliseconds); },
+    }),
+    /authentication has expired/,
+  );
+  assert.deepEqual(delays, []);
+});
+
 test('recording session requires Git to ignore the auth folder', () => {
   assert.doesNotThrow(() => assertIgnoredAuthRoot('scripts/demo-recording/.auth', () => true));
   assert.throws(() => assertIgnoredAuthRoot('recordings/auth', () => false), /Git does not ignore/);
@@ -285,6 +314,85 @@ test('auth refresh closes only the owned Playwright session before inspecting Ed
     },
   );
   assert.deepEqual(events, ['close:agentweaver-demo', 'refresh-default']);
+});
+
+test('open reuses an already-open verified recording session without refreshing Edge Default', async () => {
+  const events = [];
+  await openRecordingSession(
+    { session: 'agentweaver-demo', authRoot: path.join(repositoryRoot, 'scripts', 'demo-recording', '.auth') },
+    {
+      listSessions: () => new Map([['agentweaver-demo', { status: 'open' }]]),
+      verifyAuthenticatedSnapshot: async (session) => events.push(`verify:${session}`),
+      refreshAuthentication: async () => events.push('refresh-default'),
+    },
+  );
+  assert.deepEqual(events, ['verify:agentweaver-demo']);
+});
+
+test('open restores protected recording auth before refreshing the Edge Default profile', async () => {
+  const events = [];
+  await openRecordingSession(
+    { session: 'agentweaver-demo', authRoot: path.join(repositoryRoot, 'scripts', 'demo-recording', '.auth') },
+    {
+      listSessions: () => new Map([['agentweaver-demo', { status: 'closed' }]]),
+      hasAuthentication: async () => {
+        events.push('has-protected-auth');
+        return true;
+      },
+      restoreAuthentication: async () => events.push('restore-protected-auth'),
+      refreshAuthentication: async () => events.push('refresh-default'),
+    },
+  );
+  assert.deepEqual(events, ['has-protected-auth', 'restore-protected-auth']);
+});
+
+test('open refreshes Default-profile sign-in only after protected auth cannot restore', async () => {
+  const events = [];
+  await openRecordingSession(
+    { session: 'agentweaver-demo', authRoot: path.join(repositoryRoot, 'scripts', 'demo-recording', '.auth') },
+    {
+      listSessions: () => new Map([['agentweaver-demo', { status: 'closed' }]]),
+      hasAuthentication: async () => {
+        events.push('has-protected-auth');
+        return true;
+      },
+      restoreAuthentication: async () => {
+        events.push('restore-protected-auth');
+        if (events.length === 2) throw new Error('expired');
+      },
+      refreshAuthentication: async () => events.push('refresh-default'),
+    },
+  );
+  assert.deepEqual(events, [
+    'has-protected-auth',
+    'restore-protected-auth',
+    'refresh-default',
+    'has-protected-auth',
+    'restore-protected-auth',
+  ]);
+});
+
+test('open uses the existing refresh flow when its open recording session cannot verify', async () => {
+  const events = [];
+  await assert.rejects(
+    () => openRecordingSession(
+      { session: 'agentweaver-demo', authRoot: path.join(repositoryRoot, 'scripts', 'demo-recording', '.auth') },
+      {
+        listSessions: () => new Map([['agentweaver-demo', { status: 'open' }]]),
+        verifyAuthenticatedSnapshot: async () => {
+          events.push('verify');
+          throw new Error('expired');
+        },
+        refreshAuthentication: async () => {
+          events.push('refresh-default');
+          throw new Error('recovery stopped');
+        },
+        hasAuthentication: async () => false,
+      },
+    ),
+    /recovery stopped/,
+  );
+  assert.deepEqual(events, ['verify', 'refresh-default']);
 });
 
 test('signin foregrounds, waits for, and clicks the Agentweaver Entra button', async () => {
@@ -395,6 +503,19 @@ test('open fails closed without protected recording authentication', async () =>
   assert.equal(sessionsRead, false);
 });
 
+test('start self-directs recording session setup without a prior status or open command', async () => {
+  const calls = [];
+  await runRecordingCommand(
+    'start',
+    [],
+    {
+      openSession: async (options) => calls.push(options),
+    },
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].session, 'agentweaver-demo');
+});
+
 test('auth destinations reject a junction that escapes the ignored auth root', async () => {
   const id = `${process.pid}-${Date.now()}`;
   const authRoot = path.join(packageRoot, '.auth', `junction-test-${id}`);
@@ -448,6 +569,6 @@ test('top-level help documents the complete recording workflow', () => {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
   assert.match(help, /Microsoft Edge Default work profile/);
-  assert.match(help, /Refresh Default-profile sign-in/);
-  assert.match(help, /capture  Refresh Default-profile sign-in/);
+  assert.match(help, /Reuse or restore recording auth/);
+  assert.match(help, /capture  Self-direct authenticated setup/);
 });
