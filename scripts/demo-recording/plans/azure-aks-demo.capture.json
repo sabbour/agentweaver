@@ -241,7 +241,7 @@
         {
           "type": "type",
           "selector": "page.getByLabel('Project name')",
-          "text": "Agentweaver Demo S2 — sabbour/AKS",
+          "text": "Agentweaver Demo — AKS Product Operations",
           "scale": 1.55,
           "delay": 25,
           "after": 300
