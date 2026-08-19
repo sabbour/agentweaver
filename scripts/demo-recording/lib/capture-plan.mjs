@@ -58,7 +58,8 @@ export function renderCaptureScript(plan) {
     '  const shouldNavigate = (() => {',
     "    const currentUrl = page.url?.() ?? '';",
     "    if (!planStartUrl) return false;",
-    "    if (freshNavigation || !currentUrl || currentUrl === 'about:blank') return true;",
+    "    if (!freshNavigation) return false;",
+    "    if (!currentUrl || currentUrl === 'about:blank') return true;",
     '    try {',
     '      return new URL(currentUrl).href !== new URL(planStartUrl).href;',
     '    } catch (e) {',
@@ -284,6 +285,13 @@ export function renderCaptureScript(plan) {
         lines.push(`    await page.evaluate((cue) => window.__demoEmitDomCue?.(cue, document.body), ${JSON.stringify(cue)});`);
       }
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('waitText', { text: ${JSON.stringify(step.text)} }));`);
+    } else if (step.type === 'reload') {
+      // Reload the current page — used to re-hydrate SSE/UI state after long waits
+      // (e.g. beat 2.2: coordinator finishes drafting but SSE stream has expired).
+      lines.push(`    await page.reload({ waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });`);
+      lines.push('    await page.evaluate(installSource);');
+      lines.push('    await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
+      lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('reload'));`);
     } else if (step.type === 'goto') {
       lines.push(`    await page.goto(${JSON.stringify(step.url)}, { waitUntil: 'domcontentloaded' });`);
       lines.push('    await page.evaluate(installSource);');
