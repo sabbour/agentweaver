@@ -61,6 +61,37 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
+    public async Task RunDispatchLoop_TerminalCoordinatorWithoutActiveSubtasks_PersistsCompletePlanStatus()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.Completed);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.Completed, (string?)null) });
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch();
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.Complete,
+            "a terminal coordinator with no active subtasks must not stay stuck in dispatching");
+    }
+
+    [Fact]
+    public async Task RunDispatchLoop_TerminalCoordinatorAfterInFlightDrain_PersistsFailedPlanStatus()
+    {
+        var coord = RunId.New().ToString();
+        var child0 = await SeedChildRunAsync(RunStatus.AssembleReady);
+        await SeedCoordinatorRunAsync(coord, RunStatus.Failed);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.Running, (string?)child0) });
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch();
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AssemblyFailed,
+            "once the last in-flight child drains, a stopped coordinator must persist a non-dispatching status");
+    }
+
+    [Fact]
     public async Task ReArm_OrphanedRunningSubtask_ReconcilesTerminalChild_DispatchesDependent_AdvancesPlan()
     {
         const string coord = "coord-rearm-1";
@@ -573,7 +604,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         return id.ToString();
     }
 
-    private async Task SeedCoordinatorRunAsync(string coordinatorRunId)
+    private async Task SeedCoordinatorRunAsync(string coordinatorRunId, RunStatus status = RunStatus.InProgress)
     {
         var run = new Run
         {
@@ -583,7 +614,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
             ModelSource = ModelSource.GitHubCopilot,
             Task = "coordinate the work",
             SubmittingUser = "owner",
-            Status = RunStatus.InProgress,
+            Status = status,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
         };
