@@ -1087,6 +1087,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         string runtimeHome)
     {
         environment["HOME"] = runtimeHome;
+        environment["DOTNET_CLI_HOME"] = runtimeHome;
         environment["XDG_CACHE_HOME"] = Path.Combine(runtimeHome, ".cache");
         environment["XDG_DATA_HOME"] = Path.Combine(runtimeHome, ".local", "share");
         environment["XDG_CONFIG_HOME"] = Path.Combine(runtimeHome, ".config");

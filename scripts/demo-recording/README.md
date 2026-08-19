@@ -147,6 +147,21 @@ another origin, or a fixture pattern that differs from the declared fixture name
 from the deterministic UTC timestamp suffix). It lists every project page and verifies
 that no matching fixture remains; unrelated projects are never deleted.
 
+## Final-take preflight
+
+Before a final capture, close all recorder sessions and run:
+
+```powershell
+node scripts\demo-recording\final-take-preflight.mjs `
+  --plan scripts\demo-recording\plans\blueprint-demo.capture.json
+```
+
+The preflight requires the plan's isolated final-take output directory to contain every
+planned media path, refuses any pre-existing planned output, and verifies that only that
+plan's declared fixture is absent. It does not delete recordings, broad directories, or
+projects; preserve or move an earlier take, then use the plan-scoped cleanup command at
+an inactive boundary if its declared fixture remains.
+
 ## Other commands
 
 ```powershell

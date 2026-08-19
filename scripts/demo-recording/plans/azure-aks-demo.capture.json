@@ -7,8 +7,10 @@
     "repository": "sabbour/AKS"
   },
   "fixture": {
-    "projectName": "Agentweaver Demo S2 — sabbour/AKS",
-    "safeProjectNamePatterns": ["^Agentweaver Demo S2 — sabbour/AKS$"]
+    "projectName": "Agentweaver Demo — AKS Product Operations",
+    "safeProjectNamePatterns": [
+      "^Agentweaver Demo — AKS Product Operations(?: - [0-9]{8}T[0-9]{6}Z)?$"
+    ]
   },
   "beats": [
     {
@@ -17,27 +19,81 @@
       "freshNavigation": true,
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
-      "videoPath": "recordings/azure-aks/beat-0-0-entra-sign-in-handoff.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 3500, "preferred": 5000, "maximum": 7000 },
-      "expectedCues": ["s2.0.0.entra-handoff-dialog"],
-      "cueOrder": ["s2.0.0.entra-handoff-dialog"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-0-0-entra-sign-in-handoff.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 3500,
+        "preferred": 5000,
+        "maximum": 7000
+      },
+      "expectedCues": [
+        "s2.0.0.entra-handoff-dialog"
+      ],
+      "cueOrder": [
+        "s2.0.0.entra-handoff-dialog"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 0.0", "title": "Hand off to secure sign-in", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByRole('heading', { name: 'Sign in with Microsoft Entra ID', exact: true })", "timeout": 30000, "cue": { "name": "s2.0.0.entra-handoff-dialog", "stableForMs": 500, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "Sign in with Microsoft Entra ID" }, "rect": { "mode": "matched-element" } } },
-        { "type": "pause", "ms": 2200 }
+        {
+          "type": "badge",
+          "label": "Beat 0.0",
+          "title": "Hand off to secure sign-in",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Sign in with Microsoft Entra ID', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "s2.0.0.entra-handoff-dialog",
+            "stableForMs": 500,
+            "deadlineMs": 30000,
+            "source": {
+              "kind": "text",
+              "selector": "body",
+              "includes": "Sign in with Microsoft Entra ID"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "pause",
+          "ms": 2200
+        }
       ]
     },
     {
       "id": "0.1",
       "requiresPriorBeat": "0.0",
-      "videoPath": "recordings/azure-aks/beat-0-1.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8300, "preferred": 11800, "maximum": 17200 },
-      "expectedCues": ["s2.0.1.repo-context", "s2.0.1.project-shell"],
-      "cueOrder": ["s2.0.1.repo-context", "s2.0.1.project-shell"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-0-1.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8300,
+        "preferred": 11800,
+        "maximum": 17200
+      },
+      "expectedCues": [
+        "s2.0.1.repo-context",
+        "s2.0.1.project-shell"
+      ],
+      "cueOrder": [
+        "s2.0.1.repo-context",
+        "s2.0.1.project-shell"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 0.1", "title": "Introduce the repo and the job", "duration": 1800 },
+        {
+          "type": "badge",
+          "label": "Beat 0.1",
+          "title": "Introduce the repo and the job",
+          "duration": 1800
+        },
         {
           "type": "waitText",
           "text": "sabbour/AKS",
@@ -46,8 +102,15 @@
             "name": "s2.0.1.repo-context",
             "stableForMs": 600,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "sabbour/AKS" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "sabbour/AKS"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
         {
@@ -58,27 +121,67 @@
             "name": "s2.0.1.project-shell",
             "stableForMs": 500,
             "deadlineMs": 60000,
-            "source": { "kind": "selector", "selector": "[data-testid='app-navigation-menu']", "state": "visible" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "selector",
+              "selector": "[data-testid='app-navigation-menu']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "pause", "ms": 900 }
+        {
+          "type": "pause",
+          "ms": 900
+        }
       ],
       "intervalCategories": [
-        { "from": "s2.0.1.repo-context", "to": "s2.0.1.project-shell", "category": "action" }
+        {
+          "from": "s2.0.1.repo-context",
+          "to": "s2.0.1.project-shell",
+          "category": "action"
+        }
       ]
     },
     {
       "id": "1.1",
       "requiresPriorBeat": "0.1",
-      "videoPath": "recordings/azure-aks/beat-1-1.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7800, "preferred": 11100, "maximum": 16200 },
-      "expectedCues": ["s2.1.1.project-gallery", "s2.1.1.github-dialog", "s2.1.1.generated-blueprint", "s2.1.1.project-created"],
-      "cueOrder": ["s2.1.1.project-gallery", "s2.1.1.github-dialog", "s2.1.1.generated-blueprint", "s2.1.1.project-created"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-1-1.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 7800,
+        "preferred": 11100,
+        "maximum": 16200
+      },
+      "expectedCues": [
+        "s2.1.1.project-gallery",
+        "s2.1.1.github-dialog",
+        "s2.1.1.generated-blueprint",
+        "s2.1.1.project-created"
+      ],
+      "cueOrder": [
+        "s2.1.1.project-gallery",
+        "s2.1.1.github-dialog",
+        "s2.1.1.generated-blueprint",
+        "s2.1.1.project-created"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 1.1", "title": "Generate the right blueprint", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Projects', exact: true })", "scale": 1.35, "after": 700 },
+        {
+          "type": "badge",
+          "label": "Beat 1.1",
+          "title": "Generate the right blueprint",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Projects', exact: true })",
+          "scale": 1.35,
+          "after": 700
+        },
         {
           "type": "waitFor",
           "selector": "page.getByRole('button', { name: 'Create from GitHub', exact: true })",
@@ -87,11 +190,22 @@
             "name": "s2.1.1.project-gallery",
             "stableForMs": 500,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "Projects" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Projects"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Create from GitHub', exact: true })", "scale": 1.45, "after": 700 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Create from GitHub', exact: true })",
+          "scale": 1.45,
+          "after": 700
+        },
         {
           "type": "waitFor",
           "selector": "page.getByRole('dialog').filter({ hasText: 'Create project from GitHub' })",
@@ -100,14 +214,44 @@
             "name": "s2.1.1.github-dialog",
             "stableForMs": 500,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "[role='dialog']", "includes": "Create project from GitHub" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "text",
+              "selector": "[role='dialog']",
+              "includes": "Create project from GitHub"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "type", "selector": "page.getByLabel('Or paste any repository').getByRole('textbox')", "text": "sabbour/AKS", "scale": 1.55, "delay": 25, "after": 300 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Go →', exact: true })", "scale": 1.45, "after": 600 },
-        { "type": "type", "selector": "page.getByLabel('Project name')", "text": "Agentweaver Demo S2 — sabbour/AKS", "scale": 1.55, "delay": 25, "after": 300 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Generate', exact: true })", "scale": 1.42, "after": 500 },
+        {
+          "type": "type",
+          "selector": "page.getByLabel('Or paste any repository').getByRole('textbox')",
+          "text": "sabbour/AKS",
+          "scale": 1.55,
+          "delay": 25,
+          "after": 300
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Go →', exact: true })",
+          "scale": 1.45,
+          "after": 600
+        },
+        {
+          "type": "type",
+          "selector": "page.getByLabel('Project name')",
+          "text": "Agentweaver Demo — AKS Product Operations",
+          "scale": 1.55,
+          "delay": 25,
+          "after": 300
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Generate', exact: true })",
+          "scale": 1.42,
+          "after": 500
+        },
         {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Describe what you want Agentweaver to do' })",
@@ -116,7 +260,12 @@
           "delay": 8,
           "after": 700
         },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Generate Blueprint', exact: true })", "scale": 1.5, "after": 700 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Generate Blueprint', exact: true })",
+          "scale": 1.5,
+          "after": 700
+        },
         {
           "type": "waitFor",
           "selector": "page.getByLabel('Generated blueprint preview')",
@@ -125,11 +274,22 @@
             "name": "s2.1.1.generated-blueprint",
             "stableForMs": 900,
             "deadlineMs": 180000,
-            "source": { "kind": "selector", "selector": "[aria-label='Generated blueprint preview']", "state": "visible" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "selector",
+              "selector": "[aria-label='Generated blueprint preview']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Create', exact: true })", "scale": 1.45, "after": 1200 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Create', exact: true })",
+          "scale": 1.45,
+          "after": 1200
+        },
         {
           "type": "waitText",
           "text": "Project created",
@@ -138,28 +298,72 @@
             "name": "s2.1.1.project-created",
             "stableForMs": 700,
             "deadlineMs": 180000,
-            "source": { "kind": "text", "selector": "main", "includes": "Project created" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Project created"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         }
       ],
       "intervalCategories": [
-        { "from": "s2.1.1.project-gallery", "to": "s2.1.1.github-dialog", "category": "action" },
-        { "from": "s2.1.1.github-dialog", "to": "s2.1.1.generated-blueprint", "category": "wait" },
-        { "from": "s2.1.1.generated-blueprint", "to": "s2.1.1.project-created", "category": "action" }
+        {
+          "from": "s2.1.1.project-gallery",
+          "to": "s2.1.1.github-dialog",
+          "category": "action"
+        },
+        {
+          "from": "s2.1.1.github-dialog",
+          "to": "s2.1.1.generated-blueprint",
+          "category": "wait"
+        },
+        {
+          "from": "s2.1.1.generated-blueprint",
+          "to": "s2.1.1.project-created",
+          "category": "action"
+        }
       ]
     },
     {
       "id": "1.2",
       "requiresPriorBeat": "1.1",
-      "videoPath": "recordings/azure-aks/beat-1-2.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 14800, "preferred": 21100, "maximum": 30600 },
-      "expectedCues": ["s2.1.2.skills-page", "s2.1.2.pm-skill-candidates", "s2.1.2.assignments-visible"],
-      "cueOrder": ["s2.1.2.skills-page", "s2.1.2.pm-skill-candidates", "s2.1.2.assignments-visible"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-1-2.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 14800,
+        "preferred": 21100,
+        "maximum": 30600
+      },
+      "expectedCues": [
+        "s2.1.2.skills-page",
+        "s2.1.2.pm-skill-candidates",
+        "s2.1.2.assignments-visible"
+      ],
+      "cueOrder": [
+        "s2.1.2.skills-page",
+        "s2.1.2.pm-skill-candidates",
+        "s2.1.2.assignments-visible"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 1.2", "title": "Meet the cast and import PM skills", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Skills', exact: true })", "scale": 1.42, "after": 900 },
+        {
+          "type": "badge",
+          "label": "Beat 1.2",
+          "title": "Meet the cast and import PM skills",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Skills', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
         {
           "type": "waitText",
           "text": "Import, sync, and assign reusable agent skills",
@@ -168,13 +372,37 @@
             "name": "s2.1.2.skills-page",
             "stableForMs": 500,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "Import, sync, and assign reusable agent skills" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Import, sync, and assign reusable agent skills"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Import skill', exact: true })", "scale": 1.5, "after": 600 },
-        { "type": "type", "selector": "page.getByLabel('Paste raw SKILL.md URL or GitHub repo/folder URL')", "text": "https://github.com/sabbour/agentweaver/tree/dev/.github/skills", "scale": 1.55, "delay": 8, "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Preview candidates', exact: true })", "scale": 1.45, "after": 700 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Import skill', exact: true })",
+          "scale": 1.5,
+          "after": 600
+        },
+        {
+          "type": "type",
+          "selector": "page.getByLabel('Paste raw SKILL.md URL or GitHub repo/folder URL')",
+          "text": "https://github.com/sabbour/agentweaver/tree/dev/.github/skills",
+          "scale": 1.55,
+          "delay": 8,
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Preview candidates', exact: true })",
+          "scale": 1.45,
+          "after": 700
+        },
         {
           "type": "waitText",
           "text": "akspm-write-prd",
@@ -183,12 +411,29 @@
             "name": "s2.1.2.pm-skill-candidates",
             "stableForMs": 700,
             "deadlineMs": 180000,
-            "source": { "kind": "text", "selector": "[role='dialog']", "includes": "akspm-write-prd" },
-            "rect": { "mode": "element", "selector": "[role='dialog']" }
+            "source": {
+              "kind": "text",
+              "selector": "[role='dialog']",
+              "includes": "akspm-write-prd"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "[role='dialog']"
+            }
           }
         },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Import', exact: true })", "scale": 1.45, "after": 1200 },
-        { "type": "click", "selector": "page.getByRole('tab', { name: 'Assignments', exact: true })", "scale": 1.42, "after": 700 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Import', exact: true })",
+          "scale": 1.45,
+          "after": 1200
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('tab', { name: 'Assignments', exact: true })",
+          "scale": 1.42,
+          "after": 700
+        },
         {
           "type": "waitText",
           "text": "akspm-review-prd",
@@ -197,29 +442,81 @@
             "name": "s2.1.2.assignments-visible",
             "stableForMs": 500,
             "deadlineMs": 120000,
-            "source": { "kind": "text", "selector": "main", "includes": "akspm-review-prd" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "akspm-review-prd"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
-        { "type": "hover", "selector": "page.getByText(/akspm-(write-prd|review-prd|draft-technical-post|review-blog-post|name-feature|generate-social-media-blurb)/i).first()", "scale": 1.28, "hold": 1400 }
+        {
+          "type": "hover",
+          "selector": "page.getByText(/akspm-(write-prd|review-prd|draft-technical-post|review-blog-post|name-feature|generate-social-media-blurb)/i).first()",
+          "scale": 1.28,
+          "hold": 1400
+        }
       ],
       "intervalCategories": [
-        { "from": "s2.1.2.skills-page", "to": "s2.1.2.pm-skill-candidates", "category": "wait" },
-        { "from": "s2.1.2.pm-skill-candidates", "to": "s2.1.2.assignments-visible", "category": "action" }
+        {
+          "from": "s2.1.2.skills-page",
+          "to": "s2.1.2.pm-skill-candidates",
+          "category": "wait"
+        },
+        {
+          "from": "s2.1.2.pm-skill-candidates",
+          "to": "s2.1.2.assignments-visible",
+          "category": "action"
+        }
       ]
     },
     {
       "id": "2.2",
       "requiresPriorBeat": "1.2",
-      "videoPath": "recordings/azure-aks/beat-2-2.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 18900, "preferred": 27000, "maximum": 39200 },
-      "expectedCues": ["s2.2.2.workflow-dialog", "s2.2.2.workflow-graph", "s2.2.2.schedule-saved", "s2.2.2.event-saved"],
-      "cueOrder": ["s2.2.2.workflow-dialog", "s2.2.2.workflow-graph", "s2.2.2.schedule-saved", "s2.2.2.event-saved"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-2-2.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 18900,
+        "preferred": 27000,
+        "maximum": 39200
+      },
+      "expectedCues": [
+        "s2.2.2.workflow-dialog",
+        "s2.2.2.workflow-graph",
+        "s2.2.2.schedule-saved",
+        "s2.2.2.event-saved"
+      ],
+      "cueOrder": [
+        "s2.2.2.workflow-dialog",
+        "s2.2.2.workflow-graph",
+        "s2.2.2.schedule-saved",
+        "s2.2.2.event-saved"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.2", "title": "Generate the issue-triage workflow", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Workflows', exact: true })", "scale": 1.42, "after": 900 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Generate workflow', exact: true })", "scale": 1.46, "after": 700 },
+        {
+          "type": "badge",
+          "label": "Beat 2.2",
+          "title": "Generate the issue-triage workflow",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Generate workflow', exact: true })",
+          "scale": 1.46,
+          "after": 700
+        },
         {
           "type": "waitFor",
           "selector": "page.getByRole('dialog').filter({ hasText: 'Describe the workflow you need' })",
@@ -228,12 +525,30 @@
             "name": "s2.2.2.workflow-dialog",
             "stableForMs": 400,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "[role='dialog']", "includes": "Describe the workflow you need" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "text",
+              "selector": "[role='dialog']",
+              "includes": "Describe the workflow you need"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "type", "selector": "page.getByLabel('Describe the workflow you need')", "text": "Weekly AKS issue triage: classify open issues, group duplicate feature requests, identify gaps not already documented, write PRDs, name features, review PRDs, and produce a triage report without writing back to sabbour/AKS unless explicitly approved.", "scale": 1.65, "delay": 7, "after": 700 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Generate', exact: true })", "scale": 1.5, "after": 800 },
+        {
+          "type": "type",
+          "selector": "page.getByLabel('Describe the workflow you need')",
+          "text": "Weekly AKS issue triage: classify open issues, group duplicate feature requests, identify gaps not already documented, write PRDs, name features, review PRDs, and produce a triage report without writing back to sabbour/AKS unless explicitly approved.",
+          "scale": 1.65,
+          "delay": 7,
+          "after": 700
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Generate', exact: true })",
+          "scale": 1.5,
+          "after": 800
+        },
         {
           "type": "waitFor",
           "selector": "page.locator('.react-flow__node').first()",
@@ -242,17 +557,65 @@
             "name": "s2.2.2.workflow-graph",
             "stableForMs": 1000,
             "deadlineMs": 180000,
-            "source": { "kind": "predicate", "selector": ".react-flow__node", "operator": "count-gte", "minCount": 1 },
-            "rect": { "mode": "first-matching", "selector": ".react-flow__node" }
+            "source": {
+              "kind": "predicate",
+              "selector": ".react-flow__node",
+              "operator": "count-gte",
+              "minCount": 1
+            },
+            "rect": {
+              "mode": "first-matching",
+              "selector": ".react-flow__node"
+            }
           }
         },
-        { "type": "hover", "selector": "page.getByRole('toolbar', { name: 'Workflow canvas actions' })", "scale": 1.24, "hold": 1400 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Save', exact: true })", "scale": 1.42, "after": 1200 },
-        { "type": "waitText", "text": "Workflow \"", "timeout": 120000 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Add schedule|Edit schedule|Replace with schedule/i }).first()", "scale": 1.42, "after": 700 },
-        { "type": "select", "selector": "page.getByLabel('Cadence')", "option": { "label": "Weekly" }, "scale": 1.35, "after": 500 },
-        { "type": "select", "selector": "page.getByLabel('Day of week')", "option": { "label": "monday" }, "scale": 1.35, "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Save schedule', exact: true })", "scale": 1.45, "after": 1000 },
+        {
+          "type": "hover",
+          "selector": "page.getByRole('toolbar', { name: 'Workflow canvas actions' })",
+          "scale": 1.24,
+          "hold": 1400
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Save', exact: true })",
+          "scale": 1.42,
+          "after": 1200
+        },
+        {
+          "type": "waitText",
+          "text": "Workflow \"",
+          "timeout": 120000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Add schedule|Edit schedule|Replace with schedule/i }).first()",
+          "scale": 1.42,
+          "after": 700
+        },
+        {
+          "type": "select",
+          "selector": "page.getByLabel('Cadence')",
+          "option": {
+            "label": "Weekly"
+          },
+          "scale": 1.35,
+          "after": 500
+        },
+        {
+          "type": "select",
+          "selector": "page.getByLabel('Day of week')",
+          "option": {
+            "label": "monday"
+          },
+          "scale": 1.35,
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Save schedule', exact: true })",
+          "scale": 1.45,
+          "after": 1000
+        },
         {
           "type": "waitText",
           "text": "Schedule trigger saved",
@@ -261,16 +624,61 @@
             "name": "s2.2.2.schedule-saved",
             "stableForMs": 500,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "Schedule trigger saved" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Schedule trigger saved"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Add event|Edit event|Replace with event/i }).first()", "scale": 1.42, "after": 700 },
-        { "type": "select", "selector": "page.getByLabel('GitHub event')", "option": { "label": "Issues" }, "scale": 1.35, "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Add condition', exact: true })", "scale": 1.35, "after": 500 },
-        { "type": "select", "selector": "page.getByLabel('Condition type').last()", "option": { "label": "Has label" }, "scale": 1.35, "after": 500 },
-        { "type": "type", "selector": "page.getByLabel('Label').last()", "text": "roadmap-review", "scale": 1.45, "delay": 20, "after": 600 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Save event', exact: true })", "scale": 1.45, "after": 1000 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Add event|Edit event|Replace with event/i }).first()",
+          "scale": 1.42,
+          "after": 700
+        },
+        {
+          "type": "select",
+          "selector": "page.getByLabel('GitHub event')",
+          "option": {
+            "label": "Issues"
+          },
+          "scale": 1.35,
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Add condition', exact: true })",
+          "scale": 1.35,
+          "after": 500
+        },
+        {
+          "type": "select",
+          "selector": "page.getByLabel('Condition type').last()",
+          "option": {
+            "label": "Has label"
+          },
+          "scale": 1.35,
+          "after": 500
+        },
+        {
+          "type": "type",
+          "selector": "page.getByLabel('Label').last()",
+          "text": "roadmap-review",
+          "scale": 1.45,
+          "delay": 20,
+          "after": 600
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Save event', exact: true })",
+          "scale": 1.45,
+          "after": 1000
+        },
         {
           "type": "waitText",
           "text": "Event trigger saved",
@@ -279,29 +687,78 @@
             "name": "s2.2.2.event-saved",
             "stableForMs": 500,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "Event trigger saved" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Event trigger saved"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         }
       ],
       "intervalCategories": [
-        { "from": "s2.2.2.workflow-dialog", "to": "s2.2.2.workflow-graph", "category": "wait" },
-        { "from": "s2.2.2.workflow-graph", "to": "s2.2.2.schedule-saved", "category": "action" },
-        { "from": "s2.2.2.schedule-saved", "to": "s2.2.2.event-saved", "category": "action" }
+        {
+          "from": "s2.2.2.workflow-dialog",
+          "to": "s2.2.2.workflow-graph",
+          "category": "wait"
+        },
+        {
+          "from": "s2.2.2.workflow-graph",
+          "to": "s2.2.2.schedule-saved",
+          "category": "action"
+        },
+        {
+          "from": "s2.2.2.schedule-saved",
+          "to": "s2.2.2.event-saved",
+          "category": "action"
+        }
       ]
     },
     {
       "id": "2.3",
       "requiresPriorBeat": "2.2",
-      "videoPath": "recordings/azure-aks/beat-2-3.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 5700, "preferred": 8150, "maximum": 11800 },
-      "expectedCues": ["s2.2.3.marketplace-open", "s2.2.3.writing-skill-candidate", "s2.2.3.writer-assignment"],
-      "cueOrder": ["s2.2.3.marketplace-open", "s2.2.3.writing-skill-candidate", "s2.2.3.writer-assignment"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-2-3.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 5700,
+        "preferred": 8150,
+        "maximum": 11800
+      },
+      "expectedCues": [
+        "s2.2.3.marketplace-open",
+        "s2.2.3.writing-skill-candidate",
+        "s2.2.3.writer-assignment"
+      ],
+      "cueOrder": [
+        "s2.2.3.marketplace-open",
+        "s2.2.3.writing-skill-candidate",
+        "s2.2.3.writer-assignment"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.3", "title": "Add the writing skill", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Skills', exact: true })", "scale": 1.42, "after": 900 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Browse marketplaces', exact: true })", "scale": 1.5, "after": 700 },
+        {
+          "type": "badge",
+          "label": "Beat 2.3",
+          "title": "Add the writing skill",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Skills', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Browse marketplaces', exact: true })",
+          "scale": 1.5,
+          "after": 700
+        },
         {
           "type": "waitFor",
           "selector": "page.getByRole('dialog').filter({ hasText: 'Browse skill marketplaces' })",
@@ -310,12 +767,30 @@
             "name": "s2.2.3.marketplace-open",
             "stableForMs": 400,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "[role='dialog']", "includes": "Browse skill marketplaces" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "text",
+              "selector": "[role='dialog']",
+              "includes": "Browse skill marketplaces"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "type", "selector": "page.getByLabel('Add a source by GitHub URL')", "text": "conorbronsdon/avoid-ai-writing", "scale": 1.55, "delay": 12, "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Add source', exact: true })", "scale": 1.42, "after": 1200 },
+        {
+          "type": "type",
+          "selector": "page.getByLabel('Add a source by GitHub URL')",
+          "text": "conorbronsdon/avoid-ai-writing",
+          "scale": 1.55,
+          "delay": 12,
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Add source', exact: true })",
+          "scale": 1.42,
+          "after": 1200
+        },
         {
           "type": "waitText",
           "text": "avoid-ai-writing",
@@ -324,15 +799,46 @@
             "name": "s2.2.3.writing-skill-candidate",
             "stableForMs": 700,
             "deadlineMs": 180000,
-            "source": { "kind": "text", "selector": "[role='dialog']", "includes": "avoid-ai-writing" },
-            "rect": { "mode": "element", "selector": "[role='dialog']" }
+            "source": {
+              "kind": "text",
+              "selector": "[role='dialog']",
+              "includes": "avoid-ai-writing"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "[role='dialog']"
+            }
           }
         },
-        { "type": "click", "selector": "page.getByRole('checkbox', { name: /avoid-ai-writing/i }).first()", "scale": 1.35, "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Import selected', exact: true })", "scale": 1.45, "after": 1200 },
-        { "type": "click", "selector": "page.getByRole('tab', { name: 'Assignments', exact: true })", "scale": 1.4, "after": 700 },
-        { "type": "waitText", "text": "avoid-ai-writing", "timeout": 120000 },
-        { "type": "click", "selector": "page.getByText('avoid-ai-writing', { exact: true }).locator('xpath=../..').getByRole('checkbox', { name: /writer/i })", "scale": 1.35, "after": 700 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('checkbox', { name: /avoid-ai-writing/i }).first()",
+          "scale": 1.35,
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Import selected', exact: true })",
+          "scale": 1.45,
+          "after": 1200
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('tab', { name: 'Assignments', exact: true })",
+          "scale": 1.4,
+          "after": 700
+        },
+        {
+          "type": "waitText",
+          "text": "avoid-ai-writing",
+          "timeout": 120000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByText('avoid-ai-writing', { exact: true }).locator('xpath=../..').getByRole('checkbox', { name: /writer/i })",
+          "scale": 1.35,
+          "after": 700
+        },
         {
           "type": "waitFor",
           "selector": "page.getByText('avoid-ai-writing', { exact: true }).locator('xpath=../..').getByRole('checkbox', { name: /writer/i })",
@@ -341,29 +847,80 @@
             "name": "s2.2.3.writer-assignment",
             "stableForMs": 700,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "avoid-ai-writing" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "avoid-ai-writing"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "hover", "selector": "page.getByText('avoid-ai-writing', { exact: true }).first()", "scale": 1.35, "hold": 1200 }
+        {
+          "type": "hover",
+          "selector": "page.getByText('avoid-ai-writing', { exact: true }).first()",
+          "scale": 1.35,
+          "hold": 1200
+        }
       ],
       "intervalCategories": [
-        { "from": "s2.2.3.marketplace-open", "to": "s2.2.3.writing-skill-candidate", "category": "wait" },
-        { "from": "s2.2.3.writing-skill-candidate", "to": "s2.2.3.writer-assignment", "category": "action" }
+        {
+          "from": "s2.2.3.marketplace-open",
+          "to": "s2.2.3.writing-skill-candidate",
+          "category": "wait"
+        },
+        {
+          "from": "s2.2.3.writing-skill-candidate",
+          "to": "s2.2.3.writer-assignment",
+          "category": "action"
+        }
       ]
     },
     {
       "id": "3.1",
       "requiresPriorBeat": "2.3",
-      "videoPath": "recordings/azure-aks/beat-3-1.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 4000, "preferred": 6500, "maximum": 9000 },
-      "expectedCues": ["s2.3.1.run-queued", "s2.3.1.topology-rendered", "s2.3.1.split-confirmed", "s2.3.1.triage-artifacts"],
-      "cueOrder": ["s2.3.1.run-queued", "s2.3.1.topology-rendered", "s2.3.1.split-confirmed", "s2.3.1.triage-artifacts"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-3-1.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 4000,
+        "preferred": 6500,
+        "maximum": 9000
+      },
+      "expectedCues": [
+        "s2.3.1.run-queued",
+        "s2.3.1.topology-rendered",
+        "s2.3.1.split-confirmed",
+        "s2.3.1.triage-artifacts"
+      ],
+      "cueOrder": [
+        "s2.3.1.run-queued",
+        "s2.3.1.topology-rendered",
+        "s2.3.1.split-confirmed",
+        "s2.3.1.triage-artifacts"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 3.1", "title": "Run triage now", "duration": 1600 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Workflows', exact: true })", "scale": 1.42, "after": 900 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Run now', exact: true }).first()", "scale": 1.5, "after": 1000 },
+        {
+          "type": "badge",
+          "label": "Beat 3.1",
+          "title": "Run triage now",
+          "duration": 1600
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Run now', exact: true }).first()",
+          "scale": 1.5,
+          "after": 1000
+        },
         {
           "type": "waitText",
           "text": "Queued a run",
@@ -372,13 +929,34 @@
             "name": "s2.3.1.run-queued",
             "stableForMs": 400,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "main", "includes": "Queued a run" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Queued a run"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Orchestrations', exact: true })", "scale": 1.42, "after": 900 },
-        { "type": "waitFor", "selector": "page.getByRole('region', { name: 'Active orchestrations' })", "timeout": 180000 },
-        { "type": "click", "selector": "page.getByRole('region', { name: 'Active orchestrations' }).getByRole('button', { name: 'Open', exact: true }).first()", "scale": 1.45, "after": 900 },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Orchestrations', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('region', { name: 'Active orchestrations' })",
+          "timeout": 180000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('region', { name: 'Active orchestrations' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "scale": 1.45,
+          "after": 900
+        },
         {
           "type": "waitFor",
           "selector": "page.getByTestId('coordinator-topology-graph')",
@@ -387,13 +965,33 @@
             "name": "s2.3.1.topology-rendered",
             "stableForMs": 1200,
             "deadlineMs": 300000,
-            "source": { "kind": "selector", "selector": "[data-testid='coordinator-topology-graph']", "state": "visible" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "selector",
+              "selector": "[data-testid='coordinator-topology-graph']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "waitFor", "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })", "timeout": 300000 },
-        { "type": "click", "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })", "scale": 1.45, "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Confirm plan', exact: true })", "scale": 1.5, "after": 900 },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "timeout": 300000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "scale": 1.45,
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Confirm plan', exact: true })",
+          "scale": 1.5,
+          "after": 900
+        },
         {
           "type": "waitText",
           "text": "Confirmed",
@@ -402,8 +1000,15 @@
             "name": "s2.3.1.split-confirmed",
             "stableForMs": 700,
             "deadlineMs": 300000,
-            "source": { "kind": "text", "selector": "main", "includes": "Confirmed" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Confirmed"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
         {
@@ -414,30 +1019,79 @@
             "name": "s2.3.1.triage-artifacts",
             "stableForMs": 1200,
             "deadlineMs": 600000,
-            "source": { "kind": "text", "selector": "main", "includes": "Triage report" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Triage report"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
-        { "type": "hover", "selector": "page.getByText(/triage report|PRD|roadmap/i).first()", "scale": 1.22, "hold": 1800 }
+        {
+          "type": "hover",
+          "selector": "page.getByText(/triage report|PRD|roadmap/i).first()",
+          "scale": 1.22,
+          "hold": 1800
+        }
       ],
       "intervalCategories": [
-        { "from": "s2.3.1.run-queued", "to": "s2.3.1.topology-rendered", "category": "wait" },
-        { "from": "s2.3.1.topology-rendered", "to": "s2.3.1.split-confirmed", "category": "action" },
-        { "from": "s2.3.1.split-confirmed", "to": "s2.3.1.triage-artifacts", "category": "wait" }
+        {
+          "from": "s2.3.1.run-queued",
+          "to": "s2.3.1.topology-rendered",
+          "category": "wait"
+        },
+        {
+          "from": "s2.3.1.topology-rendered",
+          "to": "s2.3.1.split-confirmed",
+          "category": "action"
+        },
+        {
+          "from": "s2.3.1.split-confirmed",
+          "to": "s2.3.1.triage-artifacts",
+          "category": "wait"
+        }
       ]
     },
     {
       "id": "3.2",
       "requiresPriorBeat": "3.1",
-      "videoPath": "recordings/azure-aks/beat-3-2.webm",
-      "viewport": { "width": 1920, "height": 1080 },
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-3-2.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
       "disableApprovalWatcher": true,
-      "outputBudgetMs": { "minimum": 13500, "preferred": 19300, "maximum": 28000 },
-      "expectedCues": ["s2.3.2.start-dialog", "s2.3.2.blog-draft", "s2.3.2.pr-approval-visible"],
-      "cueOrder": ["s2.3.2.start-dialog", "s2.3.2.blog-draft", "s2.3.2.pr-approval-visible"],
+      "outputBudgetMs": {
+        "minimum": 13500,
+        "preferred": 19300,
+        "maximum": 28000
+      },
+      "expectedCues": [
+        "s2.3.2.start-dialog",
+        "s2.3.2.blog-draft",
+        "s2.3.2.pr-approval-visible"
+      ],
+      "cueOrder": [
+        "s2.3.2.start-dialog",
+        "s2.3.2.blog-draft",
+        "s2.3.2.pr-approval-visible"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 3.2", "title": "Draft the blog post locally", "duration": 1800 },
-        { "type": "click", "selector": "page.getByTestId('start-task-topbar-action')", "scale": 1.45, "after": 700 },
+        {
+          "type": "badge",
+          "label": "Beat 3.2",
+          "title": "Draft the blog post locally",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('start-task-topbar-action')",
+          "scale": 1.45,
+          "after": 700
+        },
         {
           "type": "waitFor",
           "selector": "page.getByRole('dialog').filter({ hasText: 'Start a task' })",
@@ -446,12 +1100,30 @@
             "name": "s2.3.2.start-dialog",
             "stableForMs": 400,
             "deadlineMs": 60000,
-            "source": { "kind": "text", "selector": "[role='dialog']", "includes": "Start a task" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "text",
+              "selector": "[role='dialog']",
+              "includes": "Start a task"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "type", "selector": "page.getByRole('textbox', { name: 'Goal' })", "text": "Draft a standalone engineering blog post about multi-agent orchestration on AKS, researching against https://sabbour.me/agentweaver. Keep all work local and stop at the approval gate that would open a pull request.", "scale": 1.65, "delay": 7, "after": 700 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Direct', exact: true })", "scale": 1.5, "after": 1100 },
+        {
+          "type": "type",
+          "selector": "page.getByRole('textbox', { name: 'Goal' })",
+          "text": "Draft a standalone engineering blog post about multi-agent orchestration on AKS, researching against https://sabbour.me/agentweaver. Keep all work local and stop at the approval gate that would open a pull request.",
+          "scale": 1.65,
+          "delay": 7,
+          "after": 700
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Direct', exact: true })",
+          "scale": 1.5,
+          "after": 1100
+        },
         {
           "type": "waitText",
           "text": "blog",
@@ -460,8 +1132,16 @@
             "name": "s2.3.2.blog-draft",
             "stableForMs": 1200,
             "deadlineMs": 300000,
-            "source": { "kind": "text", "selector": "main", "pattern": "blog|post|draft", "flags": "i" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "pattern": "blog|post|draft",
+              "flags": "i"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
         {
@@ -472,28 +1152,73 @@
             "name": "s2.3.2.pr-approval-visible",
             "stableForMs": 1200,
             "deadlineMs": 300000,
-            "source": { "kind": "predicate", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate'], [data-testid='shell-approval-gate']", "operator": "exists" },
-            "rect": { "mode": "first-matching", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate'], [data-testid='shell-approval-gate']" }
+            "source": {
+              "kind": "predicate",
+              "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate'], [data-testid='shell-approval-gate']",
+              "operator": "exists"
+            },
+            "rect": {
+              "mode": "first-matching",
+              "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate'], [data-testid='shell-approval-gate']"
+            }
           }
         },
-        { "type": "hover", "selector": "page.locator('[data-testid=\"session-approval-gate\"], [data-testid=\"assistant-approval-gate\"], [data-testid=\"shell-approval-gate\"]').first()", "scale": 1.28, "hold": 2400 }
+        {
+          "type": "hover",
+          "selector": "page.locator('[data-testid=\"session-approval-gate\"], [data-testid=\"assistant-approval-gate\"], [data-testid=\"shell-approval-gate\"]').first()",
+          "scale": 1.28,
+          "hold": 2400
+        }
       ],
       "intervalCategories": [
-        { "from": "s2.3.2.start-dialog", "to": "s2.3.2.blog-draft", "category": "wait" },
-        { "from": "s2.3.2.blog-draft", "to": "s2.3.2.pr-approval-visible", "category": "wait" }
+        {
+          "from": "s2.3.2.start-dialog",
+          "to": "s2.3.2.blog-draft",
+          "category": "wait"
+        },
+        {
+          "from": "s2.3.2.blog-draft",
+          "to": "s2.3.2.pr-approval-visible",
+          "category": "wait"
+        }
       ]
     },
     {
       "id": "4.4",
       "requiresPriorBeat": "3.2",
-      "videoPath": "recordings/azure-aks/beat-4-4.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 6200, "preferred": 8900, "maximum": 12900 },
-      "expectedCues": ["s2.4.4.cluster-page", "s2.4.4.diagnostics-loaded", "s2.4.4.refresh-visible"],
-      "cueOrder": ["s2.4.4.cluster-page", "s2.4.4.diagnostics-loaded", "s2.4.4.refresh-visible"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-4-4.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 6200,
+        "preferred": 8900,
+        "maximum": 12900
+      },
+      "expectedCues": [
+        "s2.4.4.cluster-page",
+        "s2.4.4.diagnostics-loaded",
+        "s2.4.4.refresh-visible"
+      ],
+      "cueOrder": [
+        "s2.4.4.cluster-page",
+        "s2.4.4.diagnostics-loaded",
+        "s2.4.4.refresh-visible"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.4", "title": "Check observability", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Cluster', exact: true })", "scale": 1.42, "after": 900 },
+        {
+          "type": "badge",
+          "label": "Beat 4.4",
+          "title": "Check observability",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Cluster', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
         {
           "type": "waitText",
           "text": "Kubernetes cluster health and capacity",
@@ -502,8 +1227,15 @@
             "name": "s2.4.4.cluster-page",
             "stableForMs": 500,
             "deadlineMs": 120000,
-            "source": { "kind": "text", "selector": "main", "includes": "Kubernetes cluster health and capacity" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Kubernetes cluster health and capacity"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
         {
@@ -514,13 +1246,33 @@
             "name": "s2.4.4.diagnostics-loaded",
             "stableForMs": 1000,
             "deadlineMs": 180000,
-            "source": { "kind": "text", "selector": "main", "includes": "Warm pool ready" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Warm pool ready"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
-        { "type": "waitText", "text": "Sandbox claims", "timeout": 180000 },
-        { "type": "waitText", "text": "agent_pod_quota", "timeout": 180000 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Refresh', exact: true })", "scale": 1.25, "after": 900 },
+        {
+          "type": "waitText",
+          "text": "Sandbox claims",
+          "timeout": 180000
+        },
+        {
+          "type": "waitText",
+          "text": "agent_pod_quota",
+          "timeout": 180000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Refresh', exact: true })",
+          "scale": 1.25,
+          "after": 900
+        },
         {
           "type": "waitFor",
           "selector": "page.getByText(/Refreshing|Refreshes|Last refreshed|Generated/i).first()",
@@ -529,28 +1281,71 @@
             "name": "s2.4.4.refresh-visible",
             "stableForMs": 1000,
             "deadlineMs": 120000,
-            "source": { "kind": "predicate", "selector": "main", "operator": "text-matches", "pattern": "Refreshing|Refreshes|Last refreshed|Generated", "flags": "i" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "predicate",
+              "selector": "main",
+              "operator": "text-matches",
+              "pattern": "Refreshing|Refreshes|Last refreshed|Generated",
+              "flags": "i"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
-        { "type": "pause", "ms": 1800 }
+        {
+          "type": "pause",
+          "ms": 1800
+        }
       ],
       "intervalCategories": [
-        { "from": "s2.4.4.cluster-page", "to": "s2.4.4.diagnostics-loaded", "category": "wait" },
-        { "from": "s2.4.4.diagnostics-loaded", "to": "s2.4.4.refresh-visible", "category": "action" }
+        {
+          "from": "s2.4.4.cluster-page",
+          "to": "s2.4.4.diagnostics-loaded",
+          "category": "wait"
+        },
+        {
+          "from": "s2.4.4.diagnostics-loaded",
+          "to": "s2.4.4.refresh-visible",
+          "category": "action"
+        }
       ]
     },
     {
       "id": "5.1",
       "requiresPriorBeat": "4.4",
-      "videoPath": "recordings/azure-aks/beat-5-1.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 21800, "preferred": 31100, "maximum": 45100 },
-      "expectedCues": ["s2.5.1.settings-page", "s2.5.1.mcp-url-visible"],
-      "cueOrder": ["s2.5.1.settings-page", "s2.5.1.mcp-url-visible"],
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-5-1.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 21800,
+        "preferred": 31100,
+        "maximum": 45100
+      },
+      "expectedCues": [
+        "s2.5.1.settings-page",
+        "s2.5.1.mcp-url-visible"
+      ],
+      "cueOrder": [
+        "s2.5.1.settings-page",
+        "s2.5.1.mcp-url-visible"
+      ],
       "steps": [
-        { "type": "badge", "label": "Beat 5.1", "title": "Outro", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Settings', exact: true })", "scale": 1.42, "after": 900 },
+        {
+          "type": "badge",
+          "label": "Beat 5.1",
+          "title": "Outro",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
         {
           "type": "waitText",
           "text": "Account settings",
@@ -559,8 +1354,15 @@
             "name": "s2.5.1.settings-page",
             "stableForMs": 500,
             "deadlineMs": 120000,
-            "source": { "kind": "text", "selector": "main", "includes": "Account settings" },
-            "rect": { "mode": "element", "selector": "main" }
+            "source": {
+              "kind": "text",
+              "selector": "main",
+              "includes": "Account settings"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
           }
         },
         {
@@ -571,16 +1373,38 @@
             "name": "s2.5.1.mcp-url-visible",
             "stableForMs": 700,
             "deadlineMs": 120000,
-            "source": { "kind": "selector", "selector": "[aria-label='MCP server URL']", "state": "visible" },
-            "rect": { "mode": "matched-element" }
+            "source": {
+              "kind": "selector",
+              "selector": "[aria-label='MCP server URL']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
           }
         },
-        { "type": "hover", "selector": "page.getByLabel('MCP server URL')", "scale": 1.35, "hold": 2400 },
-        { "type": "pause", "ms": 1200 }
+        {
+          "type": "hover",
+          "selector": "page.getByLabel('MCP server URL')",
+          "scale": 1.35,
+          "hold": 2400
+        },
+        {
+          "type": "pause",
+          "ms": 1200
+        }
       ],
       "intervalCategories": [
-        { "from": "s2.5.1.settings-page", "to": "s2.5.1.mcp-url-visible", "category": "action" }
+        {
+          "from": "s2.5.1.settings-page",
+          "to": "s2.5.1.mcp-url-visible",
+          "category": "action"
+        }
       ]
     }
-  ]
+  ],
+  "finalTake": {
+    "id": "aks-product-operations",
+    "outputDirectory": "recordings/final-takes/aks-product-operations"
+  }
 }

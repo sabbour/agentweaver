@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { createApiFromSession } from './api.mjs';
 import { DEFAULT_SESSION_STORAGE_PATH } from './auth.mjs';
 
@@ -113,6 +115,82 @@ export async function verifyFixtureWorkflowRequirements(options, dependencies = 
   if (missing.length) {
     preflightError(`fixture "${fixture.projectName}" is missing required project workflows: ${missing.join(', ')}. Create these project-owned workflows during the 2.x setup; built-in workflows are read-only and cannot be scheduled or event-configured.`);
   }
+}
+
+function isPathWithin(candidate, root) {
+  const relative = path.relative(root, candidate);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+export function validateFinalTake(captureConfig) {
+  const finalTake = captureConfig?.finalTake;
+  if (!finalTake || typeof finalTake !== 'object' || Array.isArray(finalTake)) {
+    throw new Error('A final capture plan must declare a finalTake object.');
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(finalTake.id ?? '')) {
+    throw new Error('finalTake.id must be a stable kebab-case identifier.');
+  }
+  if (typeof finalTake.outputDirectory !== 'string' || !finalTake.outputDirectory.trim()) {
+    throw new Error('finalTake.outputDirectory is required.');
+  }
+  if (!Array.isArray(captureConfig.beats) || captureConfig.beats.length === 0) {
+    throw new Error('A final capture plan must declare at least one beat.');
+  }
+
+  const outputDirectory = path.resolve(finalTake.outputDirectory);
+  const videoPaths = captureConfig.beats.map((beat, index) => {
+    if (typeof beat?.videoPath !== 'string' || !beat.videoPath.trim()) {
+      throw new Error(`A final capture plan requires beats[${index}].videoPath.`);
+    }
+    const videoPath = path.resolve(beat.videoPath);
+    if (!isPathWithin(videoPath, outputDirectory)) {
+      throw new Error('Every final-take videoPath must stay inside finalTake.outputDirectory.');
+    }
+    return videoPath;
+  });
+  if (new Set(videoPaths).size !== videoPaths.length) {
+    throw new Error('Every final-take beat must use a distinct videoPath.');
+  }
+  return { ...finalTake, outputDirectory, videoPaths };
+}
+
+export async function preflightFinalTake(captureConfig, dependencies = {}) {
+  const fixture = validateScenarioFixture(captureConfig?.fixture);
+  const finalTake = validateFinalTake(captureConfig);
+  const api = dependencies.api;
+  if (!api || typeof api.listAllProjects !== 'function') {
+    throw new Error('Final-take preflight requires an authenticated project API.');
+  }
+
+  const fileExists = dependencies.fileExists ?? (async (candidate) => {
+    try {
+      await fs.access(candidate);
+      return true;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return false;
+      throw error;
+    }
+  });
+  const existingMedia = [];
+  for (const videoPath of finalTake.videoPaths) {
+    if (await fileExists(videoPath)) existingMedia.push(videoPath);
+  }
+  if (existingMedia.length > 0) {
+    throw new Error(`Final-take preflight refused: ${existingMedia.length} planned output file(s) already exist. Preserve or move prior media; this preflight never deletes recordings.`);
+  }
+
+  const projects = await api.listAllProjects();
+  const staleFixtures = projects.filter((project) => isScenarioFixtureProject(project, fixture));
+  if (staleFixtures.length > 0) {
+    throw new Error(`Final-take preflight refused: ${staleFixtures.length} declared fixture project(s) still exist. Clean only this plan's fixture at an inactive boundary before the final take.`);
+  }
+  return {
+    finalTakeId: finalTake.id,
+    outputDirectory: finalTake.outputDirectory,
+    plannedVideoCount: finalTake.videoPaths.length,
+    fixtureProjectName: fixture.projectName,
+    clean: true,
+  };
 }
 
 export async function cleanScenarioFixtures(options, dependencies = {}) {

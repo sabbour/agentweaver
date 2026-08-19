@@ -103,9 +103,10 @@ internal static class RunWorkflowGraphBinder
 
         // Entry plumbing: the hidden input storer feeds the start node's executor (unconditional). The
         // start node is resolved by its declared id and its TYPE — not a hardcoded "agent". A start that
-        // is a producing turn (prompt, or a peer-review used as a plain review turn) enters its per-node
-        // agent executor.
+        // is a producing turn enters its per-node agent executor.
         var startNode = GetNode(definition, definition.Start);
+        if (GetStartTopologyError(startNode) is { } startTopologyError)
+            throw new WorkflowBindException(startTopologyError, startNode.Id);
         builder.AddEdge(bindings.AgentInputStorer, ResolveEntry(ctx, startNode));
 
         // Every root/full-pipeline AgentTurnExecutor can return a structured terminal failure.
@@ -136,8 +137,9 @@ internal static class RunWorkflowGraphBinder
     /// maps to a node kind the binder can wire to a runtime executor, and that every edge references a
     /// declared node. Throws <see cref="WorkflowBindException"/> for the first node/edge that would fail
     /// closed at BUILD time (e.g. fan_out / fan_in / serial / coordinator_composed, which the loader accepts
-    /// but have no runtime executor; or a dangling edge reference). <c>peer_review</c> is ACCEPTED — it now
-    /// has a runtime executor. Lets callers (save, set-default, generator) reject loader-valid-but-bind-
+    /// but have no runtime executor; or a dangling edge reference). <c>peer_review</c> is accepted when
+    /// reached from a producer, but cannot be the entry node because its runtime executor consumes
+    /// <c>AgentTurnOutput</c>. Lets callers (save, set-default, generator) reject loader-valid-but-bind-
     /// invalid workflows up front without standing up the full executor graph (which needs DI bindings).
     /// </summary>
     public static void ValidateBindable(WorkflowDefinition definition)
@@ -159,6 +161,11 @@ internal static class RunWorkflowGraphBinder
         var outgoingByNode = definition.Edges
             .GroupBy(e => e.From, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        var startNode = definition.Nodes.FirstOrDefault(
+            node => string.Equals(node.Id, definition.Start, StringComparison.Ordinal));
+        if (startNode is not null && GetStartTopologyError(startNode) is { } startTopologyError)
+            errors.Add(startTopologyError);
 
         foreach (var node in definition.Nodes)
         {
@@ -222,6 +229,18 @@ internal static class RunWorkflowGraphBinder
 
         return errors;
     }
+
+    /// <summary>
+    /// The graph entry plumbing supplies <see cref="AgentTurnInput"/>. Verdict-style peer-review and
+    /// build-test nodes instead consume a produced <see cref="AgentTurnOutput"/>; they can only be reached
+    /// through a producer edge and its output adapter, never directly from <c>start</c>.
+    /// </summary>
+    private static string? GetStartTopologyError(WorkflowNode startNode) =>
+        NodeClassifier.Classify(startNode) == NodeKind.PeerReview
+            ? $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): peer_review and build_test " +
+              "verdict gates require an AgentTurnOutput from a preceding producer, but workflow entry supplies " +
+              "AgentTurnInput. Choose a prompt or publish node as start and route its successful output to this gate."
+            : null;
 
     /// <summary>Resolves the executor a definition's START node is entered at.</summary>
     private static ExecutorBinding ResolveEntry(WireContext ctx, WorkflowNode startNode) =>
@@ -569,6 +588,17 @@ internal static class RunWorkflowGraphBinder
                 return true;
             }
 
+            // Peer-review APPROVED / PASS -> continue to the next agent turn with the reviewed output.
+            case (NodeKind.PeerReview, NodeKind.Agent, "approved"):
+            case (NodeKind.PeerReview, NodeKind.Agent, "pass"):
+            {
+                var adapter = s.ReviewToAgentForwardAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), adapter,
+                    decision => decision is not null && decision.Approved)
+                 .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
             // Peer-review hard-declined -> terminal.
             case (NodeKind.PeerReview, NodeKind.Terminal, "declined"):
                 g.AddEdge<WorkflowReviewDecision>(s.ResolvePeerReviewNode(fromNode), b.TerminalDeclined,
@@ -792,6 +822,7 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.PeerReview, NodeKind.Rai, "approved" or "pass") => true,
             (NodeKind.PeerReview, NodeKind.Rubberduck, "pass") => true,
             (NodeKind.PeerReview, NodeKind.Agent, "request-changes" or "fail") => true,
+            (NodeKind.PeerReview, NodeKind.Agent, "approved" or "pass") => true,
             (NodeKind.PeerReview, NodeKind.Terminal, "approved" or "pass" or "declined") => true,
             (NodeKind.HumanReview, NodeKind.Agent, "approved") => true,
             (NodeKind.HumanReview, NodeKind.Scribe, "approved") => true,
