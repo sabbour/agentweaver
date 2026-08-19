@@ -130,7 +130,9 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
                 return latest.AccessToken;
 
             _logger.LogWarning(
-                "GitHub token refresh failed for scope {Scope}; sign-in required.", scope.Key);
+                "GitHub token refresh failed for scope {Scope}; token marked as signed-out. " +
+                "User must re-link their GitHub account to restore Copilot access.",
+                scope.Key);
             await _tokenStore.SignOutAsync(scope, ct).ConfigureAwait(false);
             return null;
         }
@@ -198,6 +200,10 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
                 || !string.IsNullOrWhiteSpace(body.Error)
                 || string.IsNullOrWhiteSpace(body.AccessToken))
             {
+                if (!string.IsNullOrWhiteSpace(body?.Error))
+                    _logger.LogWarning(
+                        "GitHub refresh token rejected (error={Error}); scope will be signed out.",
+                        body.Error);
                 return null;
             }
 

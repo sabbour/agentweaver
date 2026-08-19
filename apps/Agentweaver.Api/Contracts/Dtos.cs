@@ -702,6 +702,8 @@ public sealed record GitHubAuthStatusResponse
     [JsonPropertyName("status")] public required string Status { get; init; }   // "signed_in" | "signed_out" | "never_signed_in"
     [JsonPropertyName("login")] public string? Login { get; init; }
     [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
+    /// <summary>True when the user must take action (re-link / sign in) to restore GitHub access.</summary>
+    [JsonPropertyName("token_action_required")] public bool TokenActionRequired { get; init; }
 }
 
 public sealed record BeginGitHubAccountLinkResponse(
@@ -719,6 +721,8 @@ public sealed record LinkedGitHubAccountResponse
     [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
     [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
     [JsonPropertyName("linked_at")] public required DateTimeOffset LinkedAt { get; init; }
+    /// <summary>True when the linked token is currently valid (signed-in state); false means the user must re-link.</summary>
+    [JsonPropertyName("token_valid")] public bool? TokenValid { get; init; }
 }
 
 public sealed record UnlinkGitHubAccountResponse(

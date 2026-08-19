@@ -226,6 +226,8 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 /// </summary>
 public sealed class GitHubCopilotUnauthorizedException : AgentProviderException
 {
+    public const string ErrorCode = "github_copilot_unauthorized";
+
     public GitHubCopilotUnauthorizedException(string message)
         : base(
             ModelSource.GitHubCopilot,

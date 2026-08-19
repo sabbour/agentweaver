@@ -4,6 +4,10 @@ import {
   Badge,
   Button,
   Divider,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
+  MessageBarTitle,
   Popover,
   PopoverSurface,
   PopoverTrigger,
@@ -20,6 +24,7 @@ import {
   ChevronDownRegular,
   ShieldPersonRegular,
   SignOutRegular,
+  WarningRegular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount, ProjectAccessOverview } from '../api/types';
@@ -275,6 +280,20 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
     }
   };
 
+  const handleRelink = async () => {
+    setSaving('__relink__');
+    setError(null);
+    try {
+      const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setError(apiErrorMessage(err));
+      setSaving(null);
+    }
+  };
+
+  const isTokenExpired = currentAccount != null && currentAccount.token_valid === false;
+
   if (loading) {
     return <Spinner size="extra-tiny" aria-label="Loading GitHub account switcher" />;
   }
@@ -315,7 +334,10 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
               {!collapsed && (
                 <>
                   <Text className={styles.login}>{triggerLabel}</Text>
-                  {authMode === 'entra' && (
+                  {isTokenExpired && (
+                    <Badge color="warning" size="tiny" shape="circular" icon={<WarningRegular />} aria-label="GitHub token expired" />
+                  )}
+                  {authMode === 'entra' && !isTokenExpired && (
                     <Badge
                       className={styles.entraBadge}
                       appearance="tint"
@@ -340,6 +362,19 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
               <ShieldPersonRegular />
               <Text size={200}>Signed in with Microsoft Entra ID</Text>
             </div>
+          )}
+          {isTokenExpired && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>GitHub access expired</MessageBarTitle>
+                Your GitHub token needs to be renewed to run tasks.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" disabled={saving !== null} onClick={() => void handleRelink()}>
+                  {saving === '__relink__' ? <Spinner size="tiny" /> : 'Re-link account'}
+                </Button>
+              </MessageBarActions>
+            </MessageBar>
           )}
           <div className={styles.section}>
             <Text weight="semibold">Current GitHub account</Text>

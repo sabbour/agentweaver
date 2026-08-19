@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -750,6 +751,13 @@ public sealed class CoordinatorRunService
             catch (OperationCanceledException) when (runCt.IsCancellationRequested)
             {
                 _logger.LogInformation("Coordinator run {RunId} abandoned", runId);
+            }
+            catch (GitHubCopilotUnauthorizedException ex)
+            {
+                _logger.LogWarning(ex,
+                    "Coordinator run {RunId} failed: GitHub Copilot token is unauthorized or expired. " +
+                    "User must re-link their GitHub account.", runId);
+                await FailRunSafeAsync(runId, entry, GitHubCopilotUnauthorizedException.ErrorCode).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
