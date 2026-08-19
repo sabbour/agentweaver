@@ -543,6 +543,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
     private void AssertRuntimeHomeEnvironment(IReadOnlyDictionary<string, string> environment)
     {
         environment["HOME"].Should().Be(Path.GetFullPath(_runtimeHome));
+        environment["DOTNET_CLI_HOME"].Should().Be(Path.GetFullPath(_runtimeHome));
         environment["XDG_CACHE_HOME"].Should().Be(Path.Combine(_runtimeHome, ".cache"));
         environment["XDG_DATA_HOME"].Should().Be(Path.Combine(_runtimeHome, ".local", "share"));
         environment["XDG_CONFIG_HOME"].Should().Be(Path.Combine(_runtimeHome, ".config"));
