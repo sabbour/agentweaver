@@ -9,6 +9,7 @@ import {
   assertAuthRootWithinRepository,
   assertIgnoredAuthRoot,
   buildEdgeLaunchOptions,
+  openRecordingSession,
   parsePlaywrightSessionList,
   parseRecordingCommandOptions,
   refreshRecordingAuthentication,
@@ -279,6 +280,26 @@ test('open routes directly to the Agentweaver sign-in recovery session', async (
   );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].session, 'agentweaver-demo');
+});
+
+test('open fails closed without protected recording authentication', async () => {
+  let sessionsRead = false;
+  await assert.rejects(
+    openRecordingSession({
+      session: 'agentweaver-demo',
+      baseUrl: 'https://example.test',
+      authRoot: 'scripts/demo-recording/.auth',
+    }, {
+      getRepositoryRoot: async () => repositoryRoot,
+      getAuth: async () => false,
+      getSessions: () => {
+        sessionsRead = true;
+        return new Map();
+      },
+    }),
+    /Run "npm run demo:record -- signin"/,
+  );
+  assert.equal(sessionsRead, false);
 });
 
 test('auth destinations reject a junction that escapes the ignored auth root', async () => {

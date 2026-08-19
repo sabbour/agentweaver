@@ -81,11 +81,10 @@ npm run demo:record -- start `
   --plan scripts\demo-recording\plans\blueprint-demo.capture.json
 ```
 
-`open`, `start`, and `capture` each refresh sign-in state from the exact Edge Default
-source before opening the named `playwright-cli` session. If that named session is
-already open, the CLI closes only that owned session before waiting for Edge; it never
-terminates unrelated Edge processes. It does not reuse stale saved authentication as a
-fallback. The default session name is `agentweaver-demo`.
+Only `signin` accesses the exact Edge Default source. `open`, `start`, and `capture`
+restore and verify the protected saved authentication for the named `playwright-cli`
+session; they fail closed with sign-in guidance when it is missing or expired. The
+default session name is `agentweaver-demo`.
 
 ## Capture
 
@@ -128,9 +127,7 @@ waits for their unauthenticated dialog.
 Capture-plan prerequisites are evaluated only for selected beats. Thus Beat 0.0 can
 capture its safe unauthenticated Agentweaver handoff without external GitHub-triage
 variables, while `--all` or a later beat still requires that beat's declared
-prerequisites. `open` performs only the normal Agentweaver sign-in recovery flow, so it
-can reach the Agentweaver **Sign in** affordance for cached SSO recovery without capture
-plan validation. It does not interact with the identity provider beyond that button.
+prerequisites.
 
 ## Clean Blueprint fixture
 
