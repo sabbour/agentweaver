@@ -190,6 +190,24 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         Directory.Exists(project.WorkingDirectory).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task CreateFromGitHubAsync_UsesProjectCreationClonePurpose()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var tokenStore = new InMemoryGitHubTokenStore();
+        await tokenStore.SetAsync(
+            GitHubTokenScope.Installation,
+            new GitHubToken("ghp_test_token", null, null, "testuser", null, ["repo"]));
+        var gitInit = new NoOpGitInitializer();
+        var service = BuildService(store, gitInit: gitInit, tokenStore: tokenStore, db: testDb.Db);
+
+        await service.CreateFromGitHubAsync(
+            "GitHub Project", "https://github.com/owner/repo", NewDir(), null, null, null, "test-user");
+
+        gitInit.LastClonePurpose.Should().Be(GitClonePurpose.ProjectCreation);
+    }
+
     // =========================================================================
     // PC-05: CreateBlankAsync rollback — if DB insert fails, created directory removed
     // =========================================================================
@@ -400,14 +418,21 @@ public sealed class ProjectServiceCreateTests : IAsyncDisposable
         public NoOpGitInitializer()
             : base(NullLogger<ProjectGitInitializer>.Instance) { }
 
+        public GitClonePurpose? LastClonePurpose { get; private set; }
+
         public override string InitBlank(string workingDirectory, string defaultBranch)
         {
             Directory.CreateDirectory(workingDirectory);
             return defaultBranch;
         }
 
-        public override string Clone(string workingDirectory, string sourceRepository, string accessToken)
+        public override string Clone(
+            string workingDirectory,
+            string sourceRepository,
+            string accessToken,
+            GitClonePurpose purpose)
         {
+            LastClonePurpose = purpose;
             Directory.CreateDirectory(workingDirectory);
             return "main";
         }

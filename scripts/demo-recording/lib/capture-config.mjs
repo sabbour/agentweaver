@@ -52,8 +52,24 @@ export function validateCaptureConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) fail('root must be an object');
   if (config.schemaVersion !== 1) fail('schemaVersion must be 1');
   if (!Array.isArray(config.beats)) fail('beats must be an array');
+  if (config.preflight !== undefined) {
+    if (!config.preflight || typeof config.preflight !== 'object' || Array.isArray(config.preflight)) fail('preflight must be an object');
+    for (const [index, artifact] of (config.preflight.externalArtifacts ?? []).entries()) {
+      const location = `preflight.externalArtifacts[${index}]`;
+      if (!Array.isArray(artifact?.beats) || artifact.beats.some((id) => !/^[0-9]+\.[0-9]+$/.test(id))) fail(`${location}.beats must contain markdown beat IDs`);
+      if (!/^[A-Z][A-Z0-9_]+$/.test(artifact.environment ?? '')) fail(`${location}.environment must be an environment variable name`);
+      if (typeof artifact.instruction !== 'string' || !artifact.instruction.trim()) fail(`${location}.instruction is required`);
+      if (artifact.host !== undefined && (typeof artifact.host !== 'string' || !artifact.host)) fail(`${location}.host must be a host name`);
+      if (artifact.origin !== undefined && (typeof artifact.origin !== 'string' || !/^https:\/\//u.test(artifact.origin))) fail(`${location}.origin must be an HTTPS origin`);
+    }
+    const requirement = config.preflight.workflowRequirements;
+    if (requirement !== undefined && (!Array.isArray(requirement.beats) || requirement.beats.some((id) => !/^[0-9]+\.[0-9]+$/.test(id)) || !Array.isArray(requirement.workflowIds) || requirement.workflowIds.some((id) => typeof id !== 'string' || !id.trim()))) {
+      fail('preflight.workflowRequirements must contain beat IDs and workflow IDs');
+    }
+  }
 
   const beatIds = new Set();
+  const priorBeatIds = new Map();
   const cueNames = new Set();
   for (const [beatIndex, beat] of config.beats.entries()) {
     const location = `beats[${beatIndex}]`;
@@ -61,12 +77,21 @@ export function validateCaptureConfig(config) {
     if (!/^[0-9]+\.[0-9]+$/.test(beat.id ?? '')) fail(`${location}.id must match a markdown beat ID`);
     if (beatIds.has(beat.id)) fail(`duplicate beat ID ${beat.id}`);
     beatIds.add(beat.id);
+    if (beat.requiresPriorBeat !== undefined) {
+      if (!/^[0-9]+\.[0-9]+$/.test(beat.requiresPriorBeat)) {
+        fail(`${location}.requiresPriorBeat must reference a markdown beat ID`);
+      }
+      priorBeatIds.set(beat.id, beat.requiresPriorBeat);
+    }
     if (beat.cueWatchers !== undefined && !Array.isArray(beat.cueWatchers)) fail(`${location}.cueWatchers must be an array`);
     if (beat.steps !== undefined && !Array.isArray(beat.steps)) fail(`${location}.steps must be an array`);
     if (beat.expectedCues !== undefined && !Array.isArray(beat.expectedCues)) fail(`${location}.expectedCues must be an array`);
     if (beat.cueOrder !== undefined && !Array.isArray(beat.cueOrder)) fail(`${location}.cueOrder must be an array`);
     if (beat.disableApprovalWatcher !== undefined && typeof beat.disableApprovalWatcher !== 'boolean') {
       fail(`${location}.disableApprovalWatcher must be a boolean`);
+    }
+    if (beat.captureMode !== undefined && !['authenticated', 'unauthenticated'].includes(beat.captureMode)) {
+      fail(`${location}.captureMode must be authenticated or unauthenticated`);
     }
     if (beat.approvalWatcherGraceMs !== undefined
       && (!Number.isInteger(beat.approvalWatcherGraceMs) || beat.approvalWatcherGraceMs < 0)) {
@@ -109,6 +134,9 @@ export function validateCaptureConfig(config) {
       if (cueNames.has(item.cue.name)) fail(`duplicate semantic cue name ${item.cue.name}`);
       cueNames.add(item.cue.name);
     }
+  }
+  for (const [beatId, priorBeatId] of priorBeatIds) {
+    if (!beatIds.has(priorBeatId)) fail(`beat ${beatId} requires missing prior beat ${priorBeatId}`);
   }
   return config;
 }

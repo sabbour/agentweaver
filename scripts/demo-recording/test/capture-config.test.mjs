@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import test from 'node:test';
 import {
   createCueManifest,
@@ -165,4 +166,43 @@ test('cue manifest sorts immutable observations by capture-relative time', () =>
   });
   assert.equal(manifest.schemaVersion, 1);
   assert.deepEqual(manifest.cues.map((cue) => cue.name), ['earlier', 'later']);
+});
+
+test('Blueprint plan keeps promotion, review, trace, and decision evidence continuous', async () => {
+  const plan = JSON.parse(await fs.readFile(
+    new URL('../plans/blueprint-demo.capture.json', import.meta.url),
+    'utf8',
+  ));
+  assert.doesNotThrow(() => validateCaptureConfig(plan));
+  const byId = (id) => plan.beats.find((beat) => beat.id === id);
+  const confirm = byId('2.2');
+  const board = byId('2.4');
+  const review = byId('2.6');
+  const traces = byId('2.7');
+  const decisions = byId('2.8');
+
+  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })";
+  const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
+    && step.selector === promotionCheckbox);
+  assert.ok(promotionWait >= 0, 'expected the actual promotion checkbox to be ready before confirmation');
+  assert.deepEqual(
+    confirm.steps.slice(promotionWait, promotionWait + 3).map(({ type, selector }) => ({ type, selector })),
+    [
+      { type: 'waitFor', selector: promotionCheckbox },
+      { type: 'click', selector: promotionCheckbox },
+      { type: 'click', selector: "page.getByRole('button', { name: 'Confirm plan' }).first()" },
+    ],
+    'the promotion checkbox must be waited for, selected, then immediately confirmed',
+  );
+  assert.ok(board.steps.some((step) => step.cue?.name === '2.4.promoted-task'));
+  assert.equal(board.steps.some((step) => step.selector?.includes('New task title')), false);
+  assert.ok(review.cueWatchers.some((cue) => cue.source?.selector === "[data-testid='coordinator-review-changes']"));
+  assert.equal(review.freshNavigation, false);
+  assert.equal(traces.freshNavigation, false);
+  assert.ok(traces.steps.some((step) => step.selector?.includes('Preview trace')));
+  assert.equal(decisions.freshNavigation, false);
+  assert.equal(
+    decisions.steps.find((step) => step.cue?.name === '2.8.accepted-decision').selector,
+    "page.getByTestId('accepted-decision').first()",
+  );
 });

@@ -15,7 +15,10 @@ import {
   recordingAuthPaths,
   resolveLiteralEdgeDefaultProfile,
   resolveSafeAuthDestination,
+  selectCaptureBeats,
   shouldCopyEdgeProfileEntry,
+  presentInteractiveSignInShell,
+  waitForInteractiveSignInCompletion,
   validateLiteralEdgeDefaultProfile,
   waitForEdgeToClose,
 } from '../lib/recording-session.mjs';
@@ -44,6 +47,48 @@ test('capture requires an explicit beat selection or all', () => {
   assert.equal(
     parseRecordingCommandOptions('capture', ['--plan', 'demo.capture.json', '--all']).all,
     true,
+  );
+  const unauthenticated = parseRecordingCommandOptions(
+    'capture',
+    ['--plan', 'demo.capture.json', '--beat', '0.0', '--unauthenticated'],
+  );
+  assert.equal(unauthenticated.unauthenticated, true);
+  assert.equal(unauthenticated.session, 'agentweaver-demo-unauthenticated');
+  assert.throws(
+    () => parseRecordingCommandOptions('capture', ['--plan', 'demo.capture.json', '--all', '--unauthenticated']),
+    /do not use --all/,
+  );
+  assert.throws(
+    () => parseRecordingCommandOptions('capture', ['--plan', 'demo.capture.json', '--beat', '0.0', '--unauthenticated', '--session', 'other']),
+    /own isolated recording session/,
+  );
+});
+
+test('authenticated all capture skips handoff beats and modes cannot mix', () => {
+  const beats = [
+    { id: '0.0', captureMode: 'unauthenticated' },
+    { id: '1.1', requiresPriorBeat: '0.0' },
+    { id: '1.2', captureMode: 'authenticated', requiresPriorBeat: '1.1' },
+  ];
+  assert.deepEqual(
+    selectCaptureBeats(beats, { all: true }).map((beat) => beat.id),
+    ['1.1', '1.2'],
+  );
+  assert.deepEqual(
+    selectCaptureBeats(beats, { beat: '0.0', unauthenticated: true }).map((beat) => beat.id),
+    ['0.0'],
+  );
+  assert.throws(
+    () => selectCaptureBeats(beats, { beat: '0.0' }),
+    /requires --unauthenticated/,
+  );
+  assert.throws(
+    () => selectCaptureBeats(beats, { beat: '1.1', unauthenticated: true }),
+    /declared with captureMode "unauthenticated"/,
+  );
+  assert.throws(
+    () => selectCaptureBeats(beats, { beat: '1.2' }),
+    /Beat 1.2 requires prior beat 1.1.*--all/,
   );
 });
 
@@ -153,6 +198,63 @@ test('auth refresh closes only the owned Playwright session before inspecting Ed
   assert.deepEqual(events, ['close:agentweaver-demo', 'refresh-default']);
 });
 
+test('signin foregrounds, waits for, and clicks the Agentweaver Entra button', async () => {
+  const events = [];
+  const button = {
+    async waitFor(options) {
+      events.push(['waitFor', options]);
+    },
+    async isVisible() {
+      events.push(['isVisible']);
+      return true;
+    },
+    async click() {
+      events.push(['click']);
+    },
+  };
+  const page = {
+    async bringToFront() {
+      events.push(['bringToFront']);
+    },
+    getByRole(role, options) {
+      events.push(['getByRole', role, options]);
+      return button;
+    },
+  };
+
+  await presentInteractiveSignInShell(page);
+
+  assert.deepEqual(events, [
+    ['bringToFront'],
+    ['getByRole', 'button', { name: 'Sign in with Microsoft Entra ID', exact: true }],
+    ['waitFor', { state: 'visible', timeout: 30_000 }],
+    ['isVisible'],
+    ['click'],
+  ]);
+});
+
+test('signin detects the post-click Entra boundary without inspecting IdP data', async () => {
+  let evaluations = 0;
+  let output = '';
+  await assert.rejects(
+    () => waitForInteractiveSignInCompletion({
+      url: () => 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+      evaluate: async () => {
+        evaluations += 1;
+        return false;
+      },
+    }, {
+      baseUrl: 'https://agentweaver.example.test',
+      timeoutMs: 5,
+      pollMs: 1,
+      write: (message) => { output += message; },
+    }),
+    /sign-in did not complete/,
+  );
+  assert.equal(evaluations, 0);
+  assert.match(output, /human-only step/);
+});
+
 test('signin CLI routing cannot bypass the close-first authentication helper', async () => {
   const calls = [];
   await runRecordingCommand(
@@ -164,6 +266,19 @@ test('signin CLI routing cannot bypass the close-first authentication helper', a
   );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].session, 'owned-session');
+});
+
+test('open routes directly to the Agentweaver sign-in recovery session', async () => {
+  const calls = [];
+  await runRecordingCommand(
+    'open',
+    [],
+    {
+      openSession: async (options) => calls.push(options),
+    },
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].session, 'agentweaver-demo');
 });
 
 test('auth destinations reject a junction that escapes the ignored auth root', async () => {

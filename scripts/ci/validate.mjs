@@ -214,6 +214,7 @@ function runNodeTests(repoRoot) {
     ...globSync('scripts/azure/tests/*.test.mjs', { cwd: repoRoot }),
     ...globSync('scripts/changesets/tests/*.test.mjs', { cwd: repoRoot }),
     ...globSync('scripts/ci/tests/*.test.mjs', { cwd: repoRoot }),
+    ...globSync('scripts/demo-recording/test/*.test.mjs', { cwd: repoRoot }),
   ];
   run(process.execPath, ['--test', ...files], repoRoot);
 }

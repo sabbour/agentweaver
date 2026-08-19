@@ -169,7 +169,11 @@ public sealed class ProjectService
         bool dirWasCreated = appCreatedDir;
         try
         {
-            defaultBranch = _gitInit.Clone(workingDir, sourceRepository, accessToken!);
+            defaultBranch = _gitInit.Clone(
+                workingDir,
+                sourceRepository,
+                accessToken!,
+                GitClonePurpose.ProjectCreation);
         }
         catch
         {

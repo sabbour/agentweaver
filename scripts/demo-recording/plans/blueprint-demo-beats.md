@@ -19,6 +19,61 @@ An optional `On screen:` line after a beat's `Narration:` records the concrete o
 actions the capture plan must perform (it is ignored by the narration parser, which only
 reads the `Narration:` line).
 
+## Clean-run capture readiness
+
+This is a 22-beat capture plan: one isolated unauthenticated handoff plus a 21-beat
+**live-product** narrative. A closed GitHub issue, a seeded UI
+state, or a successful HTTP delivery alone is not capture evidence.  Before recording,
+the capture owner records the following redacted evidence; no cookie, bearer token, or
+webhook secret belongs in the plan, narration, screenshots, or capture artifacts.
+
+1. **Staging build:** verify the deployed immutable build/release contains the fixes from
+   #721 (task-linked run authorization), #722 (automatic webhook provisioning), #723
+   (Assistant/MCP Entra identity propagation), and #724 (issue-label event actions).
+   Those PRs being merged into `dev` is not enough; the running build must be shown to
+   contain them.  Beats 2.4–2.7, 3.2, and 4.1–4.7 are not clean-run eligible otherwise.
+2. **Run and trace:** use one fresh project and retain the project-local run URL/ID for
+   the board, topology, review, and trace beats.  Evidence is an owner opening the
+   task-linked run and its transaction trace without a 401/403.
+3. **Webhook (Beat 3.2):** the project's effective linked GitHub identity needs
+   repository-hook administration for the automatic path.  Evidence is the Settings
+   action reporting **Created** or **Updated**, followed by a redacted GitHub
+   `issues.labeled` delivery and the resulting `github.issues.labeled` run in the same
+   project.  If that permission is unavailable, do not click or describe the automatic
+   action as successful.  Use this exact fallback narration instead: “The workflow is
+   ready for an `issues.labeled` event. A repository administrator can use these
+   project-specific details to finish the signed GitHub hook; Agentweaver starts triage
+   when that delivery arrives.”  Showing that fallback is truthful, but does **not**
+   satisfy the live-trigger portion of Beat 3.2; an administrator must complete the
+   manual setup before the full authenticated 21-beat clean run.
+4. **Assistant/MCP (Beats 4.1–4.3):** evidence is a newly opened Assistant session
+   reading the current linked GitHub identity and project, then presenting an approval
+   before its state-changing workflow start.  Browser sign-in by itself is not evidence.
+   If this fails, do not substitute a UI-started workflow while narrating assistant
+   parity.  The only safe fallback narration is: “The project UI can start this workflow;
+   the Assistant path will be shown after its authenticated connection is available.”
+   Resequence later beats only after that evidence exists; this does not qualify as a
+   complete authenticated 21-beat Assistant capture.
+5. **Preview and PR (Beats 2.5, 4.5, and 4.7):** evidence is an actually rendered,
+   interactive preview URL after approval and a real pull-request URL linked from the
+   completed run/topology.  If preview infrastructure or repository write/PR permission
+   is unavailable, show neither a mock preview nor a placeholder PR.  Narrate the
+   completed review/diff only, and mark the affected beat pending rather than claiming
+   shipment.  A full clean run requires both real artifacts.
+
+## Beat 0.0 — Hand off to secure sign-in
+
+Narration: "Agentweaver hands sign-in to Microsoft Entra."
+
+Fresh navigation: true
+
+On screen: Show only the Agentweaver **Sign in with Microsoft Entra ID** handoff dialog
+and hold for the narration. An agent may click Agentweaver's own button to start the
+redirect; cached SSO may complete it. Cut as soon as Microsoft Entra is reached. Do not
+select an account, type credentials, interact with MFA or consent, or access tokens,
+cookies, profile data, or sensitive account content. A human completes any unfinished
+sign-in privately and off camera before the authenticated beats begin.
+
 ## Beat 1.1 — Create the project
 
 Narration: "First, I'll create a new project. I'll give it a name and a short description of what we're building."
@@ -43,33 +98,33 @@ On screen: Open **Agents**, inspect one agent card, and show its role, default m
 
 Narration: "This time I'll describe the product we're building."
 
-Fresh navigation: true
+Fresh navigation: false
 
-On screen: Starting from the existing project context, open the task/assistant entry point, choose the **Product** workflow or prompt path, enter the Trailhead brief, and submit it.
+On screen: Starting from the existing project context, open the task/assistant entry point, choose the **Product** workflow or prompt path, enter the Trailhead brief. Keep the product brief and UX notes in this coordinator run, but request the separately shippable landing-page deliverable as **Create Trailhead landing page**, then submit it.
 
 ## Beat 2.2 — Review and confirm the plan
 
 Narration: "Before any agent starts working, the coordinator writes up an OutcomeSpec — its understanding of the goal, the assumptions it's making, and what it plans to do. I'll ask for one change here, and it updates the spec. Once it looks right, I confirm it."
 
-On screen: Stay on the generated OutcomeSpec view from 2.1, provide one clarification, wait for the revised plan to appear, then confirm it. Do not jump away and come back.
+On screen: Stay on the generated OutcomeSpec view from 2.1, provide one clarification, wait for the revised plan to appear, then confirm it. Once the WorkPlan is visible, enable **Autopilot** and **Auto-approve safe tools** and leave both visibly on. Do not jump away and come back.
 
 ## Beat 2.3 — Watch the work plan run
 
 Narration: "With the spec confirmed, the coordinator breaks the work into subtasks and builds a WorkPlan. This is the topology view — a live graph of every agent involved and how they connect. Each agent runs its own subtask inside an isolated sandbox — its own worktree, cut off from everything else — so nothing collides. The coordinator manages the handoffs between them, so tasks run in the right order. Once the subtasks finish, we get the artifacts — spec, plan, UX notes, even marketing copy. Here they are."
 
-On screen: Stay on the same run. Wait for decomposition into subtasks, approve anything that appears, open the live topology graph once it renders, inspect a few nodes, return to the run view, and show the generated artifacts landing in real time.
+On screen: Stay on the same run. Wait for decomposition into subtasks, approve anything that appears, open the live topology graph once it renders, inspect a few nodes, return to the run view, and show the generated artifacts landing in real time. Complete this parent coordinator run before moving its promoted board item to Ready; otherwise its own collective review can overlap the independent landing-page run.
 
 ## Beat 2.4 — Review the board
 
-Narration: "Let's turn one of those artifacts into work. I'll add a task to the board for a landing page that matches what we just generated, then move it from Backlog to Ready."
+Narration: "Let's turn one of those artifacts into work. The coordinator has promoted the independent landing-page deliverable to the board; I'll move it from Backlog to Ready. Ready is the handoff: the coordinator picks it up as its own run."
 
-On screen: Navigate from the finished run into the **Board**, create the landing-page work item exactly once, then drag it from **Backlog** to **Ready**.
+On screen: Navigate from the finished run into the **Board**, wait for the promoted **Create Trailhead landing page** item to appear in **Backlog**, then drag that same item to **Ready**. Do not create a replacement task: this beat must show the task promoted by the confirmed plan.
 
 ## Beat 2.5 — Ship it
 
-Narration: "I'll break this task down further and watch it split into subtasks. Once one of them starts implementing, I'll follow along — and when it's done, the agent builds and runs the app right there in its sandbox and registers a live preview. I'll open that preview to see the page running for real, not just a mockup."
+Narration: "The Ready task has been picked up as its own coordinator run and split into subtasks. Once one starts implementing, I'll follow along — and when it's done, the agent builds and runs the app right there in its sandbox and registers a live preview. I'll open that preview to see the page running for real, not just a mockup."
 
-On screen: From the board item created in 2.4, choose the breakdown path, follow one implementation subtask, approve the preview gate when it appears, and open the live preview after it actually renders.
+On screen: Open the run for the uniquely titled board item promoted in 2.4, follow one implementation subtask, approve the preview gate when it appears, and open the live preview after it actually renders.
 
 ## Beat 2.6 — Review the diff and approve the merge
 
@@ -93,7 +148,7 @@ On screen: From the same project context, open **Decisions** and show a real, no
 
 Narration: "Not everything should run on a schedule — but some things should. I'll set up a weekly dependency sweep, since checking for outdated or vulnerable dependencies is naturally recurring work, regardless of what we're shipping."
 
-Fresh navigation: true
+Fresh navigation: false
 
 On screen: Open **Workflows**, choose the dependency-sweep workflow, add a weekly schedule, and save it. This beat starts from the project you already created; do not recreate or reclone anything.
 
@@ -107,7 +162,7 @@ On screen: Stay in **Workflows**, open the bug-triage workflow, change its trigg
 
 Narration: "There's more than one way to work with Agentweaver. I'll open a new issue, this time without a label, and just ask for it directly. I'll start a chat and tell the assistant to triage issue #x."
 
-Fresh navigation: true
+Fresh navigation: false
 
 On screen: Starting from the same project, create or open the next issue without the trigger label, open an assistant session, and ask it to triage that issue directly.
 

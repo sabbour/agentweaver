@@ -55,6 +55,29 @@ public sealed class ProjectGitInitializerTests : IDisposable
             "an existing .gitignore must never be overwritten");
     }
 
+    [Fact]
+    public void CreateCloneOptions_ProjectCreationFetchesOnlyDefaultBranchTip()
+    {
+        var options = ProjectGitInitializer.CreateCloneOptions(
+            "ephemeral-test-token",
+            GitClonePurpose.ProjectCreation);
+
+        options.FetchOptions.Depth.Should().Be(ProjectGitInitializer.ProjectCreationCloneDepth);
+        options.FetchOptions.Depth.Should().Be(1,
+            "new GitHub projects need a usable branch tip, not the full history of a large repository");
+    }
+
+    [Fact]
+    public void CreateCloneOptions_SkillImportRetainsHistoryAndTags()
+    {
+        var options = ProjectGitInitializer.CreateCloneOptions(
+            "ephemeral-test-token",
+            GitClonePurpose.SkillImport);
+
+        options.FetchOptions.Depth.Should().Be(0,
+            "skill imports must resolve valid pinned branches and historical tags");
+    }
+
     private string NewTempDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"aw-gitinit-{Guid.NewGuid():N}");
