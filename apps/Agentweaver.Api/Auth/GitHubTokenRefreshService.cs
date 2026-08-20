@@ -242,12 +242,13 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
             try { body = await response.Content.ReadFromJsonAsync<RefreshTokenResponse>(ct).ConfigureAwait(false); }
             catch (Exception) { body = null; }
 
-            if (body is null || string.IsNullOrWhiteSpace(body.AccessToken))
+            if (body is null)
             {
                 _logger.LogWarning("GitHub refresh response body was empty or missing access_token; treating as transient.");
                 return RefreshResult.Transient();
             }
 
+            // Check error field first — GitHub returns error JSON without an access_token.
             if (!string.IsNullOrWhiteSpace(body.Error))
             {
                 var isPermanent = PermanentErrorCodes.Contains(body.Error);
@@ -255,6 +256,12 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
                     "GitHub refresh token rejected (error={Error}); treating as {Kind} failure.",
                     body.Error, isPermanent ? "permanent" : "transient");
                 return isPermanent ? RefreshResult.Permanent() : RefreshResult.Transient();
+            }
+
+            if (string.IsNullOrWhiteSpace(body.AccessToken))
+            {
+                _logger.LogWarning("GitHub refresh response body was missing access_token; treating as transient.");
+                return RefreshResult.Transient();
             }
 
             var expiresAt = body.ExpiresIn is > 0
