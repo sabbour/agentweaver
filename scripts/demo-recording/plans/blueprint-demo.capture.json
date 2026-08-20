@@ -1,426 +1,2078 @@
 {
   "schemaVersion": 1,
   "requireAllBeats": true,
+  "authentication": {
+    "mode": "entra",
+    "repository": "sabbour/agentweaver-demo-dryrun"
+  },
+  "fixture": {
+    "projectName": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+    "safeProjectNamePatterns": [
+      "^Agentweaver Demo \u2014 Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+    ]
+  },
+  "finalTake": {
+    "id": "trailhead-travel-studio",
+    "outputDirectory": "recordings/final-takes/trailhead-travel-studio"
+  },
+  "preflight": {
+    "workflowRequirements": {
+      "beats": [
+        "3.1",
+        "3.2"
+      ],
+      "workflowIds": [
+        "dependency-sweep",
+        "bug-triage"
+      ]
+    },
+    "externalArtifacts": [
+      {
+        "beats": [
+          "3.2"
+        ],
+        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
+        "host": "github.com",
+        "instruction": "A repository administrator must manually create the disposable demo issue, add agentweaver:triage, and verify the signed issues.labeled delivery before capture. The capture plan never creates issues, labels, or webhooks."
+      },
+      {
+        "beats": [
+          "3.2"
+        ],
+        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_RUN_URL",
+        "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
+        "instruction": "Set this to the resulting same-project github.issues.labeled run URL after a repository administrator has verified delivery."
+      }
+    ]
+  },
   "beats": [
+    {
+      "id": "0.0",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "freshNavigation": true,
+      "captureMode": "unauthenticated",
+      "disableApprovalWatcher": true,
+      "videoPath": "recordings/blueprint-demo/0.0-entra-sign-in-handoff.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 3500,
+        "preferred": 5000,
+        "maximum": 7000
+      },
+      "expectedCues": [
+        "s1.0.0.entra-handoff-dialog"
+      ],
+      "cueOrder": [
+        "s1.0.0.entra-handoff-dialog"
+      ],
+      "steps": [
+        {
+          "type": "badge",
+          "label": "Beat 0.0",
+          "title": "Hand off to secure sign-in",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Sign in with Microsoft Entra ID', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "s1.0.0.entra-handoff-dialog",
+            "stableForMs": 500,
+            "deadlineMs": 30000,
+            "source": {
+              "kind": "text",
+              "selector": "body",
+              "includes": "Sign in with Microsoft Entra ID"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "pause",
+          "ms": 2200
+        }
+      ]
+    },
     {
       "id": "1.1",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": true,
-      "videoPath": "recordings/blueprint-demo/1.1-create-project.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 6500, "preferred": 9500, "maximum": 14000 },
-      "expectedCues": ["1.1.create-dialog", "1.1.trailhead-details"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/1.1-create-project.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 6500,
+        "preferred": 18500,
+        "maximum": 22000
+      },
+      "expectedCues": [
+        "1.1.create-dialog",
+        "1.1.trailhead-details"
+      ],
       "cueWatchers": [
-        { "name": "1.1.create-dialog", "stableForMs": 350, "deadlineMs": 15000, "source": { "kind": "text", "selector": "body", "includes": "Create blank project" }, "rect": { "mode": "element", "selector": "[role=dialog]" } }
+        {
+          "name": "1.1.create-dialog",
+          "stableForMs": 350,
+          "deadlineMs": 15000,
+          "source": {
+            "kind": "selector",
+            "selector": "[placeholder='My project']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[placeholder='My project']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 1.1", "title": "Create the project", "duration": 2200 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Projects', exact: true })", "scale": 1.22, "after": 1200 },
-        { "type": "waitFor", "selector": "page.getByRole('heading', { name: 'Projects', exact: true })", "timeout": 20000, "after": 700 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Create blank project', exact: true })", "scale": 1.45, "after": 1000 },
-        { "type": "waitFor", "selector": "page.getByRole('dialog').filter({ hasText: 'Create blank project' })", "timeout": 15000, "cue": { "name": "1.1.trailhead-details", "rect": { "mode": "matched-element" } } },
-        { "type": "type", "selector": "page.getByPlaceholder('My project')", "text": "Trailhead", "scale": 1.6, "delay": 36, "after": 900 },
-        { "type": "type", "selector": "page.getByPlaceholder('What is this project about?')", "text": "A calm, shared first experience for planning trips with friends.", "scale": 1.45, "delay": 36, "after": 1600 }
+        {
+          "type": "badge",
+          "label": "Beat 1.1",
+          "title": "Create the project",
+          "duration": 2200
+        },
+        {
+          "type": "press",
+          "key": "Escape",
+          "after": 400
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Projects', exact: true })",
+          "scale": 1.22,
+          "after": 1200
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Projects', exact: true })",
+          "timeout": 20000,
+          "after": 700
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Create blank project', exact: true })",
+          "scale": 1.45,
+          "after": 1000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByPlaceholder('My project')",
+          "timeout": 15000,
+          "cue": {
+            "name": "1.1.trailhead-details",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "type",
+          "selector": "page.getByPlaceholder('My project')",
+          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "scale": 1.6,
+          "delay": 36,
+          "after": 900
+        },
+        {
+          "type": "type",
+          "selector": "page.getByPlaceholder('What is this project about?')",
+          "text": "A calm, shared first experience for planning trips with friends.",
+          "scale": 1.45,
+          "delay": 36,
+          "after": 1600
+        }
       ]
     },
     {
       "id": "1.2",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/1.2-choose-blueprint.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8500, "preferred": 12000, "maximum": 18000 },
-      "expectedCues": ["1.2.blueprint-picker", "1.2.blueprint-selected", "1.2.project-created"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/1.2-choose-blueprint.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8500,
+        "preferred": 25000,
+        "maximum": 30000
+      },
+      "expectedCues": [
+        "1.2.blueprint-picker",
+        "1.2.blueprint-selected",
+        "1.2.project-created"
+      ],
       "cueWatchers": [
-        { "name": "1.2.blueprint-picker", "stableForMs": 300, "deadlineMs": 15000, "source": { "kind": "selector", "selector": "[role=radiogroup][aria-label='Blueprint templates']", "state": "visible" }, "rect": { "mode": "element", "selector": "[role=radiogroup][aria-label='Blueprint templates']" } }
+        {
+          "name": "1.2.blueprint-picker",
+          "stableForMs": 300,
+          "deadlineMs": 90000,
+          "source": {
+            "kind": "selector",
+            "selector": "[role=radiogroup][aria-label='Blueprint templates']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[role=radiogroup][aria-label='Blueprint templates']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 1.2", "title": "Choose a blueprint", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('radio', { name: 'Product & Software Delivery', exact: true })", "scale": 1.5, "after": 900 },
-        { "type": "waitFor", "selector": "page.locator('[role=\"radio\"][aria-label=\"Product & Software Delivery\"][aria-checked=\"true\"]')", "timeout": 20000, "cue": { "name": "1.2.blueprint-selected", "rect": { "mode": "matched-element" } } },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Create', exact: true })", "scale": 1.55, "after": 1000 },
-        { "type": "waitText", "text": "Trailhead", "timeout": 60000, "cue": { "name": "1.2.project-created", "rect": { "mode": "element", "selector": "main" } } }
+        {
+          "type": "badge",
+          "label": "Beat 1.2",
+          "title": "Choose a blueprint",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[role=radiogroup][aria-label=\"Blueprint templates\"]')",
+          "timeout": 90000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('radio', { name: 'Product & Software Delivery', exact: true })",
+          "scale": 1.5,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[role=\"radio\"][aria-label=\"Product & Software Delivery\"][aria-checked=\"true\"]')",
+          "timeout": 20000,
+          "cue": {
+            "name": "1.2.blueprint-selected",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Create', exact: true })",
+          "scale": 1.55,
+          "after": 1000
+        },
+        {
+          "type": "waitText",
+          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "timeout": 60000,
+          "cue": {
+            "name": "1.2.project-created",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        },
+        {
+          "type": "eval",
+          "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { await fetch('/api/projects/' + m[1] + '/provider-settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_model_github_copilot: 'claude-sonnet-4.6' }) }); }",
+          "after": 600
+        }
       ]
     },
     {
       "id": "1.3",
-      "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/1.3-inspect-team.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 14500, "preferred": 21000, "maximum": 30000 },
-      "expectedCues": ["1.3.team-visible", "1.3.import-dialog"],
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "freshNavigation": true,
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/1.3-inspect-team.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 14500,
+        "preferred": 21000,
+        "maximum": 30000
+      },
+      "expectedCues": [
+        "1.3.team-visible",
+        "1.3.agent-detail",
+        "1.3.marketplace-open",
+        "1.3.import-dialog"
+      ],
       "cueWatchers": [
-        { "name": "1.3.team-visible", "stableForMs": 350, "deadlineMs": 20000, "source": { "kind": "selector", "selector": "[aria-label='Project agents']", "state": "visible" }, "rect": { "mode": "element", "selector": "[aria-label='Project agents']" } }
+        {
+          "name": "1.3.team-visible",
+          "stableForMs": 350,
+          "deadlineMs": 20000,
+          "source": {
+            "kind": "selector",
+            "selector": "[aria-label='Project agents']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[aria-label='Project agents']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 1.3", "title": "Inspect the team", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Open', exact: true })", "scale": 1.45, "after": 900 },
-        { "type": "waitFor", "selector": "page.getByRole('link', { name: 'Agents', exact: true })", "timeout": 20000 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Agents', exact: true })", "scale": 1.42, "after": 900 },
-        { "type": "waitFor", "selector": "page.getByLabel('Project agents')", "timeout": 20000, "cue": { "name": "1.3.import-dialog", "rect": { "mode": "matched-element" } } },
-        { "type": "click", "selector": "page.getByLabel('Project agents').getByRole('button').first()", "scale": 1.35, "after": 1400 },
-        { "type": "press", "key": "Escape", "after": 700 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Skills', exact: true })", "scale": 1.42, "after": 900 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Browse marketplaces', exact: true })", "scale": 1.55, "after": 900 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'GitHub Awesome Copilot', exact: true })", "scale": 1.45, "after": 1100 },
-        { "type": "press", "key": "Escape", "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Generate skill', exact: true })", "scale": 1.5, "after": 900 },
-        { "type": "press", "key": "Escape", "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Import skill', exact: true })", "scale": 1.55, "after": 700 },
-        { "type": "waitText", "text": "Import skill", "timeout": 15000 }
+        {
+          "type": "badge",
+          "label": "Beat 1.3",
+          "title": "Inspect the team",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Projects', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Projects', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "scale": 1.45,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('link', { name: 'Agents', exact: true })",
+          "timeout": 20000
+        },
+        {
+          "type": "eval",
+          "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { await fetch('/api/projects/' + m[1] + '/provider-settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_model_github_copilot: 'claude-sonnet-4.6' }) }); }",
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Agents', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByLabel('Project agents')",
+          "timeout": 20000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByLabel('Project agents').getByRole('button').first()",
+          "scale": 1.35,
+          "after": 1400
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByLabel('Agent detail sections')",
+          "timeout": 20000,
+          "cue": {
+            "name": "1.3.agent-detail",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "press",
+          "key": "Escape",
+          "after": 700
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Skills', exact: true })",
+          "scale": 1.42,
+          "after": 900
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Browse marketplaces', exact: true })",
+          "scale": 1.55,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('dialog').filter({ hasText: 'Browse skill marketplaces' })",
+          "timeout": 20000,
+          "cue": {
+            "name": "1.3.marketplace-open",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "press",
+          "key": "Escape",
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Import skill', exact: true })",
+          "timeout": 120000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Import skill', exact: true })",
+          "scale": 1.55,
+          "after": 700
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('dialog').filter({ hasText: 'Import skill' })",
+          "timeout": 15000,
+          "cue": {
+            "name": "1.3.import-dialog",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "press",
+          "key": "Escape",
+          "after": 1000
+        }
       ]
     },
     {
       "id": "2.1",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": true,
-      "videoPath": "recordings/blueprint-demo/2.1-frame-product.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 9000, "preferred": 13000, "maximum": 19000 },
-      "expectedCues": ["2.1.task-dialog", "2.1.goal-ready", "2.1.outcome-drafting"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.1-frame-product.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 12000,
+        "preferred": 20000,
+        "maximum": 32000
+      },
+      "expectedCues": [
+        "2.1.task-dialog",
+        "2.1.goal-ready"
+      ],
       "cueWatchers": [
-        { "name": "2.1.task-dialog", "stableForMs": 300, "deadlineMs": 20000, "source": { "kind": "text", "selector": "body", "includes": "Start a task" }, "rect": { "mode": "element", "selector": "[role=dialog]" } }
+        {
+          "name": "2.1.task-dialog",
+          "stableForMs": 300,
+          "deadlineMs": 20000,
+          "source": {
+            "kind": "text",
+            "selector": "body",
+            "includes": "Start a task"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[role=dialog]"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.1", "title": "Frame the product", "duration": 1800 },
-        { "type": "press", "key": "Escape", "after": 250 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Dashboard', exact: true })", "scale": 1.42, "after": 800 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Start task' }).first()", "scale": 1.58, "after": 700 },
-        { "type": "waitFor", "selector": "page.getByRole('dialog').filter({ hasText: 'Start a task' })", "timeout": 20000, "cue": { "name": "2.1.goal-ready", "rect": { "mode": "matched-element" } } },
-        { "type": "select", "selector": "page.getByRole('combobox', { name: 'Workflow' }).first()", "option": { "label": "Product" }, "scale": 1.48, "after": 500 },
-        { "type": "type", "selector": "page.getByRole('textbox', { name: 'Goal' })", "text": "Planning a weekend trip with friends turns into a mess of group chats, links, and half-made plans, and everyone ends up on a different page. I want to launch Trailhead: shape the first experience, and ship a landing page with a welcome banner, three value props, and one primary Plan my first trip button.", "scale": 1.72, "delay": 6, "after": 900 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Define Outcome' })", "scale": 1.62, "after": 1000 },
-        { "type": "waitText", "text": "Outcome plan", "timeout": 180000, "cue": { "name": "2.1.outcome-drafting", "rect": { "mode": "element", "selector": "main" } } }
+        {
+          "type": "badge",
+          "label": "Beat 2.1",
+          "title": "Frame the product",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Projects', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Projects', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "scale": 1.45,
+          "after": 900
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Start task' }).first()",
+          "scale": 1.58,
+          "after": 700
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('dialog').filter({ hasText: 'Start a task' })",
+          "timeout": 20000,
+          "cue": {
+            "name": "2.1.goal-ready",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "select",
+          "selector": "page.getByRole('combobox', { name: 'Workflow' }).first()",
+          "option": {
+            "label": "Product Management Discovery"
+          },
+          "scale": 1.48,
+          "after": 500
+        },
+        {
+          "type": "type",
+          "selector": "page.getByRole('textbox', { name: 'Goal' })",
+          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'. Create one work item titled 'Create Trailhead landing page'.",
+          "scale": 1.72,
+          "delay": 6,
+          "after": 900
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Direct' })",
+          "scale": 1.62,
+          "after": 1000
+        },
+        {
+          "type": "pause",
+          "ms": 5000
+        }
       ]
     },
     {
       "id": "2.2",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/2.2-confirm-plan.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 10500, "preferred": 15000, "maximum": 24000 },
-      "expectedCues": ["2.2.outcome-spec", "2.2.confirm-ready", "2.2.plan-confirmed"],
-      "cueWatchers": [
-        { "name": "2.2.outcome-spec", "stableForMs": 500, "deadlineMs": 180000, "source": { "kind": "text", "selector": "body", "includes": "Confirm plan" }, "rect": { "mode": "matched-element" } }
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.2-confirm-plan.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 12000,
+        "preferred": 120000,
+        "maximum": 210000
+      },
+      "expectedCues": [
+        "2.2.plan-confirmed",
+        "2.2.autopilot-enabled",
+        "2.2.auto-approve-enabled"
       ],
+      "cueWatchers": [],
       "steps": [
-        { "type": "badge", "label": "Beat 2.2", "title": "Review and confirm the plan", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()", "timeout": 180000, "cue": { "name": "2.2.confirm-ready", "rect": { "mode": "matched-element" } } },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Clarify plan|Request change/i }).first()", "scale": 1.45, "after": 500 },
-        { "type": "type", "selector": "page.getByPlaceholder('e.g. Narrow the scope to the API only; assume Postgres, not MySQL.')", "text": "Keep the first release focused on the welcoming landing page and the primary trip-planning call to action.", "scale": 1.5, "after": 450 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Update plan|Send clarification/i }).first()", "scale": 1.45, "after": 900 },
-        { "type": "waitFor", "selector": "page.getByRole('checkbox', { name: /Independent task promotion/i }).first()", "timeout": 180000 },
-        { "type": "click", "selector": "page.getByRole('checkbox', { name: /Independent task promotion/i }).first()", "scale": 1.5, "after": 600 },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()", "scale": 1.62, "after": 1200 },
-        { "type": "waitText", "text": "Work plan", "timeout": 180000, "cue": { "name": "2.2.plan-confirmed", "rect": { "mode": "element", "selector": "main" } } }
+        {
+          "type": "badge",
+          "label": "Beat 2.2",
+          "title": "Work plan ready",
+          "duration": 1800
+        },
+        {
+          "type": "reload"
+        },
+        {
+          "type": "waitText",
+          "text": "Work plan",
+          "timeout": 300000,
+          "cue": {
+            "name": "2.2.plan-confirmed",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })",
+          "scale": 1.35,
+          "after": 600
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "2.2.autopilot-enabled",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
+          "scale": 1.35,
+          "after": 600
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "2.2.auto-approve-enabled",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "after": 400
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
+          "after": 600
+        }
       ]
     },
     {
       "id": "2.3",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/2.3-watch-work-plan.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 13000, "preferred": 19000, "maximum": 30000 },
-      "expectedCues": ["2.3.topology-ready", "2.3.topology-open", "2.3.artifacts-visible"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.3-watch-work-plan.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8000,
+        "preferred": 12000,
+        "maximum": 30000
+      },
+      "expectedCues": [
+        "2.3.topology-open",
+        "2.3.topology-ready",
+        "2.3.parent-review-cleared"
+      ],
       "cueWatchers": [
-        { "name": "2.3.topology-ready", "stableForMs": 500, "deadlineMs": 240000, "source": { "kind": "selector", "selector": "[data-testid='topology-graph-canvas']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='topology-graph-canvas']" } }
+        {
+          "name": "2.3.topology-ready",
+          "stableForMs": 500,
+          "deadlineMs": 600000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='topology-graph-canvas']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='topology-graph-canvas']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.3", "title": "Watch the work plan run", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('topology-graph-canvas')", "timeout": 240000, "cue": { "name": "2.3.topology-open", "rect": { "mode": "matched-element" } } },
-        { "type": "click", "selector": "page.getByTestId('open-topology-minimap').first()", "scale": 1.35, "after": 1200 },
-        { "type": "hover", "selector": "page.getByTestId('topology-graph-canvas')", "scale": 1.12, "hold": 2200 },
-        { "type": "press", "key": "Escape", "after": 400 },
-        { "type": "waitText", "text": "Artifacts", "timeout": 240000, "cue": { "name": "2.3.artifacts-visible", "rect": { "mode": "element", "selector": "main" } } }
+        {
+          "type": "badge",
+          "label": "Beat 2.3",
+          "title": "Watch the work plan run",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('open-topology-minimap').first()",
+          "timeout": 600000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('open-topology-minimap').first()",
+          "scale": 1.35,
+          "after": 1200
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "timeout": 600000,
+          "cue": {
+            "name": "2.3.topology-open",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "scale": 1.12,
+          "hold": 2200
+        },
+        {
+          "type": "press",
+          "key": "Escape",
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('coordinator-review-changes')",
+          "timeout": 600000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('coordinator-review-changes')",
+          "scale": 1.3,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
+          "timeout": 600000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
+          "scale": 1.35,
+          "after": 1000
+        },
+        {
+          "type": "waitText",
+          "text": "Completed",
+          "timeout": 180000,
+          "cue": {
+            "name": "2.3.parent-review-cleared",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        }
       ]
     },
     {
       "id": "2.4",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/2.4-review-board.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 9000, "preferred": 14000, "maximum": 22000 },
-      "expectedCues": ["2.4.board-visible", "2.4.task-entry", "2.4.task-ready"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8000,
+        "preferred": 14000,
+        "maximum": 22000
+      },
+      "expectedCues": [
+        "2.4.task-entry",
+        "2.4.promoted-task",
+        "2.4.pickup-run"
+      ],
       "cueWatchers": [
-        { "name": "2.4.board-visible", "stableForMs": 350, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "Agent task board" }, "rect": { "mode": "element", "selector": "[aria-label='Work board']" } }
+        {
+          "name": "2.4.board-visible",
+          "stableForMs": 350,
+          "deadlineMs": 30000,
+          "source": {
+            "kind": "text",
+            "selector": "body",
+            "includes": "Agent task board"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[aria-label='Work board']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.4", "title": "Review the board", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Board', exact: true })", "scale": 1.42, "after": 800 },
-        { "type": "waitText", "text": "Agent task board", "timeout": 30000, "cue": { "name": "2.4.task-entry", "rect": { "mode": "element", "selector": "[aria-label='Work board']" } } },
-        { "type": "type", "selector": "page.getByLabel('New task title')", "text": "Create Trailhead landing page", "scale": 1.52, "after": 350 },
-        { "type": "press", "selector": "page.getByLabel('New task title')", "key": "Enter", "after": 900 },
-        { "type": "waitFor", "selector": "page.getByText('Create Trailhead landing page', { exact: true })", "timeout": 30000, "cue": { "name": "2.4.task-ready", "rect": { "mode": "matched-element" } } },
-        { "type": "drag", "selector": "page.getByText('Create Trailhead landing page', { exact: true }).locator('..').locator('..')", "target": "page.getByTestId('column-ready')", "scale": 1.4, "after": 1100 }
+        {
+          "type": "badge",
+          "label": "Beat 2.4",
+          "title": "Review the board",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Board', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitText",
+          "text": "Agent task board",
+          "timeout": 30000,
+          "cue": {
+            "name": "2.4.task-entry",
+            "rect": {
+              "mode": "element",
+              "selector": "[aria-label='Work board']"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "timeout": 240000,
+          "cue": {
+            "name": "2.4.promoted-task",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "drag",
+          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "target": "page.getByTestId('column-ready')",
+          "scale": 1.4,
+          "after": 1100
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "timeout": 180000,
+          "cue": {
+            "name": "2.4.pickup-run",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        }
       ]
     },
     {
       "id": "2.5",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/2.5-ship-it.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 12500, "preferred": 18500, "maximum": 28000 },
-      "expectedCues": ["2.5.preview-approval", "2.5.preview-open"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.5-ship-it.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 12500,
+        "preferred": 18500,
+        "maximum": 28000
+      },
+      "expectedCues": [
+        "2.5.run-open",
+        "2.5.preview-approval",
+        "2.5.preview-open"
+      ],
       "cueWatchers": [
-        { "name": "2.5.preview-approval", "stableForMs": 350, "deadlineMs": 300000, "source": { "kind": "selector", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']", "state": "visible" }, "rect": { "mode": "first-matching", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']" } }
+        {
+          "name": "2.5.preview-approval",
+          "stableForMs": 350,
+          "deadlineMs": 600000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "first-matching",
+            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.5", "title": "Ship it", "duration": 1800 },
-        { "type": "click", "selector": "page.getByText('Create Trailhead landing page', { exact: true })", "scale": 1.5, "after": 700 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Break down|Decompose/i }).first()", "scale": 1.5, "after": 900 },
-        { "type": "waitText", "text": "Preview proposed backlog items", "timeout": 60000 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Create.*subtasks|Apply/i }).first()", "scale": 1.45, "after": 1000 },
-        { "type": "waitFor", "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))", "timeout": 300000 },
-        { "type": "pause", "ms": 2200 },
-        { "type": "click", "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()", "scale": 1.6, "after": 1200, "force": true },
-        { "type": "waitText", "text": "Preview", "timeout": 300000, "cue": { "name": "2.5.preview-open", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()", "scale": 1.52, "after": 1800 }
+        {
+          "type": "badge",
+          "label": "Beat 2.5",
+          "title": "Ship it",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
+          "scale": 1.5,
+          "after": 700
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('open-topology-minimap')",
+          "timeout": 30000,
+          "cue": {
+            "name": "2.5.run-open",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))",
+          "timeout": 600000
+        },
+        {
+          "type": "pause",
+          "ms": 2200
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()",
+          "scale": 1.6,
+          "after": 1200,
+          "force": true
+        },
+        {
+          "type": "waitText",
+          "text": "Preview",
+          "timeout": 300000,
+          "cue": {
+            "name": "2.5.preview-open",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()",
+          "scale": 1.52,
+          "after": 1800
+        }
       ]
     },
     {
       "id": "2.6",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/2.6-review-merge.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 10500, "preferred": 15500, "maximum": 24000 },
-      "expectedCues": ["2.6.review-gate", "2.6.diff-visible", "2.6.merge-approved"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.6-review-merge.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 10500,
+        "preferred": 15500,
+        "maximum": 24000
+      },
+      "expectedCues": [
+        "2.6.review-gate",
+        "2.6.diff-visible",
+        "2.6.merge-approved"
+      ],
       "cueWatchers": [
-        { "name": "2.6.review-gate", "stableForMs": 500, "deadlineMs": 300000, "source": { "kind": "selector", "selector": "[data-testid='human-review-preview-status']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='human-review-preview-status']" } }
+        {
+          "name": "2.6.review-gate",
+          "stableForMs": 500,
+          "deadlineMs": 600000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='coordinator-review-changes']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='coordinator-review-changes']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.6", "title": "Review the diff and approve the merge", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('human-review-preview-status')", "timeout": 300000 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Review.*changes|View.*diff|Review/i }).first()", "scale": 1.48, "after": 1200 },
-        { "type": "waitText", "text": "Files changed", "timeout": 60000, "cue": { "name": "2.6.diff-visible", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "hover", "selector": "page.getByText('Files changed', { exact: true })", "scale": 1.25, "hold": 1600 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Approve.*merge|Approve/i }).first()", "scale": 1.62, "after": 1200 },
-        { "type": "waitText", "text": "Completed", "timeout": 180000, "cue": { "name": "2.6.merge-approved", "rect": { "mode": "element", "selector": "main" } } }
+        {
+          "type": "badge",
+          "label": "Beat 2.6",
+          "title": "Review the diff and approve the merge",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('coordinator-review-changes')",
+          "timeout": 600000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('coordinator-review-changes')",
+          "scale": 1.48,
+          "after": 1200
+        },
+        {
+          "type": "waitText",
+          "text": "Files changed",
+          "timeout": 60000,
+          "cue": {
+            "name": "2.6.diff-visible",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByText('Files changed', { exact: true })",
+          "scale": 1.25,
+          "hold": 1600
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
+          "scale": 1.62,
+          "after": 1200
+        },
+        {
+          "type": "waitText",
+          "text": "Completed",
+          "timeout": 180000,
+          "cue": {
+            "name": "2.6.merge-approved",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        }
       ]
     },
     {
       "id": "2.7",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/2.7-review-trace.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 9000, "preferred": 13500, "maximum": 20000 },
-      "expectedCues": ["2.7.trace-list", "2.7.span-tree"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.7-review-trace.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 9000,
+        "preferred": 13500,
+        "maximum": 20000
+      },
+      "expectedCues": [
+        "2.7.trace-list",
+        "2.7.span-tree"
+      ],
       "cueWatchers": [
-        { "name": "2.7.trace-list", "stableForMs": 350, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "Trace summary" }, "rect": { "mode": "element", "selector": "main" } }
+        {
+          "name": "2.7.trace-list",
+          "stableForMs": 350,
+          "deadlineMs": 30000,
+          "source": {
+            "kind": "text",
+            "selector": "body",
+            "includes": "Trace summary"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "main"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.7", "title": "Review the trace", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Observability', exact: true })", "scale": 1.42, "after": 700 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Traces', exact: true })", "scale": 1.4, "after": 800 },
-        { "type": "waitText", "text": "Trace summary", "timeout": 30000, "cue": { "name": "2.7.span-tree", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "click", "selector": "page.getByRole('button', { name: 'Preview trace', exact: true }).first()", "scale": 1.5, "after": 900 },
-        { "type": "waitFor", "selector": "page.getByTestId('transaction-trace-panel')", "timeout": 60000 },
-        { "type": "hover", "selector": "page.getByTestId('transaction-trace-panel')", "scale": 1.18, "hold": 2400 }
+        {
+          "type": "badge",
+          "label": "Beat 2.7",
+          "title": "Review the trace",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Observability', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('tab', { name: 'Traces', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitText",
+          "text": "Trace summary",
+          "timeout": 30000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Preview trace', exact: true }).first()",
+          "timeout": 180000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Preview trace', exact: true }).first()",
+          "scale": 1.5,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('transaction-trace-panel')",
+          "timeout": 180000,
+          "cue": {
+            "name": "2.7.span-tree",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('transaction-trace-panel')",
+          "scale": 1.18,
+          "hold": 2400
+        }
       ]
     },
     {
       "id": "2.8",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/2.8-review-memory.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7000, "preferred": 10500, "maximum": 16000 },
-      "expectedCues": ["2.8.decisions-visible", "2.8.accepted-decision"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/2.8-review-memory.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 7000,
+        "preferred": 10500,
+        "maximum": 16000
+      },
+      "expectedCues": [
+        "2.8.decisions-visible",
+        "2.8.accepted-decision"
+      ],
       "cueWatchers": [
-        { "name": "2.8.decisions-visible", "stableForMs": 350, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "Accepted decisions" }, "rect": { "mode": "element", "selector": "main" } }
+        {
+          "name": "2.8.decisions-visible",
+          "stableForMs": 350,
+          "deadlineMs": 300000,
+          "source": {
+            "kind": "text",
+            "selector": "body",
+            "includes": "Accepted decisions"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "main"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 2.8", "title": "Review team memory and decisions", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Decisions', exact: true })", "scale": 1.42, "after": 700 },
-        { "type": "waitText", "text": "Accepted decisions", "timeout": 30000, "cue": { "name": "2.8.accepted-decision", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "hover", "selector": "page.getByText('Accepted decisions', { exact: true })", "scale": 1.28, "hold": 2200 }
+        {
+          "type": "badge",
+          "label": "Beat 2.8",
+          "title": "Review team memory and decisions",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Memories', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitText",
+          "text": "Accepted decisions",
+          "timeout": 30000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('accepted-decision').first()",
+          "timeout": 300000,
+          "cue": {
+            "name": "2.8.accepted-decision",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('accepted-decision').first()",
+          "scale": 1.28,
+          "hold": 2200
+        }
       ]
     },
     {
       "id": "3.1",
-      "freshNavigation": true,
-      "videoPath": "recordings/blueprint-demo/3.1-schedule-sweep.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8000, "preferred": 12000, "maximum": 18000 },
-      "expectedCues": ["3.1.workflow-list", "3.1.weekly-schedule"],
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "freshNavigation": false,
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/3.1-schedule-sweep.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8000,
+        "preferred": 12000,
+        "maximum": 18000
+      },
+      "expectedCues": [
+        "3.1.workflow-list",
+        "3.1.weekly-schedule",
+        "3.1.schedule-saved"
+      ],
       "cueWatchers": [
-        { "name": "3.1.workflow-list", "stableForMs": 350, "deadlineMs": 30000, "source": { "kind": "selector", "selector": "[aria-label='Available workflows'], [aria-label='Active workflow']", "state": "visible" }, "rect": { "mode": "first-matching", "selector": "[aria-label='Available workflows'], [aria-label='Active workflow']" } }
+        {
+          "name": "3.1.workflow-list",
+          "stableForMs": 350,
+          "deadlineMs": 30000,
+          "source": {
+            "kind": "selector",
+            "selector": "[aria-label='Available workflows'], [aria-label='Active workflow']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "first-matching",
+            "selector": "[aria-label='Available workflows'], [aria-label='Active workflow']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 3.1", "title": "Schedule recurring dependency sweeps", "duration": 1800 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Workflows', exact: true })", "scale": 1.42, "after": 800 },
-        { "type": "waitFor", "selector": "page.getByLabel('Available workflows').or(page.getByLabel('Active workflow'))", "timeout": 30000, "cue": { "name": "3.1.weekly-schedule", "rect": { "mode": "matched-element" } } },
-        { "type": "click", "selector": "page.getByText(/dependency.*sweep/i).first()", "scale": 1.48, "after": 700 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Schedule/i }).first()", "scale": 1.45, "after": 650 },
-        { "type": "select", "selector": "page.getByRole('combobox', { name: 'Cadence' })", "option": { "label": "Weekly" }, "scale": 1.42, "after": 450 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Save schedule|Schedule workflow/i }).first()", "scale": 1.52, "after": 1100 }
+        {
+          "type": "badge",
+          "label": "Beat 3.1",
+          "title": "Schedule recurring dependency sweeps",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByLabel('Available workflows').or(page.getByLabel('Active workflow'))",
+          "timeout": 30000,
+          "cue": {
+            "name": "3.1.weekly-schedule",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'dependency-sweep' }).getByRole('button', { name: 'Add schedule', exact: true })",
+          "scale": 1.48,
+          "after": 700
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Schedule/i }).first()",
+          "scale": 1.45,
+          "after": 650
+        },
+        {
+          "type": "select",
+          "selector": "page.getByRole('combobox', { name: 'Cadence' })",
+          "option": {
+            "label": "Weekly"
+          },
+          "scale": 1.42,
+          "after": 450
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Save schedule|Schedule workflow/i }).first()",
+          "scale": 1.52,
+          "after": 1100
+        },
+        {
+          "type": "waitText",
+          "text": "Schedule saved.",
+          "timeout": 30000,
+          "cue": {
+            "name": "3.1.schedule-saved",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        }
       ]
     },
     {
       "id": "3.2",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/3.2-github-triage.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 13500, "preferred": 20500, "maximum": 32000 },
-      "expectedCues": ["3.2.event-trigger", "3.2.event-config", "3.2.webhook-config", "3.2.triage-run"],
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
+          "kind": "github-issue-url",
+          "message": "Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4."
+        }
+      ],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/3.2-github-triage.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 13500,
+        "preferred": 20500,
+        "maximum": 32000
+      },
+      "expectedCues": [
+        "3.2.event-trigger",
+        "3.2.event-config",
+        "3.2.webhook-config",
+        "3.2.triage-run"
+      ],
       "cueWatchers": [
-        { "name": "3.2.event-trigger", "stableForMs": 350, "deadlineMs": 60000, "source": { "kind": "text", "selector": "body", "includes": "Event trigger" }, "rect": { "mode": "element", "selector": "[role=dialog]" } }
+        {
+          "name": "3.2.event-trigger",
+          "stableForMs": 350,
+          "deadlineMs": 60000,
+          "source": {
+            "kind": "text",
+            "selector": "body",
+            "includes": "Event trigger"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[role=dialog]"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 3.2", "title": "Trigger bug triage from GitHub", "duration": 1800 },
-        { "type": "click", "selector": "page.getByText(/bug.*triage/i).first()", "scale": 1.48, "after": 700 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Event trigger|Trigger/i }).first()", "scale": 1.48, "after": 600 },
-        { "type": "waitText", "text": "Event trigger", "timeout": 60000, "cue": { "name": "3.2.event-config", "rect": { "mode": "element", "selector": "[role=dialog]" } } },
-        { "type": "select", "selector": "page.getByRole('combobox', { name: 'GitHub event' })", "option": { "label": "Issues" }, "scale": 1.42, "after": 500 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Add condition/i })", "scale": 1.4, "after": 450 },
-        { "type": "select", "selector": "page.getByRole('combobox', { name: 'Condition type' }).first()", "option": { "label": "Label" }, "scale": 1.38, "after": 350 },
-        { "type": "type", "selector": "page.getByRole('textbox', { name: /Label/i }).first()", "text": "agentweaver:triage", "scale": 1.45, "after": 450 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Save event/i })", "scale": 1.52, "after": 1000 },
-        { "type": "click", "selector": "page.getByRole('link', { name: 'Settings', exact: true })", "scale": 1.42, "after": 800 },
-        { "type": "waitFor", "selector": "page.getByRole('button', { name: 'Create webhook automatically', exact: true })", "timeout": 30000, "cue": { "name": "3.2.webhook-config", "rect": { "mode": "matched-element" } } },
-        { "type": "hover", "selector": "page.getByRole('button', { name: 'Create webhook automatically', exact: true })", "scale": 1.45, "hold": 1600 },
-        { "type": "goto", "url": "{{AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL}}", "after": 900 },
-        { "type": "waitText", "text": "agentweaver:triage", "timeout": 60000, "cue": { "name": "3.2.triage-run", "rect": { "mode": "element", "selector": "main" } } }
+        {
+          "type": "badge",
+          "label": "Beat 3.2",
+          "title": "Trigger bug triage from GitHub",
+          "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByText(/bug.*triage/i).first()",
+          "scale": 1.48,
+          "after": 700
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Event trigger|Trigger/i }).first()",
+          "scale": 1.48,
+          "after": 600
+        },
+        {
+          "type": "waitText",
+          "text": "Event trigger",
+          "timeout": 60000,
+          "cue": {
+            "name": "3.2.event-config",
+            "rect": {
+              "mode": "element",
+              "selector": "[role=dialog]"
+            }
+          }
+        },
+        {
+          "type": "select",
+          "selector": "page.getByRole('combobox', { name: 'GitHub event' })",
+          "option": {
+            "label": "Issues"
+          },
+          "scale": 1.42,
+          "after": 500
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Add condition/i })",
+          "scale": 1.4,
+          "after": 450
+        },
+        {
+          "type": "select",
+          "selector": "page.getByRole('combobox', { name: 'Condition type' }).first()",
+          "option": {
+            "label": "Label"
+          },
+          "scale": 1.38,
+          "after": 350
+        },
+        {
+          "type": "type",
+          "selector": "page.getByRole('textbox', { name: /Label/i }).first()",
+          "text": "agentweaver:triage",
+          "scale": 1.45,
+          "after": 450
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: /Save event/i })",
+          "scale": 1.52,
+          "after": 1000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Create webhook automatically', exact: true })",
+          "timeout": 30000,
+          "cue": {
+            "name": "3.2.webhook-config",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByRole('button', { name: 'Create webhook automatically', exact: true })",
+          "scale": 1.45,
+          "hold": 1600
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL}}",
+          "after": 900
+        },
+        {
+          "type": "waitText",
+          "text": "agentweaver:triage",
+          "timeout": 60000,
+          "cue": {
+            "name": "3.2.triage-run",
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        }
       ]
     },
     {
       "id": "4.1",
-      "freshNavigation": true,
-      "videoPath": "recordings/blueprint-demo/4.1-chat-triage.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8000, "preferred": 12000, "maximum": 19000 },
-      "expectedCues": ["4.1.issue-open", "4.1.assistant-ready"],
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "freshNavigation": false,
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/4.1-chat-triage.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8000,
+        "preferred": 12000,
+        "maximum": 19000
+      },
+      "expectedCues": [
+        "4.1.issue-open",
+        "4.1.assistant-ready"
+      ],
       "cueWatchers": [
-        { "name": "4.1.issue-open", "stableForMs": 350, "deadlineMs": 60000, "source": { "kind": "text", "selector": "body", "includes": "Issue" }, "rect": { "mode": "element", "selector": "main" } }
+        {
+          "name": "4.1.issue-open",
+          "stableForMs": 350,
+          "deadlineMs": 60000,
+          "source": {
+            "kind": "selector",
+            "selector": "#issue-title",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "#issue-title"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.1", "title": "Triage the next issue from chat", "duration": 1800 },
-        { "type": "goto", "url": "{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL}}", "after": 800 },
-        { "type": "waitText", "text": "Issue", "timeout": 60000 },
-        { "type": "goto", "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}", "after": 800 },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-run-page')", "timeout": 30000, "cue": { "name": "4.1.assistant-ready", "rect": { "mode": "matched-element" } } },
-        { "type": "type", "selector": "page.getByPlaceholder('Message the assistant...')", "text": "Triage issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}}.", "scale": 1.55, "after": 500 },
-        { "type": "press", "selector": "page.getByPlaceholder('Message the assistant...')", "key": "Enter", "after": 1000 }
+        {
+          "type": "badge",
+          "label": "Beat 4.1",
+          "title": "Triage the next issue from chat",
+          "duration": 1800
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL}}",
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('#issue-title')",
+          "timeout": 60000
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('assistant-run-page')",
+          "timeout": 30000,
+          "cue": {
+            "name": "4.1.assistant-ready",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "type",
+          "selector": "page.getByPlaceholder('Message the assistant...')",
+          "text": "Triage issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}}.",
+          "scale": 1.55,
+          "after": 500
+        },
+        {
+          "type": "press",
+          "selector": "page.getByPlaceholder('Message the assistant...')",
+          "key": "Enter",
+          "after": 1000
+        }
+      ],
+      "requiresPriorBeat": "3.2",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL",
+          "kind": "github-issue-url",
+          "message": "Set it to the manually prepared, unlabelled demo issue URL; the capture will only open it.",
+          "matchesEnvironment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER"
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER",
+          "kind": "github-issue-number",
+          "message": "Set it to the issue number from AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
       ]
     },
     {
       "id": "4.2",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/4.2-assistant-triage.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8000, "preferred": 12500, "maximum": 20000 },
-      "expectedCues": ["4.2.triage-response", "4.2.approval-gate"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/4.2-assistant-triage.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8000,
+        "preferred": 12500,
+        "maximum": 20000
+      },
+      "expectedCues": [
+        "4.2.triage-response",
+        "4.2.approval-gate"
+      ],
       "cueWatchers": [
-        { "name": "4.2.triage-response", "stableForMs": 500, "deadlineMs": 180000, "source": { "kind": "selector", "selector": "[data-testid='assistant-transcript']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='assistant-transcript']" } }
+        {
+          "name": "4.2.transcript-ready",
+          "stableForMs": 500,
+          "deadlineMs": 180000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='assistant-transcript']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='assistant-transcript']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.2", "title": "Ask the assistant to triage", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-transcript')", "timeout": 180000, "cue": { "name": "4.2.approval-gate", "rect": { "mode": "matched-element" } } },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-approval-gate')", "timeout": 180000 },
-        { "type": "hover", "selector": "page.getByTestId('assistant-approval-gate')", "scale": 1.25, "hold": 2400 }
-      ]
+        {
+          "type": "badge",
+          "label": "Beat 4.2",
+          "title": "Ask the assistant to triage",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('assistant-approval-gate')",
+          "timeout": 180000,
+          "cue": {
+            "name": "4.2.approval-gate",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('assistant-transcript')",
+          "timeout": 180000,
+          "cue": {
+            "name": "4.2.triage-response",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('assistant-approval-gate')",
+          "scale": 1.25,
+          "hold": 2400
+        }
+      ],
+      "requiresPriorBeat": "4.1"
     },
     {
       "id": "4.3",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/4.3-scope-bug.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7000, "preferred": 10000, "maximum": 16000 },
-      "expectedCues": ["4.3.run-timeline", "4.3.scope-visible"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/4.3-scope-bug.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 7000,
+        "preferred": 10000,
+        "maximum": 16000
+      },
+      "expectedCues": [
+        "4.3.run-timeline",
+        "4.3.scope-visible"
+      ],
       "cueWatchers": [
-        { "name": "4.3.run-timeline", "stableForMs": 350, "deadlineMs": 180000, "source": { "kind": "selector", "selector": "[data-testid='assistant-transcript']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='assistant-transcript']" } }
+        {
+          "name": "4.3.run-timeline",
+          "stableForMs": 350,
+          "deadlineMs": 180000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='assistant-transcript']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='assistant-transcript']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.3", "title": "Read and scope the bug", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('assistant-transcript')", "timeout": 180000, "cue": { "name": "4.3.scope-visible", "rect": { "mode": "matched-element" } } },
-        { "type": "click", "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: /^(Allow once|Approve)$/ }).first()", "scale": 1.55, "after": 1100, "force": true },
-        { "type": "waitText", "text": "Bug Fix", "timeout": 180000 },
-        { "type": "hover", "selector": "page.getByText(/current behavior|smallest safe fix/i).first()", "scale": 1.28, "hold": 1800 }
-      ]
+        {
+          "type": "badge",
+          "label": "Beat 4.3",
+          "title": "Read and scope the bug",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('assistant-approval-gate')",
+          "timeout": 180000,
+          "cue": {
+            "name": "4.3.scope-visible",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
+          "scale": 1.55,
+          "after": 1100,
+          "force": true
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('assistant-transcript').getByText('Bug Fix', { exact: false })",
+          "timeout": 180000
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('assistant-transcript').getByText(/current behavior|smallest safe fix/i).first()",
+          "scale": 1.28,
+          "hold": 1800
+        }
+      ],
+      "requiresPriorBeat": "4.2"
     },
     {
       "id": "4.4",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/4.4-implement-test.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 8500, "preferred": 13000, "maximum": 20000 },
-      "expectedCues": ["4.4.work-plan", "4.4.validation-visible"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/4.4-implement-test.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 8500,
+        "preferred": 13000,
+        "maximum": 20000
+      },
+      "expectedCues": [
+        "4.4.work-plan",
+        "4.4.validation-visible"
+      ],
       "cueWatchers": [
-        { "name": "4.4.work-plan", "stableForMs": 350, "deadlineMs": 240000, "source": { "kind": "selector", "selector": "[data-testid='topology-graph-canvas'], [data-testid='assistant-transcript']", "state": "visible" }, "rect": { "mode": "first-matching", "selector": "[data-testid='topology-graph-canvas'], [data-testid='assistant-transcript']" } }
+        {
+          "name": "4.4.work-plan",
+          "stableForMs": 350,
+          "deadlineMs": 240000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='topology-graph-canvas']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='topology-graph-canvas']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.4", "title": "Implement and test the repair", "duration": 1800 },
-        { "type": "waitText", "text": "Work plan", "timeout": 240000, "cue": { "name": "4.4.validation-visible", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "click", "selector": "page.getByText(/investigate|implement|test/i).first()", "scale": 1.36, "after": 800 },
-        { "type": "click", "selector": "page.getByText(/implement|test/i).nth(1)", "scale": 1.36, "after": 800 },
-        { "type": "click", "selector": "page.getByText(/validation|test/i).last()", "scale": 1.36, "after": 1000 }
-      ]
+        {
+          "type": "badge",
+          "label": "Beat 4.4",
+          "title": "Implement and test the repair",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "timeout": 240000,
+          "cue": {
+            "name": "4.4.validation-visible",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('toggle-run-tree')",
+          "scale": 1.25,
+          "after": 800
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "scale": 1.18,
+          "hold": 1800
+        }
+      ],
+      "requiresPriorBeat": "4.3"
     },
     {
       "id": "4.5",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/4.5-preview-repair.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 9000, "preferred": 14000, "maximum": 22000 },
-      "expectedCues": ["4.5.preview-approval", "4.5.repaired-preview"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/4.5-preview-repair.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 9000,
+        "preferred": 14000,
+        "maximum": 22000
+      },
+      "expectedCues": [
+        "4.5.preview-approval",
+        "4.5.repaired-preview"
+      ],
       "cueWatchers": [
-        { "name": "4.5.preview-approval", "stableForMs": 350, "deadlineMs": 300000, "source": { "kind": "selector", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']", "state": "visible" }, "rect": { "mode": "first-matching", "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']" } }
+        {
+          "name": "4.5.preview-approval",
+          "stableForMs": 350,
+          "deadlineMs": 300000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='session-approval-gate']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='session-approval-gate']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.5", "title": "Preview the repaired behavior", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))", "timeout": 300000 },
-        { "type": "pause", "ms": 1800 },
-        { "type": "click", "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()", "scale": 1.58, "after": 1000, "force": true },
-        { "type": "waitText", "text": "Preview", "timeout": 300000, "cue": { "name": "4.5.repaired-preview", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()", "scale": 1.5, "after": 1800 }
-      ]
+        {
+          "type": "badge",
+          "label": "Beat 4.5",
+          "title": "Preview the repaired behavior",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('session-approval-gate')",
+          "timeout": 300000
+        },
+        {
+          "type": "pause",
+          "ms": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('session-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
+          "scale": 1.58,
+          "after": 1000,
+          "force": true
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('human-review-preview-status')",
+          "timeout": 300000,
+          "cue": {
+            "name": "4.5.repaired-preview",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('human-review-preview-status').getByRole('button', { name: 'Open preview', exact: true })",
+          "scale": 1.5,
+          "after": 1800
+        }
+      ],
+      "requiresPriorBeat": "4.4"
     },
     {
       "id": "4.6",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/4.6-approve-bug-fix.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7000, "preferred": 10000, "maximum": 16000 },
-      "expectedCues": ["4.6.final-review", "4.6.merge-action"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/4.6-approve-bug-fix.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 7000,
+        "preferred": 10000,
+        "maximum": 16000
+      },
+      "expectedCues": [
+        "4.6.final-review",
+        "4.6.merge-action"
+      ],
       "cueWatchers": [
-        { "name": "4.6.final-review", "stableForMs": 500, "deadlineMs": 300000, "source": { "kind": "text", "selector": "body", "includes": "Approve & merge" }, "rect": { "mode": "element", "selector": "main" } }
+        {
+          "name": "4.6.final-review",
+          "stableForMs": 500,
+          "deadlineMs": 300000,
+          "source": {
+            "kind": "selector",
+            "selector": "[aria-label='Approvals and gates'] button[aria-label='Approve human review and continue to merge']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[aria-label='Approvals and gates']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.6", "title": "Approve the bug fix", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()", "timeout": 300000, "cue": { "name": "4.6.merge-action", "rect": { "mode": "matched-element" } } },
-        { "type": "hover", "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()", "scale": 1.55, "hold": 1800 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Approve.*merge/i }).first()", "scale": 1.62, "after": 1200 }
+        {
+          "type": "badge",
+          "label": "Beat 4.6",
+          "title": "Approve the bug fix",
+          "duration": 1800
+        },
+        {
+          "type": "resolveBugFixPullRequest",
+          "runUrl": "{{AGENTWEAVER_DEMO_BUGFIX_RUN_URL}}",
+          "projectUrl": "{{AGENTWEAVER_DEMO_BUGFIX_PROJECT_URL}}",
+          "expectedPullRequestUrl": "{{AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL}}"
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+          "timeout": 300000,
+          "cue": {
+            "name": "4.6.merge-action",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+          "scale": 1.55,
+          "hold": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+          "scale": 1.62,
+          "after": 1200
+        }
+      ],
+      "requiresPriorBeat": "4.5",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
+          "kind": "app-url",
+          "message": "Set it to the current Bug Fix run route that produced this pull request."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set it to the project route that owns the current Bug Fix run."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL",
+          "kind": "github-pr-url",
+          "message": "Set it to the PR created by this same Bug Fix run; it is checked against run, topology, and project evidence before approval."
+        }
       ]
     },
     {
       "id": "4.7",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
-      "videoPath": "recordings/blueprint-demo/4.7-close-issue-loop.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 7500, "preferred": 11000, "maximum": 18000 },
-      "expectedCues": ["4.7.pr-topology", "4.7.pr-open"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/4.7-close-issue-loop.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 7500,
+        "preferred": 11000,
+        "maximum": 18000
+      },
+      "expectedCues": [
+        "4.7.pr-topology",
+        "4.7.pr-open"
+      ],
       "cueWatchers": [
-        { "name": "4.7.pr-topology", "stableForMs": 350, "deadlineMs": 180000, "source": { "kind": "selector", "selector": "[data-testid='topology-graph-canvas']", "state": "visible" }, "rect": { "mode": "element", "selector": "[data-testid='topology-graph-canvas']" } }
+        {
+          "name": "4.7.pr-topology",
+          "stableForMs": 350,
+          "deadlineMs": 180000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='topology-graph-canvas']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='topology-graph-canvas']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 4.7", "title": "Close the loop on the issue", "duration": 1800 },
-        { "type": "waitFor", "selector": "page.getByTestId('topology-graph-canvas')", "timeout": 180000, "cue": { "name": "4.7.pr-open", "rect": { "mode": "matched-element" } } },
-        { "type": "hover", "selector": "page.getByTestId('topology-graph-canvas')", "scale": 1.15, "hold": 1600 },
-        { "type": "click", "selector": "page.getByRole('link', { name: /pull request|open.*pr/i }).first()", "scale": 1.45, "after": 1800 }
+        {
+          "type": "badge",
+          "label": "Beat 4.7",
+          "title": "Close the loop on the issue",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "timeout": 180000
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "scale": 1.15,
+          "hold": 1600
+        },
+        {
+          "type": "gotoResolvedBugFixPullRequest",
+          "after": 1000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('main').getByRole('heading').first()",
+          "timeout": 60000,
+          "cue": {
+            "name": "4.7.pr-open",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        }
+      ],
+      "requiresPriorBeat": "4.6",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
+          "kind": "app-url",
+          "message": "Set it to the current Bug Fix run route that produced this pull request."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_BUGFIX_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set it to the project route that owns the current Bug Fix run."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_GITHUB_BUGFIX_PR_URL",
+          "kind": "github-pr-url",
+          "message": "Set it to the PR created by this same Bug Fix run; it is checked against run, topology, and project evidence before approval."
+        }
       ]
     },
     {
       "id": "5.1",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/settings",
       "freshNavigation": true,
-      "videoPath": "recordings/blueprint-demo/5.1-drive-from-tools.webm",
-      "viewport": { "width": 1920, "height": 1080 },
-      "outputBudgetMs": { "minimum": 6500, "preferred": 9500, "maximum": 15000 },
-      "expectedCues": ["5.1.settings-visible", "5.1.mcp-url"],
+      "videoPath": "recordings/final-takes/trailhead-travel-studio/5.1-drive-from-tools.webm",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "outputBudgetMs": {
+        "minimum": 6500,
+        "preferred": 9500,
+        "maximum": 15000
+      },
+      "expectedCues": [
+        "5.1.settings-visible",
+        "5.1.mcp-url"
+      ],
       "cueWatchers": [
-        { "name": "5.1.settings-visible", "stableForMs": 350, "deadlineMs": 30000, "source": { "kind": "text", "selector": "body", "includes": "MCP server URL" }, "rect": { "mode": "element", "selector": "main" } }
+        {
+          "name": "5.1.settings-visible",
+          "stableForMs": 350,
+          "deadlineMs": 30000,
+          "source": {
+            "kind": "selector",
+            "selector": "[data-testid='mcp-server-url']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "[data-testid='mcp-server-url']"
+          }
+        }
       ],
       "steps": [
-        { "type": "badge", "label": "Beat 5.1", "title": "Drive it from your own tools", "duration": 1800 },
-        { "type": "waitText", "text": "MCP server URL", "timeout": 30000, "cue": { "name": "5.1.mcp-url", "rect": { "mode": "element", "selector": "main" } } },
-        { "type": "hover", "selector": "page.getByLabel('MCP server URL')", "scale": 1.42, "hold": 2200 },
-        { "type": "click", "selector": "page.getByRole('button', { name: /Copy.*MCP|Copy/i }).first()", "scale": 1.35, "after": 900 }
+        {
+          "type": "badge",
+          "label": "Beat 5.1",
+          "title": "Drive it from your own tools",
+          "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('mcp-server-url')",
+          "timeout": 30000,
+          "cue": {
+            "name": "5.1.mcp-url",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('mcp-server-url')",
+          "scale": 1.42,
+          "hold": 2200
+        }
       ]
     }
   ]

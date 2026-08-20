@@ -35,10 +35,10 @@ Usage:
 
 Recording session commands:
   signin   Refresh protected auth from the literal Microsoft Edge Default work profile.
-  open     Refresh Default-profile sign-in, then start or restore the recording session.
-  start    Refresh Default-profile sign-in, open the session, and optionally prepare a capture plan.
+  open     Reuse or restore recording auth; refresh Default-profile sign-in only when needed.
+  start    Self-direct session setup, then optionally prepare a capture plan.
   prepare  Validate a capture plan and create playwright-cli scripts.
-  capture  Refresh Default-profile sign-in, then capture one beat or every beat.
+  capture  Self-direct authenticated setup; --unauthenticated is isolated.
   status   Check the Edge profile, protected auth, and recording session.
   close    Close the named persistent recording session.
   help     Show this help.
@@ -53,12 +53,14 @@ Plan options:
   --beat-plan <path>     Optional Markdown beat plan to join and validate.
   --beat <id>            Prepare or capture one beat.
   --all                  Capture every beat.
+  --unauthenticated      Capture the one plan-declared unauthenticated handoff beat.
   --out-dir <path>       Generated script directory.
 
 Examples:
   npm run demo:record -- signin
   npm run demo:record -- start --plan scripts\\demo-recording\\plans\\blueprint-demo.capture.json
   npm run demo:record -- capture --plan scripts\\demo-recording\\plans\\blueprint-demo.capture.json --beat 1.1
+  npm run demo:record -- capture --plan scripts\\demo-recording\\plans\\blueprint-demo.capture.json --beat 0.0 --unauthenticated
   npm run demo:record -- status
 `;
 }
@@ -277,14 +279,15 @@ async function printPrepared(result) {
 
 export async function runRecordingCommand(command, argv, {
   refreshAuthentication = refreshRecordingAuthentication,
+  openSession = openRecordingSession,
 } = {}) {
   const options = parseRecordingCommandOptions(command, argv);
   if (command === 'signin') {
     await refreshAuthentication(options);
   } else if (command === 'open') {
-    await openRecordingSession(options);
+    await openSession(options);
   } else if (command === 'start') {
-    await openRecordingSession(options);
+    await openSession(options);
     if (options.plan) await printPrepared(await prepareCaptureScripts(options));
   } else if (command === 'prepare') {
     await printPrepared(await prepareCaptureScripts(options));

@@ -477,6 +477,7 @@ export interface GitHubAuthStatusResponse {
   status: GitHubAuthStatus;
   login: string | null;
   avatar_url?: string;
+  token_action_required?: boolean;
 }
 
 export interface AuthSessionResponse {
@@ -518,6 +519,7 @@ export interface LinkedGitHubAccount {
   dependent_project_names?: string[] | null;
   unlink_warnings?: string[] | null;
   can_unlink?: boolean;
+  token_valid?: boolean | null;
 }
 
 export interface AccessibleGitHubRepo extends GitHubRepo {

@@ -76,6 +76,7 @@ jobs:
               - 'scripts/azure/**'
               - 'scripts/changesets/**'
               - 'scripts/ci/**'
+              - 'scripts/demo-recording/**'
               - 'scripts/ui-harness/**'
               - 'scripts/harness-judge/**'
               - 'scripts/harness-shared/**'

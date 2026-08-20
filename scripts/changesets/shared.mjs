@@ -208,7 +208,12 @@ export function getUnexpectedIgnoredFiles(stdout) {
     // Rendered/scratch outputs from the azure deployment scripts.
     /^scripts\/azure\/params\..*\.json$/,
     /^scripts\/azure\/tests\/\.scratch-/,
-    /^scripts\/azure\/steps\/\.rendered\//
+    /^scripts\/azure\/steps\/\.rendered\//,
+    // Demo recording artifacts: playwright-cli sessions, recording outputs, auth state.
+    /^\.playwright-cli\//,
+    /^recordings\//,
+    /^scripts\/demo-recording\/\.auth\//,
+    /^scripts\/demo-recording\/\.auth$/
   ];
 
   return stdout

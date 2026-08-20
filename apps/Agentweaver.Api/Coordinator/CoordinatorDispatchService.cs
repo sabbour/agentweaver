@@ -265,9 +265,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var entry = _streamStore.Get(context.CoordinatorRunId);
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
         var seq = new SeqCounter();
-        var coordinatorStopped = await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        var stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+        var coordinatorStopped = stoppedWorkPlanStatus is not null;
         if (coordinatorStopped && !HasActiveSubtasks(subtasks))
         {
+            await PersistStoppedCoordinatorWorkPlanStatusAsync(
+                workPlanId.Value, context.CoordinatorRunId, stoppedWorkPlanStatus, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "Coordinator dispatch: run {RunId} is already terminal/stopped; no subtasks will be dispatched",
                 context.CoordinatorRunId);
@@ -338,11 +342,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         while (!ct.IsCancellationRequested)
         {
-            if (coordinatorStopped || await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))
+            if (coordinatorStopped
+                || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+                    .ConfigureAwait(false)) is not null)
             {
                 coordinatorStopped = true;
                 if (inFlight.Count == 0)
                 {
+                    await PersistStoppedCoordinatorWorkPlanStatusAsync(
+                        workPlanId.Value, context.CoordinatorRunId, stoppedWorkPlanStatus, ct).ConfigureAwait(false);
                     _logger.LogInformation(
                         "Coordinator dispatch: run {RunId} is terminal/stopped; stopping before dispatching pending subtasks",
                         context.CoordinatorRunId);
@@ -355,7 +363,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // (deferred until the conflicting in-flight task completes).
             foreach (var subtaskId in SubtaskFrontier.ReadyPending(statusById, edges))
             {
-                if (coordinatorStopped || await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))
+                if (coordinatorStopped
+                    || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+                        .ConfigureAwait(false)) is not null)
                 {
                     coordinatorStopped = true;
                     _logger.LogInformation(
@@ -376,7 +386,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (inFlight.Count > 0 && ConflictsWithAnyInFlight(subtaskId, inFlight.Keys, subtasksById))
                     continue;
 
-                if (await IsCoordinatorDispatchStoppedAsync(context.CoordinatorRunId, ct).ConfigureAwait(false))
+                if ((stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+                    .ConfigureAwait(false)) is not null)
                 {
                     coordinatorStopped = true;
                     _logger.LogInformation(
@@ -397,7 +408,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             if (inFlight.Count == 0)
             {
                 if (coordinatorStopped)
+                {
+                    await PersistStoppedCoordinatorWorkPlanStatusAsync(
+                        workPlanId.Value, context.CoordinatorRunId, stoppedWorkPlanStatus, ct).ConfigureAwait(false);
                     return;
+                }
 
                 var delayedUntil = await GetNextRetryEligibilityAsync(
                     workPlanId.Value,
@@ -631,25 +646,36 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
     }
 
-    private async Task<bool> IsCoordinatorDispatchStoppedAsync(string coordinatorRunId, CancellationToken ct)
+    private async Task PersistStoppedCoordinatorWorkPlanStatusAsync(
+        int workPlanId,
+        string coordinatorRunId,
+        string? stoppedWorkPlanStatus,
+        CancellationToken ct)
+    {
+        var status = stoppedWorkPlanStatus
+            ?? await GetStoppedCoordinatorWorkPlanStatusAsync(coordinatorRunId, ct).ConfigureAwait(false)
+            ?? WorkPlanStatus.AssemblyFailed;
+        await SetWorkPlanStatusAsync(workPlanId, status, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
+    }
+
+    private async Task<string?> GetStoppedCoordinatorWorkPlanStatusAsync(string coordinatorRunId, CancellationToken ct)
     {
         if (!RunId.TryParse(coordinatorRunId, out var runId))
-            return false;
+            return null;
 
         var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
-        return run is not null && IsTerminalRunStatus(run.Status);
+        return run?.Status switch
+        {
+            RunStatus.Completed or RunStatus.Merged => WorkPlanStatus.Complete,
+            RunStatus.Declined => WorkPlanStatus.AssemblyDeclined,
+            RunStatus.Failed or RunStatus.MergeFailed => WorkPlanStatus.AssemblyFailed,
+            RunStatus.AssembleReady => WorkPlanStatus.AwaitingAssembly,
+            _ => null,
+        };
     }
 
     private static bool HasActiveSubtasks(IEnumerable<Subtask> subtasks) =>
         subtasks.Any(s => s.Status is SubtaskStatus.Dispatched or SubtaskStatus.Running);
-
-    private static bool IsTerminalRunStatus(RunStatus status) => status is
-        RunStatus.Completed or
-        RunStatus.Failed or
-        RunStatus.Merged or
-        RunStatus.Declined or
-        RunStatus.MergeFailed or
-        RunStatus.AssembleReady;
 
     /// <summary>
     /// Every child subtask is now terminal. This emits an explicit children-complete signal, moves

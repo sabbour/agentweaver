@@ -427,7 +427,7 @@ Catalog-style workflows add supported generic families:
 
 - sequential agent turns,
 - agent output into peer review,
-- peer-review pass or approval into merge / RAI,
+- peer-review pass or approval into merge / RAI / a subsequent agent turn,
 - peer-review fail or request-changes back to an agent,
 - direct agent or review completion through scribe,
 - merge blocked back into peer review or an agent.

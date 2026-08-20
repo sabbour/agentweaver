@@ -38,6 +38,7 @@ export async function runGenerationSeams(client, scenario, opts = {}) {
   const started = Date.now();
   const timings = {};
   const evidence = {
+    authentication: null,
     projectId: null,
     generatedBlueprint: null,
     generatedBlueprintWorkflowValid: null,
@@ -65,7 +66,21 @@ export async function runGenerationSeams(client, scenario, opts = {}) {
   // --- Auth ---
   const auth = await client.get('/api/auth/github');
   const signedIn = auth.ok && auth.responseBody?.status === 'signed_in';
-  add('Authenticated (bearer token accepted)', signedIn, signedIn ? `as ${auth.responseBody.login}` : `status ${auth.status}`);
+  let authDetail = signedIn ? `as ${auth.responseBody.login}` : `status ${auth.status}`;
+  if (!signedIn && auth.status === 401) {
+    // This public endpoint distinguishes an expired GitHub token from an Entra-mode
+    // deployment, without retaining public identity-provider configuration in evidence.
+    const authConfig = await client.get('/api/auth/config');
+    const authMode = authConfig.ok && typeof authConfig.responseBody?.mode === 'string'
+      ? authConfig.responseBody.mode
+      : null;
+    evidence.authentication = { authStatus: auth.status, serverMode: authMode };
+    authConfig.responseBody = authMode ? { mode: authMode } : null;
+    if (authMode === 'Entra') {
+      authDetail += '; server auth mode Entra requires a valid Entra bearer token (GitHub CLI token is not accepted)';
+    }
+  }
+  add('Authenticated (bearer token accepted)', signedIn, authDetail);
   if (!signedIn) return finalize();
 
   // ── SEAM 1: blueprint generation ────────────────────────────────────────────

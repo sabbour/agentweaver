@@ -7,7 +7,9 @@ import {
   Field,
   Input,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
+  MessageBarTitle,
   Spinner,
   Switch,
   Toast,
@@ -272,7 +274,19 @@ export function SettingsPage() {
       // POST /auth/github-accounts/link, which registers a pending-link state so the OAuth
       // callback actually calls CompleteLinkAsync() instead of a normal sign-in exchange.
       const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
-      window.location.href = authorizeUrl;
+      window.location.assign(authorizeUrl);
+    } catch (err) {
+      setAccountActionError(formatError(err));
+      setAccountActionKey(null);
+    }
+  };
+
+  const handleRelink = async (login: string) => {
+    setAccountActionKey(`relink:${login}`);
+    setAccountActionError(null);
+    try {
+      const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
+      window.location.assign(authorizeUrl);
     } catch (err) {
       setAccountActionError(formatError(err));
       setAccountActionKey(null);
@@ -451,13 +465,31 @@ export function SettingsPage() {
                             <div className={styles.badgeRow}>
                               {account.is_default && <Badge appearance="filled">Default</Badge>}
                               <Badge appearance="outline">{account.type === 'org' ? 'Organization' : 'User'}</Badge>
-                              <Badge appearance={account.copilot_entitled ? 'filled' : 'tint'}>
-                                {account.copilot_entitled === null
-                                  ? 'Copilot status pending'
-                                  : account.copilot_entitled
-                                    ? 'Copilot included'
-                                    : 'No Copilot entitlement'}
-                              </Badge>
+                              {account.token_valid === false ? (
+                                <MessageBar intent="warning">
+                                  <MessageBarBody>
+                                    <MessageBarTitle>Token expired</MessageBarTitle>
+                                    Re-link to restore Copilot access.
+                                  </MessageBarBody>
+                                  <MessageBarActions>
+                                    <Button
+                                      size="small"
+                                      disabled={accountActionKey !== null}
+                                      onClick={() => void handleRelink(account.login)}
+                                    >
+                                      {accountActionKey === `relink:${account.login}` ? <Spinner size="tiny" /> : 'Re-link'}
+                                    </Button>
+                                  </MessageBarActions>
+                                </MessageBar>
+                              ) : (
+                                <Badge appearance={account.copilot_entitled ? 'filled' : 'tint'}>
+                                  {account.copilot_entitled === null
+                                    ? 'Copilot status unknown'
+                                    : account.copilot_entitled
+                                      ? 'Copilot included'
+                                      : 'No Copilot entitlement'}
+                                </Badge>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -532,7 +564,7 @@ export function SettingsPage() {
             label="MCP server URL"
             hint="Use this URL in your MCP client configuration."
           >
-            <Input value={MCP_URL} readOnly />
+            <Input value={MCP_URL} readOnly data-testid="mcp-server-url" />
           </Field>
         </div>
       </PageSection>
