@@ -279,8 +279,6 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
             return RefreshResult.Transient();
         }
     }
-        }
-    }
 
     private sealed class RefreshTokenResponse
     {
