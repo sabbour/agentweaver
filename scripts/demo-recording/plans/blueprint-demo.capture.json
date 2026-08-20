@@ -589,6 +589,21 @@
         },
         {
           "type": "waitFor",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "after": 400
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
+          "after": 600
+        },
+        {
+          "type": "waitFor",
           "selector": "page.getByRole('switch', { name: 'Autopilot', exact: true })",
           "timeout": 30000
         },
@@ -630,21 +645,6 @@
               "mode": "matched-element"
             }
           }
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "timeout": 30000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "after": 400
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
-          "after": 600
         }
       ]
     },
@@ -2077,5 +2077,3 @@
     }
   ]
 }
-
-
