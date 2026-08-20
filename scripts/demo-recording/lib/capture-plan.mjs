@@ -275,7 +275,9 @@ export function renderCaptureScript(plan) {
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('select'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'waitText') {
-      lines.push(`    await page.waitForFunction(() => document.body.innerText.includes(${JSON.stringify(step.text)}), { timeout: ${step.timeout ?? 180000} });`);
+      // Pass `undefined` as the arg slot so the timeout lands in the options object,
+      // not in the pageFunction argument (Playwright: waitForFunction(fn, arg?, options?)).
+      lines.push(`    await page.waitForFunction(() => document.body.innerText.includes(${JSON.stringify(step.text)}), undefined, { timeout: ${step.timeout ?? 180000} });`);
       if (step.cue) {
         const cue = {
           ...step.cue,
