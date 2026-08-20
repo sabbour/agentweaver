@@ -481,24 +481,20 @@ test('open routes directly to the Agentweaver sign-in recovery session', async (
   assert.equal(calls[0].session, 'agentweaver-demo');
 });
 
-test('open fails closed without protected recording authentication', async () => {
-  let sessionsRead = false;
+test('open invokes interactive refresh when protected authentication is unavailable', async () => {
+  const events = [];
   await assert.rejects(
-    openRecordingSession({
-      session: 'agentweaver-demo',
-      baseUrl: 'https://example.test',
-      authRoot: 'scripts/demo-recording/.auth',
-    }, {
-      getRepositoryRoot: async () => repositoryRoot,
-      getAuth: async () => false,
-      getSessions: () => {
-        sessionsRead = true;
-        return new Map();
+    () => openRecordingSession(
+      { session: 'agentweaver-demo', authRoot: path.join(repositoryRoot, 'scripts', 'demo-recording', '.auth') },
+      {
+        listSessions: () => new Map(),
+        hasAuthentication: async () => false,
+        refreshAuthentication: async () => events.push('refresh'),
       },
-    }),
-    /Run "npm run demo:record -- signin"/,
+    ),
+    /could not be verified/,
   );
-  assert.equal(sessionsRead, false);
+  assert.deepEqual(events, ['refresh']);
 });
 
 test('start self-directs recording session setup without a prior status or open command', async () => {
