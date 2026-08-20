@@ -577,7 +577,7 @@
         },
         {
           "type": "waitText",
-          "text": "Outcome plan",
+          "text": "Awaiting confirmation",
           "timeout": 300000,
           "cue": {
             "name": "2.2.plan-confirmed",
@@ -586,6 +586,11 @@
               "selector": "main"
             }
           }
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('treeitem').filter({ hasText: 'Awaiting confirmation' }).first()",
+          "after": 500
         },
         {
           "type": "waitFor",
