@@ -6,9 +6,9 @@
     "repository": "sabbour/agentweaver-demo-dryrun"
   },
   "fixture": {
-    "projectName": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+    "projectName": "Agentweaver Demo — Trailhead Travel Studio",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo \u2014 Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
     ]
   },
   "finalTake": {
@@ -177,7 +177,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('My project')",
-          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "scale": 1.6,
           "delay": 36,
           "after": 900
@@ -264,7 +264,7 @@
         },
         {
           "type": "waitText",
-          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "timeout": 60000,
           "cue": {
             "name": "1.2.project-created",
@@ -337,7 +337,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
           "scale": 1.45,
           "after": 900
         },
@@ -495,7 +495,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
           "scale": 1.45,
           "after": 900
         },
@@ -535,7 +535,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Direct' })",
+          "selector": "page.getByRole('button', { name: 'Define Outcome' })",
           "scale": 1.62,
           "after": 1000
         },
@@ -547,7 +547,7 @@
     },
     {
       "id": "2.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.2-confirm-plan.webm",
       "viewport": {
@@ -650,7 +650,7 @@
     },
     {
       "id": "2.3",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.3-watch-work-plan.webm",
       "viewport": {
@@ -761,7 +761,7 @@
     },
     {
       "id": "2.4",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
       "viewport": {
@@ -852,7 +852,7 @@
     },
     {
       "id": "2.5",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.5-ship-it.webm",
       "viewport": {
@@ -947,7 +947,7 @@
     },
     {
       "id": "2.6",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.6-review-merge.webm",
       "viewport": {
@@ -1038,7 +1038,7 @@
     },
     {
       "id": "2.7",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.7-review-trace.webm",
       "viewport": {
@@ -1126,7 +1126,7 @@
     },
     {
       "id": "2.8",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.8-review-memory.webm",
       "viewport": {
@@ -1197,7 +1197,7 @@
     },
     {
       "id": "3.1",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/3.1-schedule-sweep.webm",
       "viewport": {
@@ -1297,7 +1297,7 @@
     },
     {
       "id": "3.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -1450,7 +1450,7 @@
     },
     {
       "id": "4.1",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.1-chat-triage.webm",
       "viewport": {
@@ -1551,7 +1551,7 @@
     },
     {
       "id": "4.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.2-assistant-triage.webm",
       "viewport": {
@@ -1623,7 +1623,7 @@
     },
     {
       "id": "4.3",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.3-scope-bug.webm",
       "viewport": {
@@ -1696,7 +1696,7 @@
     },
     {
       "id": "4.4",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.4-implement-test.webm",
       "viewport": {
@@ -1763,7 +1763,7 @@
     },
     {
       "id": "4.5",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.5-preview-repair.webm",
       "viewport": {
@@ -1840,7 +1840,7 @@
     },
     {
       "id": "4.6",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.6-approve-bug-fix.webm",
       "viewport": {
@@ -1930,7 +1930,7 @@
     },
     {
       "id": "4.7",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.7-close-issue-loop.webm",
       "viewport": {
@@ -2077,3 +2077,4 @@
     }
   ]
 }
+
