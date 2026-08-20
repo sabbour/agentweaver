@@ -528,7 +528,7 @@
         {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Goal' })",
-          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'. Create one work item titled 'Create Trailhead landing page'.",
+          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'. Create one work item titled 'Implement Trailhead'.",
           "scale": 1.72,
           "delay": 6,
           "after": 900
@@ -815,7 +815,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Implement Trailhead' })",
           "timeout": 240000,
           "cue": {
             "name": "2.4.promoted-task",
@@ -826,14 +826,14 @@
         },
         {
           "type": "drag",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Implement Trailhead' })",
           "target": "page.getByTestId('column-ready')",
           "scale": 1.4,
           "after": 1100
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Implement Trailhead' })",
           "timeout": 180000,
           "cue": {
             "name": "2.4.pickup-run",
@@ -860,7 +860,6 @@
       },
       "expectedCues": [
         "2.5.run-open",
-        "2.5.preview-approval",
         "2.5.preview-open"
       ],
       "cueWatchers": [
@@ -870,12 +869,12 @@
           "deadlineMs": 600000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']",
+            "selector": "[data-testid='approval-gate-approve-btn']",
             "state": "visible"
           },
           "rect": {
             "mode": "first-matching",
-            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']"
+            "selector": "[data-testid='approval-gate-approve-btn']"
           }
         }
       ],
@@ -888,7 +887,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
+          "selector": "page.getByTestId('column-human-review').getByTestId(/^run-card-[0-9a-f-]{36}$/).filter({ hasText: 'Implement Trailhead' }).first()",
           "scale": 1.5,
           "after": 700
         },
@@ -902,22 +901,6 @@
               "mode": "matched-element"
             }
           }
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))",
-          "timeout": 600000
-        },
-        {
-          "type": "pause",
-          "ms": 2200
-        },
-        {
-          "type": "click",
-          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()",
-          "scale": 1.6,
-          "after": 1200,
-          "force": true
         },
         {
           "type": "waitText",
@@ -965,12 +948,12 @@
           "deadlineMs": 600000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='coordinator-review-changes']",
+            "selector": "[data-testid='run-summary-chip-changes']",
             "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "[data-testid='coordinator-review-changes']"
+            "selector": "[data-testid='run-summary-chip-changes']"
           }
         }
       ],
@@ -983,18 +966,18 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('coordinator-review-changes')",
+          "selector": "page.getByTestId('run-summary-chip-changes')",
           "timeout": 600000
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('coordinator-review-changes')",
+          "selector": "page.getByTestId('run-summary-chip-changes')",
           "scale": 1.48,
           "after": 1200
         },
         {
           "type": "waitText",
-          "text": "Files changed",
+          "text": "Branch Changes",
           "timeout": 60000,
           "cue": {
             "name": "2.6.diff-visible",
@@ -1006,13 +989,13 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByText('Files changed', { exact: true })",
+          "selector": "page.getByText('Branch Changes', { exact: true })",
           "scale": 1.25,
           "hold": 1600
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
+          "selector": "page.locator('[role=\"dialog\"][aria-label=\"Changes\"]').locator('button').filter({ hasText: 'Approve & merge' })",
           "scale": 1.62,
           "after": 1200
         },
@@ -1586,7 +1569,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-approval-gate')",
+          "selector": "page.getByTestId('approval-gate-approve-btn')",
           "timeout": 180000,
           "cue": {
             "name": "4.2.approval-gate",
@@ -1608,7 +1591,7 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByTestId('assistant-approval-gate')",
+          "selector": "page.getByTestId('approval-gate-approve-btn')",
           "scale": 1.25,
           "hold": 2400
         }
@@ -1658,7 +1641,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-approval-gate')",
+          "selector": "page.getByTestId('approval-gate-approve-btn')",
           "timeout": 180000,
           "cue": {
             "name": "4.3.scope-visible",
@@ -1669,7 +1652,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
+          "selector": "page.getByTestId('approval-gate-approve-btn').getByRole('button', { name: 'Allow once', exact: true })",
           "scale": 1.55,
           "after": 1100,
           "force": true
@@ -1780,12 +1763,12 @@
           "deadlineMs": 300000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='session-approval-gate']",
+            "selector": "[data-testid='approval-gate-approve-btn']",
             "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "[data-testid='session-approval-gate']"
+            "selector": "[data-testid='approval-gate-approve-btn']"
           }
         }
       ],
@@ -1798,7 +1781,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('session-approval-gate')",
+          "selector": "page.getByTestId('approval-gate-approve-btn')",
           "timeout": 300000
         },
         {
@@ -1807,7 +1790,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('session-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
+          "selector": "page.getByTestId('approval-gate-approve-btn')",
           "scale": 1.58,
           "after": 1000,
           "force": true
@@ -1857,7 +1840,7 @@
           "deadlineMs": 300000,
           "source": {
             "kind": "selector",
-            "selector": "[aria-label='Approvals and gates'] button[aria-label='Approve human review and continue to merge']",
+            "selector": "[data-testid='approval-gate-approve-btn']",
             "state": "visible"
           },
           "rect": {
