@@ -274,7 +274,7 @@ export function SettingsPage() {
       // POST /auth/github-accounts/link, which registers a pending-link state so the OAuth
       // callback actually calls CompleteLinkAsync() instead of a normal sign-in exchange.
       const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
-      window.location.href = authorizeUrl;
+      window.location.assign(authorizeUrl);
     } catch (err) {
       setAccountActionError(formatError(err));
       setAccountActionKey(null);
@@ -286,7 +286,7 @@ export function SettingsPage() {
     setAccountActionError(null);
     try {
       const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
-      window.location.href = authorizeUrl;
+      window.location.assign(authorizeUrl);
     } catch (err) {
       setAccountActionError(formatError(err));
       setAccountActionKey(null);
