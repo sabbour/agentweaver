@@ -20,7 +20,7 @@ export function GitHubTokenWarningBanner() {
     }
   }, []);
 
-  useEffect(() => { void check(); }, [check]);
+  useEffect(() => { queueMicrotask(() => { void check(); }); }, [check]);
 
   const handleRelink = async () => {
     setRelinking(true);
