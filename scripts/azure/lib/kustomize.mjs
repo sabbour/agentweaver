@@ -248,6 +248,19 @@ spec:
 export function buildRuntimeConfigLiterals(vars) {
   const str = (v) => (v === undefined || v === null ? "" : String(v));
   const host = str(vars.HOST);
+  const authMode = str(vars.AUTH_MODE) || "GitHubLegacy";
+
+  // Guard: refuse to render a broken Entra config that would cause a 503 on startup.
+  // This fires when a deploy runs without params.<username>.json loaded and AUTH_MODE
+  // falls back to "GitHubLegacy" while ENTRA_* are still supplied — or the inverse:
+  // AUTH_MODE=Entra but the credentials are missing.
+  if (authMode === "Entra" && (!str(vars.ENTRA_CLIENT_ID) || !str(vars.ENTRA_TENANT_ID))) {
+    throw new Error(
+      'AUTH_MODE is "Entra" but ENTRA_CLIENT_ID or ENTRA_TENANT_ID is empty. ' +
+      'Pass --params-file scripts/azure/params.<username>.json or set these values before deploying.',
+    );
+  }
+
   return {
     HOST: host,
     PREVIEW_HOSTNAME: str(vars.PREVIEW_HOSTNAME),
@@ -266,7 +279,7 @@ export function buildRuntimeConfigLiterals(vars) {
     // today's GitHub sign-in behavior (see variables.mjs's DEFAULTS.AUTH_MODE comment). ClientId/
     // TenantId have no generic default: empty means Entra mode is not (yet) configured.
     // ClientSecret is deliberately NOT wired here -- PKCE-only per #658; see api-deployment.yaml.
-    AUTH_MODE: str(vars.AUTH_MODE) || "GitHubLegacy",
+    AUTH_MODE: authMode,
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
     ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
     ENTRA_REDIRECT_URI: host ? `https://${host}/auth/entra/callback` : "",
