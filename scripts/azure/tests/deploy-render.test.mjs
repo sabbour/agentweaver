@@ -126,6 +126,26 @@ test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT
   assert.equal(literals.ENTRA_TENANT_ID, "66666666-7777-8888-9999-000000000000");
 });
 
+test("buildRuntimeConfigLiterals() throws when AUTH_MODE=Entra but ENTRA_CLIENT_ID is missing", () => {
+  assert.throws(
+    () => buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "Entra", ENTRA_CLIENT_ID: "", ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000" }),
+    /ENTRA_CLIENT_ID or ENTRA_TENANT_ID is empty/,
+  );
+});
+
+test("buildRuntimeConfigLiterals() throws when AUTH_MODE=Entra but ENTRA_TENANT_ID is missing", () => {
+  assert.throws(
+    () => buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "Entra", ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555", ENTRA_TENANT_ID: "" }),
+    /ENTRA_CLIENT_ID or ENTRA_TENANT_ID is empty/,
+  );
+});
+
+test("buildRuntimeConfigLiterals() does NOT throw when AUTH_MODE=GitHubLegacy with empty Entra fields", () => {
+  assert.doesNotThrow(
+    () => buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "GitHubLegacy", ENTRA_CLIENT_ID: "", ENTRA_TENANT_ID: "" }),
+  );
+});
+
 test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
   const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
   const original = fs.readFileSync(overlayPath, "utf8");
