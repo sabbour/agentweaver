@@ -577,7 +577,7 @@
         },
         {
           "type": "waitText",
-          "text": "Work plan",
+          "text": "Outcome plan",
           "timeout": 300000,
           "cue": {
             "name": "2.2.plan-confirmed",
@@ -2077,4 +2077,5 @@
     }
   ]
 }
+
 
