@@ -782,6 +782,60 @@ public sealed record ProjectGitHubIdentityResponse
     [JsonPropertyName("resolution_source")] public required string ResolutionSource { get; init; }
 }
 
+public sealed record BeginGitHubAccountLinkResponse(
+    [property: JsonPropertyName("authorize_url")] string AuthorizeUrl);
+
+public sealed record LinkedGitHubAccountResponse
+{
+    [JsonPropertyName("login")] public required string Login { get; init; }
+    // GitHub identity links only ever represent a personal user account (not an org), and the
+    // display name isn't fetched at link time — populate both with the values the frontend's
+    // LinkedGitHubAccount type requires so it never silently mis-renders as "undefined".
+    [JsonPropertyName("name")] public string? Name { get; init; }
+    [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
+    [JsonPropertyName("type")] public string Type { get; init; } = "user";
+    [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
+    [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
+    [JsonPropertyName("linked_at")] public required DateTimeOffset LinkedAt { get; init; }
+}
+
+public sealed record UnlinkGitHubAccountResponse(
+    [property: JsonPropertyName("default_login")] string? DefaultLogin);
+
+public sealed record AccessibleGitHubRepositoryResponse
+{
+    // FullName/Description/Private/DefaultBranch/HtmlUrl intentionally use the default
+    // camelCase policy (no [JsonPropertyName]) to match the frontend's GitHubRepo type, which
+    // AccessibleGitHubRepo extends. Only the "source account" fields are snake_case, matching
+    // AccessibleGitHubRepo's own declared fields.
+    public required string FullName { get; init; }
+    public string? Description { get; init; }
+    public required bool Private { get; init; }
+    public required string DefaultBranch { get; init; }
+    public string? HtmlUrl { get; init; }
+    [JsonPropertyName("source_login")] public required string AccessibleViaLogin { get; init; }
+    [JsonPropertyName("source_avatar_url")] public string? AccessibleViaAvatarUrl { get; init; }
+    [JsonPropertyName("source_is_default")] public bool AccessibleViaIsDefault { get; init; }
+    [JsonPropertyName("permission")] public required string Permission { get; init; }
+}
+
+public sealed record UpdateProjectGitHubIdentityRequest
+{
+    [JsonPropertyName("github_login")] public string? GitHubLogin { get; init; }
+}
+
+public sealed record ProjectGitHubIdentityResponse
+{
+    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("project_override_login")] public string? ProjectOverrideLogin { get; init; }
+    [JsonPropertyName("effective_login")] public string? EffectiveLogin { get; init; }
+    [JsonPropertyName("effective_avatar_url")] public string? EffectiveAvatarUrl { get; init; }
+    [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
+    [JsonPropertyName("is_default")] public bool? IsDefault { get; init; }
+    [JsonPropertyName("linked_at")] public DateTimeOffset? LinkedAt { get; init; }
+    [JsonPropertyName("resolution_source")] public required string ResolutionSource { get; init; }
+}
+
 // -----------------------------------------------------------------------
 // Casting
 // -----------------------------------------------------------------------
