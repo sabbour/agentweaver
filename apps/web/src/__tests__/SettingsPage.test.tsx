@@ -74,7 +74,7 @@ describe('SettingsPage', () => {
     expect(screen.getByText('PlatformAdmin')).toBeDefined();
     expect(screen.getByText('Linked GitHub accounts')).toBeDefined();
     expect(await screen.findByText(/Octocat/)).toBeDefined();
-    expect(screen.getByText('Copilot included')).toBeDefined();
+    expect(screen.getByText('Copilot')).toBeDefined();
     expect(screen.getByDisplayValue(/\/mcp$/)).toBeDefined();
     expect(screen.getByText('Sandbox policy')).toBeDefined();
   });
@@ -100,7 +100,7 @@ describe('SettingsPage', () => {
     );
 
     await screen.findByText(/Octocat/);
-    expect(screen.queryByText('Copilot included')).toBeNull();
+    expect(screen.queryByText('Copilot')).toBeNull();
     expect(screen.queryByText('No Copilot entitlement')).toBeNull();
     expect(screen.queryByText('Copilot status unknown')).toBeNull();
   });

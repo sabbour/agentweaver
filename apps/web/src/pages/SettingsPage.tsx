@@ -482,7 +482,7 @@ export function SettingsPage() {
                                   </MessageBarActions>
                                 </MessageBar>
                               ) : account.copilot_entitled === true ? (
-                                <Badge appearance="filled">Copilot included</Badge>
+                                <Badge appearance="filled">Copilot</Badge>
                               ) : account.copilot_entitled === false ? (
                                 <Badge appearance="tint">No Copilot entitlement</Badge>
                               ) : null}

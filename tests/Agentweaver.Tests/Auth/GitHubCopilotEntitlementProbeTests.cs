@@ -1,79 +1,101 @@
-using System.Net;
 using Agentweaver.Api.Auth;
 using FluentAssertions;
+using GitHub.Copilot;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
 /// <summary>
-/// The probe must ask the SAME Copilot surface the agent runtime uses (<c>api.githubcopilot.com/models</c>).
-/// The previous <c>copilot_internal/v2/token</c> URL 404s on that host (and is restricted to allow-listed
-/// editor OAuth apps on api.github.com), so every entitled account was reported as un-entitled.
+/// The probe must use the SAME SDK/native runtime path the Copilot CLI uses so Agentweaver's own
+/// OAuth app registration does not determine the outcome.
 /// </summary>
 public sealed class GitHubCopilotEntitlementProbeTests
 {
     [Fact]
-    public async Task Probe_calls_copilot_models_endpoint_with_bearer_token()
+    public async Task Probe_returns_true_when_sdk_lists_models()
     {
-        var handler = new CapturingHandler(HttpStatusCode.OK, "{\"data\":[]}");
-        var probe = CreateProbe(handler);
+        var factory = new StubClientFactory
+        {
+            Client = new StubClient
+            {
+                Models = [new ModelInfo { Id = "gpt-5" }],
+            },
+        };
+        var probe = CreateProbe(factory);
 
         var result = await probe.ProbeAsync("gho_test-token");
 
         result.Should().BeTrue();
-        handler.LastRequest!.RequestUri!.AbsoluteUri.Should().Be("https://api.githubcopilot.com/models");
-        handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
-        handler.LastRequest.Headers.Authorization.Parameter.Should().Be("gho_test-token");
-        handler.LastRequest.Headers.Contains("Copilot-Integration-Id").Should().BeFalse();
-    }
-
-    [Theory]
-    [InlineData(HttpStatusCode.Unauthorized)]
-    [InlineData(HttpStatusCode.Forbidden)]
-    [InlineData(HttpStatusCode.NotFound)]
-    public async Task Probe_is_inconclusive_for_auth_rejections(HttpStatusCode statusCode)
-    {
-        var probe = CreateProbe(new CapturingHandler(statusCode, "{}"));
-
-        (await probe.ProbeAsync("gho_test-token")).Should().BeNull();
+        factory.LastAccessToken.Should().Be("gho_test-token");
+        factory.Client.Started.Should().BeTrue();
+        factory.Client.Disposed.Should().BeTrue();
     }
 
     [Fact]
-    public async Task Probe_is_inconclusive_for_server_errors()
+    public async Task Probe_is_inconclusive_when_sdk_listing_fails()
     {
-        var probe = CreateProbe(new CapturingHandler(HttpStatusCode.InternalServerError, "{}"));
+        var factory = new StubClientFactory
+        {
+            Client = new StubClient
+            {
+                Exception = new InvalidOperationException("Failed to list models"),
+            },
+        };
+        var probe = CreateProbe(factory);
 
         (await probe.ProbeAsync("gho_test-token")).Should().BeNull();
+        factory.Client.Disposed.Should().BeTrue();
     }
 
     [Fact]
     public async Task Probe_is_inconclusive_without_a_token()
     {
-        var probe = CreateProbe(new CapturingHandler(HttpStatusCode.OK, "{}"));
+        var factory = new StubClientFactory();
+        var probe = CreateProbe(factory);
 
         (await probe.ProbeAsync("  ")).Should().BeNull();
+        factory.LastAccessToken.Should().BeNull();
     }
 
-    private static GitHubCopilotEntitlementProbe CreateProbe(HttpMessageHandler handler) =>
-        new(new StubHttpClientFactory(handler), NullLogger<GitHubCopilotEntitlementProbe>.Instance);
+    private static GitHubCopilotEntitlementProbe CreateProbe(StubClientFactory factory) =>
+        new(factory, NullLogger<GitHubCopilotEntitlementProbe>.Instance);
 
-    private sealed class CapturingHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+    private sealed class StubClientFactory : ICopilotEntitlementSdkClientFactory
     {
-        public HttpRequestMessage? LastRequest { get; private set; }
+        public string? LastAccessToken { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
+        public StubClient Client { get; set; } = new();
+
+        public ICopilotEntitlementSdkClient Create(string accessToken)
         {
-            LastRequest = request;
-            return Task.FromResult(new HttpResponseMessage(statusCode)
-            {
-                Content = new StringContent(body),
-            });
+            LastAccessToken = accessToken;
+            return Client;
         }
     }
 
-    private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
+    private sealed class StubClient : ICopilotEntitlementSdkClient
     {
-        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+        public IList<ModelInfo> Models { get; set; } = [];
+
+        public Exception? Exception { get; set; }
+
+        public bool Started { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public Task<IList<ModelInfo>> ListModelsAsync(CancellationToken ct)
+        {
+            Started = true;
+            if (Exception is not null)
+                throw Exception;
+
+            return Task.FromResult(Models);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 }
