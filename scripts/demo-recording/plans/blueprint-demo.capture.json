@@ -194,7 +194,7 @@
     },
     {
       "id": "1.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/1.2-choose-blueprint.webm",
       "viewport": {
@@ -528,14 +528,14 @@
         {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Goal' })",
-          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'. Create one work item titled 'Implement Trailhead'.",
+          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'. Create one work item titled 'Create Trailhead landing page'.",
           "scale": 1.72,
           "delay": 6,
           "after": 900
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Define Outcome' })",
+          "selector": "page.getByRole('button', { name: 'Direct' })",
           "scale": 1.62,
           "after": 1000
         },
@@ -547,7 +547,7 @@
     },
     {
       "id": "2.2",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.2-confirm-plan.webm",
       "viewport": {
@@ -577,7 +577,7 @@
         },
         {
           "type": "waitText",
-          "text": "Awaiting confirmation",
+          "text": "Work plan",
           "timeout": 300000,
           "cue": {
             "name": "2.2.plan-confirmed",
@@ -586,26 +586,6 @@
               "selector": "main"
             }
           }
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('treeitem').filter({ hasText: 'Awaiting confirmation' }).first()",
-          "after": 500
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: false })",
-          "timeout": 300000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: false })",
-          "after": 400
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
-          "after": 600
         },
         {
           "type": "waitFor",
@@ -650,12 +630,27 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "after": 400
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
+          "after": 600
         }
       ]
     },
     {
       "id": "2.3",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.3-watch-work-plan.webm",
       "viewport": {
@@ -708,7 +703,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('rf__wrapper')",
+          "selector": "page.getByTestId('topology-graph-canvas')",
           "timeout": 600000,
           "cue": {
             "name": "2.3.topology-open",
@@ -719,7 +714,7 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByTestId('rf__wrapper')",
+          "selector": "page.getByTestId('topology-graph-canvas')",
           "scale": 1.12,
           "hold": 2200
         },
@@ -730,14 +725,25 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('approval-gate-approve-btn')",
+          "selector": "page.getByTestId('coordinator-review-changes')",
           "timeout": 600000
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('approval-gate-approve-btn')",
+          "selector": "page.getByTestId('coordinator-review-changes')",
           "scale": 1.3,
           "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
+          "timeout": 600000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
+          "scale": 1.35,
+          "after": 1000
         },
         {
           "type": "waitText",
@@ -755,7 +761,7 @@
     },
     {
       "id": "2.4",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
       "viewport": {
@@ -815,7 +821,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Implement Trailhead' })",
+          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
           "timeout": 240000,
           "cue": {
             "name": "2.4.promoted-task",
@@ -826,14 +832,14 @@
         },
         {
           "type": "drag",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Implement Trailhead' })",
+          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
           "target": "page.getByTestId('column-ready')",
           "scale": 1.4,
           "after": 1100
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Implement Trailhead' })",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' })",
           "timeout": 180000,
           "cue": {
             "name": "2.4.pickup-run",
@@ -846,7 +852,7 @@
     },
     {
       "id": "2.5",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.5-ship-it.webm",
       "viewport": {
@@ -860,6 +866,7 @@
       },
       "expectedCues": [
         "2.5.run-open",
+        "2.5.preview-approval",
         "2.5.preview-open"
       ],
       "cueWatchers": [
@@ -869,12 +876,12 @@
           "deadlineMs": 600000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='approval-gate-approve-btn']",
+            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']",
             "state": "visible"
           },
           "rect": {
             "mode": "first-matching",
-            "selector": "[data-testid='approval-gate-approve-btn']"
+            "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate']"
           }
         }
       ],
@@ -887,7 +894,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('column-human-review').getByTestId(/^run-card-[0-9a-f-]{36}$/).filter({ hasText: 'Implement Trailhead' }).first()",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
           "scale": 1.5,
           "after": 700
         },
@@ -901,6 +908,22 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))",
+          "timeout": 600000
+        },
+        {
+          "type": "pause",
+          "ms": 2200
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()",
+          "scale": 1.6,
+          "after": 1200,
+          "force": true
         },
         {
           "type": "waitText",
@@ -924,7 +947,7 @@
     },
     {
       "id": "2.6",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.6-review-merge.webm",
       "viewport": {
@@ -948,12 +971,12 @@
           "deadlineMs": 600000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='run-summary-chip-changes']",
+            "selector": "[data-testid='coordinator-review-changes']",
             "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "[data-testid='run-summary-chip-changes']"
+            "selector": "[data-testid='coordinator-review-changes']"
           }
         }
       ],
@@ -966,18 +989,18 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('run-summary-chip-changes')",
+          "selector": "page.getByTestId('coordinator-review-changes')",
           "timeout": 600000
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('run-summary-chip-changes')",
+          "selector": "page.getByTestId('coordinator-review-changes')",
           "scale": 1.48,
           "after": 1200
         },
         {
           "type": "waitText",
-          "text": "Branch Changes",
+          "text": "Files changed",
           "timeout": 60000,
           "cue": {
             "name": "2.6.diff-visible",
@@ -989,13 +1012,13 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByText('Branch Changes', { exact: true })",
+          "selector": "page.getByText('Files changed', { exact: true })",
           "scale": 1.25,
           "hold": 1600
         },
         {
           "type": "click",
-          "selector": "page.locator('[role=\"dialog\"][aria-label=\"Changes\"]').locator('button').filter({ hasText: 'Approve & merge' })",
+          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
           "scale": 1.62,
           "after": 1200
         },
@@ -1015,7 +1038,7 @@
     },
     {
       "id": "2.7",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.7-review-trace.webm",
       "viewport": {
@@ -1103,7 +1126,7 @@
     },
     {
       "id": "2.8",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/083c7cc6-c10d-481e-9a59-d532f53ce7f0/observability",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.8-review-memory.webm",
       "viewport": {
@@ -1116,14 +1139,13 @@
         "maximum": 16000
       },
       "expectedCues": [
-        "2.8.decisions-visible",
-        "2.8.accepted-decision"
+        "2.8.decisions-visible"
       ],
       "cueWatchers": [
         {
           "name": "2.8.decisions-visible",
           "stableForMs": 350,
-          "deadlineMs": 300000,
+          "deadlineMs": 30000,
           "source": {
             "kind": "text",
             "selector": "body",
@@ -1154,27 +1176,15 @@
           "timeout": 30000
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByTestId('accepted-decision').first()",
-          "timeout": 300000,
-          "cue": {
-            "name": "2.8.accepted-decision",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "hover",
-          "selector": "page.getByTestId('accepted-decision').first()",
-          "scale": 1.28,
-          "hold": 2200
+          "type": "waitText",
+          "text": "No decisions recorded yet",
+          "timeout": 15000
         }
       ]
     },
     {
       "id": "3.1",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/3.1-schedule-sweep.webm",
       "viewport": {
@@ -1274,7 +1284,7 @@
     },
     {
       "id": "3.2",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -1427,7 +1437,7 @@
     },
     {
       "id": "4.1",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.1-chat-triage.webm",
       "viewport": {
@@ -1528,7 +1538,7 @@
     },
     {
       "id": "4.2",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.2-assistant-triage.webm",
       "viewport": {
@@ -1569,7 +1579,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('approval-gate-approve-btn')",
+          "selector": "page.getByTestId('assistant-approval-gate')",
           "timeout": 180000,
           "cue": {
             "name": "4.2.approval-gate",
@@ -1591,7 +1601,7 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByTestId('approval-gate-approve-btn')",
+          "selector": "page.getByTestId('assistant-approval-gate')",
           "scale": 1.25,
           "hold": 2400
         }
@@ -1600,7 +1610,7 @@
     },
     {
       "id": "4.3",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.3-scope-bug.webm",
       "viewport": {
@@ -1641,7 +1651,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('approval-gate-approve-btn')",
+          "selector": "page.getByTestId('assistant-approval-gate')",
           "timeout": 180000,
           "cue": {
             "name": "4.3.scope-visible",
@@ -1652,7 +1662,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('approval-gate-approve-btn').getByRole('button', { name: 'Allow once', exact: true })",
+          "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
           "scale": 1.55,
           "after": 1100,
           "force": true
@@ -1673,7 +1683,7 @@
     },
     {
       "id": "4.4",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.4-implement-test.webm",
       "viewport": {
@@ -1740,7 +1750,7 @@
     },
     {
       "id": "4.5",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.5-preview-repair.webm",
       "viewport": {
@@ -1763,12 +1773,12 @@
           "deadlineMs": 300000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='approval-gate-approve-btn']",
+            "selector": "[data-testid='session-approval-gate']",
             "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "[data-testid='approval-gate-approve-btn']"
+            "selector": "[data-testid='session-approval-gate']"
           }
         }
       ],
@@ -1781,7 +1791,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('approval-gate-approve-btn')",
+          "selector": "page.getByTestId('session-approval-gate')",
           "timeout": 300000
         },
         {
@@ -1790,7 +1800,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('approval-gate-approve-btn')",
+          "selector": "page.getByTestId('session-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
           "scale": 1.58,
           "after": 1000,
           "force": true
@@ -1817,7 +1827,7 @@
     },
     {
       "id": "4.6",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.6-approve-bug-fix.webm",
       "viewport": {
@@ -1840,7 +1850,7 @@
           "deadlineMs": 300000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='approval-gate-approve-btn']",
+            "selector": "[aria-label='Approvals and gates'] button[aria-label='Approve human review and continue to merge']",
             "state": "visible"
           },
           "rect": {
@@ -1864,7 +1874,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+          "selector": "page.locator('button').filter({ hasText: 'Approve & merge' })",
           "timeout": 300000,
           "cue": {
             "name": "4.6.merge-action",
@@ -1875,13 +1885,13 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+          "selector": "page.locator('button').filter({ hasText: 'Approve & merge' })",
           "scale": 1.55,
           "hold": 1800
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+          "selector": "page.locator('button').filter({ hasText: 'Approve & merge' })",
           "scale": 1.62,
           "after": 1200
         }
@@ -1907,7 +1917,7 @@
     },
     {
       "id": "4.7",
-      "startUrl": null,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.7-close-issue-loop.webm",
       "viewport": {
