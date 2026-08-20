@@ -311,6 +311,7 @@ app.MapPost("/api/auth/session/exchange", async (
 app.MapGet("/api/auth/github-accounts", async (
     HttpContext httpContext,
     LinkedGitHubAccountService linkedAccountService,
+    IGitHubTokenStore tokenStore,
     CancellationToken ct) =>
 {
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
@@ -318,14 +319,22 @@ app.MapGet("/api/auth/github-accounts", async (
         return Results.Conflict(new { error = "Linked GitHub accounts require Entra sign-in." });
 
     var links = await linkedAccountService.ListLinkedAccountsAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
-    return Results.Ok(links.Select(link => new LinkedGitHubAccountResponse
+    var responses = new List<LinkedGitHubAccountResponse>(links.Count);
+    foreach (var link in links)
     {
-        Login = link.GitHubLogin,
-        AvatarUrl = link.AvatarUrl,
-        IsDefault = link.IsDefault,
-        CopilotEntitled = link.CopilotEntitled,
-        LinkedAt = link.LinkedAt,
-    }));
+        var tokenScope = GitHubTokenScope.ForLinkedIdentity(caller.EntraObjectId!, link.GitHubLogin);
+        var tokenEntry = await tokenStore.GetAsync(tokenScope, ct).ConfigureAwait(false);
+        responses.Add(new LinkedGitHubAccountResponse
+        {
+            Login = link.GitHubLogin,
+            AvatarUrl = link.AvatarUrl,
+            IsDefault = link.IsDefault,
+            CopilotEntitled = link.CopilotEntitled,
+            LinkedAt = link.LinkedAt,
+            TokenValid = tokenEntry.Status == GitHubTokenStatus.SignedIn,
+        });
+    }
+    return Results.Ok(responses);
 });
 
 app.MapPost("/api/auth/github-accounts/link", async (
@@ -481,6 +490,7 @@ app.MapGet("/api/auth/github", async (
         },
         Login = identity?.Login,
         AvatarUrl = identity?.AvatarUrl,
+        TokenActionRequired = entry.Status != GitHubTokenStatus.SignedIn,
     });
 });
 

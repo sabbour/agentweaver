@@ -246,6 +246,7 @@ builder.Services.AddHttpClient("entra-oidc")
 builder.Services.AddSingleton<EntraAccessTokenValidator>();
 builder.Services.AddSingleton<AuthModeEpochService>();
 builder.Services.AddHostedService<AuthModeEpochStartupService>();
+builder.Services.AddHostedService<GitHubTokenProactiveRefreshService>();
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("PlatformAccess", policy =>

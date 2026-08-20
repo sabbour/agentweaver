@@ -60,6 +60,15 @@ public interface IGitHubTokenStore
 }
 
 /// <summary>
+/// Optional capability for token stores that can enumerate all known scopes.
+/// Implemented by stores that support background token management such as proactive refresh.
+/// </summary>
+public interface IGitHubTokenScopeEnumerable
+{
+    Task<IReadOnlyList<GitHubTokenScope>> ListScopesAsync(CancellationToken ct = default);
+}
+
+/// <summary>
 /// Resolves a valid (non-expired) GitHub access token for a scope, transparently refreshing
 /// an expired/near-expiry token using the stored refresh token. Returns null when no token is
 /// available or when re-authentication is required (refresh failed / token revoked).

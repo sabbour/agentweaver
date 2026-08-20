@@ -16,7 +16,7 @@ namespace Agentweaver.Api.Auth;
 /// to <see cref="SetSecretAsync"/>, the current version is read first and the write is
 /// performed only if the ETags match (best-effort optimistic concurrency).
 /// </summary>
-public sealed class KeyVaultSecretStore : ISecretStore, IAtomicSecretLeaseStore
+public sealed class KeyVaultSecretStore : ISecretStore, IAtomicSecretLeaseStore, ISecretListStore
 {
     private readonly SecretClient _client;
     private readonly KeyVaultRecoverableSecretWriter _writer;
@@ -62,6 +62,85 @@ public sealed class KeyVaultSecretStore : ISecretStore, IAtomicSecretLeaseStore
 
     // Base32 (RFC 4648) lower-case alphabet, no padding — yields [a-z2-7]+ output.
     private static readonly char[] Base32Alphabet = "abcdefghijklmnopqrstuvwxyz234567".ToCharArray();
+
+    // Reverse lookup: char → 5-bit value, -1 for invalid characters.
+    private static readonly int[] Base32Values;
+
+    static KeyVaultSecretStore()
+    {
+        Base32Values = new int[128];
+        Array.Fill(Base32Values, -1);
+        for (int i = 0; i < Base32Alphabet.Length; i++)
+            Base32Values[Base32Alphabet[i]] = i;
+    }
+
+    internal static byte[] Base32LowerDecode(string encoded)
+    {
+        if (string.IsNullOrEmpty(encoded))
+            return [];
+
+        int outputLength = encoded.Length * 5 / 8;
+        var result = new byte[outputLength];
+        int buffer = 0, bitsLeft = 0, byteIdx = 0;
+        foreach (char c in encoded)
+        {
+            var val = c < 128 ? Base32Values[c] : -1;
+            if (val < 0) continue;
+            buffer = (buffer << 5) | val;
+            bitsLeft += 5;
+            if (bitsLeft >= 8)
+            {
+                bitsLeft -= 8;
+                if (byteIdx < result.Length)
+                    result[byteIdx++] = (byte)((buffer >> bitsLeft) & 0xFF);
+            }
+        }
+        return result[..byteIdx];
+    }
+
+    /// <summary>
+    /// Reverses <see cref="SanitizeKey"/> to recover the original scope key from a KV secret name.
+    /// Returns null for names that cannot be decoded (link-index entries, unknown prefixes).
+    /// </summary>
+    internal static string? TryDecodeScopeKey(string kvName)
+    {
+        if (kvName == "ghtok-installation")
+            return "installation";
+
+        if (kvName.StartsWith("ghtok-user-link--", StringComparison.Ordinal))
+        {
+            var encoded = kvName["ghtok-user-link--".Length..];
+            var suffix = System.Text.Encoding.UTF8.GetString(Base32LowerDecode(encoded));
+            return $"user-link:{suffix}";
+        }
+
+        if (kvName.StartsWith("ghtok-user-links--", StringComparison.Ordinal))
+            return null; // link-index entries — not token scopes
+
+        if (kvName.StartsWith("ghtok-user--", StringComparison.Ordinal))
+        {
+            var encoded = kvName["ghtok-user--".Length..];
+            var userId = System.Text.Encoding.UTF8.GetString(Base32LowerDecode(encoded));
+            return $"user:{userId}";
+        }
+
+        return null;
+    }
+
+    // ── ISecretListStore ─────────────────────────────────────────────────────
+
+    public async Task<IReadOnlyList<string>> ListTokenScopeKeysAsync(CancellationToken ct = default)
+    {
+        var result = new List<string>();
+        await foreach (var prop in _client.GetPropertiesOfSecretsAsync(ct).ConfigureAwait(false))
+        {
+            if (!prop.Enabled.GetValueOrDefault(true)) continue;
+            var scopeKey = TryDecodeScopeKey(prop.Name);
+            if (scopeKey is not null)
+                result.Add(scopeKey);
+        }
+        return result;
+    }
 
     internal static string Base32Lower(byte[] data)
     {

@@ -33,6 +33,7 @@ import { MetricEmptyState,
 import { PageHeader } from '../components/PageHeader';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import { ErrorState } from '../components/ui';
+import { GitHubTokenWarningBanner } from '../components/GitHubTokenWarningBanner';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, ThroughputPointDto } from '../api/types';
@@ -897,6 +898,8 @@ export function DashboardPage() {
       )}
 
       {loading && !data && <LoadingDashboard />}
+
+      <GitHubTokenWarningBanner />
 
       {data && dashboardModel && (
         <>

@@ -65,3 +65,15 @@ public interface ISecretStore
     /// </summary>
     Task DeleteSecretAsync(string key, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Optional listing capability for secret stores that support key enumeration.
+/// </summary>
+public interface ISecretListStore
+{
+    /// <summary>
+    /// Returns the scope keys of all GitHub token secrets currently stored
+    /// (signed-in or tombstoned). Excludes link-index entries.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListTokenScopeKeysAsync(CancellationToken ct = default);
+}
