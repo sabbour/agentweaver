@@ -117,7 +117,11 @@ public sealed class SquadReader
         if (path is null) return new CastingRegistry(new Dictionary<string, RegistryMember>());
 
         var registry = JsonSerializer.Deserialize<CastingRegistry>(File.ReadAllText(path), SquadSerialization.Options);
-        return registry ?? new CastingRegistry(new Dictionary<string, RegistryMember>());
+        if (registry is null) return new CastingRegistry(new Dictionary<string, RegistryMember>());
+        // Guard against legacy formats that produce null property values after deserialization.
+        return registry.Agents is not null
+            ? registry
+            : new CastingRegistry(new Dictionary<string, RegistryMember>());
     }
 
     public CastHistory ReadHistory()
@@ -132,7 +136,10 @@ public sealed class SquadReader
         if (path is null) return new CastHistory([], []);
 
         var history = JsonSerializer.Deserialize<CastHistory>(File.ReadAllText(path), SquadSerialization.Options);
-        return history ?? new CastHistory([], []);
+        if (history is null) return new CastHistory([], []);
+        // Legacy history.json formats may use snake_case keys that don't map to the camelCase model,
+        // producing null list properties. Normalise to empty lists so callers never receive null.
+        return new CastHistory(history.Snapshots ?? [], history.UniverseUsageHistory ?? []);
     }
 
     public string? ReadCharter(string memberName)

@@ -22,6 +22,7 @@ public sealed class UniverseAllocator
     /// </summary>
     public string ProposeUniverse(IReadOnlyList<string> usageHistory, string? seedHint = null)
     {
+        usageHistory ??= [];
         var allowed = _policy.AllowlistUniverses;
         if (allowed.Count == 0)
             throw new InvalidOperationException("Casting policy has no allowed universes.");
