@@ -12,4 +12,9 @@ public sealed class AgentHostPodReconcilerErrorException : Exception
         : base(message)
     {
     }
+
+    public AgentHostPodReconcilerErrorException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }

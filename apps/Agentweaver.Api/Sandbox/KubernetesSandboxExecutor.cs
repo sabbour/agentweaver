@@ -163,6 +163,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private const int MaxK8sAttempts = 3;
 
     /// <summary>
+    /// How many times a claim that VANISHED while we were waiting for it to bind may be re-created
+    /// before the launch fails. An AgentHost claim is shared by every participant of a run (the claim
+    /// name is a 12-char derivation of the run id, so a run and its <c>-coordinator-*</c> steps map to
+    /// the same claim — pod-per-run by design). A concurrent release on another replica (e.g. worker
+    /// restart-recovery releasing the parent run, or a sibling step failing) therefore deletes the
+    /// claim out from under an in-flight launch, and the wait used to die with a bare
+    /// <c>sandboxclaims... not found</c> 404 that failed the whole run. Re-creating it here turns that
+    /// cross-participant race into a self-healing retry.
+    /// </summary>
+    private const int MaxClaimRecreateAttempts = 2;
+
+    /// <summary>
     /// Cadence for the <see cref="EventTypes.SandboxProvisioningPending"/> heartbeat emitted while an
     /// AgentHost <c>SandboxClaim</c> is still being provisioned (unbound). Must stay well under the
     /// parent coordinator's <c>Coordinator:SubtaskStallTimeoutMinutes</c> (default 5 min) so each
@@ -307,7 +319,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 "KubernetesSandboxExecutor: creating SandboxClaim {Claim}", claimName);
             claimCreated = await CreateClaimAsync(claimName, token);
 
-            var podName = await WaitForBoundAsync(claimName, token);
+            var podName = await WaitForBoundAsync(
+                claimName, token,
+                async t => claimCreated = await CreateClaimAsync(claimName, t).ConfigureAwait(false));
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: claim {Claim} bound to pod {Pod}", claimName, podName);
 
@@ -461,7 +475,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 }
             }
 
-            var podName = await WaitForBoundWithProvisioningHeartbeatAsync(runId, claimName, ct).ConfigureAwait(false);
+            var podName = await WaitForBoundWithProvisioningHeartbeatAsync(
+                runId, claimName, ct,
+                async token =>
+                {
+                    // The shared claim was deleted mid-launch by another participant of this run.
+                    // Re-create it; ownership (→ whether WE must run /configure) follows the create.
+                    var owned = await CreateAgentHostClaimAsync(
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, token)
+                        .ConfigureAwait(false);
+                    claimCreated = owned;
+                    return owned;
+                }).ConfigureAwait(false);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
 
@@ -1074,12 +1099,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// <see cref="WaitForBoundAsync"/>.
     /// </summary>
     private async Task<string> WaitForBoundWithProvisioningHeartbeatAsync(
-        string runId, string claimName, CancellationToken ct)
+        string runId, string claimName, CancellationToken ct,
+        Func<CancellationToken, Task<bool>>? recreateClaimAsync = null)
     {
         if (_runEventStream is null)
-            return await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
+            return await WaitForBoundAsync(claimName, ct, recreateClaimAsync).ConfigureAwait(false);
 
-        var boundTask = WaitForBoundAsync(claimName, ct);
+        var boundTask = WaitForBoundAsync(claimName, ct, recreateClaimAsync);
         while (true)
         {
             var delayTask = Task.Delay(SandboxProvisioningHeartbeatInterval, ct);
@@ -1217,18 +1243,53 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// <summary>
     /// Polls every 2 s until the claim's <c>Ready</c> condition is <c>True</c>; returns the bound
     /// pod name from <c>status.sandbox.name</c>.
+    ///
+    /// <para>
+    /// When <paramref name="recreateClaimAsync"/> is supplied, a claim that DISAPPEARS mid-wait
+    /// (404 — deleted concurrently by another participant of the same run, possibly on another
+    /// replica) is re-created up to <see cref="MaxClaimRecreateAttempts"/> times instead of failing
+    /// the launch; the callback returns whether WE own the re-created claim (i.e. must run
+    /// <c>/configure</c>) so the caller can keep its ownership flag accurate.
+    /// </para>
     /// </summary>
-    private async Task<string> WaitForBoundAsync(string claimName, CancellationToken ct)
+    private async Task<string> WaitForBoundAsync(
+        string claimName,
+        CancellationToken ct,
+        Func<CancellationToken, Task<bool>>? recreateClaimAsync = null)
     {
+        var recreateAttempts = 0;
         while (true)
         {
             ct.ThrowIfCancellationRequested();
 
-            var raw = await ExecuteK8sWithRetryAsync(
-                token => _client.CustomObjects.GetNamespacedCustomObjectAsync(
-                    ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
-                    cancellationToken: token),
-                ct).ConfigureAwait(false);
+            object raw;
+            try
+            {
+                raw = await ExecuteK8sWithRetryAsync(
+                    token => _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                        ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                        cancellationToken: token),
+                    ct).ConfigureAwait(false);
+            }
+            catch (HttpOperationException ex)
+                when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                if (recreateClaimAsync is null || ++recreateAttempts > MaxClaimRecreateAttempts)
+                {
+                    throw new AgentHostPodReconcilerErrorException(
+                        $"SandboxClaim '{claimName}' disappeared while waiting for it to bind " +
+                        "(deleted concurrently — most likely by another participant of the same run " +
+                        "releasing the shared AgentHost pod).", ex);
+                }
+
+                _logger.LogWarning(
+                    "KubernetesSandboxExecutor: claim {Claim} disappeared while waiting for it to bind; " +
+                    "re-creating it (attempt {Attempt}/{Max}).",
+                    claimName, recreateAttempts, MaxClaimRecreateAttempts);
+
+                await recreateClaimAsync(ct).ConfigureAwait(false);
+                continue;
+            }
 
             var json = JsonSerializer.Serialize(raw);
             using var doc = JsonDocument.Parse(json);

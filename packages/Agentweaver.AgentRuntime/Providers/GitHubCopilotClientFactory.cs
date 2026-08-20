@@ -226,13 +226,19 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 /// </summary>
 public sealed class GitHubCopilotUnauthorizedException : AgentProviderException
 {
-    public const string ErrorCode = "github_copilot_unauthorized";
+    /// <summary>
+    /// Canonical provider error code for "Copilot needs a (re-)sign-in". Must stay in sync with the
+    /// <c>github_copilot_auth_required</c> literal used by the other Copilot runtime call sites.
+    /// Named distinctly from the inherited <see cref="AgentProviderException.ErrorCode"/> instance
+    /// property so it does not hide it (CS0108, warning-as-error).
+    /// </summary>
+    public const string AuthRequiredErrorCode = "github_copilot_auth_required";
 
     public GitHubCopilotUnauthorizedException(string message)
         : base(
             ModelSource.GitHubCopilot,
             AgentProviderFailureKind.Authorization,
-            "github_copilot_auth_required",
+            AuthRequiredErrorCode,
             message,
             isRetryable: false)
     {

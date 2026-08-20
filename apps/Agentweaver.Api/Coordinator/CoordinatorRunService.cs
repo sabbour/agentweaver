@@ -757,7 +757,7 @@ public sealed class CoordinatorRunService
                 _logger.LogWarning(ex,
                     "Coordinator run {RunId} failed: GitHub Copilot token is unauthorized or expired. " +
                     "User must re-link their GitHub account.", runId);
-                await FailRunSafeAsync(runId, entry, GitHubCopilotUnauthorizedException.ErrorCode).ConfigureAwait(false);
+                await FailRunSafeAsync(runId, entry, GitHubCopilotUnauthorizedException.AuthRequiredErrorCode).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
