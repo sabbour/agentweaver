@@ -481,15 +481,11 @@ export function SettingsPage() {
                                     </Button>
                                   </MessageBarActions>
                                 </MessageBar>
-                              ) : (
-                                <Badge appearance={account.copilot_entitled ? 'filled' : 'tint'}>
-                                  {account.copilot_entitled === null
-                                    ? 'Copilot status unknown'
-                                    : account.copilot_entitled
-                                      ? 'Copilot included'
-                                      : 'No Copilot entitlement'}
-                                </Badge>
-                              )}
+                              ) : account.copilot_entitled === true ? (
+                                <Badge appearance="filled">Copilot included</Badge>
+                              ) : account.copilot_entitled === false ? (
+                                <Badge appearance="tint">No Copilot entitlement</Badge>
+                              ) : null}
                             </div>
                           </div>
                         </div>
