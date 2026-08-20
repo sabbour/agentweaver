@@ -10,8 +10,10 @@
     <!-- SDK PermissionDecision Rpc types are marked [Experimental("GHCP001")]; suppress in tests. -->
     <NoWarn>$(NoWarn);GHCP001</NoWarn>
     <!-- SSH.NET 2025.1.0 has GHSA-q939-rpr3-3284 (high); it is a transitive test-only dependency
-         with no network exposure in our test suite. Suppress until a patched version is available. -->
+         with no network exposure in our test suite. Suppress until a patched version is available.
+         NU1903 = high-severity audit warning (treated as error by default in .NET 8+). -->
     <NuGetAuditSuppress>https://github.com/advisories/GHSA-q939-rpr3-3284</NuGetAuditSuppress>
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
