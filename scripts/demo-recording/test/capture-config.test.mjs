@@ -8,6 +8,7 @@ import {
 } from '../lib/capture-config.mjs';
 import { renderCaptureScript } from '../lib/capture-plan.mjs';
 import { browserDomCueBootstrapSource } from '../lib/dom-cues.mjs';
+import { resolveBugFixPullRequestEvidence } from '../lib/bugfix-pr.mjs';
 import { validateFinalTake } from '../lib/preflight.mjs';
 
 const beats = [
@@ -182,7 +183,7 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const traces = byId('2.7');
   const decisions = byId('2.8');
 
-  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Allow standalone backlog tasks for independent deliverables', exact: true })";
+  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })";
   const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
     && step.selector === promotionCheckbox);
   assert.ok(promotionWait >= 0, 'expected the actual promotion checkbox to be ready before confirmation');
@@ -221,10 +222,101 @@ test('final demo plans isolate their takes and use polished plan-scoped fixtures
   for (const plan of [blueprint, aks]) {
     assert.doesNotThrow(() => validateCaptureConfig(plan));
     assert.doesNotThrow(() => validateFinalTake(plan));
-    assert.match(plan.fixture.projectName, /^Agentweaver Demo — /u);
-    assert.ok(plan.beats.every((beat) => beat.videoPath.startsWith(`${plan.finalTake.outputDirectory}/`)));
+    assert.match(plan.fixture.projectName, /^Agentweaver Demo(?: S2)? — /u);
+    assert.ok(plan.beats
+      .filter((beat) => beat.captureMode !== 'unauthenticated')
+      .every((beat) => beat.videoPath.startsWith(`${plan.finalTake.outputDirectory}/`)));
   }
   assert.equal(blueprint.fixture.projectName, 'Agentweaver Demo — Trailhead Travel Studio');
-  assert.equal(aks.fixture.projectName, 'Agentweaver Demo — AKS Product Operations');
+  assert.equal(aks.fixture.projectName, 'Agentweaver Demo S2 — sabbour/AKS');
   assert.ok(aks.beats.some((beat) => JSON.stringify(beat).includes('sabbour/AKS')));
+});
+
+test('capture config requires actionable, typed capture prerequisites', () => {
+  assert.doesNotThrow(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{ id: '4.1', prerequisites: [{ environment: 'AGENTWEAVER_DEMO_GITHUB_ISSUE_URL', kind: 'github-issue-url', matchesEnvironment: 'AGENTWEAVER_DEMO_GITHUB_ISSUE_NUMBER', message: 'Set this to the prepared demo issue.' }] }],
+  }));
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{ id: '4.1', prerequisites: [{ environment: 'issue', kind: 'github-issue-url', message: 'Set it.' }] }],
+  }), /uppercase environment variable/);
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    beats: [{
+      id: '3.2',
+      steps: [{ type: 'goto', url: '{{AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL}}' }],
+    }],
+  }), /references AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL, but does not declare it as a prerequisite/);
+  assert.throws(() => validateCaptureConfig({
+    schemaVersion: 1,
+    authentication: { mode: 'entra', repository: 'not a repository' },
+    beats: [],
+  }), /authentication.repository must be a GitHub owner\/repository/);
+});
+
+test('Blueprint triage beats declare a serial, fixture-safe route through preview, review, PR, and MCP settings', async () => {
+  const plan = JSON.parse(await fs.readFile(new URL('../plans/blueprint-demo.capture.json', import.meta.url), 'utf8'));
+  const byId = new Map(plan.beats.map((beat) => [beat.id, beat]));
+  assert.deepEqual(plan.authentication, {
+    mode: 'entra',
+    repository: 'sabbour/agentweaver-demo-dryrun',
+  });
+  assert.equal(
+    byId.get('1.1').startUrl,
+    'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview',
+  );
+  assert.equal(byId.get('1.1').prerequisites, undefined);
+  assert.deepEqual(byId.get('3.2').prerequisites, [{
+    environment: 'AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL',
+    kind: 'github-issue-url',
+    message: 'Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4.',
+  }]);
+  for (const [id, predecessor] of new Map([['4.1', '3.2'], ['4.2', '4.1'], ['4.3', '4.2'], ['4.4', '4.3'], ['4.5', '4.4'], ['4.6', '4.5'], ['4.7', '4.6']])) {
+    assert.equal(byId.get(id)?.requiresPriorBeat, predecessor);
+  }
+  assert.equal(byId.get('4.1').prerequisites.find((item) => item.kind === 'github-issue-url')?.matchesEnvironment, 'AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER');
+  assert.equal(byId.get('4.5').steps[1].selector, "page.getByTestId('session-approval-gate')");
+  assert.equal(byId.get('4.6').steps[1].type, 'resolveBugFixPullRequest');
+  assert.equal(
+    byId.get('4.6').steps.find((step) => step.type === 'waitFor').selector,
+    "page.getByRole('button', { name: 'Approve & merge', exact: true })",
+  );
+  assert.equal(byId.get('4.7').steps.at(-2).type, 'gotoResolvedBugFixPullRequest');
+  assert.equal(byId.get('5.1').steps[1].selector, "page.getByTestId('mcp-server-url')");
+});
+
+test('Bug Fix PR resolution binds an exact run artifact to its project repository', () => {
+  const resolved = resolveBugFixPullRequestEvidence({
+    runUrl: 'https://demo.test/projects/project-1/runs/run-1',
+    projectUrl: 'https://demo.test/projects/project-1',
+    expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42',
+    topology: {
+      nodes: [{ id: 'push-pr', role: 'action', kind: 'live', node_type: 'action' }],
+    },
+    events: [{ payload: { message: 'Opened pull request #42: https://github.com/octo/widgets/pull/42' } }],
+    project: { source_repository: 'octo/widgets' },
+  });
+  assert.deepEqual(resolved, {
+    url: 'https://github.com/octo/widgets/pull/42', repository: 'octo/widgets', number: '42', runId: 'run-1', projectId: 'project-1',
+  });
+});
+
+test('Bug Fix PR resolution rejects missing and mismatched external pull requests', () => {
+  const evidence = {
+    runUrl: 'https://demo.test/projects/project-1/runs/run-1', projectUrl: 'https://demo.test/projects/project-1',
+    topology: {
+      nodes: [{ id: 'push-pr', role: 'action', kind: 'live', node_type: 'action' }],
+    },
+    project: { source_repository: 'octo/widgets' },
+  };
+  assert.throws(() => resolveBugFixPullRequestEvidence({
+    ...evidence,
+    topology: { nodes: [{ type: 'open_pull_request' }] },
+    expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42',
+    events: [{ url: 'https://github.com/octo/widgets/pull/42' }],
+  }), /does not contain the live push-pr action/);
+  assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/42', events: [] }), /has not reported a pull request/);
+  assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/widgets/pull/41', events: [{ url: 'https://github.com/octo/widgets/pull/42' }] }), /stale or does not match/);
+  assert.throws(() => resolveBugFixPullRequestEvidence({ ...evidence, expectedPullRequestUrl: 'https://github.com/octo/other/pull/42', events: [{ url: 'https://github.com/octo/widgets/pull/42' }] }), /stale or does not match/);
 });

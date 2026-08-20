@@ -35,10 +35,10 @@ Usage:
 
 Recording session commands:
   signin   Refresh protected auth from the literal Microsoft Edge Default work profile.
-  open     Refresh Default-profile sign-in, then start or restore the recording session.
-  start    Refresh Default-profile sign-in, open the session, and optionally prepare a capture plan.
+  open     Reuse or restore recording auth; refresh Default-profile sign-in only when needed.
+  start    Self-direct session setup, then optionally prepare a capture plan.
   prepare  Validate a capture plan and create playwright-cli scripts.
-  capture  Refresh Default-profile sign-in for authenticated beats; --unauthenticated is isolated.
+  capture  Self-direct authenticated setup; --unauthenticated is isolated.
   status   Check the Edge profile, protected auth, and recording session.
   close    Close the named persistent recording session.
   help     Show this help.

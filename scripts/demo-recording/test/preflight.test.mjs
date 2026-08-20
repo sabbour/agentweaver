@@ -5,12 +5,14 @@ import {
   cleanScenarioFixtures,
   isScenarioFixtureProject,
   resolveCapturePreflight,
+  preflightFinalTake,
+  validateFinalTake,
   validateScenarioFixture,
 } from '../lib/preflight.mjs';
 
 const fixture = {
-  projectName: 'Agentweaver Demo S1 - Trailhead',
-  safeProjectNamePatterns: ['^Agentweaver Demo S1 - Trailhead(?: - [0-9]{8}T[0-9]{6}Z)?$'],
+  projectName: 'Agentweaver Demo — Trailhead Travel Studio',
+  safeProjectNamePatterns: ['^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$'],
 };
 
 const captureConfigWithLaterExternalArtifact = {
@@ -50,11 +52,11 @@ test('capture preflight validates external artifacts only for selected beats', (
       captureConfigWithLaterExternalArtifact.beats.map((beat) => beat.id),
       {},
     ),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
   assert.throws(
     () => resolveCapturePreflight(captureConfigWithLaterExternalArtifact, ['3.2'], {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
 });
 
@@ -75,16 +77,16 @@ test('fixture cleanup requires patterns constrained to the declared project name
     () => validateScenarioFixture({ ...fixture, safeProjectNamePatterns: ['^Agentweaver Demo.*$'] }),
     /must match only the declared fixture name/,
   );
-  assert.equal(isScenarioFixtureProject({ name: 'Agentweaver Demo S1 - Trailhead' }, fixture), true);
+  assert.equal(isScenarioFixtureProject({ name: 'Agentweaver Demo — Trailhead Travel Studio' }, fixture), true);
   assert.equal(isScenarioFixtureProject({ name: 'Trailhead' }, fixture), false);
 });
 
 test('preflight deletes only safe-pattern projects and reports their associated sessions', async () => {
   let projects = [
-    { project_id: 'safe-1', name: 'Agentweaver Demo S1 - Trailhead' },
-    { project_id: 'safe-2', name: 'Agentweaver Demo S1 - Trailhead - 20260810T120000Z' },
+    { project_id: 'safe-1', name: 'Agentweaver Demo — Trailhead Travel Studio' },
+    { project_id: 'safe-2', name: 'Agentweaver Demo — Trailhead Travel Studio - 20260810T120000Z' },
     { project_id: 'user-1', name: 'Trailhead' },
-    { project_id: 'user-2', name: 'Agentweaver Demo S2 - Trailhead' },
+    { project_id: 'user-2', name: 'Agentweaver Demo — Other Trailhead' },
   ];
   const deleted = [];
   const api = {
@@ -133,7 +135,6 @@ test('preflight refuses a fixture that requests deletion of every project', () =
   );
 });
 
-
 test('Blueprint Beat 0 preflight does not require later GitHub-triage artifacts', async () => {
   const plan = JSON.parse(await fs.readFile(
     new URL('../plans/blueprint-demo.capture.json', import.meta.url),
@@ -143,10 +144,68 @@ test('Blueprint Beat 0 preflight does not require later GitHub-triage artifacts'
   assert.doesNotThrow(() => resolveCapturePreflight(plan, ['0.0'], {}));
   assert.throws(
     () => resolveCapturePreflight(plan, plan.beats.map((beat) => beat.id), {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
   assert.throws(
     () => resolveCapturePreflight(plan, ['3.2'], {}),
-    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL is required for beat 3.2/,
+    /AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL/,
   );
+});
+
+const finalTakeConfig = {
+  fixture,
+  finalTake: {
+    id: 'trailhead-travel-studio',
+    outputDirectory: 'recordings/final-takes/trailhead-travel-studio',
+  },
+  beats: [
+    { videoPath: 'recordings/final-takes/trailhead-travel-studio/1.1.webm' },
+    { videoPath: 'recordings/final-takes/trailhead-travel-studio/1.2.webm' },
+  ],
+};
+
+test('final-take validation keeps every planned recording in its isolated output directory', () => {
+  assert.equal(validateFinalTake(finalTakeConfig).videoPaths.length, 2);
+  assert.throws(
+    () => validateFinalTake({
+      ...finalTakeConfig,
+      beats: [{ videoPath: 'recordings/blueprint-demo/old-dry-run.webm' }],
+    }),
+    /must stay inside finalTake.outputDirectory/,
+  );
+});
+
+test('final-take preflight refuses old media and old state without deleting either', async () => {
+  const existingProjects = [{ project_id: 'fixture-1', name: fixture.projectName }];
+  const api = {
+    async listAllProjects() {
+      return existingProjects;
+    },
+  };
+  await assert.rejects(
+    preflightFinalTake(finalTakeConfig, {
+      api,
+      fileExists: async () => true,
+    }),
+    /planned output file\(s\) already exist.*never deletes recordings/,
+  );
+
+  await assert.rejects(
+    preflightFinalTake(finalTakeConfig, {
+      api,
+      fileExists: async () => false,
+    }),
+    /declared fixture project\(s\) still exist/,
+  );
+  assert.deepEqual(existingProjects, [{ project_id: 'fixture-1', name: fixture.projectName }]);
+});
+
+test('final-take preflight accepts only new media with a clean plan-scoped fixture state', async () => {
+  const result = await preflightFinalTake(finalTakeConfig, {
+    api: { async listAllProjects() { return [{ project_id: 'other', name: 'Agentweaver Demo — Other Trailhead' }]; } },
+    fileExists: async () => false,
+  });
+  assert.equal(result.finalTakeId, 'trailhead-travel-studio');
+  assert.equal(result.plannedVideoCount, 2);
+  assert.equal(result.clean, true);
 });

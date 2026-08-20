@@ -295,6 +295,7 @@ test('capture script re-installs the overlay bootstrap after every in-plan goto'
     videoPath: 'a.webm',
     steps: [{ type: 'goto', url: 'https://x/z', after: 500 }],
   });
+
   // After a full-page navigation the addInitScript bootstrap runs at document-start with
   // a null document.body and bails, so the cursor/zoom/activity tracking must be
   // re-installed explicitly once the new document is ready.
@@ -304,6 +305,17 @@ test('capture script re-installs the overlay bootstrap after every in-plan goto'
   assert.ok(gotoIdx > 0, 'expected the goto navigation');
   assert.ok(reinstallIdx > gotoIdx, 'expected installSource to be re-evaluated after the goto');
   assert.ok(markIdx > reinstallIdx, 'expected the goto activity mark after re-install');
+});
+
+test('capture script gives slow initial navigation a bounded two-minute deadline', () => {
+  const source = renderCaptureScript({
+    startUrl: 'https://agentweaver.example/overview',
+    videoPath: 'recordings/beat.webm',
+    steps: [],
+  });
+
+  assert.match(source, /const navigationTimeoutMs = 120_000;/);
+  assert.match(source, /await page\.goto\(planStartUrl, \{ waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs \}\);/);
 });
 
 test('capture script continues same-page beats unless a fresh navigation is requested', async () => {

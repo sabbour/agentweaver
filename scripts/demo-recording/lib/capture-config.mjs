@@ -13,6 +13,7 @@ const predicateOperators = new Set([
 ]);
 const rectModes = new Set(['matched-element', 'element', 'first-matching', 'union', 'none']);
 const intervalCategories = new Set(['action', 'wait', 'dead-time']);
+const prerequisiteKinds = new Set(['app-url', 'github-issue-number', 'github-issue-url', 'github-pr-url']);
 
 function fail(message) {
   throw new Error(`Invalid demo capture plan: ${message}`);
@@ -48,10 +49,59 @@ function validateCue(cue, location) {
   }
 }
 
+function validatePrerequisites(prerequisites, location) {
+  if (prerequisites === undefined) return;
+  if (!Array.isArray(prerequisites)) fail(`${location}.prerequisites must be an array`);
+  for (const [index, prerequisite] of prerequisites.entries()) {
+    const item = `${location}.prerequisites[${index}]`;
+    if (!prerequisite || typeof prerequisite !== 'object' || Array.isArray(prerequisite)) fail(`${item} must be an object`);
+    if (!/^[A-Z][A-Z0-9_]*$/.test(prerequisite.environment ?? '')) {
+      fail(`${item}.environment must be an uppercase environment variable name`);
+    }
+    if (!prerequisiteKinds.has(prerequisite.kind)) fail(`${item}.kind is unsupported`);
+    if (prerequisite.matchesEnvironment !== undefined
+      && !/^[A-Z][A-Z0-9_]*$/.test(prerequisite.matchesEnvironment)) {
+      fail(`${item}.matchesEnvironment must be an uppercase environment variable name`);
+    }
+    if (typeof prerequisite.message !== 'string' || !prerequisite.message.trim()) {
+      fail(`${item}.message must explain how to satisfy the prerequisite`);
+    }
+  }
+}
+
+function collectRuntimeTemplateReferences(value, references = new Set()) {
+  if (typeof value === 'string') {
+    for (const [, environment] of value.matchAll(/\{\{([A-Z][A-Z0-9_]+)\}\}/gu)) {
+      references.add(environment);
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectRuntimeTemplateReferences(item, references);
+  } else if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      if (key !== 'prerequisites') collectRuntimeTemplateReferences(item, references);
+    }
+  }
+  return references;
+}
+
+function validateAuthentication(authentication) {
+  if (authentication === undefined) return;
+  if (!authentication || typeof authentication !== 'object' || Array.isArray(authentication)) {
+    fail('authentication must be an object');
+  }
+  if (typeof authentication.mode !== 'string' || !authentication.mode.trim()) {
+    fail('authentication.mode is required');
+  }
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(authentication.repository ?? '')) {
+    fail('authentication.repository must be a GitHub owner/repository');
+  }
+}
+
 export function validateCaptureConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) fail('root must be an object');
   if (config.schemaVersion !== 1) fail('schemaVersion must be 1');
   if (!Array.isArray(config.beats)) fail('beats must be an array');
+  validateAuthentication(config.authentication);
   if (config.preflight !== undefined) {
     if (!config.preflight || typeof config.preflight !== 'object' || Array.isArray(config.preflight)) fail('preflight must be an object');
     for (const [index, artifact] of (config.preflight.externalArtifacts ?? []).entries()) {
@@ -82,6 +132,13 @@ export function validateCaptureConfig(config) {
         fail(`${location}.requiresPriorBeat must reference a markdown beat ID`);
       }
       priorBeatIds.set(beat.id, beat.requiresPriorBeat);
+    }
+    validatePrerequisites(beat.prerequisites, location);
+    const declaredPrerequisites = new Set((beat.prerequisites ?? []).map(({ environment }) => environment));
+    for (const environment of collectRuntimeTemplateReferences(beat)) {
+      if (!declaredPrerequisites.has(environment)) {
+        fail(`${location} references ${environment}, but does not declare it as a prerequisite`);
+      }
     }
     if (beat.cueWatchers !== undefined && !Array.isArray(beat.cueWatchers)) fail(`${location}.cueWatchers must be an array`);
     if (beat.steps !== undefined && !Array.isArray(beat.steps)) fail(`${location}.steps must be an array`);

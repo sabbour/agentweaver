@@ -165,15 +165,19 @@ Narration: "There's more than one way to work with Agentweaver. I'll open a new 
 
 Fresh navigation: false
 
-On screen: Starting from the same project, create or open the next issue without the trigger label, open an assistant session, and ask it to triage that issue directly.
+On screen: Before the dry run, a human manually creates the next issue in the dedicated demo repository without the trigger label. Starting from the same project, open that issue, open an assistant session, and ask it to triage that issue directly. The capture never creates, labels, or closes a GitHub issue.
 
 ## Beat 4.2 — Ask the assistant to triage
 
 Narration: "The assistant reviews the GitHub issue, outlines a minimal fix with a focused test plan, and kicks off a Bug Fix workflow. Any action that would change state still waits for approval, so the team stays in control while the investigation gets underway."
 
+On screen: Continue the assistant conversation from 4.1. Stop immediately if the focused Bug Fix proposal or its approval gate is absent; do not substitute another task or an old assistant run.
+
 ## Beat 4.3 — Read and scope the bug
 
 Narration: "Before changing any code, the workflow narrows the problem down. It captures the current behavior, defines what the app should do instead, and scopes the smallest safe fix so the change stays focused and easy to verify."
+
+On screen: Approve only the displayed Bug Fix workflow action from 4.2, then remain on that resulting run. Do not approve unrelated queued requests.
 
 ## Beat 4.4 — Implement and test the repair
 
@@ -185,20 +189,24 @@ On screen: Click each work-plan step to expand or select it so the UI visibly re
 
 Narration: "Preview the repaired layout the same way you previewed the feature. On a narrow tablet, the banner and the button now stay in their own space instead of colliding."
 
-On screen: When the preview approval gate appears, approve it, wait for the repaired preview to render, then show the fixed layout.
+On screen: When the preview approval gate for this Bug Fix run appears, approve it, wait for the repaired preview to render, then show the fixed layout. Stop if the gate belongs to another run or the preview fails to render.
 
 ## Beat 4.6 — Approve the bug fix
 
 Narration: "The bug fix reaches the final review gate, where the verified 'Approve & merge' action confirms the change and moves it forward into the merge flow."
 
+On screen: Verify the final review is for the same Bug Fix run and approve it once. The controlled staging workflow may create its review pull request, but this capture never merges or approves anything directly on GitHub.
+
 ## Beat 4.7 — Close the loop on the issue
 
 Narration: "The result shows up right in the run — here's the pull request as part of the topology. And here it is on GitHub, ready for review."
 
-On screen: End on the run topology that contains the resulting pull request, then open that same pull request on GitHub.
+On screen: End on the run topology that contains the resulting pull request, then open the configured pull-request URL on GitHub. Stop if its number or repository differs from the PR registered by this run.
 
 ## Beat 5.1 — Drive it from your own tools
 
 Narration: "You can drive the exact same workflows from your own tools. In Settings, grab the MCP server URL, then connect clients like Claude Desktop, VS Code, or Copilot CLI. Every capability you saw in the UI today — projects, runs, the board, workflows, blueprints, casting, memory, decisions, sandboxes, diagnostics — is available through that same MCP server, in the same workspace and team context you've been using throughout this demo."
 
 Fresh navigation: true
+
+On screen: Open Settings in the same authenticated workspace and show the read-only MCP server URL. Do not copy authentication values or connect an external client during capture.
