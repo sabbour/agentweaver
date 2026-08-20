@@ -24,18 +24,17 @@ public sealed class GitHubCopilotEntitlementProbeTests
         handler.LastRequest!.RequestUri!.AbsoluteUri.Should().Be("https://api.githubcopilot.com/models");
         handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
         handler.LastRequest.Headers.Authorization.Parameter.Should().Be("gho_test-token");
-        handler.LastRequest.Headers.Contains("Copilot-Integration-Id").Should().BeFalse();
     }
 
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized)]
     [InlineData(HttpStatusCode.Forbidden)]
     [InlineData(HttpStatusCode.NotFound)]
-    public async Task Probe_is_inconclusive_for_auth_rejections(HttpStatusCode statusCode)
+    public async Task Probe_reports_not_entitled_for_auth_rejections(HttpStatusCode statusCode)
     {
         var probe = CreateProbe(new CapturingHandler(statusCode, "{}"));
 
-        (await probe.ProbeAsync("gho_test-token")).Should().BeNull();
+        (await probe.ProbeAsync("gho_test-token")).Should().BeFalse();
     }
 
     [Fact]

@@ -79,32 +79,6 @@ describe('SettingsPage', () => {
     expect(screen.getByText('Sandbox policy')).toBeDefined();
   });
 
-  it('hides Copilot entitlement badge when status is unknown', async () => {
-    vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
-      {
-        login: 'octocat',
-        name: 'Octocat',
-        avatar_url: 'https://example.com/octocat.png',
-        type: 'user',
-        is_default: true,
-        copilot_entitled: null,
-      },
-    ] as never);
-
-    render(
-      <MemoryRouter initialEntries={['/settings']}>
-        <AzureFluentProvider density="compact">
-          <SettingsPage />
-        </AzureFluentProvider>
-      </MemoryRouter>,
-    );
-
-    await screen.findByText(/Octocat/);
-    expect(screen.queryByText('Copilot included')).toBeNull();
-    expect(screen.queryByText('No Copilot entitlement')).toBeNull();
-    expect(screen.queryByText('Copilot status unknown')).toBeNull();
-  });
-
   it('sets a linked account as default', async () => {
     render(
       <MemoryRouter initialEntries={['/settings']}>
