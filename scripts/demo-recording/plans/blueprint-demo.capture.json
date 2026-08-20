@@ -1539,8 +1539,6 @@
     },
     {
       "id": "4.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
-      "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.2-assistant-triage.webm",
       "viewport": {
         "width": 1920,
@@ -1613,7 +1611,7 @@
         }
       ],
       "disableApprovalWatcher": true,
-    "requiresPriorBeat": "4.1"
+      "requiresPriorBeat": "4.1"
     },
     {
       "id": "4.3",
@@ -2071,5 +2069,3 @@
     }
   ]
 }
-
-
