@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.18.3
+
+### Patch Changes
+
+- 1c3c608: Make Blueprint demo recordings use the coordinator-promoted landing-page task, preserve review, trace, and decision evidence, and safely reset only the declared demo fixture between takes.
+- c27c4fd: Fail Blueprint demo triage capture early when its current issue, PR, or assistant-route prerequisites are unavailable.
+- 795a1ba: fix: persist terminal WorkPlan status when coordinator run already stopped
+
+  CoordinatorDispatchService detected a terminal coordinator run but returned early without calling SetWorkPlanStatusAsync, leaving WorkPlans permanently stuck in dispatching. This caused the reconciler to re-arm every ~10 s forever (infinite loop). Fix calls SetWorkPlanStatusAsync before the early return and adds a regression test.
+
+  Fixes #808.
+
+- 4cc099d: Surface GitHub token expiry prominently and improve renewal resilience.
+
+  - Show a warning banner and Re-link CTA in the UI when a GitHub OAuth token has expired or been revoked, so users know why coordinator runs fail
+  - Fix entitlement probe endpoint (switched from `copilot_internal/v2/token` to `GET /models`) so Copilot entitlement status displays correctly for all linked accounts
+  - Distinguish transient (network, 5xx) vs permanent (expired token, bad credentials) refresh failures — transient failures no longer sign the user out
+  - Add proactive background refresh service that renews expiring tokens up to 2 hours before expiry, preventing mid-run token failures
+  - Fix AgentHost sandbox executor to survive concurrent claim deletion during coordinator runs
+
+- cff3d6b: Show model latency percentile checkpoints in readable seconds and minutes.
+- 1d83edf: fix(projects): create GitHub projects from a shallow clone so large repositories open promptly while skill imports retain history for pinned tags.
+- 1eec73b: Add an isolated, unauthenticated recording mode for capturing the safe Entra sign-in handoff without restoring saved browser storage.
+- aaf4900: Reject workflow drafts that start with verdict-producing review or build/test nodes, and request a corrected generated workflow before it is returned.
+
 ## 0.18.2
 
 ### Patch Changes
